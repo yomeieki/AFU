@@ -1,4 +1,5 @@
 const { getOrderDetail } = require('../../api/order')
+const { mockPaySuccess } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
 
 var STATUS_LABEL = {
@@ -23,6 +24,7 @@ Page({
       setTimeout(function() { wx.navigateBack() }, 1500)
       return
     }
+    this._orderId = id
     this.loadOrder(id)
   },
 
@@ -58,6 +60,26 @@ Page({
   },
 
   onPay() {
-    wx.showToast({ title: '支付功能将在下一阶段开发', icon: 'none', duration: 2000 })
+    var self = this
+    wx.showModal({
+      title: '确认支付',
+      content: '确认模拟支付？',
+      confirmText: '确认支付',
+      success: function(res) {
+        if (!res.confirm) return
+        wx.showLoading({ title: '支付中...' })
+        mockPaySuccess(self.data.order.orderNo)
+          .then(function() {
+            wx.hideLoading()
+            wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
+            setTimeout(function() {
+              self.loadOrder(self._orderId)
+            }, 1500)
+          })
+          .catch(function() {
+            wx.hideLoading()
+          })
+      },
+    })
   },
 })
