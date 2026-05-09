@@ -99,7 +99,7 @@ curl -X POST http://localhost:3000/api/admin/login \
 ### 后台管理和小程序
 
 ```bash
-# 后台管理（阶段 2 开发中）
+# 后台管理
 cd apps/admin && npm install && npm run dev
 
 # 小程序：使用微信开发者工具打开 apps/miniapp
@@ -122,7 +122,7 @@ docker compose down -v
 
 - [x] 阶段 0：项目文档
 - [x] 阶段 1：后端基础（monorepo + Prisma + 基础 API）
-- [ ] 阶段 2：后台管理系统 MVP
+- [x] 阶段 2：后台管理系统 MVP
 - [ ] 阶段 3：小程序商品浏览
 - [ ] 阶段 4：购物车、地址、订单
 - [ ] 阶段 5：Mock Payment

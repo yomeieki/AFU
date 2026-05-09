@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import { ZodError } from 'zod'
 
 export class AppError extends Error {
   constructor(
@@ -21,6 +22,15 @@ export function errorHandler(
     return res.status(err.httpStatus).json({
       code: err.code,
       message: err.message,
+      data: null,
+    })
+  }
+
+  if (err instanceof ZodError) {
+    const message = err.issues.map((i) => i.message).join('；')
+    return res.status(400).json({
+      code: 40001,
+      message: `参数错误：${message}`,
       data: null,
     })
   }
