@@ -3,6 +3,7 @@ import { z } from 'zod'
 import prisma from '../utils/prisma'
 import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
+import { validatePayConfig, createJsapiOrder, generatePayParams } from '../services/wechat-pay'
 
 const router = Router()
 
@@ -181,6 +182,77 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     if (!order) throw new AppError(40401, '订单不存在', 404)
 
     success(res, order)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/orders/:id/pay
+router.post('/:id/pay', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orderId = Number(req.params.id)
+    const userId = req.userId!
+    const useMockPay = process.env.WECHAT_PAY_MOCK !== 'false'
+
+    const order = await prisma.order.findFirst({
+      where: { id: orderId, userId },
+    })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+    if (order.status === 'PAID') throw new AppError(42203, '订单已支付')
+    if (order.status !== 'PENDING_PAYMENT') throw new AppError(42204, '订单状态不允许支付')
+
+    if (useMockPay) {
+      const paidAt = new Date()
+      await prisma.$transaction(async (tx) => {
+        await tx.payment.upsert({
+          where: { orderId },
+          update: { status: 'SUCCESS', paidAt, paymentType: 'MOCK' },
+          create: {
+            orderId,
+            orderNo: order.orderNo,
+            paymentType: 'MOCK',
+            amount: order.actualAmount,
+            status: 'SUCCESS',
+            paidAt,
+          },
+        })
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: 'PAID', paidAt },
+        })
+      })
+      return success(res, { mode: 'mock', status: 'PAID', paidAt })
+    }
+
+    // Real WeChat Pay
+    validatePayConfig()
+    const openid = req.openid
+    if (!openid) throw new AppError(40101, '未登录或 token 缺少 openid，无法发起微信支付', 401)
+
+    const outTradeNo = `order_${orderId}_${Date.now()}`
+    const prepayId = await createJsapiOrder({
+      outTradeNo,
+      description: `订单 ${order.orderNo}`,
+      amount: order.actualAmount,
+      openid,
+      notifyUrl: process.env.WECHAT_PAY_NOTIFY_URL!,
+    })
+
+    await prisma.payment.upsert({
+      where: { orderId },
+      update: { wxPrepayId: prepayId, status: 'PENDING', paymentType: 'WECHAT' },
+      create: {
+        orderId,
+        orderNo: order.orderNo,
+        paymentType: 'WECHAT',
+        amount: order.actualAmount,
+        status: 'PENDING',
+        wxPrepayId: prepayId,
+      },
+    })
+
+    const payParams = generatePayParams(prepayId)
+    return success(res, { mode: 'wechat', ...payParams })
   } catch (e) {
     next(e)
   }

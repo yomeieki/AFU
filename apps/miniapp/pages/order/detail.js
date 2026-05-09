@@ -1,5 +1,5 @@
 const { getOrderDetail } = require('../../api/order')
-const { mockPaySuccess } = require('../../api/payment')
+const { payOrder } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
 
 var STATUS_LABEL = {
@@ -63,18 +63,37 @@ Page({
     var self = this
     wx.showModal({
       title: '确认支付',
-      content: '确认模拟支付？',
-      confirmText: '确认支付',
-      success: function(res) {
-        if (!res.confirm) return
+      content: '确认支付此订单？',
+      confirmText: '确认',
+      success: function(modalRes) {
+        if (!modalRes.confirm) return
         wx.showLoading({ title: '支付中...' })
-        mockPaySuccess(self.data.order.orderNo)
-          .then(function() {
+        payOrder(self.data.order.id)
+          .then(function(data) {
             wx.hideLoading()
-            wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
-            setTimeout(function() {
-              self.loadOrder(self._orderId)
-            }, 1500)
+            if (data.mode === 'mock') {
+              wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
+              setTimeout(function() { self.loadOrder(self._orderId) }, 1500)
+            } else {
+              wx.requestPayment({
+                timeStamp: data.timeStamp,
+                nonceStr: data.nonceStr,
+                package: data.package,
+                signType: data.signType,
+                paySign: data.paySign,
+                success: function() {
+                  wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
+                  setTimeout(function() { self.loadOrder(self._orderId) }, 1500)
+                },
+                fail: function(err) {
+                  if (err.errMsg && err.errMsg.indexOf('cancel') !== -1) {
+                    wx.showToast({ title: '已取消支付', icon: 'none' })
+                  } else {
+                    wx.showToast({ title: '支付失败，请重试', icon: 'none' })
+                  }
+                },
+              })
+            }
           })
           .catch(function() {
             wx.hideLoading()

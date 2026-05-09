@@ -3,13 +3,15 @@
   <!-- User header -->
   <view class="user-header">
     <view class="avatar-wrap">
-      <view class="avatar-placeholder">
+      <image wx:if="{{isLoggedIn && avatarUrl}}" class="avatar-img" src="{{avatarUrl}}" mode="aspectFill" />
+      <view wx:else class="avatar-placeholder">
         <text class="avatar-icon">👤</text>
       </view>
     </view>
     <view class="user-info">
-      <text class="user-name">未登录</text>
-      <button class="login-btn" bindtap="onLogin">点击登录</button>
+      <text wx:if="{{isLoggedIn}}" class="user-name">{{nickname}}</text>
+      <text wx:else class="user-name">未登录</text>
+      <button wx:if="{{!isLoggedIn}}" class="login-btn" bindtap="onLogin">点击登录</button>
     </view>
   </view>
 

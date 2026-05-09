@@ -3,11 +3,16 @@ import express from 'express'
 import cors from 'cors'
 import { router } from './routes'
 import { errorHandler } from './middlewares/error'
+import { wechatPayNotifyHandler } from './routes/wechat-notify'
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3000
 
 app.use(cors())
+
+// Mount before express.json() so wechat-pay notify receives raw body for signature verification
+app.post('/api/wechat/pay/notify', express.text({ type: '*/*' }), wechatPayNotifyHandler)
+
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 

@@ -1,12 +1,69 @@
+const { wechatLogin } = require('../../api/auth')
+
 Page({
   data: {
     isLoggedIn: false,
+    nickname: '',
+    avatarUrl: '',
   },
 
-  onLoad() {},
+  onLoad() {
+    this._syncLoginState()
+  },
+
+  onShow() {
+    this._syncLoginState()
+  },
+
+  _syncLoginState() {
+    var app = getApp()
+    var userInfo = app.globalData.userInfo
+    var token = app.globalData.token
+    if (token && userInfo) {
+      this.setData({
+        isLoggedIn: true,
+        nickname: userInfo.nickname || '微信用户',
+        avatarUrl: userInfo.avatarUrl || '',
+      })
+    } else {
+      this.setData({ isLoggedIn: false, nickname: '', avatarUrl: '' })
+    }
+  },
 
   onLogin() {
-    wx.showToast({ title: '登录功能即将上线', icon: 'none', duration: 2000 })
+    var self = this
+    wx.showLoading({ title: '登录中...' })
+    wx.login({
+      success: function(res) {
+        if (!res.code) {
+          wx.hideLoading()
+          wx.showToast({ title: '获取登录码失败', icon: 'none' })
+          return
+        }
+        wechatLogin(res.code)
+          .then(function(data) {
+            wx.hideLoading()
+            var app = getApp()
+            app.globalData.token = data.token
+            app.globalData.userInfo = { nickname: data.nickname, avatarUrl: data.avatarUrl }
+            wx.setStorageSync('token', data.token)
+            self.setData({
+              isLoggedIn: true,
+              nickname: data.nickname || '微信用户',
+              avatarUrl: data.avatarUrl || '',
+            })
+            wx.showToast({ title: '登录成功', icon: 'success' })
+          })
+          .catch(function() {
+            wx.hideLoading()
+            wx.showToast({ title: '登录失败，请重试', icon: 'none' })
+          })
+      },
+      fail: function() {
+        wx.hideLoading()
+        wx.showToast({ title: '登录失败', icon: 'none' })
+      },
+    })
   },
 
   goToOrders() {
