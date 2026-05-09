@@ -6,6 +6,18 @@ const prisma = new PrismaClient()
 async function main() {
   console.log('🌱 开始初始化 Seed 数据...\n')
 
+  // ── 开发测试用户（阶段 3-4 使用，阶段 7 接入微信登录后可移除）────
+  await prisma.user.upsert({
+    where: { openid: 'dev_openid_001' },
+    update: {},
+    create: {
+      openid: 'dev_openid_001',
+      nickname: '测试用户',
+      phone: '13800000000',
+    },
+  })
+  console.log('✅ 开发测试用户: id=1, openid=dev_openid_001')
+
   // ── 管理员 ────────────────────────────────────────────
   const passwordHash = await bcrypt.hash('admin123456', 12)
   await prisma.admin.upsert({

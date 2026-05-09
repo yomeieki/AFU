@@ -1,0 +1,85 @@
+<view class="page">
+
+  <!-- Address -->
+  <view class="section address-section" bindtap="onSelectAddress">
+    <view wx:if="{{address}}" class="address-info">
+      <view class="receiver-row">
+        <text class="receiver-name">{{address.receiverName}}</text>
+        <text class="receiver-phone">{{address.receiverPhone}}</text>
+      </view>
+      <text class="address-full">{{address.fullAddress}}</text>
+    </view>
+    <view wx:else class="no-address">
+      <text>请选择收货地址</text>
+    </view>
+    <text class="arrow">&gt;</text>
+  </view>
+
+  <!-- Items -->
+  <view class="section">
+    <view class="section-title">商品明细</view>
+    <view class="item-list">
+      <view wx:for="{{items}}" wx:key="id" class="item-row">
+        <view class="item-img-wrap">
+          <image wx:if="{{item.productImage}}" class="item-img" src="{{item.productImage}}" mode="aspectFill"/>
+          <view wx:else class="item-img-ph"><text>暂无</text></view>
+        </view>
+        <view class="item-info">
+          <text class="item-name">{{item.productName}}</text>
+          <text class="item-qty">× {{item.quantity}}</text>
+        </view>
+        <text class="item-subtotal">¥{{item.subtotal / 100}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- Delivery -->
+  <view class="section">
+    <view class="row">
+      <text class="row-label">配送方式</text>
+      <text class="row-value">快递配送</text>
+    </view>
+  </view>
+
+  <!-- Remark -->
+  <view class="section">
+    <view class="row">
+      <text class="row-label">备注</text>
+      <input
+        class="remark-input"
+        placeholder="选填，如配送时间要求"
+        value="{{remark}}"
+        bindinput="onRemarkInput"
+      />
+    </view>
+  </view>
+
+  <!-- Amount -->
+  <view class="section">
+    <view class="row">
+      <text class="row-label">商品金额</text>
+      <text class="row-value">¥{{totalAmount / 100}}</text>
+    </view>
+    <view class="row">
+      <text class="row-label">运费</text>
+      <text class="row-value free">免运费</text>
+    </view>
+    <view class="row total-row">
+      <text class="row-label">合计</text>
+      <text class="total-price">¥{{totalAmount / 100}}</text>
+    </view>
+  </view>
+
+  <view class="spacer"></view>
+</view>
+
+<!-- Bottom bar -->
+<view class="bottom-bar">
+  <text class="bottom-total">¥{{totalAmount / 100}}</text>
+  <view
+    class="submit-btn {{submitting ? 'disabled' : ''}}"
+    bindtap="onSubmit"
+  >
+    <text>{{submitting ? '提交中...' : '提交订单'}}</text>
+  </view>
+</view>

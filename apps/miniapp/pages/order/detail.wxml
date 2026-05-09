@@ -1,0 +1,98 @@
+<view class="page" wx:if="{{!loading && order}}">
+
+  <!-- Status banner -->
+  <view class="status-banner {{order.status}}">
+    <text class="status-label">{{order.statusLabel}}</text>
+    <text class="status-order-no">{{order.orderNo}}</text>
+  </view>
+
+  <!-- Address -->
+  <view class="card">
+    <view class="card-title">收货地址</view>
+    <view class="receiver-row">
+      <text class="receiver-name">{{order.receiverName}}</text>
+      <text class="receiver-phone">{{order.receiverPhone}}</text>
+    </view>
+    <text class="receiver-address">{{order.receiverFullAddress}}</text>
+  </view>
+
+  <!-- Items -->
+  <view class="card">
+    <view class="card-title">商品信息</view>
+    <view class="item-list">
+      <view wx:for="{{order.items}}" wx:key="id" class="item-row">
+        <view class="item-img-wrap">
+          <image wx:if="{{item.productImage}}" class="item-img" src="{{item.productImage}}" mode="aspectFill"/>
+          <view wx:else class="item-img-ph"><text>无图</text></view>
+        </view>
+        <view class="item-info">
+          <text class="item-name">{{item.productName}}</text>
+          <text class="item-price">¥{{item.priceText}} × {{item.quantity}}</text>
+        </view>
+        <text class="item-subtotal">¥{{item.subtotalText}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- Amount -->
+  <view class="card">
+    <view class="amount-row">
+      <text class="amount-label">商品金额</text>
+      <text class="amount-value">¥{{order.totalAmountText}}</text>
+    </view>
+    <view class="amount-row">
+      <text class="amount-label">运费</text>
+      <text class="amount-value">{{order.shippingFee === 0 ? '免运费' : '¥' + order.shippingFeeText}}</text>
+    </view>
+    <view class="amount-row total-row">
+      <text class="amount-label">合计</text>
+      <text class="total-price">¥{{order.actualAmountText}}</text>
+    </view>
+  </view>
+
+  <!-- Order info -->
+  <view class="card">
+    <view class="info-row">
+      <text class="info-label">订单号</text>
+      <text class="info-value">{{order.orderNo}}</text>
+    </view>
+    <view class="info-row" wx:if="{{order.remark}}">
+      <text class="info-label">备注</text>
+      <text class="info-value">{{order.remark}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">下单时间</text>
+      <text class="info-value">{{order.createdAtText}}</text>
+    </view>
+    <view class="info-row" wx:if="{{order.paidAtText}}">
+      <text class="info-label">支付时间</text>
+      <text class="info-value">{{order.paidAtText}}</text>
+    </view>
+  </view>
+
+  <!-- Shipment -->
+  <view class="card" wx:if="{{order.shipment}}">
+    <view class="card-title">物流信息</view>
+    <view class="info-row">
+      <text class="info-label">快递公司</text>
+      <text class="info-value">{{order.shipment.expressCompany}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">快递单号</text>
+      <text class="info-value">{{order.shipment.expressNo}}</text>
+    </view>
+  </view>
+
+  <view class="spacer"></view>
+</view>
+
+<view wx:if="{{loading}}" class="loading-page">
+  <text class="loading-text">加载中...</text>
+</view>
+
+<!-- Bottom action bar -->
+<view class="action-bar" wx:if="{{!loading && order && order.status === 'PENDING_PAYMENT'}}">
+  <view class="pay-btn" bindtap="onPay">
+    <text>去支付</text>
+  </view>
+</view>

@@ -1,5 +1,6 @@
 const { request } = require('../../utils/request')
 const { formatPrice, formatStock } = require('../../utils/format')
+const { addToCart } = require('../../api/cart')
 
 Page({
   data: {
@@ -14,10 +15,8 @@ Page({
       setTimeout(function() { wx.navigateBack() }, 1500)
       return
     }
-    // Try to parse scene parameter (scan from QR code)
     if (options.scene) {
       var scene = decodeURIComponent(options.scene)
-      // scene format: "p_<id>"
       var match = scene.match(/^p_(\d+)$/)
       if (match) id = match[1]
     }
@@ -52,10 +51,32 @@ Page({
   },
 
   onAddToCart() {
-    wx.showToast({ title: '购物车功能即将上线', icon: 'none', duration: 2000 })
+    var product = this.data.product
+    if (!product) return
+    wx.showLoading({ title: '加入中...' })
+    addToCart(product.id, 1)
+      .then(function() {
+        wx.hideLoading()
+        wx.showToast({ title: '已加入购物车', icon: 'success', duration: 1500 })
+      })
+      .catch(function() {
+        wx.hideLoading()
+      })
   },
 
   onBuyNow() {
-    wx.showToast({ title: '下单功能即将上线', icon: 'none', duration: 2000 })
+    var product = this.data.product
+    if (!product) return
+    wx.showLoading({ title: '处理中...' })
+    addToCart(product.id, 1)
+      .then(function(res) {
+        wx.hideLoading()
+        wx.navigateTo({
+          url: '/pages/order/confirm?cartItemIds=' + res.id,
+        })
+      })
+      .catch(function() {
+        wx.hideLoading()
+      })
   },
 })

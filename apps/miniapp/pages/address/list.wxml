@@ -1,0 +1,44 @@
+<view class="page">
+
+  <view wx:if="{{loading}}" class="loading-wrap">
+    <text class="tip-text">加载中...</text>
+  </view>
+
+  <view wx:elif="{{addresses.length === 0}}" class="empty-wrap">
+    <text class="empty-text">暂无收货地址</text>
+    <view class="add-btn" bindtap="onAddAddress">新增地址</view>
+  </view>
+
+  <view wx:else>
+    <view class="address-list">
+      <view
+        wx:for="{{addresses}}"
+        wx:key="id"
+        class="address-card {{mode === 'select' ? 'selectable' : ''}}"
+        bindtap="onSelectAddress"
+        data-address="{{item}}"
+      >
+        <view class="address-main">
+          <view class="address-receiver">
+            <text class="receiver-name">{{item.receiverName}}</text>
+            <text class="receiver-phone">{{item.receiverPhone}}</text>
+            <view wx:if="{{item.isDefault}}" class="default-tag">默认</view>
+          </view>
+          <text class="address-full">{{item.fullAddress}}</text>
+        </view>
+        <view class="address-actions" wx:if="{{mode !== 'select'}}">
+          <view class="action-btn" catchtap="onEditAddress" data-id="{{item.id}}">编辑</view>
+          <view class="action-btn delete" catchtap="onDeleteAddress" data-id="{{item.id}}">删除</view>
+        </view>
+        <view class="select-icon" wx:if="{{mode === 'select'}}">
+          <text>&gt;</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="add-btn-wrap" wx:if="{{mode !== 'select'}}">
+      <view class="add-btn" bindtap="onAddAddress">新增收货地址</view>
+    </view>
+  </view>
+
+</view>

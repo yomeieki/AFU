@@ -3,6 +3,12 @@
     "pages/index/index",
     "pages/product/list",
     "pages/product/detail",
+    "pages/cart/index",
+    "pages/address/list",
+    "pages/address/edit",
+    "pages/order/confirm",
+    "pages/order/list",
+    "pages/order/detail",
     "pages/user/index"
   ],
   "tabBar": {
@@ -17,6 +23,10 @@
       {
         "pagePath": "pages/product/list",
         "text": "分类"
+      },
+      {
+        "pagePath": "pages/cart/index",
+        "text": "购物车"
       },
       {
         "pagePath": "pages/user/index",
