@@ -1,0 +1,86 @@
+<view class="page" wx:if="{{!loading && product}}">
+
+  <!-- Image swiper -->
+  <swiper
+    class="img-swiper"
+    indicator-dots="{{product.images.length > 1}}"
+    indicator-color="rgba(255,255,255,0.5)"
+    indicator-active-color="#fff"
+    autoplay="{{false}}"
+    circular="{{true}}"
+  >
+    <swiper-item wx:for="{{product.images}}" wx:key="index">
+      <image class="swiper-img" src="{{item}}" mode="aspectFill" />
+    </swiper-item>
+    <swiper-item wx:if="{{product.images.length === 0}}">
+      <view class="swiper-placeholder">
+        <text class="swiper-placeholder-text">暂无图片</text>
+      </view>
+    </swiper-item>
+  </swiper>
+
+  <!-- Main info -->
+  <view class="card">
+    <view class="price-row">
+      <text class="price">¥{{product.priceText}}</text>
+      <text class="original-price" wx:if="{{product.originalPriceText}}">¥{{product.originalPriceText}}</text>
+      <text class="unit">/ {{product.unit}}</text>
+    </view>
+    <text class="product-name">{{product.name}}</text>
+    <text class="product-subtitle" wx:if="{{product.subtitle}}">{{product.subtitle}}</text>
+    <view class="meta-row">
+      <view class="meta-tag stock-tag">
+        <text>{{product.stockLabel}}</text>
+      </view>
+      <text class="sales-text">已售 {{product.salesCount}}</text>
+    </view>
+  </view>
+
+  <!-- Specs -->
+  <view class="card" wx:if="{{product.weight || product.shelfLife || product.storageMethod || product.deliveryInfo}}">
+    <view class="card-title">
+      <text>规格说明</text>
+    </view>
+    <view class="spec-list">
+      <view class="spec-row" wx:if="{{product.weight}}">
+        <text class="spec-label">规格/重量</text>
+        <text class="spec-value">{{product.weight}}</text>
+      </view>
+      <view class="spec-row" wx:if="{{product.shelfLife}}">
+        <text class="spec-label">保　　质　期</text>
+        <text class="spec-value">{{product.shelfLife}}</text>
+      </view>
+      <view class="spec-row" wx:if="{{product.storageMethod}}">
+        <text class="spec-label">储存方式</text>
+        <text class="spec-value">{{product.storageMethod}}</text>
+      </view>
+      <view class="spec-row" wx:if="{{product.deliveryInfo}}">
+        <text class="spec-label">配送说明</text>
+        <text class="spec-value">{{product.deliveryInfo}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- Description -->
+  <view class="card" wx:if="{{product.description}}">
+    <view class="card-title">
+      <text>商品详情</text>
+    </view>
+    <text class="description-text">{{product.description}}</text>
+  </view>
+
+  <!-- Bottom spacer for action bar -->
+  <view class="action-bar-spacer"></view>
+
+</view>
+
+<!-- Loading state -->
+<view wx:if="{{loading}}" class="loading-page">
+  <text class="loading-text">加载中...</text>
+</view>
+
+<!-- Bottom action bar -->
+<view class="action-bar" wx:if="{{!loading && product}}">
+  <button class="btn-cart" bindtap="onAddToCart">加入购物车</button>
+  <button class="btn-buy" bindtap="onBuyNow">立即购买</button>
+</view>

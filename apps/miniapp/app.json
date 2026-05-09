@@ -3,12 +3,6 @@
     "pages/index/index",
     "pages/product/list",
     "pages/product/detail",
-    "pages/cart/index",
-    "pages/order/confirm",
-    "pages/order/list",
-    "pages/order/detail",
-    "pages/address/list",
-    "pages/address/edit",
     "pages/user/index"
   ],
   "tabBar": {
@@ -18,34 +12,22 @@
     "list": [
       {
         "pagePath": "pages/index/index",
-        "text": "首页",
-        "iconPath": "assets/icons/home.png",
-        "selectedIconPath": "assets/icons/home-active.png"
+        "text": "首页"
       },
       {
         "pagePath": "pages/product/list",
-        "text": "分类",
-        "iconPath": "assets/icons/category.png",
-        "selectedIconPath": "assets/icons/category-active.png"
-      },
-      {
-        "pagePath": "pages/cart/index",
-        "text": "购物车",
-        "iconPath": "assets/icons/cart.png",
-        "selectedIconPath": "assets/icons/cart-active.png"
+        "text": "分类"
       },
       {
         "pagePath": "pages/user/index",
-        "text": "我的",
-        "iconPath": "assets/icons/user.png",
-        "selectedIconPath": "assets/icons/user-active.png"
+        "text": "我的"
       }
     ]
   },
   "window": {
     "backgroundTextStyle": "dark",
     "navigationBarBackgroundColor": "#ffffff",
-    "navigationBarTitleText": "美味熟食",
+    "navigationBarTitleText": "食品商城",
     "navigationBarTextStyle": "black"
   },
   "networkTimeout": {

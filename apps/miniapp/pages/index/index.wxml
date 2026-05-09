@@ -1,0 +1,89 @@
+<view class="page">
+
+  <!-- Banner placeholder -->
+  <view class="banner">
+    <view class="banner-inner">
+      <text class="banner-title">新鲜熟食</text>
+      <text class="banner-sub">每日现做 · 品质保证</text>
+    </view>
+  </view>
+
+  <!-- Categories -->
+  <view class="section" wx:if="{{categories.length > 0}}">
+    <view class="section-header">
+      <text class="section-title">商品分类</text>
+      <text class="section-more" bindtap="goToAllProducts">全部 &gt;</text>
+    </view>
+    <scroll-view scroll-x class="category-scroll" enhanced="{{true}}" show-scrollbar="{{false}}">
+      <view class="category-list">
+        <view
+          wx:for="{{categories}}"
+          wx:key="id"
+          class="category-item"
+          bindtap="goToList"
+          data-id="{{item.id}}"
+          data-name="{{item.name}}"
+        >
+          <view class="category-icon-wrap">
+            <image
+              wx:if="{{item.iconUrl}}"
+              class="category-icon"
+              src="{{item.iconUrl}}"
+              mode="aspectFit"
+              lazy-load="{{true}}"
+            />
+            <text wx:else class="category-icon-text">{{item.name[0]}}</text>
+          </view>
+          <text class="category-name">{{item.name}}</text>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+
+  <!-- Recommended Products -->
+  <view class="section">
+    <view class="section-header">
+      <text class="section-title">推荐商品</text>
+    </view>
+
+    <view wx:if="{{loading}}" class="loading-wrap">
+      <text class="loading-text">加载中...</text>
+    </view>
+
+    <view wx:elif="{{products.length === 0}}" class="empty-wrap">
+      <text class="empty-text">暂无商品</text>
+    </view>
+
+    <view wx:else class="product-grid">
+      <view
+        wx:for="{{products}}"
+        wx:key="id"
+        class="product-card"
+        bindtap="goToDetail"
+        data-id="{{item.id}}"
+      >
+        <view class="product-img-wrap">
+          <image
+            wx:if="{{item.coverImage}}"
+            class="product-img"
+            src="{{item.coverImage}}"
+            mode="aspectFill"
+            lazy-load="{{true}}"
+          />
+          <view wx:else class="product-img-placeholder">
+            <text class="product-img-placeholder-text">暂无图片</text>
+          </view>
+        </view>
+        <view class="product-info">
+          <text class="product-name">{{item.name}}</text>
+          <text class="product-subtitle" wx:if="{{item.subtitle}}">{{item.subtitle}}</text>
+          <view class="product-bottom">
+            <text class="product-price">¥{{item.priceText}}</text>
+            <text class="product-sales">已售{{item.salesCount}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+</view>

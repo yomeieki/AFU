@@ -1,0 +1,58 @@
+<view class="page">
+
+  <!-- User header -->
+  <view class="user-header">
+    <view class="avatar-wrap">
+      <view class="avatar-placeholder">
+        <text class="avatar-icon">👤</text>
+      </view>
+    </view>
+    <view class="user-info">
+      <text class="user-name">未登录</text>
+      <button class="login-btn" bindtap="onLogin">点击登录</button>
+    </view>
+  </view>
+
+  <!-- Menu -->
+  <view class="menu-section">
+    <view class="menu-title">
+      <text>我的订单</text>
+    </view>
+    <view class="menu-list">
+      <view class="menu-item" bindtap="onMenuTap" data-title="待付款">
+        <text class="menu-icon">💳</text>
+        <text class="menu-label">待付款</text>
+        <text class="menu-arrow">&gt;</text>
+      </view>
+      <view class="menu-item" bindtap="onMenuTap" data-title="待发货">
+        <text class="menu-icon">📦</text>
+        <text class="menu-label">待发货</text>
+        <text class="menu-arrow">&gt;</text>
+      </view>
+      <view class="menu-item" bindtap="onMenuTap" data-title="已发货">
+        <text class="menu-icon">🚚</text>
+        <text class="menu-label">已发货</text>
+        <text class="menu-arrow">&gt;</text>
+      </view>
+      <view class="menu-item" bindtap="onMenuTap" data-title="全部订单">
+        <text class="menu-icon">📋</text>
+        <text class="menu-label">全部订单</text>
+        <text class="menu-arrow">&gt;</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="menu-section">
+    <view class="menu-title">
+      <text>更多</text>
+    </view>
+    <view class="menu-list">
+      <view class="menu-item" bindtap="onMenuTap" data-title="收货地址">
+        <text class="menu-icon">📍</text>
+        <text class="menu-label">收货地址</text>
+        <text class="menu-arrow">&gt;</text>
+      </view>
+    </view>
+  </view>
+
+</view>
