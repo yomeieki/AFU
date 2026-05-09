@@ -1,5 +1,5 @@
 import client from './client'
-import type { ApiResponse, PaginatedData, Category, Product, Order, Stats } from '../types'
+import type { ApiResponse, PaginatedData, Category, Product, Order, Stats, QrCodeResult } from '../types'
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -41,6 +41,9 @@ export const updateProduct = (id: number, data: Partial<Product>) =>
 
 export const deleteProduct = (id: number) =>
   client.delete<ApiResponse<null>>(`/admin/products/${id}`)
+
+export const generateQrCode = (id: number) =>
+  client.post<ApiResponse<QrCodeResult>>(`/admin/products/${id}/qrcode`)
 
 // Orders
 export const getOrders = (params?: {

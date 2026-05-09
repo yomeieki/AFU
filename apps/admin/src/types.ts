@@ -40,9 +40,18 @@ export interface Product {
   deliveryType: string
   isRecommended: number
   salesCount: number
+  qrScene: string | null
+  qrCodeUrl: string | null
+  qrGeneratedAt: string | null
   deletedAt: string | null
   createdAt: string
   category?: { id: number; name: string }
+}
+
+export interface QrCodeResult {
+  qrCodeUrl: string | null
+  qrScene: string | null
+  qrGeneratedAt: string | null
 }
 
 export interface OrderItem {

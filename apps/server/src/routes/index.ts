@@ -6,6 +6,7 @@ import cartRouter from './cart'
 import addressRouter from './addresses'
 import orderRouter from './orders'
 import paymentRouter from './payments'
+import scanLogRouter from './scan-logs'
 import { devUserMiddleware } from '../middlewares/dev-user'
 
 export const router = Router()
@@ -22,7 +23,4 @@ router.use('/cart', devUserMiddleware, cartRouter)
 router.use('/addresses', devUserMiddleware, addressRouter)
 router.use('/orders', devUserMiddleware, orderRouter)
 router.use('/payments', paymentRouter)
-
-// 后续阶段追加：
-// router.use('/auth',       authRouter)
-// router.use('/scan-logs',  scanLogRouter)
+router.use('/scan-logs', scanLogRouter)

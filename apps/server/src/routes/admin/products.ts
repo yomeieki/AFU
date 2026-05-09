@@ -3,6 +3,7 @@ import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
+import { generateProductQrCode } from '../../services/qrcode'
 
 const router = Router()
 
@@ -99,6 +100,31 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
       data: { deletedAt: new Date() },
     })
     success(res, null, '删除成功')
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/products/:id/qrcode
+router.post('/:id/qrcode', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const product = await prisma.product.findFirst({ where: { id, deletedAt: null } })
+    if (!product) throw new AppError(40401, '商品不存在', 404)
+
+    const { scene, qrCodeUrl } = await generateProductQrCode(id)
+    const now = new Date()
+
+    const updated = await prisma.product.update({
+      where: { id },
+      data: { qrScene: scene, qrCodeUrl, qrGeneratedAt: now },
+    })
+
+    success(res, {
+      qrCodeUrl: updated.qrCodeUrl,
+      qrScene: updated.qrScene,
+      qrGeneratedAt: updated.qrGeneratedAt,
+    })
   } catch (e) {
     next(e)
   }

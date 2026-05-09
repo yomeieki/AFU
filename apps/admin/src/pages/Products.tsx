@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getProducts, getCategories, createProduct, updateProduct, deleteProduct } from '../api/admin'
+import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode } from '../api/admin'
 import type { Product, Category } from '../types'
 
 const emptyForm = {
@@ -30,6 +30,8 @@ export default function Products() {
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [generatingQrId, setGeneratingQrId] = useState<number | null>(null)
+  const [qrModal, setQrModal] = useState<Product | null>(null)
 
   const load = (p = page) => {
     setLoading(true)
@@ -130,7 +132,23 @@ export default function Products() {
     }
   }
 
+  const handleGenerateQr = async (p: Product) => {
+    if (!confirm(`为「${p.name}」生成二维码？${p.qrCodeUrl ? '（将覆盖已有二维码）' : ''}`)) return
+    setGeneratingQrId(p.id)
+    try {
+      await generateQrCode(p.id)
+      load()
+    } catch (err: unknown) {
+      alert(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '生成失败'
+      )
+    } finally {
+      setGeneratingQrId(null)
+    }
+  }
+
   const totalPages = Math.ceil(total / pageSize)
+  const isMockUrl = (url: string | null) => !url || url.startsWith('mock://')
 
   return (
     <div className="space-y-4">
@@ -199,6 +217,7 @@ export default function Products() {
                   <th className="text-right px-4 py-3">库存</th>
                   <th className="text-right px-4 py-3">销量</th>
                   <th className="text-right px-4 py-3">状态</th>
+                  <th className="text-right px-4 py-3">二维码</th>
                   <th className="text-right px-4 py-3">操作</th>
                 </tr>
               </thead>
@@ -215,8 +234,23 @@ export default function Products() {
                         {p.status === 'ON_SHELF' ? '上架' : '下架'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right space-x-3">
+                    <td className="px-4 py-3 text-right">
+                      <span className={`px-2 py-0.5 rounded-full text-xs ${p.qrCodeUrl ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>
+                        {p.qrCodeUrl ? '已生成' : '未生成'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right space-x-2">
                       <button onClick={() => openEdit(p)} className="text-blue-500 hover:text-blue-700">编辑</button>
+                      <button
+                        onClick={() => handleGenerateQr(p)}
+                        disabled={generatingQrId === p.id}
+                        className="text-purple-500 hover:text-purple-700 disabled:opacity-40"
+                      >
+                        {generatingQrId === p.id ? '生成中...' : '生成二维码'}
+                      </button>
+                      {p.qrCodeUrl && (
+                        <button onClick={() => setQrModal(p)} className="text-indigo-500 hover:text-indigo-700">查看</button>
+                      )}
                       <button onClick={() => handleDelete(p)} className="text-red-500 hover:text-red-700">删除</button>
                     </td>
                   </tr>
@@ -247,6 +281,7 @@ export default function Products() {
         )}
       </div>
 
+      {/* 新增/编辑弹窗 */}
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 overflow-y-auto py-8">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 space-y-4 mx-4">
@@ -371,6 +406,55 @@ export default function Products() {
                 className="text-sm px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-md disabled:opacity-50"
               >
                 {saving ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 二维码查看弹窗 */}
+      {qrModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 space-y-4 mx-4">
+            <h3 className="text-lg font-semibold text-gray-800">二维码信息</h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">商品</span>
+                <span className="text-gray-800 font-medium">{qrModal.name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Scene</span>
+                <span className="text-gray-800 font-mono">{qrModal.qrScene}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">生成时间</span>
+                <span className="text-gray-600">
+                  {qrModal.qrGeneratedAt ? new Date(qrModal.qrGeneratedAt).toLocaleString() : '-'}
+                </span>
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-md p-3">
+              <p className="text-xs text-gray-500 mb-1">二维码 URL</p>
+              <p className="text-xs text-gray-700 break-all font-mono">{qrModal.qrCodeUrl}</p>
+            </div>
+            {qrModal.qrCodeUrl && !isMockUrl(qrModal.qrCodeUrl) && (
+              <img
+                src={qrModal.qrCodeUrl}
+                alt="二维码"
+                className="w-40 h-40 mx-auto border border-gray-200 rounded"
+              />
+            )}
+            {isMockUrl(qrModal.qrCodeUrl) && (
+              <p className="text-xs text-amber-600 bg-amber-50 rounded p-2">
+                当前为 Mock 模式，接入真实微信配置后此处将显示可扫描的小程序码图片。
+              </p>
+            )}
+            <div className="flex justify-end">
+              <button
+                onClick={() => setQrModal(null)}
+                className="text-sm px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                关闭
               </button>
             </div>
           </div>

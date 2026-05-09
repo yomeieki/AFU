@@ -1,6 +1,7 @@
 const { request } = require('../../utils/request')
 const { formatPrice, formatStock } = require('../../utils/format')
 const { addToCart } = require('../../api/cart')
+const { recordScanLog } = require('../../api/scan')
 
 Page({
   data: {
@@ -10,16 +11,29 @@ Page({
 
   onLoad(options) {
     var id = options.id
+    var scanScene = null
+    var source = options.source || 'package'
+
+    // Handle QR code scan entry: options.scene contains the encoded scene string
+    if (options.scene) {
+      var decoded = decodeURIComponent(options.scene)
+      var match = decoded.match(/^p_(\d+)$/)
+      if (match) {
+        id = match[1]
+        scanScene = decoded
+      }
+    }
+
     if (!id) {
       wx.showToast({ title: '商品不存在', icon: 'none' })
       setTimeout(function() { wx.navigateBack() }, 1500)
       return
     }
-    if (options.scene) {
-      var scene = decodeURIComponent(options.scene)
-      var match = scene.match(/^p_(\d+)$/)
-      if (match) id = match[1]
+
+    if (scanScene) {
+      recordScanLog(scanScene, source)
     }
+
     this.loadProduct(id)
   },
 
