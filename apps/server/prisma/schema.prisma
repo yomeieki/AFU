@@ -1,0 +1,296 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────
+// 用户
+// ─────────────────────────────────────────────────────────
+model User {
+  id          Int       @id @default(autoincrement())
+  openid      String    @unique @db.VarChar(64)
+  unionid     String?   @db.VarChar(64)
+  nickname    String?   @db.VarChar(64)
+  avatarUrl   String?   @map("avatar_url") @db.VarChar(500)
+  phone       String?   @db.VarChar(20)
+  status      Int       @default(1) @db.TinyInt
+  lastLoginAt DateTime? @map("last_login_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  carts     Cart[]
+  addresses Address[]
+  orders    Order[]
+  scanLogs  ScanLog[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────
+// 后台管理员
+// ─────────────────────────────────────────────────────────
+model Admin {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique @db.VarChar(64)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  name         String?   @db.VarChar(64)
+  role         String    @default("admin") @db.VarChar(32)
+  status       Int       @default(1) @db.TinyInt
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("admins")
+}
+
+// ─────────────────────────────────────────────────────────
+// 商品分类
+// ─────────────────────────────────────────────────────────
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @db.VarChar(64)
+  iconUrl   String?   @map("icon_url") @db.VarChar(500)
+  sortOrder Int       @default(0) @map("sort_order")
+  status    Int       @default(1) @db.TinyInt
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  products Product[]
+
+  @@index([status, sortOrder])
+  @@map("categories")
+}
+
+// ─────────────────────────────────────────────────────────
+// 商品
+// ─────────────────────────────────────────────────────────
+model Product {
+  id            Int       @id @default(autoincrement())
+  categoryId    Int       @map("category_id")
+  name          String    @db.VarChar(128)
+  subtitle      String?   @db.VarChar(255)
+  coverImage    String?   @map("cover_image") @db.VarChar(500)
+  price         Int
+  originalPrice Int?      @map("original_price")
+  stock         Int       @default(0)
+  salesCount    Int       @default(0) @map("sales_count")
+  unit          String    @default("份") @db.VarChar(16)
+  weight        String?   @db.VarChar(32)
+  shelfLife     String?   @map("shelf_life") @db.VarChar(64)
+  storageMethod String?   @map("storage_method") @db.VarChar(128)
+  deliveryInfo  String?   @map("delivery_info") @db.Text
+  description   String?   @db.Text
+  // ON_SHELF=上架  OFF_SHELF=下架  DELETED=已删除
+  status        String    @default("ON_SHELF") @db.VarChar(16)
+  // EXPRESS,LOCAL,PICKUP 逗号分隔
+  deliveryType  String    @default("EXPRESS") @map("delivery_type") @db.VarChar(64)
+  isRecommended Int       @default(0) @map("is_recommended") @db.TinyInt
+  qrScene       String?   @map("qr_scene") @db.VarChar(64)
+  qrCodeUrl     String?   @map("qr_code_url") @db.VarChar(500)
+  qrGeneratedAt DateTime? @map("qr_generated_at")
+  deletedAt     DateTime? @map("deleted_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  category   Category       @relation(fields: [categoryId], references: [id])
+  images     ProductImage[]
+  carts      Cart[]
+  orderItems OrderItem[]
+  scanLogs   ScanLog[]
+
+  @@index([categoryId, status])
+  @@index([status, isRecommended])
+  @@map("products")
+}
+
+// ─────────────────────────────────────────────────────────
+// 商品图片
+// ─────────────────────────────────────────────────────────
+model ProductImage {
+  id        Int      @id @default(autoincrement())
+  productId Int      @map("product_id")
+  imageUrl  String   @map("image_url") @db.VarChar(500)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId, sortOrder])
+  @@map("product_images")
+}
+
+// ─────────────────────────────────────────────────────────
+// 购物车
+// ─────────────────────────────────────────────────────────
+model Cart {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  productId  Int      @map("product_id")
+  quantity   Int      @default(1)
+  isSelected Int      @default(1) @map("is_selected") @db.TinyInt
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([userId, productId])
+  @@map("carts")
+}
+
+// ─────────────────────────────────────────────────────────
+// 收货地址
+// ─────────────────────────────────────────────────────────
+model Address {
+  id            Int       @id @default(autoincrement())
+  userId        Int       @map("user_id")
+  receiverName  String    @map("receiver_name") @db.VarChar(64)
+  receiverPhone String    @map("receiver_phone") @db.VarChar(20)
+  province      String    @db.VarChar(32)
+  city          String    @db.VarChar(32)
+  district      String    @db.VarChar(32)
+  detail        String    @db.VarChar(255)
+  fullAddress   String    @map("full_address") @db.VarChar(500)
+  isDefault     Int       @default(0) @map("is_default") @db.TinyInt
+  deletedAt     DateTime? @map("deleted_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+// ─────────────────────────────────────────────────────────
+// 订单
+// ─────────────────────────────────────────────────────────
+model Order {
+  id                  Int       @id @default(autoincrement())
+  orderNo             String    @unique @map("order_no") @db.VarChar(32)
+  userId              Int       @map("user_id")
+  // PENDING_PAYMENT / PAID / SHIPPED / COMPLETED / CANCELLED / REFUNDING / REFUNDED
+  status              String    @db.VarChar(32)
+  totalAmount         Int       @map("total_amount")
+  shippingFee         Int       @default(0) @map("shipping_fee")
+  actualAmount        Int       @map("actual_amount")
+  deliveryType        String    @map("delivery_type") @db.VarChar(16)
+  remark              String?   @db.VarChar(255)
+  // 收货地址快照
+  receiverName        String    @map("receiver_name") @db.VarChar(64)
+  receiverPhone       String    @map("receiver_phone") @db.VarChar(20)
+  receiverProvince    String    @map("receiver_province") @db.VarChar(32)
+  receiverCity        String    @map("receiver_city") @db.VarChar(32)
+  receiverDistrict    String    @map("receiver_district") @db.VarChar(32)
+  receiverDetail      String    @map("receiver_detail") @db.VarChar(255)
+  receiverFullAddress String    @map("receiver_full_address") @db.VarChar(500)
+  paidAt              DateTime? @map("paid_at")
+  cancelledAt         DateTime? @map("cancelled_at")
+  cancelReason        String?   @map("cancel_reason") @db.VarChar(255)
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  user     User        @relation(fields: [userId], references: [id])
+  items    OrderItem[]
+  payment  Payment?
+  shipment Shipment?
+
+  @@index([userId, status])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+// ─────────────────────────────────────────────────────────
+// 订单商品（含商品快照）
+// ─────────────────────────────────────────────────────────
+model OrderItem {
+  id           Int      @id @default(autoincrement())
+  orderId      Int      @map("order_id")
+  productId    Int?     @map("product_id")
+  productName  String   @map("product_name") @db.VarChar(128)
+  productImage String?  @map("product_image") @db.VarChar(500)
+  productPrice Int      @map("product_price")
+  quantity     Int
+  subtotal     Int
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  order   Order    @relation(fields: [orderId], references: [id])
+  product Product? @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+// ─────────────────────────────────────────────────────────
+// 支付记录
+// ─────────────────────────────────────────────────────────
+model Payment {
+  id              Int       @id @default(autoincrement())
+  orderId         Int       @unique @map("order_id")
+  orderNo         String    @map("order_no") @db.VarChar(32)
+  // MOCK / WECHAT
+  paymentType     String    @map("payment_type") @db.VarChar(16)
+  amount          Int
+  // PENDING / SUCCESS / FAILED / REFUNDED
+  status          String    @db.VarChar(16)
+  wxPrepayId      String?   @map("wx_prepay_id") @db.VarChar(64)
+  wxTransactionId String?   @unique @map("wx_transaction_id") @db.VarChar(64)
+  wxNotifyData    String?   @map("wx_notify_data") @db.Text
+  paidAt          DateTime? @map("paid_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderNo])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────
+// 发货/物流信息
+// ─────────────────────────────────────────────────────────
+model Shipment {
+  id             Int       @id @default(autoincrement())
+  orderId        Int       @unique @map("order_id")
+  orderNo        String    @map("order_no") @db.VarChar(32)
+  expressCompany String?   @map("express_company") @db.VarChar(64)
+  expressNo      String?   @map("express_no") @db.VarChar(64)
+  shippedAt      DateTime? @map("shipped_at")
+  deliveryType   String    @map("delivery_type") @db.VarChar(16)
+  remark         String?   @db.VarChar(255)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@map("shipments")
+}
+
+// ─────────────────────────────────────────────────────────
+// 二维码扫码日志
+// ─────────────────────────────────────────────────────────
+model ScanLog {
+  id        Int      @id @default(autoincrement())
+  productId Int      @map("product_id")
+  userId    Int?     @map("user_id")
+  openid    String?  @db.VarChar(64)
+  scene     String   @db.VarChar(64)
+  source    String   @default("package") @db.VarChar(32)
+  ip        String?  @db.VarChar(45)
+  userAgent String?  @map("user_agent") @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id])
+  user    User?   @relation(fields: [userId], references: [id])
+
+  @@index([productId])
+  @@index([openid])
+  @@index([createdAt])
+  @@map("scan_logs")
+}

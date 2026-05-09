@@ -1,0 +1,27 @@
+services:
+  food-shop-mysql:
+    image: mysql:8.0
+    container_name: food-shop-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: foodshop_root_password
+      MYSQL_DATABASE: food_shop
+      MYSQL_USER: foodshop_user
+      MYSQL_PASSWORD: foodshop_password
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - food_shop_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pfoodshop_root_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  food_shop_mysql_data:

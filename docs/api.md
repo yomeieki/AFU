@@ -1,0 +1,878 @@
+# API 设计文档
+
+## 一、通用约定
+
+### 1.1 请求格式
+
+- 协议：HTTPS
+- 数据格式：JSON（`Content-Type: application/json`）
+- 字符集：UTF-8
+- 文件上传：`multipart/form-data`
+
+### 1.2 认证方式
+
+- 用户端：`Authorization: Bearer <user_jwt_token>`
+- 管理端：`Authorization: Bearer <admin_jwt_token>`
+
+### 1.3 统一响应格式
+
+**成功：**
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": { ... }
+}
+```
+
+**分页列表：**
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "list": [ ... ],
+    "total": 100,
+    "page": 1,
+    "pageSize": 20
+  }
+}
+```
+
+**失败：**
+```json
+{
+  "code": 40001,
+  "message": "商品不存在",
+  "data": null
+}
+```
+
+### 1.4 错误码设计
+
+| 错误码 | 说明 |
+|--------|------|
+| 0 | 成功 |
+| 40001 | 参数错误 |
+| 40101 | 未登录 / Token 无效 |
+| 40102 | Token 已过期 |
+| 40301 | 无权限 |
+| 40401 | 资源不存在 |
+| 40901 | 数据冲突（如重复提交） |
+| 42201 | 库存不足 |
+| 42202 | 商品已下架 |
+| 42203 | 订单状态错误 |
+| 42204 | 支付金额不匹配 |
+| 50001 | 服务器内部错误 |
+| 50002 | 第三方服务错误（微信/COS） |
+
+### 1.5 金额说明
+
+- 所有金额字段单位为**分（整数）**。
+- 示例：`price: 2990` 表示 29.90 元。
+- 前端展示时自行除以 100。
+
+---
+
+## 二、小程序端 API
+
+### 2.1 认证
+
+#### POST /api/auth/wechat-login
+
+微信登录，用 code 换取用户 JWT。
+
+**Request Body:**
+```json
+{
+  "code": "wx_login_code_from_wx.login()"
+}
+```
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "token": "eyJhbGci...",
+    "expiresIn": 604800,
+    "userInfo": {
+      "id": 1,
+      "nickname": "张三",
+      "avatarUrl": "https://..."
+    }
+  }
+}
+```
+
+**说明：**
+- 后端用 code 调用微信 `jscode2session` 接口换取 openid。
+- 首次登录自动创建用户记录。
+- 返回自签 JWT，有效期 7 天。
+
+---
+
+### 2.2 商品分类
+
+#### GET /api/categories
+
+获取所有上架分类列表。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": [
+    {
+      "id": 1,
+      "name": "熟食",
+      "iconUrl": "https://cos.../icon.png",
+      "sortOrder": 1
+    }
+  ]
+}
+```
+
+---
+
+### 2.3 商品
+
+#### GET /api/products
+
+商品列表（支持分类筛选、搜索、分页）。
+
+**Query Params:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| categoryId | int | 否 | 分类 ID |
+| keyword | string | 否 | 搜索关键词 |
+| page | int | 否 | 页码，默认 1 |
+| pageSize | int | 否 | 每页数量，默认 20，最大 50 |
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "list": [
+      {
+        "id": 1,
+        "name": "招牌猪头肉",
+        "coverImage": "https://...",
+        "price": 2990,
+        "originalPrice": 3500,
+        "unit": "份",
+        "salesCount": 128,
+        "stock": 50,
+        "status": "ON_SHELF"
+      }
+    ],
+    "total": 30,
+    "page": 1,
+    "pageSize": 20
+  }
+}
+```
+
+---
+
+#### GET /api/products/:id
+
+商品详情。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "id": 1,
+    "categoryId": 2,
+    "name": "招牌猪头肉",
+    "subtitle": "每日新鲜制作，限量供应",
+    "coverImage": "https://...",
+    "images": [
+      { "id": 1, "imageUrl": "https://...", "sortOrder": 0 }
+    ],
+    "price": 2990,
+    "originalPrice": 3500,
+    "stock": 50,
+    "salesCount": 128,
+    "unit": "份",
+    "weight": "500g",
+    "shelfLife": "常温3天，冷藏7天",
+    "storageMethod": "常温存放，开封后冷藏",
+    "deliveryInfo": "支持顺丰快递，次日达",
+    "description": "<p>...</p>",
+    "deliveryType": "EXPRESS,LOCAL",
+    "status": "ON_SHELF"
+  }
+}
+```
+
+---
+
+### 2.4 购物车
+
+> 所有购物车接口需要携带用户 JWT。
+
+#### GET /api/cart
+
+获取当前用户购物车。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "productId": 1,
+        "productName": "招牌猪头肉",
+        "productImage": "https://...",
+        "price": 2990,
+        "stock": 50,
+        "status": "ON_SHELF",
+        "quantity": 2,
+        "isSelected": true,
+        "subtotal": 5980
+      }
+    ],
+    "totalAmount": 5980,
+    "selectedCount": 1
+  }
+}
+```
+
+---
+
+#### POST /api/cart
+
+添加商品到购物车。
+
+**Request Body:**
+```json
+{
+  "productId": 1,
+  "quantity": 2
+}
+```
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": { "id": 1 }
+}
+```
+
+**说明：** 若商品已在购物车中，数量累加。
+
+---
+
+#### PUT /api/cart/:id
+
+更新购物车项（数量或选中状态）。
+
+**Request Body:**
+```json
+{
+  "quantity": 3,
+  "isSelected": true
+}
+```
+
+---
+
+#### DELETE /api/cart/:id
+
+删除购物车项。
+
+**Response:**
+```json
+{ "code": 0, "data": null }
+```
+
+---
+
+### 2.5 收货地址
+
+#### GET /api/addresses
+
+获取当前用户地址列表。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": [
+    {
+      "id": 1,
+      "receiverName": "张三",
+      "receiverPhone": "13800138000",
+      "province": "广东省",
+      "city": "广州市",
+      "district": "天河区",
+      "detail": "天河路 100 号 3 楼",
+      "fullAddress": "广东省广州市天河区天河路 100 号 3 楼",
+      "isDefault": true
+    }
+  ]
+}
+```
+
+---
+
+#### POST /api/addresses
+
+新增地址。
+
+**Request Body:**
+```json
+{
+  "receiverName": "张三",
+  "receiverPhone": "13800138000",
+  "province": "广东省",
+  "city": "广州市",
+  "district": "天河区",
+  "detail": "天河路 100 号 3 楼",
+  "isDefault": true
+}
+```
+
+---
+
+#### PUT /api/addresses/:id
+
+编辑地址（字段同新增）。
+
+---
+
+#### DELETE /api/addresses/:id
+
+删除地址（软删除）。
+
+---
+
+### 2.6 订单
+
+#### POST /api/orders
+
+创建订单。
+
+**Request Body:**
+```json
+{
+  "cartItemIds": [1, 2],
+  "addressId": 1,
+  "deliveryType": "EXPRESS",
+  "remark": "请放门口"
+}
+```
+
+**说明：**
+- 前端只传 cartItemIds（或 productId + quantity 直接购买），不传价格。
+- 后端根据数据库商品价格计算金额。
+- 创建订单时检查：商品存在、已上架、库存充足。
+- 订单创建成功后减少库存、清空对应购物车项。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "orderId": 100,
+    "orderNo": "ORD20240101001",
+    "totalAmount": 5980,
+    "shippingFee": 0,
+    "actualAmount": 5980,
+    "status": "PENDING_PAYMENT"
+  }
+}
+```
+
+---
+
+#### GET /api/orders
+
+获取当前用户订单列表。
+
+**Query Params:**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| status | string | 订单状态筛选，不传则查全部 |
+| page | int | 页码 |
+| pageSize | int | 每页数量 |
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "list": [
+      {
+        "id": 100,
+        "orderNo": "ORD20240101001",
+        "status": "PENDING_PAYMENT",
+        "actualAmount": 5980,
+        "createdAt": "2024-01-01T10:00:00Z",
+        "items": [
+          {
+            "productName": "招牌猪头肉",
+            "productImage": "https://...",
+            "quantity": 2,
+            "productPrice": 2990
+          }
+        ]
+      }
+    ],
+    "total": 5,
+    "page": 1,
+    "pageSize": 20
+  }
+}
+```
+
+---
+
+#### GET /api/orders/:id
+
+订单详情。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "id": 100,
+    "orderNo": "ORD20240101001",
+    "status": "SHIPPED",
+    "totalAmount": 5980,
+    "shippingFee": 0,
+    "actualAmount": 5980,
+    "deliveryType": "EXPRESS",
+    "remark": "请放门口",
+    "receiverName": "张三",
+    "receiverPhone": "13800138000",
+    "receiverFullAddress": "广东省广州市天河区天河路 100 号 3 楼",
+    "paidAt": "2024-01-01T10:05:00Z",
+    "createdAt": "2024-01-01T10:00:00Z",
+    "items": [
+      {
+        "id": 1,
+        "productName": "招牌猪头肉",
+        "productImage": "https://...",
+        "productPrice": 2990,
+        "quantity": 2,
+        "subtotal": 5980
+      }
+    ],
+    "shipment": {
+      "expressCompany": "顺丰速运",
+      "expressNo": "SF1234567890",
+      "shippedAt": "2024-01-02T09:00:00Z"
+    }
+  }
+}
+```
+
+---
+
+### 2.7 支付
+
+#### POST /api/payments/mock/success
+
+Mock 支付成功（仅开发/第一阶段使用）。
+
+**Request Body:**
+```json
+{
+  "orderNo": "ORD20240101001"
+}
+```
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "orderNo": "ORD20240101001",
+    "status": "PAID"
+  }
+}
+```
+
+**安全说明：** 生产环境此接口必须关闭或设置白名单，防止恶意调用。
+
+---
+
+#### POST /api/payments/wechat/prepay
+
+微信支付预下单（第二阶段）。
+
+**Request Body:**
+```json
+{
+  "orderNo": "ORD20240101001"
+}
+```
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "timeStamp": "1704067200",
+    "nonceStr": "randomstring",
+    "package": "prepay_id=wx...",
+    "signType": "RSA",
+    "paySign": "..."
+  }
+}
+```
+
+---
+
+#### POST /api/payments/wechat/notify
+
+微信支付回调（微信服务器主动调用，非小程序调用）。
+
+**无需认证，但必须验签。**
+
+**Request Body（微信 XML/JSON 报文）:** 由微信发送，后端解析。
+
+**Response Body（返回给微信）:**
+```xml
+<xml>
+  <return_code>SUCCESS</return_code>
+  <return_msg>OK</return_msg>
+</xml>
+```
+
+---
+
+### 2.8 扫码日志
+
+#### POST /api/scan-logs
+
+记录扫码事件（用户扫包装二维码时调用）。
+
+**Request Body:**
+```json
+{
+  "scene": "p_10001",
+  "source": "package"
+}
+```
+
+**Response:**
+```json
+{ "code": 0, "data": null }
+```
+
+**说明：** 不需要强制登录，openid 有则记录，无则留空。
+
+---
+
+## 三、后台管理端 API
+
+> 所有后台接口需要携带管理员 JWT：`Authorization: Bearer <admin_token>`
+
+### 3.1 管理员认证
+
+#### POST /api/admin/login
+
+**Request Body:**
+```json
+{
+  "username": "admin",
+  "password": "your_password"
+}
+```
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "token": "eyJhbGci...",
+    "expiresIn": 86400,
+    "adminInfo": {
+      "id": 1,
+      "username": "admin",
+      "name": "店长",
+      "role": "admin"
+    }
+  }
+}
+```
+
+---
+
+### 3.2 商品分类管理
+
+#### GET /api/admin/categories
+
+获取所有分类（含隐藏分类）。
+
+#### POST /api/admin/categories
+
+新增分类。
+
+**Request Body:**
+```json
+{
+  "name": "熟食",
+  "iconUrl": "https://...",
+  "sortOrder": 1,
+  "status": 1
+}
+```
+
+#### PUT /api/admin/categories/:id
+
+编辑分类（字段同新增）。
+
+#### DELETE /api/admin/categories/:id
+
+删除分类（检查是否有关联商品，有则拒绝或提示）。
+
+---
+
+### 3.3 商品管理
+
+#### GET /api/admin/products
+
+商品列表。
+
+**Query Params:**
+| 参数 | 说明 |
+|------|------|
+| categoryId | 分类筛选 |
+| status | ON_SHELF / OFF_SHELF |
+| keyword | 搜索关键词 |
+| page | 页码 |
+| pageSize | 每页数量 |
+
+---
+
+#### POST /api/admin/products
+
+新增商品。
+
+**Request Body:**
+```json
+{
+  "categoryId": 1,
+  "name": "招牌猪头肉",
+  "subtitle": "每日新鲜制作",
+  "coverImage": "https://...",
+  "imageUrls": ["https://...", "https://..."],
+  "price": 2990,
+  "originalPrice": 3500,
+  "stock": 100,
+  "unit": "份",
+  "weight": "500g",
+  "shelfLife": "常温3天，冷藏7天",
+  "storageMethod": "常温存放，开封后冷藏",
+  "deliveryInfo": "支持顺丰快递",
+  "description": "<p>...</p>",
+  "status": "ON_SHELF",
+  "deliveryType": "EXPRESS,LOCAL",
+  "isRecommended": 1
+}
+```
+
+---
+
+#### PUT /api/admin/products/:id
+
+编辑商品（字段同新增）。
+
+---
+
+#### DELETE /api/admin/products/:id
+
+软删除商品（设置 deleted_at）。
+
+---
+
+#### POST /api/admin/products/:id/qrcode
+
+为商品生成小程序码。
+
+**说明：**
+- 后端调用微信接口生成小程序码（getwxacode 或 getwxacodeunlimit）。
+- 小程序码图片上传到腾讯云 COS。
+- 更新 products 表的 qr_scene、qr_code_url、qr_generated_at 字段。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "qrCodeUrl": "https://cos.../qrcode/product_1.png",
+    "qrScene": "p_1",
+    "qrGeneratedAt": "2024-01-01T10:00:00Z"
+  }
+}
+```
+
+---
+
+### 3.4 文件上传
+
+#### POST /api/admin/upload
+
+上传图片到腾讯云 COS。
+
+**Request:** `multipart/form-data`，字段名 `file`。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "url": "https://cos.yourdomain.com/images/abc123.jpg"
+  }
+}
+```
+
+---
+
+### 3.5 订单管理
+
+#### GET /api/admin/orders
+
+订单列表。
+
+**Query Params:**
+| 参数 | 说明 |
+|------|------|
+| status | 订单状态筛选 |
+| orderNo | 订单号搜索 |
+| startDate | 开始日期 |
+| endDate | 结束日期 |
+| page | 页码 |
+| pageSize | 每页数量 |
+
+---
+
+#### GET /api/admin/orders/:id
+
+订单详情（同用户端订单详情，含更多字段）。
+
+---
+
+#### PUT /api/admin/orders/:id/status
+
+修改订单状态。
+
+**Request Body:**
+```json
+{
+  "status": "CANCELLED",
+  "reason": "用户申请取消"
+}
+```
+
+---
+
+#### POST /api/admin/orders/:id/ship
+
+发货操作。
+
+**Request Body:**
+```json
+{
+  "expressCompany": "顺丰速运",
+  "expressNo": "SF1234567890",
+  "remark": ""
+}
+```
+
+**说明：** 成功后订单状态变为 `SHIPPED`，创建 shipments 记录。
+
+---
+
+### 3.6 用户管理
+
+#### GET /api/admin/users
+
+用户列表。
+
+**Query Params:** page, pageSize, keyword（按昵称/手机号搜索）
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "list": [
+      {
+        "id": 1,
+        "nickname": "张三",
+        "phone": "138****8000",
+        "status": 1,
+        "orderCount": 5,
+        "totalAmount": 15000,
+        "createdAt": "2024-01-01T10:00:00Z"
+      }
+    ],
+    "total": 100
+  }
+}
+```
+
+---
+
+#### GET /api/admin/users/:id/orders
+
+查看指定用户的订单列表（参数同订单列表）。
+
+---
+
+### 3.7 数据统计
+
+#### GET /api/admin/stats
+
+基础统计数据。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "today": {
+      "orderCount": 12,
+      "salesAmount": 35880
+    },
+    "total": {
+      "orderCount": 1024,
+      "userCount": 356
+    },
+    "hotProducts": [
+      {
+        "id": 1,
+        "name": "招牌猪头肉",
+        "coverImage": "https://...",
+        "salesCount": 256,
+        "totalAmount": 765440
+      }
+    ]
+  }
+}
+```
+
+---
+
+## 四、接口安全说明
+
+1. **用户接口**：使用 `verifyUserToken` 中间件，验证用户 JWT。
+2. **管理员接口**：使用 `verifyAdminToken` 中间件，验证管理员 JWT，使用不同的 secret。
+3. **微信支付回调**：不使用 JWT 认证，使用微信签名验证。
+4. **Mock 支付**：仅在 `NODE_ENV !== 'production'` 时开放，或通过配置开关控制。
+5. **文件上传**：限制文件类型（仅允许图片）、文件大小（不超过 5MB）。
+6. **SQL 注入**：使用 Prisma ORM，参数化查询，不拼接 SQL。
+7. **XSS**：富文本字段存储前做 sanitize。
+8. **CORS**：后端配置白名单域名。

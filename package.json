@@ -1,0 +1,14 @@
+{
+  "name": "food-shop",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=apps/server",
+    "build:server": "npm run build --workspace=apps/server",
+    "build:admin": "npm run build --workspace=apps/admin"
+  }
+}
