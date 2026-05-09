@@ -4,8 +4,10 @@ dist/
 *.env.local
 .DS_Store
 
-# Prisma
-apps/server/prisma/migrations/*.sql
+# WeChat Pay private key and certificates (never commit)
+*.pem
+*.key
+*.p12
 
 # Logs
 *.log

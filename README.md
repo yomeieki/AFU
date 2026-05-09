@@ -30,6 +30,7 @@ food-shop/
 | [docs/payment-design.md](docs/payment-design.md) | 支付设计（Mock + 微信支付） |
 | [docs/qrcode-design.md](docs/qrcode-design.md) | 包装二维码设计 |
 | [docs/development-plan.md](docs/development-plan.md) | 分阶段开发计划 |
+| [docs/deployment.md](docs/deployment.md) | 生产部署指南 |
 
 ## 技术栈
 
@@ -127,5 +128,5 @@ docker compose down -v
 - [x] 阶段 4：购物车、地址、订单
 - [x] 阶段 5：Mock Payment
 - [x] 阶段 6：商品包装二维码
-- [ ] 阶段 7：真实微信支付
-- [ ] 阶段 8：部署上线
+- [x] 阶段 7：真实微信支付
+- [ ] 阶段 8：部署上线（部署文档、脚本、迁移链已就绪，待服务器配置）
