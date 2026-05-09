@@ -236,6 +236,8 @@ model Payment {
   orderNo         String    @map("order_no") @db.VarChar(32)
   // MOCK / WECHAT
   paymentType     String    @map("payment_type") @db.VarChar(16)
+  // 微信 out_trade_no（格式 order_<orderId>_<timestamp>），用于对账和退款
+  outTradeNo      String?   @map("out_trade_no") @db.VarChar(64)
   amount          Int
   // PENDING / SUCCESS / FAILED / REFUNDED
   status          String    @db.VarChar(16)

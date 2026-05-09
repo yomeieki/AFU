@@ -59,8 +59,12 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       replyFail(res, '证书加载失败')
       return
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    console.error('[wechat-notify] WECHAT_PAY_PLATFORM_CERT_PATH must be configured in production')
+    replyFail(res, '服务配置错误')
+    return
   } else {
-    console.warn('[wechat-notify] WECHAT_PAY_PLATFORM_CERT_PATH not set, skipping signature verify')
+    console.warn('[wechat-notify] WECHAT_PAY_PLATFORM_CERT_PATH not set, skipping signature verify (dev only)')
   }
 
   let body: NotifyBody
@@ -135,6 +139,7 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       await tx.payment.upsert({
         where: { orderId },
         update: {
+          outTradeNo: transaction.out_trade_no,
           status: 'SUCCESS',
           wxTransactionId: transaction.transaction_id,
           wxNotifyData: rawBody,
@@ -143,6 +148,7 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
         create: {
           orderId,
           orderNo: order.orderNo,
+          outTradeNo: transaction.out_trade_no,
           paymentType: 'WECHAT',
           amount: order.actualAmount,
           status: 'SUCCESS',

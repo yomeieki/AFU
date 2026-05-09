@@ -82,6 +82,7 @@ Page({
                 signType: data.signType,
                 paySign: data.paySign,
                 success: function() {
+                  // Reload from server — actual PAID status is set by backend notify
                   wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
                   setTimeout(function() { self.loadOrder(self._orderId) }, 1500)
                 },

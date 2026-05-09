@@ -229,21 +229,23 @@ router.post('/:id/pay', async (req: Request, res: Response, next: NextFunction) 
     const openid = req.openid
     if (!openid) throw new AppError(40101, '未登录或 token 缺少 openid，无法发起微信支付', 401)
 
+    // amount is stored as fen (integer cents) throughout the codebase
     const outTradeNo = `order_${orderId}_${Date.now()}`
     const prepayId = await createJsapiOrder({
       outTradeNo,
       description: `订单 ${order.orderNo}`,
-      amount: order.actualAmount,
+      amount: order.actualAmount, // fen
       openid,
       notifyUrl: process.env.WECHAT_PAY_NOTIFY_URL!,
     })
 
     await prisma.payment.upsert({
       where: { orderId },
-      update: { wxPrepayId: prepayId, status: 'PENDING', paymentType: 'WECHAT' },
+      update: { outTradeNo, wxPrepayId: prepayId, status: 'PENDING', paymentType: 'WECHAT' },
       create: {
         orderId,
         orderNo: order.orderNo,
+        outTradeNo,
         paymentType: 'WECHAT',
         amount: order.actualAmount,
         status: 'PENDING',
