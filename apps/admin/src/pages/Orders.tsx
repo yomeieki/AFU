@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { getOrders } from '../api/admin'
+import { Fragment, useEffect, useState } from 'react'
+import { getOrders, shipOrder, cancelOrder } from '../api/admin'
 import type { Order, OrderStatus } from '../types'
 
 const STATUS_LABEL: Record<OrderStatus, string> = {
@@ -29,6 +29,10 @@ export default function Orders() {
   const [filterOrderNo, setFilterOrderNo] = useState('')
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<number | null>(null)
+  const [shipModal, setShipModal] = useState<Order | null>(null)
+  const [shipForm, setShipForm] = useState({ expressCompany: '', expressNo: '', remark: '' })
+  const [shipError, setShipError] = useState('')
+  const [shipping, setShipping] = useState(false)
 
   const load = (p = page) => {
     setLoading(true)
@@ -50,6 +54,47 @@ export default function Orders() {
   const handleSearch = () => {
     setPage(1)
     load(1)
+  }
+
+  const openShipModal = (order: Order) => {
+    setShipModal(order)
+    setShipForm({ expressCompany: '', expressNo: '', remark: '' })
+    setShipError('')
+  }
+
+  const handleShip = async () => {
+    if (!shipModal) return
+    if (!shipForm.expressCompany.trim()) { setShipError('请填写快递公司'); return }
+    if (!shipForm.expressNo.trim()) { setShipError('请填写快递单号'); return }
+    setShipping(true)
+    setShipError('')
+    try {
+      await shipOrder(shipModal.id, {
+        expressCompany: shipForm.expressCompany.trim(),
+        expressNo: shipForm.expressNo.trim(),
+        remark: shipForm.remark.trim() || undefined,
+      })
+      setShipModal(null)
+      load()
+    } catch (err: unknown) {
+      setShipError(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '发货失败'
+      )
+    } finally {
+      setShipping(false)
+    }
+  }
+
+  const handleCancel = async (order: Order) => {
+    if (!confirm(`确认取消订单 ${order.orderNo}？库存将回滚。`)) return
+    try {
+      await cancelOrder(order.id)
+      load()
+    } catch (err: unknown) {
+      alert(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '取消失败'
+      )
+    }
   }
 
   const totalPages = Math.ceil(total / pageSize)
@@ -102,13 +147,13 @@ export default function Orders() {
                   <th className="text-right px-4 py-3">实付金额</th>
                   <th className="text-right px-4 py-3">状态</th>
                   <th className="text-right px-4 py-3">下单时间</th>
-                  <th className="text-right px-4 py-3">详情</th>
+                  <th className="text-right px-4 py-3">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {list.map((order) => (
-                  <>
-                    <tr key={order.id} className="hover:bg-gray-50">
+                  <Fragment key={order.id}>
+                    <tr className="hover:bg-gray-50">
                       <td className="px-4 py-3 font-mono text-gray-700">{order.orderNo}</td>
                       <td className="px-4 py-3 text-gray-800">
                         {order.receiverName} {order.receiverPhone}
@@ -124,7 +169,23 @@ export default function Orders() {
                       <td className="px-4 py-3 text-right text-gray-500">
                         {new Date(order.createdAt).toLocaleString('zh-CN')}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-right space-x-2">
+                        {order.status === 'PAID' && (
+                          <button
+                            onClick={() => openShipModal(order)}
+                            className="text-orange-500 hover:text-orange-700 font-medium"
+                          >
+                            发货
+                          </button>
+                        )}
+                        {order.status === 'PENDING_PAYMENT' && (
+                          <button
+                            onClick={() => handleCancel(order)}
+                            className="text-red-500 hover:text-red-700"
+                          >
+                            取消
+                          </button>
+                        )}
                         <button
                           onClick={() => setExpanded(expanded === order.id ? null : order.id)}
                           className="text-blue-500 hover:text-blue-700"
@@ -134,11 +195,19 @@ export default function Orders() {
                       </td>
                     </tr>
                     {expanded === order.id && (
-                      <tr key={`${order.id}-detail`}>
+                      <tr>
                         <td colSpan={6} className="px-4 py-3 bg-gray-50">
                           <div className="text-xs text-gray-500 mb-2">
                             收货地址：{order.receiverFullAddress}
                           </div>
+                          {order.shipment?.expressNo && (
+                            <div className="text-xs text-gray-500 mb-2">
+                              物流：{order.shipment.expressCompany} {order.shipment.expressNo}
+                              {order.shipment.shippedAt &&
+                                `（${new Date(order.shipment.shippedAt).toLocaleString('zh-CN')} 发货）`}
+                              {order.shipment.remark && ` 备注：${order.shipment.remark}`}
+                            </div>
+                          )}
                           <table className="w-full text-xs">
                             <thead className="text-gray-500">
                               <tr>
@@ -166,7 +235,7 @@ export default function Orders() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -193,6 +262,65 @@ export default function Orders() {
           </>
         )}
       </div>
+
+      {/* 发货弹窗 */}
+      {shipModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 space-y-4 mx-4">
+            <h3 className="text-lg font-semibold text-gray-800">订单发货</h3>
+            <div className="text-xs text-gray-500 space-y-1">
+              <p>订单号：<span className="font-mono">{shipModal.orderNo}</span></p>
+              <p>收货人：{shipModal.receiverName} {shipModal.receiverPhone}</p>
+              <p>地址：{shipModal.receiverFullAddress}</p>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">快递公司 *</label>
+                <input
+                  value={shipForm.expressCompany}
+                  onChange={(e) => setShipForm({ ...shipForm, expressCompany: e.target.value })}
+                  placeholder="如 顺丰速运"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">快递单号 *</label>
+                <input
+                  value={shipForm.expressNo}
+                  onChange={(e) => setShipForm({ ...shipForm, expressNo: e.target.value })}
+                  placeholder="请输入快递单号"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">备注</label>
+                <input
+                  value={shipForm.remark}
+                  onChange={(e) => setShipForm({ ...shipForm, remark: e.target.value })}
+                  placeholder="可选"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+            </div>
+            {shipError && <p className="text-red-500 text-sm">{shipError}</p>}
+            <div className="flex justify-end space-x-3 pt-2">
+              <button
+                onClick={() => setShipModal(null)}
+                className="text-sm px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleShip}
+                disabled={shipping}
+                className="text-sm px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-md disabled:opacity-50"
+              >
+                {shipping ? '发货中...' : '确认发货'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

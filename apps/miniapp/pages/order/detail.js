@@ -1,4 +1,4 @@
-const { getOrderDetail } = require('../../api/order')
+const { getOrderDetail, confirmOrder } = require('../../api/order')
 const { payOrder } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
 
@@ -73,7 +73,7 @@ Page({
             wx.hideLoading()
             if (data.mode === 'mock') {
               wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
-              setTimeout(function() { self.loadOrder(self._orderId) }, 1500)
+              self.pollPaidStatus()
             } else {
               wx.requestPayment({
                 timeStamp: data.timeStamp,
@@ -82,9 +82,9 @@ Page({
                 signType: data.signType,
                 paySign: data.paySign,
                 success: function() {
-                  // Reload from server — actual PAID status is set by backend notify
+                  // PAID 状态由后端支付回调异步写入，轮询等待
                   wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
-                  setTimeout(function() { self.loadOrder(self._orderId) }, 1500)
+                  self.pollPaidStatus()
                 },
                 fail: function(err) {
                   if (err.errMsg && err.errMsg.indexOf('cancel') !== -1) {
@@ -95,6 +95,56 @@ Page({
                 },
               })
             }
+          })
+          .catch(function() {
+            wx.hideLoading()
+          })
+      },
+    })
+  },
+
+  // 支付后轮询订单状态：1.5s 间隔，最多 8 次，见 PAID 即停
+  pollPaidStatus() {
+    var self = this
+    var attempts = 0
+    var maxAttempts = 8
+
+    function check() {
+      attempts++
+      getOrderDetail(self._orderId)
+        .then(function(order) {
+          if (order.status !== 'PENDING_PAYMENT') {
+            self.loadOrder(self._orderId)
+          } else if (attempts < maxAttempts) {
+            setTimeout(check, 1500)
+          } else {
+            wx.showToast({ title: '支付结果确认中，请稍后下拉刷新', icon: 'none', duration: 2500 })
+            self.loadOrder(self._orderId)
+          }
+        })
+        .catch(function() {
+          self.loadOrder(self._orderId)
+        })
+    }
+
+    setTimeout(check, 1500)
+  },
+
+  // 确认收货（SHIPPED → COMPLETED）
+  onConfirmReceipt() {
+    var self = this
+    wx.showModal({
+      title: '确认收货',
+      content: '确认已收到商品？',
+      confirmText: '确认',
+      success: function(modalRes) {
+        if (!modalRes.confirm) return
+        wx.showLoading({ title: '处理中...' })
+        confirmOrder(self.data.order.id)
+          .then(function() {
+            wx.hideLoading()
+            wx.showToast({ title: '已确认收货', icon: 'success', duration: 1500 })
+            self.loadOrder(self._orderId)
           })
           .catch(function() {
             wx.hideLoading()

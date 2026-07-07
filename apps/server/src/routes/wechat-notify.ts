@@ -24,6 +24,9 @@ interface TransactionResult {
   success_time?: string
 }
 
+// 金额不一致属于严重异常（串单/篡改），单独标识以便返回 FAIL 并人工介入
+class AmountMismatchError extends Error {}
+
 function replyOk(res: Response) {
   res.json({ code: 'SUCCESS', message: '成功' })
 }
@@ -134,6 +137,13 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       // Idempotent: already paid
       if (order.status === 'PAID') return
 
+      // 金额比对：回调金额必须与订单实付金额（分）一致，否则拒绝处理
+      if (!transaction.amount || transaction.amount.total !== order.actualAmount) {
+        throw new AmountMismatchError(
+          `orderNo=${order.orderNo} 回调金额=${transaction.amount?.total ?? 'N/A'} 订单实付=${order.actualAmount}`
+        )
+      }
+
       const paidAt = transaction.success_time ? new Date(transaction.success_time) : new Date()
 
       await tx.payment.upsert({
@@ -164,6 +174,12 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       })
     })
   } catch (err) {
+    if (err instanceof AmountMismatchError) {
+      // 金额不一致：不更新订单，记录日志并返回 FAIL（微信会重试，需人工介入排查）
+      console.error('[wechat-notify] AMOUNT MISMATCH:', err.message)
+      replyFail(res, '金额校验失败')
+      return
+    }
     console.error('[wechat-notify] db error:', err)
     replyFail(res, '数据库更新失败')
     return

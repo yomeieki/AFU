@@ -26,6 +26,7 @@ Page({
           selectedCount: data.selectedCount,
           loading: false,
         })
+        getApp().updateCartCount()
       })
       .catch(function() {
         self.setData({ loading: false })

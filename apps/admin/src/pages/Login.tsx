@@ -17,8 +17,8 @@ export default function Login() {
     setLoading(true)
     try {
       const res = await login(username, password)
-      const { token, admin } = res.data.data
-      setAuth(token, admin)
+      const { token, adminInfo } = res.data.data
+      setAuth(token, adminInfo)
       navigate('/dashboard')
     } catch (err: unknown) {
       const msg =

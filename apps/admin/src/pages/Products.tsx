@@ -1,16 +1,30 @@
 import { useEffect, useState } from 'react'
 import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode } from '../api/admin'
+import ImageUploader from '../components/ImageUploader'
 import type { Product, Category } from '../types'
+
+const DELIVERY_TYPE_LABEL: Record<string, string> = {
+  EXPRESS: '快递配送',
+  LOCAL: '同城配送',
+  PICKUP: '到店自提',
+}
 
 const emptyForm = {
   categoryId: 0,
   name: '',
   subtitle: '',
   coverImage: '',
+  imageUrls: [] as string[],
   price: '',
   originalPrice: '',
   stock: 0,
   unit: '份',
+  weight: '',
+  shelfLife: '',
+  storageMethod: '',
+  deliveryInfo: '',
+  description: '',
+  deliveryType: 'EXPRESS',
   status: 'ON_SHELF' as 'ON_SHELF' | 'OFF_SHELF',
   isRecommended: 0,
 }
@@ -74,10 +88,17 @@ export default function Products() {
       name: p.name,
       subtitle: p.subtitle ?? '',
       coverImage: p.coverImage ?? '',
+      imageUrls: p.images?.map((img) => img.imageUrl) ?? [],
       price: (p.price / 100).toString(),
       originalPrice: p.originalPrice ? (p.originalPrice / 100).toString() : '',
       stock: p.stock,
       unit: p.unit,
+      weight: p.weight ?? '',
+      shelfLife: p.shelfLife ?? '',
+      storageMethod: p.storageMethod ?? '',
+      deliveryInfo: p.deliveryInfo ?? '',
+      description: p.description ?? '',
+      deliveryType: p.deliveryType || 'EXPRESS',
       status: p.status,
       isRecommended: p.isRecommended,
     })
@@ -97,10 +118,17 @@ export default function Products() {
         name: form.name,
         subtitle: form.subtitle || null,
         coverImage: form.coverImage || null,
+        imageUrls: form.imageUrls,
         price: Math.round(parseFloat(form.price) * 100),
         originalPrice: form.originalPrice ? Math.round(parseFloat(form.originalPrice) * 100) : null,
         stock: form.stock,
         unit: form.unit,
+        weight: form.weight || null,
+        shelfLife: form.shelfLife || null,
+        storageMethod: form.storageMethod || null,
+        deliveryInfo: form.deliveryInfo || null,
+        description: form.description || null,
+        deliveryType: form.deliveryType,
         status: form.status,
         isRecommended: form.isRecommended,
       }
@@ -325,11 +353,18 @@ export default function Products() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">封面图 URL</label>
-                <input
+                <label className="block text-sm font-medium text-gray-700 mb-1">封面图</label>
+                <ImageUploader
                   value={form.coverImage}
-                  onChange={(e) => setForm({ ...form, coverImage: e.target.value })}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  onChange={(url) => setForm({ ...form, coverImage: url })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">商品多图（详情轮播，最多 9 张）</label>
+                <ImageUploader
+                  mode="multi"
+                  value={form.imageUrls}
+                  onChange={(urls) => setForm({ ...form, imageUrls: urls })}
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -380,6 +415,69 @@ export default function Products() {
                     <option value="OFF_SHELF">下架</option>
                   </select>
                 </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">规格/重量</label>
+                  <input
+                    value={form.weight}
+                    onChange={(e) => setForm({ ...form, weight: e.target.value })}
+                    placeholder="如 500g/袋"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">保质期</label>
+                  <input
+                    value={form.shelfLife}
+                    onChange={(e) => setForm({ ...form, shelfLife: e.target.value })}
+                    placeholder="如 冷藏 3 天"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">储存方式</label>
+                  <input
+                    value={form.storageMethod}
+                    onChange={(e) => setForm({ ...form, storageMethod: e.target.value })}
+                    placeholder="如 0-4℃ 冷藏"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">配送方式</label>
+                  <select
+                    value={form.deliveryType}
+                    onChange={(e) => setForm({ ...form, deliveryType: e.target.value })}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  >
+                    {Object.entries(DELIVERY_TYPE_LABEL).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">配送说明</label>
+                <textarea
+                  value={form.deliveryInfo}
+                  onChange={(e) => setForm({ ...form, deliveryInfo: e.target.value })}
+                  rows={2}
+                  placeholder="如 同城当日达，快递次日达"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">商品详情</label>
+                <textarea
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  rows={4}
+                  placeholder="商品详细介绍"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
               </div>
               <div className="flex items-center gap-2">
                 <input

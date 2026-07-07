@@ -4,6 +4,8 @@ import prisma from '../utils/prisma'
 import { signUserToken } from '../utils/jwt'
 import { success } from '../utils/response'
 import { AppError } from '../middlewares/error'
+import { loginLimiter } from '../middlewares/rate-limit'
+import { config } from '../config'
 
 const router = Router()
 
@@ -12,10 +14,14 @@ const loginSchema = z.object({
 })
 
 // POST /api/auth/wechat-login
-router.post('/wechat-login', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/wechat-login', loginLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { code } = loginSchema.parse(req.body)
-    const useMock = !process.env.WECHAT_APP_ID || process.env.WECHAT_LOGIN_MOCK === 'true'
+    // 生产环境缺 WECHAT_APP_ID 直接报错，绝不静默降级到 mock（config.ts 已保证生产不允许 WECHAT_LOGIN_MOCK=true）
+    if (!process.env.WECHAT_APP_ID && config.isProduction) {
+      throw new AppError(50001, '服务配置错误：缺少 WECHAT_APP_ID', 500)
+    }
+    const useMock = !process.env.WECHAT_APP_ID || config.mock.login
 
     let openid: string
 

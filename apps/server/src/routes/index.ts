@@ -5,10 +5,9 @@ import adminRouter from './admin'
 import cartRouter from './cart'
 import addressRouter from './addresses'
 import orderRouter from './orders'
-import paymentRouter from './payments'
 import scanLogRouter from './scan-logs'
 import authRouter from './auth'
-import { devUserMiddleware } from '../middlewares/dev-user'
+import { verifyUserToken } from '../middlewares/auth'
 
 export const router = Router()
 
@@ -22,9 +21,10 @@ router.use('/auth', authRouter)
 // ── 管理员接口 ────────────────────────────────────────────
 router.use('/admin', adminRouter)
 
-// ── 用户接口（devUserMiddleware：有 token 则解析，否则 userId=1）────
-router.use('/cart', devUserMiddleware, cartRouter)
-router.use('/addresses', devUserMiddleware, addressRouter)
-router.use('/orders', devUserMiddleware, orderRouter)
-router.use('/payments', paymentRouter)
+// ── 用户接口（必须携带有效用户 token）─────────────────────
+router.use('/cart', verifyUserToken, cartRouter)
+router.use('/addresses', verifyUserToken, addressRouter)
+router.use('/orders', verifyUserToken, orderRouter)
+
+// ── 扫码日志（可选认证：未登录也可记录，userId 为空）───────
 router.use('/scan-logs', scanLogRouter)

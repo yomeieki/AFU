@@ -1,9 +1,11 @@
 import jwt from 'jsonwebtoken'
+import { config } from '../config'
 
-const USER_SECRET = process.env.JWT_SECRET || 'user-dev-secret'
-const USER_EXPIRES = (process.env.JWT_EXPIRES_IN || '7d') as jwt.SignOptions['expiresIn']
-const ADMIN_SECRET = process.env.ADMIN_JWT_SECRET || 'admin-dev-secret'
-const ADMIN_EXPIRES = (process.env.ADMIN_JWT_EXPIRES_IN || '24h') as jwt.SignOptions['expiresIn']
+// 密钥由 config.ts 启动时强制校验，此处不再有任何硬编码回退
+const USER_SECRET = config.jwt.userSecret
+const USER_EXPIRES = config.jwt.userExpiresIn as jwt.SignOptions['expiresIn']
+const ADMIN_SECRET = config.jwt.adminSecret
+const ADMIN_EXPIRES = config.jwt.adminExpiresIn as jwt.SignOptions['expiresIn']
 
 export function signUserToken(payload: { userId: number; openid: string }) {
   return jwt.sign(payload, USER_SECRET, { expiresIn: USER_EXPIRES })

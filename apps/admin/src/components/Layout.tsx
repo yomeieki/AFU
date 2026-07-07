@@ -6,6 +6,7 @@ const navItems = [
   { to: '/categories', label: '分类管理' },
   { to: '/products', label: '商品管理' },
   { to: '/orders', label: '订单管理' },
+  { to: '/users', label: '用户管理' },
 ]
 
 export default function Layout() {

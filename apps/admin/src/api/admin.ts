@@ -1,12 +1,25 @@
 import client from './client'
-import type { ApiResponse, PaginatedData, Category, Product, Order, Stats, QrCodeResult } from '../types'
+import type {
+  ApiResponse,
+  PaginatedData,
+  Category,
+  Product,
+  Order,
+  Stats,
+  QrCodeResult,
+  Shipment,
+  AdminUser,
+  UserOrder,
+} from '../types'
 
 // Auth
 export const login = (username: string, password: string) =>
-  client.post<ApiResponse<{ token: string; admin: { id: number; username: string; role: string } }>>(
-    '/admin/login',
-    { username, password }
-  )
+  client.post<
+    ApiResponse<{
+      token: string
+      adminInfo: { id: number; username: string; name: string | null; role: string }
+    }>
+  >('/admin/login', { username, password })
 
 // Stats
 export const getStats = () => client.get<ApiResponse<Stats>>('/admin/stats')
@@ -33,10 +46,12 @@ export const getProducts = (params?: {
   status?: string
 }) => client.get<ApiResponse<PaginatedData<Product>>>('/admin/products', { params })
 
-export const createProduct = (data: Partial<Product>) =>
+type ProductPayload = Partial<Omit<Product, 'images'>> & { imageUrls?: string[] }
+
+export const createProduct = (data: ProductPayload) =>
   client.post<ApiResponse<Product>>('/admin/products', data)
 
-export const updateProduct = (id: number, data: Partial<Product>) =>
+export const updateProduct = (id: number, data: ProductPayload) =>
   client.put<ApiResponse<Product>>(`/admin/products/${id}`, data)
 
 export const deleteProduct = (id: number) =>
@@ -55,3 +70,25 @@ export const getOrders = (params?: {
 
 export const getOrder = (id: number) =>
   client.get<ApiResponse<Order>>(`/admin/orders/${id}`)
+
+export const shipOrder = (id: number, data: { expressCompany: string; expressNo: string; remark?: string }) =>
+  client.post<ApiResponse<{ shipment: Shipment; order: Order }>>(`/admin/orders/${id}/ship`, data)
+
+export const cancelOrder = (id: number) =>
+  client.put<ApiResponse<Order>>(`/admin/orders/${id}/status`, { status: 'CANCELLED' })
+
+// Users
+export const getUsers = (params?: { page?: number; pageSize?: number; keyword?: string }) =>
+  client.get<ApiResponse<PaginatedData<AdminUser>>>('/admin/users', { params })
+
+export const getUserOrders = (userId: number, params?: { page?: number; pageSize?: number }) =>
+  client.get<ApiResponse<PaginatedData<UserOrder>>>(`/admin/users/${userId}/orders`, { params })
+
+// Upload
+export const uploadImage = (file: File) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return client.post<ApiResponse<{ url: string }>>('/admin/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}

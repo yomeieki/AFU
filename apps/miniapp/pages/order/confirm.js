@@ -87,6 +87,7 @@ Page({
     })
       .then(function(res) {
         wx.showToast({ title: '下单成功', icon: 'success' })
+        getApp().updateCartCount()
         setTimeout(function() {
           wx.redirectTo({ url: '/pages/order/detail?id=' + res.orderId })
         }, 800)

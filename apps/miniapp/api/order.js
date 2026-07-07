@@ -19,4 +19,8 @@ function getOrderDetail(id) {
   return request({ url: '/orders/' + id })
 }
 
-module.exports = { createOrder, getOrders, getOrderDetail }
+function confirmOrder(id) {
+  return request({ url: '/orders/' + id + '/confirm', method: 'PUT' })
+}
+
+module.exports = { createOrder, getOrders, getOrderDetail, confirmOrder }

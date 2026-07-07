@@ -46,6 +46,7 @@ export interface Product {
   deletedAt: string | null
   createdAt: string
   category?: { id: number; name: string }
+  images?: { imageUrl: string }[]
 }
 
 export interface QrCodeResult {
@@ -64,6 +65,15 @@ export interface OrderItem {
 
 export type OrderStatus = 'PENDING_PAYMENT' | 'PAID' | 'SHIPPED' | 'COMPLETED' | 'CANCELLED' | 'REFUNDED'
 
+export interface Shipment {
+  id: number
+  orderId: number
+  expressCompany: string | null
+  expressNo: string | null
+  shippedAt: string | null
+  remark: string | null
+}
+
 export interface Order {
   id: number
   orderNo: string
@@ -78,6 +88,28 @@ export interface Order {
   paidAt: string | null
   createdAt: string
   items: OrderItem[]
+  shipment?: Shipment | null
+}
+
+export interface AdminUser {
+  id: number
+  openid: string
+  nickname: string | null
+  avatarUrl: string | null
+  phone: string | null
+  status: number
+  lastLoginAt: string | null
+  createdAt: string
+  orderCount: number
+}
+
+export interface UserOrder {
+  id: number
+  orderNo: string
+  status: OrderStatus
+  actualAmount: number
+  createdAt: string
+  items: { productName: string; quantity: number }[]
 }
 
 export interface Stats {

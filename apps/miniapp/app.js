@@ -1,4 +1,8 @@
 const { wechatLogin } = require('./api/auth')
+const { getCart } = require('./api/cart')
+
+// tabBar 中购物车的索引（首页/分类/购物车/我的）
+var CART_TAB_INDEX = 2
 
 App({
   globalData: {
@@ -16,26 +20,59 @@ App({
     if (token) {
       this.globalData.token = token
     }
-    this._tryLogin()
-  },
-  _tryLogin() {
     var self = this
-    wx.login({
-      success: function(res) {
-        if (!res.code) return
-        wechatLogin(res.code)
-          .then(function(data) {
-            self.globalData.token = data.token
-            self.globalData.userInfo = {
-              nickname: data.nickname,
-              avatarUrl: data.avatarUrl,
-            }
-            wx.setStorageSync('token', data.token)
-          })
-          .catch(function(err) {
-            console.warn('[app] wechatLogin failed', err)
-          })
-      },
+    this._tryLogin()
+      .then(function() { self.updateCartCount() })
+      .catch(function(err) { console.warn('[app] wechatLogin failed', err) })
+  },
+  // 登录（返回 Promise；并发调用共享同一次登录，避免重复 wx.login）
+  _tryLogin() {
+    if (this._loginPromise) return this._loginPromise
+    var self = this
+    var p = new Promise(function(resolve, reject) {
+      wx.login({
+        success: function(res) {
+          if (!res.code) return reject(new Error('wx.login: no code'))
+          wechatLogin(res.code)
+            .then(function(data) {
+              self.globalData.token = data.token
+              self.globalData.userInfo = {
+                nickname: data.nickname,
+                avatarUrl: data.avatarUrl,
+              }
+              wx.setStorageSync('token', data.token)
+              resolve(data)
+            })
+            .catch(reject)
+        },
+        fail: reject,
+      })
     })
+    this._loginPromise = p
+    var clear = function() {
+      if (self._loginPromise === p) self._loginPromise = null
+    }
+    p.then(clear, clear)
+    return p
+  },
+  // 刷新购物车数量并更新 tabBar 角标（登录成功、加购、购物车变更、下单后调用）
+  updateCartCount() {
+    var self = this
+    getCart()
+      .then(function(data) {
+        var items = (data && data.items) || []
+        var count = items.reduce(function(sum, item) {
+          return sum + (item.quantity || 0)
+        }, 0)
+        self.globalData.cartCount = count
+        if (count > 0) {
+          wx.setTabBarBadge({ index: CART_TAB_INDEX, text: count > 99 ? '99+' : String(count) })
+        } else {
+          wx.removeTabBarBadge({ index: CART_TAB_INDEX })
+        }
+      })
+      .catch(function() {
+        // 未登录等场景静默忽略
+      })
   },
 })

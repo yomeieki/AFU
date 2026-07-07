@@ -95,12 +95,9 @@
   "code": 0,
   "data": {
     "token": "eyJhbGci...",
-    "expiresIn": 604800,
-    "userInfo": {
-      "id": 1,
-      "nickname": "张三",
-      "avatarUrl": "https://..."
-    }
+    "userId": 1,
+    "nickname": "张三",
+    "avatarUrl": "https://..."
   }
 }
 ```
@@ -480,48 +477,28 @@
 
 ### 2.7 支付
 
-#### POST /api/payments/mock/success
+#### POST /api/orders/:id/pay
 
-Mock 支付成功（仅开发/第一阶段使用）。
+发起支付。后端按环境变量 `WECHAT_PAY_MOCK` 决定支付模式，响应中的 `mode` 字段区分：
 
-**Request Body:**
-```json
-{
-  "orderNo": "ORD20240101001"
-}
-```
-
-**Response:**
+**Mock 模式响应（`WECHAT_PAY_MOCK=true`，仅开发环境）：**
 ```json
 {
   "code": 0,
   "data": {
-    "orderNo": "ORD20240101001",
-    "status": "PAID"
+    "mode": "mock",
+    "status": "PAID",
+    "paidAt": "2026-01-01T00:00:00.000Z"
   }
 }
 ```
 
-**安全说明：** 生产环境此接口必须关闭或设置白名单，防止恶意调用。
-
----
-
-#### POST /api/payments/wechat/prepay
-
-微信支付预下单（第二阶段）。
-
-**Request Body:**
-```json
-{
-  "orderNo": "ORD20240101001"
-}
-```
-
-**Response:**
+**真实微信支付响应（JSAPI 预下单，返回 `wx.requestPayment` 所需参数）：**
 ```json
 {
   "code": 0,
   "data": {
+    "mode": "wechat",
     "timeStamp": "1704067200",
     "nonceStr": "randomstring",
     "package": "prepay_id=wx...",
@@ -531,22 +508,29 @@ Mock 支付成功（仅开发/第一阶段使用）。
 }
 ```
 
+**安全说明：** mock 默认关闭，仅显式 `WECHAT_PAY_MOCK=true` 时启用；生产环境（`NODE_ENV=production`）开启 mock 会导致服务拒绝启动。
+
 ---
 
-#### POST /api/payments/wechat/notify
+#### PUT /api/orders/:id/confirm
 
-微信支付回调（微信服务器主动调用，非小程序调用）。
+确认收货（仅 `SHIPPED` 状态订单），订单流转为 `COMPLETED`。
 
-**无需认证，但必须验签。**
+**Response:** 返回更新后的订单对象。
 
-**Request Body（微信 XML/JSON 报文）:** 由微信发送，后端解析。
+---
+
+#### POST /api/wechat/pay/notify
+
+微信支付 APIv3 回调（微信服务器主动调用，非小程序调用）。
+
+**无需认证，但必须验签（生产环境强制），并比对回调金额与订单实付金额，不一致拒绝处理。**
+
+**Request Body（APIv3 JSON 加密报文）:** 由微信发送，后端验签后解密处理。
 
 **Response Body（返回给微信）:**
-```xml
-<xml>
-  <return_code>SUCCESS</return_code>
-  <return_msg>OK</return_msg>
-</xml>
+```json
+{ "code": "SUCCESS", "message": "成功" }
 ```
 
 ---
@@ -771,10 +755,11 @@ Mock 支付成功（仅开发/第一阶段使用）。
 **Request Body:**
 ```json
 {
-  "status": "CANCELLED",
-  "reason": "用户申请取消"
+  "status": "CANCELLED"
 }
 ```
+
+**说明：** 当前仅支持取消待付款（`PENDING_PAYMENT`）订单，取消时自动回滚库存与销量。
 
 ---
 
@@ -811,11 +796,13 @@ Mock 支付成功（仅开发/第一阶段使用）。
     "list": [
       {
         "id": 1,
+        "openid": "o6_bm...",
         "nickname": "张三",
+        "avatarUrl": "https://...",
         "phone": "138****8000",
         "status": 1,
         "orderCount": 5,
-        "totalAmount": 15000,
+        "lastLoginAt": "2024-01-01T10:00:00Z",
         "createdAt": "2024-01-01T10:00:00Z"
       }
     ],
@@ -849,7 +836,8 @@ Mock 支付成功（仅开发/第一阶段使用）。
     },
     "total": {
       "orderCount": 1024,
-      "userCount": 356
+      "productCount": 36,
+      "categoryCount": 5
     },
     "hotProducts": [
       {
@@ -857,7 +845,7 @@ Mock 支付成功（仅开发/第一阶段使用）。
         "name": "招牌猪头肉",
         "coverImage": "https://...",
         "salesCount": 256,
-        "totalAmount": 765440
+        "price": 2990
       }
     ]
   }

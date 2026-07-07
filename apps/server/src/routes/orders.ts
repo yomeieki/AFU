@@ -4,6 +4,8 @@ import prisma from '../utils/prisma'
 import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { validatePayConfig, createJsapiOrder, generatePayParams } from '../services/wechat-pay'
+import { config } from '../config'
+import { payLimiter } from '../middlewares/rate-limit'
 
 const router = Router()
 
@@ -187,12 +189,35 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   }
 })
 
+// PUT /api/orders/:id/confirm — 确认收货（SHIPPED → COMPLETED）
+router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const userId = req.userId!
+
+    const order = await prisma.order.findFirst({ where: { id, userId } })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+    if (order.status !== 'SHIPPED') {
+      throw new AppError(42204, '仅已发货订单可确认收货')
+    }
+
+    const updated = await prisma.order.update({
+      where: { id },
+      data: { status: 'COMPLETED' },
+    })
+    success(res, updated)
+  } catch (e) {
+    next(e)
+  }
+})
+
 // POST /api/orders/:id/pay
-router.post('/:id/pay', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orderId = Number(req.params.id)
     const userId = req.userId!
-    const useMockPay = process.env.WECHAT_PAY_MOCK !== 'false'
+    // Mock 支付默认关闭：仅 WECHAT_PAY_MOCK=true 时启用（config.ts 保证生产环境无法开启）
+    const useMockPay = config.mock.pay
 
     const order = await prisma.order.findFirst({
       where: { id: orderId, userId },

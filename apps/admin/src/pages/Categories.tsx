@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getCategories, createCategory, updateCategory, deleteCategory } from '../api/admin'
+import ImageUploader from '../components/ImageUploader'
 import type { Category } from '../types'
 
 const emptyForm = { name: '', iconUrl: '', sortOrder: 0, status: 1 }
@@ -133,12 +134,10 @@ export default function Categories() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">图标 URL</label>
-                <input
+                <label className="block text-sm font-medium text-gray-700 mb-1">图标</label>
+                <ImageUploader
                   value={form.iconUrl}
-                  onChange={(e) => setForm({ ...form, iconUrl: e.target.value })}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
-                  placeholder="留空则无图标"
+                  onChange={(url) => setForm({ ...form, iconUrl: url })}
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">

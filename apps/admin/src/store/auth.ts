@@ -3,6 +3,7 @@ import { create } from 'zustand'
 interface AdminInfo {
   id: number
   username: string
+  name?: string | null
   role: string
 }
 

@@ -24,6 +24,8 @@ const productSchema = z.object({
   status: z.enum(['ON_SHELF', 'OFF_SHELF']).default('ON_SHELF'),
   deliveryType: z.string().max(64).default('EXPRESS'),
   isRecommended: z.number().int().min(0).max(1).default(0),
+  // 商品多图（详情轮播），按数组顺序作为 sortOrder 同步到 ProductImage
+  imageUrls: z.array(z.string().max(500)).max(9).optional(),
 })
 
 // GET /api/admin/products
@@ -45,7 +47,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const [list, total] = await prisma.$transaction([
       prisma.product.findMany({
         where,
-        include: { category: { select: { id: true, name: true } } },
+        include: {
+          category: { select: { id: true, name: true } },
+          images: { select: { imageUrl: true }, orderBy: { sortOrder: 'asc' } },
+        },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -62,11 +67,19 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 // POST /api/admin/products
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = productSchema.parse(req.body)
+    const { imageUrls, ...data } = productSchema.parse(req.body)
     const cat = await prisma.category.findUnique({ where: { id: data.categoryId } })
     if (!cat) throw new AppError(40401, '分类不存在', 404)
 
-    const product = await prisma.product.create({ data })
+    const product = await prisma.product.create({
+      data: {
+        ...data,
+        ...(imageUrls?.length
+          ? { images: { create: imageUrls.map((imageUrl, i) => ({ imageUrl, sortOrder: i })) } }
+          : {}),
+      },
+      include: { images: { orderBy: { sortOrder: 'asc' } } },
+    })
     success(res, product)
   } catch (e) {
     next(e)
@@ -80,8 +93,23 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const exists = await prisma.product.findFirst({ where: { id, deletedAt: null } })
     if (!exists) throw new AppError(40401, '商品不存在', 404)
 
-    const data = productSchema.partial().parse(req.body)
-    const product = await prisma.product.update({ where: { id }, data })
+    const { imageUrls, ...data } = productSchema.partial().parse(req.body)
+    const product = await prisma.$transaction(async (tx) => {
+      // 传了 imageUrls 时全量替换多图（未传则不动）
+      if (imageUrls !== undefined) {
+        await tx.productImage.deleteMany({ where: { productId: id } })
+        if (imageUrls.length > 0) {
+          await tx.productImage.createMany({
+            data: imageUrls.map((imageUrl, i) => ({ productId: id, imageUrl, sortOrder: i })),
+          })
+        }
+      }
+      return tx.product.update({
+        where: { id },
+        data,
+        include: { images: { orderBy: { sortOrder: 'asc' } } },
+      })
+    })
     success(res, product)
   } catch (e) {
     next(e)

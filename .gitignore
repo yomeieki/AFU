@@ -21,6 +21,9 @@ npm-debug.log*
 apps/admin/dist/
 apps/server/dist/
 
+# Local uploaded images (migrate to COS later)
+apps/server/uploads/
+
 # WeChat DevTools
 apps/miniapp/.idea/
 apps/miniapp/node_modules/

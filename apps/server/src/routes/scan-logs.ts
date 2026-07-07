@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import prisma from '../utils/prisma'
 import { success } from '../utils/response'
-import { devUserMiddleware } from '../middlewares/dev-user'
+import { optionalUserAuth } from '../middlewares/auth'
 
 const router = Router()
 
@@ -12,8 +12,8 @@ const scanLogSchema = z.object({
 })
 
 // POST /api/scan-logs
-// No forced login: devUserMiddleware sets userId=1 in dev mode; production will use optional auth
-router.post('/', devUserMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+// 不强制登录：有有效 token 则记录 userId，匿名扫码 userId 为空
+router.post('/', optionalUserAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { scene, source } = scanLogSchema.parse(req.body)
 
