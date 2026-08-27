@@ -1,5 +1,5 @@
 const isDev = true // set to false for production
 
 module.exports = {
-  baseURL: isDev ? 'http://localhost:3000/api' : 'https://api.yourdomain.com/api',
+  baseURL: isDev ? 'http://localhost:3100/api' : 'https://api.yourdomain.com/api',
 }

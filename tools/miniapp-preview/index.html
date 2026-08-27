@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小程序预览台 · food-shop</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+    background: #eceef1;
+    color: #1a1a1a;
+  }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: linear-gradient(135deg, #ff6a3d 0%, #e5441e 100%);
+    color: #fff;
+    padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.12);
+  }
+  .topbar h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  .topbar .sub { font-size: 13px; opacity: .9; }
+  .topbar .spacer { flex: 1; }
+  .tabbar-strip {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    background: rgba(255,255,255,.15);
+    padding: 6px 14px;
+    border-radius: 999px;
+  }
+  .tabbar-strip .tb { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .tabbar-strip img { width: 26px; height: 26px; }
+  .tabbar-strip span { font-size: 10px; }
+  .tabbar-strip .active span { color: #fff; font-weight: 600; }
+  .tabbar-strip .normal span { color: rgba(255,255,255,.7); }
+
+  /* 绝对定位瀑布流：卡片始终留在 grid 内（不重新挂载 → iframe 不重载），
+     JS 只改 left/top，把每张放进当前最矮的列 → 三列高度均衡，无孤儿、不偏重右下 */
+  .grid {
+    position: relative;
+    width: 100%;
+  }
+  .frame-card {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 375px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .frame-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .frame-label .path { font-size: 11px; color: #999; font-weight: 400; }
+  .phone {
+    width: 375px;
+    border: 8px solid #1a1a1a;
+    border-radius: 30px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 8px 32px rgba(0,0,0,.14);
+    /* 底部 Home 指示区：固定操作栏落在留白之上，不被圆角裁切、不贴边 */
+    padding-bottom: 22px;
+    position: relative;
+  }
+  /* Home 指示条（真机底部安全区观感） */
+  .phone::after {
+    content: '';
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 5px;
+    border-radius: 3px;
+    background: #d0d2d6;
+    z-index: 10;
+  }
+  .phone iframe {
+    width: 375px;
+    height: 720px;                 /* 初值，onload 后按内容真实高度覆盖 */
+    border: none;
+    display: block;
+  }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <h1>🍜 小程序预览台</h1>
+      <div class="sub">HTML 近似渲染 · 内联真实 wxss · 改样式即时反映（非真机，交互/wxs 不跑）</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="tabbar-strip">
+      <div class="tb active"><img src="/assets/tabbar/home-active.png"><span>首页</span></div>
+      <div class="tb normal"><img src="/assets/tabbar/category.png"><span>分类</span></div>
+      <div class="tb normal"><img src="/assets/tabbar/cart.png"><span>购物车</span></div>
+      <div class="tb normal"><img src="/assets/tabbar/user.png"><span>我的</span></div>
+    </div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <script>
+    const PAGES = [
+      ['首页', 'pages/index/index', 'index'],
+      ['商品详情', 'pages/product/detail', 'product-detail'],
+      ['分类/商品列表', 'pages/product/list', 'product-list'],
+      ['购物车', 'pages/cart/index', 'cart'],
+      ['我的', 'pages/user/index', 'user'],
+      ['订单列表', 'pages/order/list', 'order-list'],
+      ['订单详情', 'pages/order/detail', 'order-detail'],
+      ['下单确认', 'pages/order/confirm', 'order-confirm'],
+      ['地址列表', 'pages/address/list', 'address-list'],
+      ['地址编辑', 'pages/address/edit', 'address-edit'],
+    ];
+    const grid = document.getElementById('grid');
+    const PHONE_W = 375, GAP = 28;
+
+    // 建卡片（先脱离文档流不影响测量），iframe 需入 DOM 才能加载
+    const cards = PAGES.map(([name, srcPath, file]) => {
+      const card = document.createElement('div');
+      card.className = 'frame-card';
+      card.innerHTML =
+        '<div class="frame-label">' + name + ' <span class="path">' + srcPath + '</span></div>' +
+        '<div class="phone"><iframe src="/pages/' + file + '.html"></iframe></div>';
+      grid.appendChild(card);
+      return card;
+    });
+
+    // iframe 按内容真实高度自适应：固定动作栏落到页面真实底部，不截断尾部内容
+    function fitIframe(iframe) {
+      try {
+        const h = iframe.contentDocument.body.scrollHeight;
+        if (h) iframe.style.height = h + 'px';
+      } catch (e) {}
+    }
+
+    // 绝对定位排布：卡片不重新挂载（iframe 不重载），只改 left/top。
+    const V_GAP = 32, TOP = 32;
+    function layout() {
+      const cols = Math.max(1, Math.min(4,
+        Math.floor((grid.clientWidth - 64 + GAP) / (PHONE_W + GAP))));
+      const totalW = cols * PHONE_W + (cols - 1) * GAP;
+      const offsetX = Math.max(0, (grid.clientWidth - totalW) / 2);
+
+      // 1) LPT：按高度从高到低分进当前最矮的逻辑列 → 列高接近均衡
+      const buckets = Array.from({ length: cols }, () => []);
+      const colH = new Array(cols).fill(0);
+      const order = [...cards].sort((a, b) => b.offsetHeight - a.offsetHeight);
+      for (const card of order) {
+        let m = 0;
+        for (let i = 1; i < cols; i++) if (colH[i] < colH[m]) m = i;
+        buckets[m].push(card);
+        colH[m] += card.offsetHeight + V_GAP;
+      }
+
+      // 2) 把最高的列摆到中间（矮-高-矮），多出的高度落在中央而非右侧
+      const bySize = [...Array(cols).keys()].sort((a, b) => colH[b] - colH[a]); // 高→矮
+      const center = Math.floor((cols - 1) / 2);
+      const visualPos = [center];
+      for (let d = 1; visualPos.length < cols; d++) {
+        if (center + d < cols) visualPos.push(center + d);
+        if (center - d >= 0) visualPos.push(center - d);
+      }
+      const slotLogical = new Array(cols);
+      visualPos.forEach((vp, i) => { slotLogical[vp] = bySize[i]; });
+
+      // 3) 定位
+      for (let vp = 0; vp < cols; vp++) {
+        let y = TOP;
+        for (const card of buckets[slotLogical[vp]]) {
+          card.style.left = (offsetX + vp * (PHONE_W + GAP)) + 'px';
+          card.style.top = y + 'px';
+          y += card.offsetHeight + V_GAP;
+        }
+      }
+      grid.style.height = (Math.max(...colH) + TOP) + 'px';
+    }
+
+    // 重排（防抖）。多重触发确保随 iframe 高度陆续确定而收敛，
+    // 不依赖 load 计数（缓存命中时 load 可能早于监听器绑定、导致计数永不归零）。
+    let rz;
+    const relayout = () => { clearTimeout(rz); rz = setTimeout(layout, 120); };
+
+    document.querySelectorAll('.phone iframe').forEach((iframe) => {
+      iframe.addEventListener('load', () => { fitIframe(iframe); relayout(); });
+    });
+
+    // 初始 + 兜底：window load 与若干延时（覆盖缓存命中、晚到高度等），每次先测高再排
+    window.addEventListener('load', relayout);
+    ;[100, 400, 900].forEach((t) => setTimeout(() => {
+      document.querySelectorAll('.phone iframe').forEach(fitIframe);
+      layout();
+    }, t));
+
+    // 视口/容器尺寸变化即重排
+    window.addEventListener('resize', relayout);
+    new ResizeObserver(relayout).observe(grid);
+    relayout();
+  </script>
+</body>
+</html>

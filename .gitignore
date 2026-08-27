@@ -27,3 +27,12 @@ apps/server/uploads/
 # WeChat DevTools
 apps/miniapp/.idea/
 apps/miniapp/node_modules/
+
+# 小程序预览台：由源 wxss 实时派生，不入库
+tools/miniapp-preview/*.generated.css
+
+# 微信开发者工具个人配置
+project.private.config.json
+
+# Claude Code 本地设置
+.claude/settings.local.json

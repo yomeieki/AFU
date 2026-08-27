@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/product-detail.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page">
+
+    <div class="img-swiper"><div class="swiper-placeholder img-placeholder"></div></div>
+
+    <div class="card info-card">
+      <div class="price-row">
+        <div class="price-main">
+          <span class="price-symbol detail-price-symbol">¥</span>
+          <span class="price-int detail-price-int">36</span>
+          <span class="price-dec detail-price-dec">.80</span>
+        </div>
+        <span class="original-price">¥42.80</span>
+        <span class="unit">/ 份</span>
+      </div>
+      <span class="product-name">冷吃兔</span>
+      <span class="product-subtitle">川味经典，麻辣鲜香</span>
+      <div class="meta-row">
+        <div class="meta-tag stock-tag"><span>有货</span></div>
+        <span class="sales-text">已售 158</span>
+      </div>
+    </div>
+
+    <!-- 规格/数量选择入口 -->
+    <div class="card select-sku-card">
+      <span class="select-sku-label">选择规格</span>
+      <div class="select-sku-value">
+        <span>已选：中辣/去骨 ×1</span>
+        <div class="select-sku-arrow icon icon-arrow"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span>规格说明</span></div>
+      <div class="spec-list">
+        <div class="spec-row"><span class="spec-label">规格/重量</span><span class="spec-value">250g/份</span></div>
+        <div class="spec-row"><span class="spec-label">保质期</span><span class="spec-value">冷藏5天，冷冻30天</span></div>
+        <div class="spec-row"><span class="spec-label">储存方式</span><span class="spec-value">冷藏保存</span></div>
+        <div class="spec-row"><span class="spec-label">配送说明</span><span class="spec-value">顺丰冷链发货</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span>商品详情</span></div>
+      <span class="description-text">选用鲜兔肉，川式冷吃做法，麻辣入味，越嚼越香。可选辣度与去骨/带骨。</span>
+    </div>
+
+    <div class="action-bar-spacer"></div>
+  </div>
+
+  <div class="action-bar safe-bottom">
+    <button class="btn-cart btn-plain">加入购物车</button>
+    <button class="btn-buy btn-primary">立即购买</button>
+  </div>
+
+  <!-- 规格选择弹层（展开态静态镜像；真机由 sku-popup 组件渲染） -->
+  <div class="sku-mask">
+    <div class="sku-panel safe-bottom">
+      <div class="sku-header">
+        <div class="sku-img-wrap"><div class="sku-img img-placeholder"></div></div>
+        <div class="sku-header-info">
+          <div class="sku-price-row">
+            <span class="price-symbol">¥</span>
+            <span class="price-int sku-price-int">45.80</span>
+            <span class="sku-original-price">¥49.80</span>
+          </div>
+          <span class="sku-stock">有货</span>
+          <span class="sku-selected">已选：中辣/去骨</span>
+        </div>
+        <div class="sku-close">✕</div>
+      </div>
+      <div class="sku-body">
+        <div class="sku-group">
+          <span class="sku-group-name">辣度</span>
+          <div class="sku-options">
+            <div class="sku-chip">微辣</div>
+            <div class="sku-chip sku-chip-active">中辣</div>
+            <div class="sku-chip sku-chip-disabled">特辣</div>
+          </div>
+        </div>
+        <div class="sku-group">
+          <span class="sku-group-name">骨型</span>
+          <div class="sku-options">
+            <div class="sku-chip">带骨</div>
+            <div class="sku-chip sku-chip-active">去骨</div>
+          </div>
+        </div>
+        <div class="sku-qty-row">
+          <span class="sku-group-name">数量</span>
+          <div class="stepper">
+            <div class="stepper-btn stepper-btn-disabled"><span>−</span></div>
+            <span class="stepper-num">1</span>
+            <div class="stepper-btn"><span>+</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="sku-footer">
+        <div class="sku-confirm btn-primary">加入购物车</div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

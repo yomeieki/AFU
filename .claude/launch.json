@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "admin",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3100 npm run dev"],
+      "port": 5173,
+      "autoPort": true
+    },
+    {
+      "name": "miniapp-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/miniapp-preview/serve.mjs", "--port", "5180"],
+      "port": 5180
+    }
+  ]
+}
