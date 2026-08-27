@@ -5,8 +5,8 @@
   </view>
 
   <view wx:elif="{{addresses.length === 0}}" class="empty-wrap">
-    <text class="empty-text">暂无收货地址</text>
-    <view class="add-btn" bindtap="onAddAddress">新增地址</view>
+    <empty-state type="address" text="还没有收货地址" />
+    <view class="add-btn-inline btn-primary" bindtap="onAddAddress">新增地址</view>
   </view>
 
   <view wx:else>
@@ -14,10 +14,12 @@
       <view
         wx:for="{{addresses}}"
         wx:key="id"
-        class="address-card {{mode === 'select' ? 'selectable' : ''}}"
+        class="address-card card {{mode === 'select' ? 'selectable' : ''}}"
+        hover-class="address-card-hover"
         bindtap="onSelectAddress"
         data-address="{{item}}"
       >
+        <view class="address-pin icon icon-pin"></view>
         <view class="address-main">
           <view class="address-receiver">
             <text class="receiver-name">{{item.receiverName}}</text>
@@ -30,15 +32,14 @@
           <view class="action-btn" catchtap="onEditAddress" data-id="{{item.id}}">编辑</view>
           <view class="action-btn delete" catchtap="onDeleteAddress" data-id="{{item.id}}">删除</view>
         </view>
-        <view class="select-icon" wx:if="{{mode === 'select'}}">
-          <text>&gt;</text>
-        </view>
+        <view class="select-icon icon icon-arrow" wx:if="{{mode === 'select'}}"></view>
       </view>
     </view>
 
-    <view class="add-btn-wrap" wx:if="{{mode !== 'select'}}">
-      <view class="add-btn" bindtap="onAddAddress">新增收货地址</view>
+    <view class="add-btn-wrap safe-bottom" wx:if="{{mode !== 'select'}}">
+      <view class="add-btn btn-primary" bindtap="onAddAddress">+ 新增收货地址</view>
     </view>
+    <view class="add-btn-spacer" wx:if="{{mode !== 'select'}}"></view>
   </view>
 
 </view>

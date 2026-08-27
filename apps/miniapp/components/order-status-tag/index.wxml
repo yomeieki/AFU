@@ -1,0 +1,1 @@
+<text class="tag tag-{{status}}">{{label}}</text>

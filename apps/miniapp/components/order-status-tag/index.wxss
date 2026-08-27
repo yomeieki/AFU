@@ -1,0 +1,32 @@
+.tag {
+  display: inline-block;
+  padding: 4rpx 16rpx;
+  font-size: 22rpx;
+  border-radius: 999rpx;
+  background: var(--gray-bg, #f3f4f6);
+  color: var(--gray, #9ca3af);
+}
+.tag-PENDING_PAYMENT {
+  background: var(--warning-bg, #fff7e8);
+  color: var(--warning, #ff9500);
+}
+.tag-PAID {
+  background: var(--info-bg, #eff6ff);
+  color: var(--info, #3b82f6);
+}
+.tag-SHIPPED {
+  background: var(--cyan-bg, #ecfeff);
+  color: var(--cyan, #0891b2);
+}
+.tag-COMPLETED {
+  background: var(--success-bg, #f0fdf4);
+  color: var(--success, #16a34a);
+}
+.tag-CANCELLED {
+  background: var(--gray-bg, #f3f4f6);
+  color: var(--gray, #9ca3af);
+}
+.tag-REFUNDED {
+  background: var(--danger-bg, #fef2f2);
+  color: var(--danger, #ef4444);
+}

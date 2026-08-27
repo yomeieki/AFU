@@ -1,0 +1,26 @@
+// 价格三段式排版辅助：把 "29.90" 拆成整数与小数部分（wxml 内使用，不涉及页面 js）
+function intPart(text) {
+  if (text === null || text === undefined || text === '') return '0'
+  var s = '' + text
+  var i = s.indexOf('.')
+  return i === -1 ? s : s.substring(0, i)
+}
+
+function decPart(text) {
+  if (text === null || text === undefined || text === '') return ''
+  var s = '' + text
+  var i = s.indexOf('.')
+  return i === -1 ? '' : s.substring(i)
+}
+
+// 分 → 元字符串（保留两位小数）
+function fenToYuan(fen) {
+  if (!fen) fen = 0
+  return (fen / 100).toFixed(2)
+}
+
+module.exports = {
+  int: intPart,
+  dec: decPart,
+  fen: fenToYuan,
+}

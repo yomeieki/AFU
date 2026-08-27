@@ -1,3 +1,4 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page" wx:if="{{!loading && order}}">
 
   <!-- Status banner -->
@@ -8,12 +9,16 @@
 
   <!-- Address -->
   <view class="card">
-    <view class="card-title">收货地址</view>
-    <view class="receiver-row">
-      <text class="receiver-name">{{order.receiverName}}</text>
-      <text class="receiver-phone">{{order.receiverPhone}}</text>
+    <view class="address-row">
+      <view class="address-pin icon icon-pin"></view>
+      <view class="address-body">
+        <view class="receiver-row">
+          <text class="receiver-name">{{order.receiverName}}</text>
+          <text class="receiver-phone">{{order.receiverPhone}}</text>
+        </view>
+        <text class="receiver-address">{{order.receiverFullAddress}}</text>
+      </view>
     </view>
-    <text class="receiver-address">{{order.receiverFullAddress}}</text>
   </view>
 
   <!-- Items -->
@@ -23,10 +28,11 @@
       <view wx:for="{{order.items}}" wx:key="id" class="item-row">
         <view class="item-img-wrap">
           <image wx:if="{{item.productImage}}" class="item-img" src="{{item.productImage}}" mode="aspectFill"/>
-          <view wx:else class="item-img-ph"><text>无图</text></view>
+          <view wx:else class="item-img-ph img-placeholder"></view>
         </view>
         <view class="item-info">
           <text class="item-name">{{item.productName}}</text>
+          <text class="item-spec" wx:if="{{item.specText}}">{{item.specText}}</text>
           <text class="item-price">¥{{item.priceText}} × {{item.quantity}}</text>
         </view>
         <text class="item-subtotal">¥{{item.subtotalText}}</text>
@@ -46,7 +52,11 @@
     </view>
     <view class="amount-row total-row">
       <text class="amount-label">合计</text>
-      <text class="total-price">¥{{order.actualAmountText}}</text>
+      <view class="total-price-wrap">
+        <text class="price-symbol">¥</text>
+        <text class="price-int total-price-int">{{pricefmt.int(order.actualAmountText)}}</text>
+        <text class="price-dec">{{pricefmt.dec(order.actualAmountText)}}</text>
+      </view>
     </view>
   </view>
 
@@ -92,10 +102,10 @@
 
 <!-- Bottom action bar -->
 <view class="action-bar" wx:if="{{!loading && order && (order.status === 'PENDING_PAYMENT' || order.status === 'SHIPPED')}}">
-  <view class="pay-btn" wx:if="{{order.status === 'PENDING_PAYMENT'}}" bindtap="onPay">
+  <view class="pay-btn btn-primary" wx:if="{{order.status === 'PENDING_PAYMENT'}}" bindtap="onPay">
     <text>去支付</text>
   </view>
-  <view class="pay-btn" wx:if="{{order.status === 'SHIPPED'}}" bindtap="onConfirmReceipt">
+  <view class="pay-btn btn-primary" wx:if="{{order.status === 'SHIPPED'}}" bindtap="onConfirmReceipt">
     <text>确认收货</text>
   </view>
 </view>

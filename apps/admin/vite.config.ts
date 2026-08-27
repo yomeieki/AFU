@@ -7,7 +7,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        // 本机 3000 端口被其他项目占用时，可用 VITE_PROXY_TARGET 指向实际后端（如 http://localhost:3100）
+        target: process.env.VITE_PROXY_TARGET ?? 'http://localhost:3000',
         changeOrigin: true,
       },
     },

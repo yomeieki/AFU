@@ -2,5 +2,8 @@
   "navigationBarTitleText": "商品列表",
   "enablePullDownRefresh": true,
   "backgroundTextStyle": "dark",
-  "onReachBottomDistance": 100
+  "onReachBottomDistance": 100,
+  "usingComponents": {
+    "empty-state": "/components/empty-state/index"
+  }
 }

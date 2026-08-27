@@ -1,7 +1,205 @@
+/* ============================================================
+   设计 token（规范见 docs/design-system.md）
+   CSS 变量定义在 page 上，可继承进自定义组件（穿透样式隔离）
+   ============================================================ */
 page {
+  /* 品牌色 */
+  --brand: #e5441e;
+  --brand-dark: #c33514;
+  --brand-light: #ef7150;
+  --brand-bg: #fef4f0;
+  --brand-bg-deep: #fde5dc;
+  --brand-gradient: linear-gradient(135deg, #ff6a3d 0%, #e5441e 100%);
+
+  /* 中性色 */
+  --text-1: #1a1a1a;
+  --text-2: #666666;
+  --text-3: #999999;
+  --text-disabled: #c8c9cc;
+  --border: #ebedf0;
+  --divider: #f2f3f5;
+  --bg: #f5f6f7;
+  --card: #ffffff;
+
+  /* 功能色 / 订单状态色 */
+  --warning: #ff9500;
+  --warning-bg: #fff7e8;
+  --info: #3b82f6;
+  --info-bg: #eff6ff;
+  --cyan: #0891b2;
+  --cyan-bg: #ecfeff;
+  --success: #16a34a;
+  --success-bg: #f0fdf4;
+  --gray: #9ca3af;
+  --gray-bg: #f3f4f6;
+  --danger: #ef4444;
+  --danger-bg: #fef2f2;
+
+  /* 圆角 */
+  --radius-sm: 8rpx;
+  --radius-md: 12rpx;
+  --radius-lg: 16rpx;
+  --radius-xl: 24rpx;
+
+  /* 阴影 */
+  --shadow-card: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
   font-size: 28rpx;
-  color: #333;
-  background-color: #f5f5f5;
+  color: var(--text-1);
+  background-color: var(--bg);
   box-sizing: border-box;
+}
+
+/* ============================================================
+   原生 button 重置
+   ============================================================ */
+button {
+  padding: 0;
+  margin: 0;
+  background: none;
+  border-radius: 0;
+  line-height: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+button::after {
+  border: none;
+}
+
+/* ============================================================
+   公共类
+   ============================================================ */
+.card {
+  background: var(--card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+/* 按钮：渐变胶囊主按钮 / 描边次按钮 / 禁用态 */
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80rpx;
+  padding: 0 48rpx;
+  background: var(--brand-gradient);
+  color: #fff;
+  font-size: 30rpx;
+  font-weight: 600;
+  border-radius: 999rpx;
+}
+.btn-plain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80rpx;
+  padding: 0 48rpx;
+  background: var(--brand-bg);
+  color: var(--brand);
+  font-size: 30rpx;
+  font-weight: 600;
+  border: 2rpx solid var(--brand-light);
+  border-radius: 999rpx;
+  box-sizing: border-box;
+}
+.btn-disabled {
+  background: var(--text-disabled) !important;
+  color: #fff !important;
+  border: none !important;
+}
+
+/* 价格三段式：¥小 + 整数大 + 小数小，700 字重品牌色 */
+.price {
+  color: var(--brand);
+  font-weight: 700;
+}
+.price-symbol {
+  font-size: 24rpx;
+  color: var(--brand);
+  font-weight: 700;
+}
+.price-int {
+  font-size: 44rpx;
+  color: var(--brand);
+  font-weight: 700;
+}
+.price-dec {
+  font-size: 24rpx;
+  color: var(--brand);
+  font-weight: 700;
+}
+
+/* 数量步进器（购物车 / 商品详情共用视觉） */
+.stepper {
+  display: flex;
+  align-items: center;
+}
+.stepper-btn {
+  width: 52rpx;
+  height: 52rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--divider);
+  color: var(--text-2);
+  font-size: 32rpx;
+  border-radius: 8rpx;
+}
+.stepper-btn.disabled {
+  color: var(--text-disabled);
+}
+.stepper-num {
+  min-width: 72rpx;
+  text-align: center;
+  font-size: 28rpx;
+  color: var(--text-1);
+}
+
+/* 底部安全区（fixed 操作栏容器用） */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ============================================================
+   图形素材（data-uri，源文件见 scripts/svg-src/）
+   ============================================================ */
+
+/* 商品占位图：浅橙底 + 简笔餐盒，居中不铺满 */
+.img-placeholder {
+  background-color: var(--brand-bg);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 45%;
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+IDxwYXRoIGQ9Ik04IDI2IGgzMiBhMiAyIDAgMCAxIDIgMiB2MiBhOCA4IDAgMCAxIC04IDggSDE0IGE4IDggMCAwIDEgLTggLTggdi0yIGEyIDIgMCAwIDEgMiAtMiBaIiBmaWxsPSJub25lIiBzdHJva2U9IiNmNmEyODgiIHN0cm9rZS13aWR0aD0iMi41IiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+IDxwYXRoIGQ9Ik0xMiAyNiBhMTIgMTIgMCAwIDEgMjQgMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZjZhMjg4IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+IDxjaXJjbGUgY3g9IjI0IiBjeT0iMTIiIHI9IjIiIGZpbGw9IiNmNmEyODgiLz4gPHBhdGggZD0iTTE4IDIwIHExLjUgLTIgMyAwIE0yNyAyMCBxMS41IC0yIDMgMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZjZhMjg4IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPiA8L3N2Zz4=");
+}
+
+/* 行内小图标基类：固定尺寸 view + 背景图（源文件 scripts/svg-src/） */
+.icon {
+  display: inline-block;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+.icon-arrow {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxwYXRoIGQ9Ik05IDYgbDYgNiAtNiA2IiBmaWxsPSJub25lIiBzdHJva2U9IiNjOGM5Y2MiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+IDwvc3ZnPg==");
+}
+.icon-pin {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxwYXRoIGQ9Ik0xMiAyMSBzLTcgLTUuNSAtNyAtMTEgYTcgNyAwIDAgMSAxNCAwIGMwIDUuNSAtNyAxMSAtNyAxMSBaIiBmaWxsPSJub25lIiBzdHJva2U9IiNlNTQ0MWUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPiA8Y2lyY2xlIGN4PSIxMiIgY3k9IjEwIiByPSIyLjUiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U1NDQxZSIgc3Ryb2tlLXdpZHRoPSIyIi8+IDwvc3ZnPg==");
+}
+.icon-pay {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxyZWN0IHg9IjMiIHk9IjYiIHdpZHRoPSIxOCIgaGVpZ2h0PSIxMyIgcng9IjIuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZTU0NDFlIiBzdHJva2Utd2lkdGg9IjIiLz4gPHBhdGggZD0iTTMgMTAuNSBoMTgiIHN0cm9rZT0iI2U1NDQxZSIgc3Ryb2tlLXdpZHRoPSIyIi8+IDxwYXRoIGQ9Ik03IDE1LjUgaDQiIHN0cm9rZT0iI2ZmOTUwMCIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4gPC9zdmc+");
+}
+.icon-ship {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxwYXRoIGQ9Ik00IDguMiBMMTIgNCBsOCA0LjIgdjcuNiBMMTIgMjAgbC04IC00LjIgWiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZTU0NDFlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4gPHBhdGggZD0iTTQgOC4yIEwxMiAxMi40IGw4IC00LjIgTTEyIDEyLjQgVjIwIiBmaWxsPSJub25lIiBzdHJva2U9IiNlNTQ0MWUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPiA8cGF0aCBkPSJNOCA2LjEgbDggNC4yIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZjk1MDAiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+IDwvc3ZnPg==");
+}
+.icon-truck {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxwYXRoIGQ9Ik0yLjUgNi41IGgxMSBhMSAxIDAgMCAxIDEgMSBWMTYgaC0xMiBhMSAxIDAgMCAxIC0xIC0xIFY3LjUgYTEgMSAwIDAgMSAxIC0xIFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U1NDQxZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+IDxwYXRoIGQ9Ik0xNC41IDkuNSBoNCBsMyAzLjUgdjMgaC03IFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U1NDQxZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+IDxjaXJjbGUgY3g9IjciIGN5PSIxNy41IiByPSIxLjgiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmOTUwMCIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4gPGNpcmNsZSBjeD0iMTcuNSIgY3k9IjE3LjUiIHI9IjEuOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmY5NTAwIiBzdHJva2Utd2lkdGg9IjEuOCIvPiA8L3N2Zz4=");
+}
+.icon-done {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjkiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U1NDQxZSIgc3Ryb2tlLXdpZHRoPSIyIi8+IDxwYXRoIGQ9Ik04IDEyLjIgbDIuOCAyLjggTDE2IDkuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmY5NTAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPiA8L3N2Zz4=");
+}
+/* 白色对勾（选中圈内用） */
+.icon-check {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxwYXRoIGQ9Ik02IDEyLjUgbDQgNCBMMTggOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjMiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPiA8L3N2Zz4=");
 }

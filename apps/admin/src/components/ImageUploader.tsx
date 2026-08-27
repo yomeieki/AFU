@@ -89,7 +89,7 @@ export default function ImageUploader(props: Props) {
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={uploading}
-            className="w-20 h-20 border-2 border-dashed border-gray-300 rounded-md text-gray-400 hover:border-orange-400 hover:text-orange-500 text-xs flex flex-col items-center justify-center disabled:opacity-50"
+            className="w-20 h-20 border-2 border-dashed border-gray-300 rounded-md text-gray-400 hover:border-brand-400 hover:text-brand-500 text-xs flex flex-col items-center justify-center disabled:opacity-50"
           >
             <span className="text-xl leading-none mb-1">+</span>
             {uploading ? '上传中...' : '上传图片'}

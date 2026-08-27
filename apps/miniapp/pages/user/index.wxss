@@ -1,25 +1,55 @@
 .page {
-  background-color: #f5f5f5;
+  background-color: var(--bg);
   min-height: 100vh;
+  padding-bottom: 40rpx;
 }
 
 /* User header */
 .user-header {
-  background: linear-gradient(135deg, #e5441e 0%, #ff7043 100%);
-  padding: 60rpx 40rpx 50rpx;
+  position: relative;
+  background: var(--brand-gradient);
+  padding: 70rpx 40rpx 60rpx;
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 30rpx;
+  overflow: hidden;
+}
+.header-deco {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+}
+.header-deco-1 {
+  width: 300rpx;
+  height: 300rpx;
+  top: -150rpx;
+  right: -60rpx;
+}
+.header-deco-2 {
+  width: 140rpx;
+  height: 140rpx;
+  bottom: -50rpx;
+  left: 40%;
 }
 .avatar-wrap {
+  position: relative;
   flex-shrink: 0;
 }
+.avatar-img {
+  width: 128rpx;
+  height: 128rpx;
+  border-radius: 50%;
+  border: 4rpx solid rgba(255, 255, 255, 0.8);
+  box-sizing: border-box;
+}
 .avatar-placeholder {
-  width: 120rpx;
-  height: 120rpx;
-  border-radius: 60rpx;
+  width: 128rpx;
+  height: 128rpx;
+  border-radius: 50%;
   background-color: rgba(255, 255, 255, 0.3);
+  border: 4rpx solid rgba(255, 255, 255, 0.7);
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -28,6 +58,7 @@
   font-size: 60rpx;
 }
 .user-info {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16rpx;
@@ -41,49 +72,65 @@
   background-color: rgba(255, 255, 255, 0.25);
   color: #fff;
   font-size: 26rpx;
-  border-radius: 30rpx;
-  padding: 6rpx 28rpx;
-  border: none;
+  border-radius: 999rpx;
+  padding: 8rpx 32rpx;
+  border: 1rpx solid rgba(255, 255, 255, 0.5);
   width: fit-content;
-}
-.login-btn::after {
-  border: none;
 }
 
 /* Menu section */
 .menu-section {
-  background-color: #fff;
-  margin-top: 20rpx;
+  margin: 20rpx 24rpx 0;
 }
 .menu-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 24rpx 30rpx 16rpx;
-  border-bottom: 1rpx solid #f5f5f5;
+  padding: 26rpx 30rpx 16rpx;
+  border-bottom: 1rpx solid var(--divider);
 }
-.menu-section-title { font-size: 30rpx; font-weight: bold; color: #222; }
-.menu-section-more { font-size: 26rpx; color: #999; }
+.menu-section-title {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: var(--text-1);
+}
+.menu-section-more {
+  display: flex;
+  align-items: center;
+  font-size: 26rpx;
+  color: var(--text-3);
+}
+.more-arrow {
+  width: 26rpx;
+  height: 26rpx;
+}
+
+/* Order shortcuts */
 .order-shortcuts {
   display: flex;
   flex-direction: row;
   justify-content: space-around;
-  padding: 24rpx 0;
+  padding: 30rpx 0 28rpx;
 }
 .shortcut-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10rpx;
+  gap: 14rpx;
 }
-.shortcut-icon { font-size: 48rpx; }
-.shortcut-label { font-size: 24rpx; color: #555; }
-.menu-title {
-  padding: 20rpx 30rpx 12rpx;
-  font-size: 26rpx;
-  color: #999;
-  border-bottom: 1rpx solid #f5f5f5;
+.shortcut-item-hover {
+  opacity: 0.7;
 }
+.shortcut-icon {
+  width: 52rpx;
+  height: 52rpx;
+}
+.shortcut-label {
+  font-size: 24rpx;
+  color: var(--text-2);
+}
+
+/* Menu list */
 .menu-list {
   display: flex;
   flex-direction: column;
@@ -92,23 +139,25 @@
   display: flex;
   align-items: center;
   padding: 30rpx;
-  border-bottom: 1rpx solid #f5f5f5;
+  border-bottom: 1rpx solid var(--divider);
   gap: 20rpx;
 }
 .menu-item:last-child {
   border-bottom: none;
 }
+.menu-item-hover {
+  background-color: var(--bg);
+}
 .menu-icon {
-  font-size: 36rpx;
-  width: 50rpx;
-  text-align: center;
+  width: 40rpx;
+  height: 40rpx;
 }
 .menu-label {
   flex: 1;
   font-size: 30rpx;
-  color: #333;
+  color: var(--text-1);
 }
 .menu-arrow {
-  font-size: 28rpx;
-  color: #ccc;
+  width: 28rpx;
+  height: 28rpx;
 }

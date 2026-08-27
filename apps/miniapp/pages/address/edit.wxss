@@ -1,44 +1,79 @@
-.page { background-color: #f5f5f5; min-height: 100vh; padding: 20rpx; }
-.form { display: flex; flex-direction: column; gap: 16rpx; }
-.field-group { background-color: #fff; border-radius: 12rpx; overflow: hidden; }
+.page {
+  background-color: var(--bg);
+  min-height: 100vh;
+  padding: 20rpx 24rpx;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+.field-group {
+  background-color: var(--card);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
 .field {
   display: flex;
   align-items: center;
   padding: 28rpx 30rpx;
-  border-bottom: 1rpx solid #f5f5f5;
+  border-bottom: 1rpx solid var(--divider);
   gap: 20rpx;
 }
-.field:last-child { border-bottom: none; }
-.label { width: 140rpx; font-size: 28rpx; color: #333; flex-shrink: 0; }
-.input { flex: 1; font-size: 28rpx; color: #222; }
-.switch-field { justify-content: space-between; }
+.field:last-child {
+  border-bottom: none;
+}
+.label {
+  width: 152rpx;
+  font-size: 28rpx;
+  color: var(--text-1);
+  flex-shrink: 0;
+}
+.input {
+  flex: 1;
+  font-size: 28rpx;
+  color: var(--text-1);
+}
+.input-placeholder {
+  color: var(--text-disabled);
+}
+
+/* 默认地址开关（品牌渐变） */
+.switch-field {
+  justify-content: space-between;
+}
+.switch-field .label {
+  width: auto;
+}
 .switch {
   width: 96rpx;
   height: 52rpx;
-  border-radius: 26rpx;
-  background-color: #ddd;
+  border-radius: 999rpx;
+  background-color: var(--text-disabled);
   position: relative;
   transition: background-color 0.2s;
 }
-.switch.on { background-color: #e5441e; }
+.switch.on {
+  background: var(--brand-gradient);
+}
 .switch-thumb {
   position: absolute;
   top: 6rpx;
   left: 6rpx;
   width: 40rpx;
   height: 40rpx;
-  border-radius: 20rpx;
+  border-radius: 50%;
   background-color: #fff;
+  box-shadow: 0 2rpx 6rpx rgba(0, 0, 0, 0.15);
   transition: left 0.2s;
 }
-.switch.on .switch-thumb { left: 50rpx; }
-.save-btn {
-  margin-top: 40rpx;
-  background-color: #e5441e;
-  color: #fff;
-  font-size: 32rpx;
-  text-align: center;
-  padding: 28rpx 0;
-  border-radius: 12rpx;
+.switch.on .switch-thumb {
+  left: 50rpx;
 }
-.save-btn.disabled { background-color: #ccc; }
+
+/* 保存按钮 */
+.save-btn {
+  margin-top: 48rpx;
+  height: 88rpx;
+}

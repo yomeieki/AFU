@@ -9,6 +9,11 @@
   "scripts": {
     "dev:server": "npm run dev --workspace=apps/server",
     "build:server": "npm run build --workspace=apps/server",
-    "build:admin": "npm run build --workspace=apps/admin"
+    "build:admin": "npm run build --workspace=apps/admin",
+    "preview:miniapp": "node tools/miniapp-preview/serve.mjs",
+    "gen:tabbar": "node scripts/gen-tabbar-icons.mjs"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.3"
   }
 }

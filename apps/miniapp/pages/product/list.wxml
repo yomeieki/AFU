@@ -1,3 +1,4 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
 
   <!-- Search bar -->
@@ -28,15 +29,14 @@
   </view>
 
   <!-- Product list -->
-  <view wx:if="{{list.length === 0 && !loading}}" class="empty-wrap">
-    <text class="empty-text">暂无商品</text>
-  </view>
+  <empty-state wx:if="{{list.length === 0 && !loading}}" type="product" text="暂无商品" />
 
   <view class="product-list">
     <view
       wx:for="{{list}}"
       wx:key="id"
       class="product-row"
+      hover-class="product-row-hover"
       bindtap="goToDetail"
       data-id="{{item.id}}"
     >
@@ -48,9 +48,7 @@
           mode="aspectFill"
           lazy-load="{{true}}"
         />
-        <view wx:else class="product-row-img-placeholder">
-          <text>暂无图片</text>
-        </view>
+        <view wx:else class="product-row-img-placeholder img-placeholder"></view>
       </view>
       <view class="product-row-info">
         <text class="product-row-name">{{item.name}}</text>
@@ -60,7 +58,9 @@
           <text class="product-row-sales">已售{{item.salesCount}}</text>
         </view>
         <view class="product-row-bottom">
-          <text class="product-row-price">¥{{item.priceText}}</text>
+          <text class="price-symbol">¥</text>
+          <text class="price-int product-row-price-int">{{pricefmt.int(item.priceText)}}</text>
+          <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
           <text class="product-row-unit">/ {{item.unit}}</text>
         </view>
       </view>

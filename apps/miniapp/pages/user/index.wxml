@@ -2,6 +2,8 @@
 
   <!-- User header -->
   <view class="user-header">
+    <view class="header-deco header-deco-1"></view>
+    <view class="header-deco header-deco-2"></view>
     <view class="avatar-wrap">
       <image wx:if="{{isLoggedIn && avatarUrl}}" class="avatar-img" src="{{avatarUrl}}" mode="aspectFill" />
       <view wx:else class="avatar-placeholder">
@@ -16,38 +18,41 @@
   </view>
 
   <!-- Order shortcuts -->
-  <view class="menu-section">
+  <view class="menu-section card">
     <view class="menu-section-header">
       <text class="menu-section-title">我的订单</text>
-      <text class="menu-section-more" bindtap="goToOrders">全部订单 &gt;</text>
+      <view class="menu-section-more" bindtap="goToOrders">
+        <text>全部订单</text>
+        <view class="more-arrow icon icon-arrow"></view>
+      </view>
     </view>
     <view class="order-shortcuts">
-      <view class="shortcut-item" bindtap="goToOrdersByStatus" data-status="PENDING_PAYMENT">
-        <text class="shortcut-icon">💳</text>
+      <view class="shortcut-item" hover-class="shortcut-item-hover" bindtap="goToOrdersByStatus" data-status="PENDING_PAYMENT">
+        <view class="shortcut-icon icon icon-pay"></view>
         <text class="shortcut-label">待付款</text>
       </view>
-      <view class="shortcut-item" bindtap="goToOrdersByStatus" data-status="PAID">
-        <text class="shortcut-icon">📦</text>
+      <view class="shortcut-item" hover-class="shortcut-item-hover" bindtap="goToOrdersByStatus" data-status="PAID">
+        <view class="shortcut-icon icon icon-ship"></view>
         <text class="shortcut-label">待发货</text>
       </view>
-      <view class="shortcut-item" bindtap="goToOrdersByStatus" data-status="SHIPPED">
-        <text class="shortcut-icon">🚚</text>
+      <view class="shortcut-item" hover-class="shortcut-item-hover" bindtap="goToOrdersByStatus" data-status="SHIPPED">
+        <view class="shortcut-icon icon icon-truck"></view>
         <text class="shortcut-label">已发货</text>
       </view>
-      <view class="shortcut-item" bindtap="goToOrdersByStatus" data-status="COMPLETED">
-        <text class="shortcut-icon">✅</text>
+      <view class="shortcut-item" hover-class="shortcut-item-hover" bindtap="goToOrdersByStatus" data-status="COMPLETED">
+        <view class="shortcut-icon icon icon-done"></view>
         <text class="shortcut-label">已完成</text>
       </view>
     </view>
   </view>
 
   <!-- More menu -->
-  <view class="menu-section">
+  <view class="menu-section card">
     <view class="menu-list">
-      <view class="menu-item" bindtap="goToAddresses">
-        <text class="menu-icon">📍</text>
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="goToAddresses">
+        <view class="menu-icon icon icon-pin"></view>
         <text class="menu-label">收货地址</text>
-        <text class="menu-arrow">&gt;</text>
+        <view class="menu-arrow icon icon-arrow"></view>
       </view>
     </view>
   </view>

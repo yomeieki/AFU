@@ -1,7 +1,11 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
 
-  <!-- Banner placeholder -->
+  <!-- Banner -->
   <view class="banner">
+    <view class="banner-deco banner-deco-1"></view>
+    <view class="banner-deco banner-deco-2"></view>
+    <view class="banner-deco banner-deco-3"></view>
     <view class="banner-inner">
       <text class="banner-title">新鲜熟食</text>
       <text class="banner-sub">每日现做 · 品质保证</text>
@@ -12,7 +16,7 @@
   <view class="section" wx:if="{{categories.length > 0}}">
     <view class="section-header">
       <text class="section-title">商品分类</text>
-      <text class="section-more" bindtap="goToAllProducts">全部 &gt;</text>
+      <text class="section-more" bindtap="goToAllProducts">全部 <text class="section-more-arrow icon icon-arrow"></text></text>
     </view>
     <scroll-view scroll-x class="category-scroll" enhanced="{{true}}" show-scrollbar="{{false}}">
       <view class="category-list">
@@ -20,6 +24,7 @@
           wx:for="{{categories}}"
           wx:key="id"
           class="category-item"
+          hover-class="category-item-hover"
           bindtap="goToList"
           data-id="{{item.id}}"
           data-name="{{item.name}}"
@@ -46,19 +51,25 @@
       <text class="section-title">推荐商品</text>
     </view>
 
-    <view wx:if="{{loading}}" class="loading-wrap">
-      <text class="loading-text">加载中...</text>
+    <!-- 骨架屏 -->
+    <view wx:if="{{loading}}" class="product-grid">
+      <view class="product-card skeleton-card" wx:for="{{[1, 2, 3, 4]}}" wx:key="*this">
+        <view class="skeleton-img skeleton-shine"></view>
+        <view class="product-info">
+          <view class="skeleton-line skeleton-shine"></view>
+          <view class="skeleton-line skeleton-line-short skeleton-shine"></view>
+        </view>
+      </view>
     </view>
 
-    <view wx:elif="{{products.length === 0}}" class="empty-wrap">
-      <text class="empty-text">暂无商品</text>
-    </view>
+    <empty-state wx:elif="{{products.length === 0}}" type="product" text="暂无商品" />
 
     <view wx:else class="product-grid">
       <view
         wx:for="{{products}}"
         wx:key="id"
         class="product-card"
+        hover-class="product-card-hover"
         bindtap="goToDetail"
         data-id="{{item.id}}"
       >
@@ -70,15 +81,17 @@
             mode="aspectFill"
             lazy-load="{{true}}"
           />
-          <view wx:else class="product-img-placeholder">
-            <text class="product-img-placeholder-text">暂无图片</text>
-          </view>
+          <view wx:else class="product-img-placeholder img-placeholder"></view>
         </view>
         <view class="product-info">
           <text class="product-name">{{item.name}}</text>
           <text class="product-subtitle" wx:if="{{item.subtitle}}">{{item.subtitle}}</text>
           <view class="product-bottom">
-            <text class="product-price">¥{{item.priceText}}</text>
+            <view class="product-price-wrap">
+              <text class="price-symbol">¥</text>
+              <text class="price-int product-price-int">{{pricefmt.int(item.priceText)}}</text>
+              <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
+            </view>
             <text class="product-sales">已售{{item.salesCount}}</text>
           </view>
         </view>
