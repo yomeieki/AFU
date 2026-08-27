@@ -37,7 +37,7 @@ Page({
     var self = this
     var id = e.currentTarget.dataset.id
     var item = this.data.items.find(function(i) { return i.id === id })
-    if (!item) return
+    if (!item || item.status !== 'ON_SHELF') return
     var newVal = item.isSelected === 1 ? 0 : 1
     updateCartItem(id, { isSelected: newVal })
       .then(function() { self.loadCart() })
@@ -47,7 +47,7 @@ Page({
     var self = this
     var id = e.currentTarget.dataset.id
     var item = this.data.items.find(function(i) { return i.id === id })
-    if (!item || item.quantity <= 1) return
+    if (!item || item.status !== 'ON_SHELF' || item.quantity <= 1) return
     updateCartItem(id, { quantity: item.quantity - 1 })
       .then(function() { self.loadCart() })
   },
@@ -56,7 +56,7 @@ Page({
     var self = this
     var id = e.currentTarget.dataset.id
     var item = this.data.items.find(function(i) { return i.id === id })
-    if (!item) return
+    if (!item || item.status !== 'ON_SHELF') return
     updateCartItem(id, { quantity: item.quantity + 1 })
       .then(function() { self.loadCart() })
   },

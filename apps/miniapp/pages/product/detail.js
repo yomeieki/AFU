@@ -7,12 +7,22 @@ Page({
   data: {
     product: null,
     loading: true,
+    // 页面 push 转场约 300ms，转场结束前不渲染 position:fixed 底部栏，
+    // 避免固定栏在滑动动画中提前落到屏幕底、盖在前一页上形成「闪现」
+    entered: false,
+    skuPopupShow: false,
+    skuPopupMode: 'cart',
+    selectedSkuText: '', // 「已选」行展示
   },
 
   onLoad(options) {
+    var self = this
     var id = options.id
     var scanScene = null
     var source = options.source || 'package'
+
+    // 转场动画结束后再放出底部动作栏（带淡入）
+    setTimeout(function() { self.setData({ entered: true }) }, 350)
 
     // Handle QR code scan entry: options.scene contains the encoded scene string
     if (options.scene) {
@@ -46,12 +56,18 @@ Page({
         var images = (product.images && product.images.length > 0)
           ? product.images.map(function(img) { return img.imageUrl })
           : (product.coverImage ? [product.coverImage] : [])
+        var skus = product.skus || []
+        var dims = product.specDimensions || []
         self.setData({
           product: Object.assign({}, product, {
             priceText: formatPrice(product.price),
             originalPriceText: product.originalPrice ? formatPrice(product.originalPrice) : null,
             stockLabel: formatStock(product.stock),
             images: images,
+            skus: skus,
+            specDimensions: dims,
+            // 「选择规格」行的占位提示：辣度、骨型
+            specHint: dims.length > 0 ? dims.map(function(d) { return d.name }).join('、') : '',
           }),
           loading: false,
         })
@@ -64,31 +80,48 @@ Page({
       })
   },
 
+  // 底部按钮 / 「已选」行：统一打开规格弹层（无规格商品弹层内只选数量）
   onAddToCart() {
-    var product = this.data.product
-    if (!product) return
-    wx.showLoading({ title: '加入中...' })
-    addToCart(product.id, 1)
-      .then(function() {
-        wx.hideLoading()
-        wx.showToast({ title: '已加入购物车', icon: 'success', duration: 1500 })
-        getApp().updateCartCount()
-      })
-      .catch(function() {
-        wx.hideLoading()
-      })
+    if (!this.data.product) return
+    this.setData({ skuPopupShow: true, skuPopupMode: 'cart' })
   },
 
   onBuyNow() {
+    if (!this.data.product) return
+    this.setData({ skuPopupShow: true, skuPopupMode: 'buy' })
+  },
+
+  onOpenSkuPopup() {
+    if (!this.data.product) return
+    this.setData({ skuPopupShow: true, skuPopupMode: 'cart' })
+  },
+
+  onSkuPopupClose() {
+    this.setData({ skuPopupShow: false })
+  },
+
+  onSkuConfirm(e) {
+    var self = this
     var product = this.data.product
-    if (!product) return
-    wx.showLoading({ title: '处理中...' })
-    addToCart(product.id, 1)
+    var skuId = e.detail.skuId
+    var quantity = e.detail.quantity
+    var specText = e.detail.specText
+    var isBuy = this.data.skuPopupMode === 'buy'
+
+    wx.showLoading({ title: isBuy ? '处理中...' : '加入中...' })
+    addToCart(product.id, quantity, skuId)
       .then(function(res) {
         wx.hideLoading()
-        wx.navigateTo({
-          url: '/pages/order/confirm?cartItemIds=' + res.id,
+        self.setData({
+          skuPopupShow: false,
+          selectedSkuText: specText ? specText + ' ×' + quantity : '×' + quantity,
         })
+        if (isBuy) {
+          wx.navigateTo({ url: '/pages/order/confirm?cartItemIds=' + res.id })
+        } else {
+          wx.showToast({ title: '已加入购物车', icon: 'success', duration: 1500 })
+          getApp().updateCartCount()
+        }
       })
       .catch(function() {
         wx.hideLoading()

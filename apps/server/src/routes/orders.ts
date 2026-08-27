@@ -29,21 +29,24 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.userId!
     const { cartItemIds, addressId, deliveryType, remark } = createOrderSchema.parse(req.body)
 
-    // 1. 获取购物车项（含商品信息）
+    // 1. 获取购物车项（含商品与 SKU 信息）
     const cartItems = await prisma.cart.findMany({
       where: { id: { in: cartItemIds }, userId },
-      include: { product: true },
+      include: { product: true, sku: true },
     })
     if (cartItems.length === 0) {
       throw new AppError(40001, '购物车商品不存在或不属于当前用户')
     }
 
-    // 2. 逐个验证商品
+    // 2. 逐个验证商品（有 SKU 的行按 SKU 库存校验）
     for (const item of cartItems) {
       const p = item.product
       if (!p || p.deletedAt) throw new AppError(40401, '商品不存在')
       if (p.status !== 'ON_SHELF') throw new AppError(42202, `${p.name} 已下架`)
-      if (p.stock < item.quantity) throw new AppError(42201, `${p.name} 库存不足（剩余 ${p.stock}）`)
+      if (item.skuId && !item.sku) throw new AppError(40401, `${p.name} 所选规格已失效`)
+      const stock = item.sku?.stock ?? p.stock
+      const label = item.sku ? `${p.name}（${item.sku.specText}）` : p.name
+      if (stock < item.quantity) throw new AppError(42201, `${label} 库存不足（剩余 ${stock}）`)
     }
 
     // 3. 获取收货地址（验证归属）
@@ -52,16 +55,19 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     })
     if (!address) throw new AppError(40401, '收货地址不存在', 404)
 
-    // 4. 计算金额（全部后端计算）
+    // 4. 计算金额（全部后端计算；单价取 SKU 价，无 SKU 走商品价）
     let totalAmount = 0
     const orderItemsData = cartItems.map((item) => {
-      const subtotal = item.product.price * item.quantity
+      const unitPrice = item.sku?.price ?? item.product.price
+      const subtotal = unitPrice * item.quantity
       totalAmount += subtotal
       return {
         productId: item.productId,
+        skuId: item.skuId,
+        specText: item.sku?.specText ?? null,
         productName: item.product.name,
         productImage: item.product.coverImage,
-        productPrice: item.product.price,
+        productPrice: unitPrice,
         quantity: item.quantity,
         subtotal,
       }
@@ -101,16 +107,34 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       })
 
       // 原子减库存（updateMany 带 stock >= quantity 条件，防超卖）
+      // 有 SKU：先扣 SKU 库存，再同步扣商品冗余总库存（product.stock = sum(sku.stock) 约定）
       for (const item of cartItems) {
-        const updated = await tx.product.updateMany({
-          where: { id: item.productId, stock: { gte: item.quantity } },
-          data: {
-            stock: { decrement: item.quantity },
-            salesCount: { increment: item.quantity },
-          },
-        })
-        if (updated.count === 0) {
-          throw new AppError(42201, `${item.product.name} 库存不足，请刷新重试`)
+        if (item.skuId) {
+          const skuUpdated = await tx.productSku.updateMany({
+            where: { id: item.skuId, stock: { gte: item.quantity } },
+            data: { stock: { decrement: item.quantity } },
+          })
+          if (skuUpdated.count === 0) {
+            throw new AppError(42201, `${item.product.name}（${item.sku!.specText}）库存不足，请刷新重试`)
+          }
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              stock: { decrement: item.quantity },
+              salesCount: { increment: item.quantity },
+            },
+          })
+        } else {
+          const updated = await tx.product.updateMany({
+            where: { id: item.productId, stock: { gte: item.quantity } },
+            data: {
+              stock: { decrement: item.quantity },
+              salesCount: { increment: item.quantity },
+            },
+          })
+          if (updated.count === 0) {
+            throw new AppError(42201, `${item.product.name} 库存不足，请刷新重试`)
+          }
         }
       }
 

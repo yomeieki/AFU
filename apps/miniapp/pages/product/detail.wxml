@@ -1,3 +1,4 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page" wx:if="{{!loading && product}}">
 
   <!-- Image swiper -->
@@ -13,26 +14,38 @@
       <image class="swiper-img" src="{{item}}" mode="aspectFill" />
     </swiper-item>
     <swiper-item wx:if="{{product.images.length === 0}}">
-      <view class="swiper-placeholder">
-        <text class="swiper-placeholder-text">暂无图片</text>
-      </view>
+      <view class="swiper-placeholder img-placeholder"></view>
     </swiper-item>
   </swiper>
 
   <!-- Main info -->
-  <view class="card">
+  <view class="card info-card">
     <view class="price-row">
-      <text class="price">¥{{product.priceText}}</text>
+      <view class="price-main">
+        <text class="price-symbol detail-price-symbol">¥</text>
+        <text class="price-int detail-price-int">{{pricefmt.int(product.priceText)}}</text>
+        <text class="price-dec detail-price-dec">{{pricefmt.dec(product.priceText)}}</text>
+      </view>
       <text class="original-price" wx:if="{{product.originalPriceText}}">¥{{product.originalPriceText}}</text>
       <text class="unit">/ {{product.unit}}</text>
     </view>
     <text class="product-name">{{product.name}}</text>
     <text class="product-subtitle" wx:if="{{product.subtitle}}">{{product.subtitle}}</text>
     <view class="meta-row">
-      <view class="meta-tag stock-tag">
+      <view class="meta-tag stock-tag {{product.stock <= 0 ? 'stock-tag-out' : (product.stock <= 10 ? 'stock-tag-low' : '')}}">
         <text>{{product.stockLabel}}</text>
       </view>
       <text class="sales-text">已售 {{product.salesCount}}</text>
+    </view>
+  </view>
+
+  <!-- 规格/数量选择入口 -->
+  <view class="card select-sku-card" bindtap="onOpenSkuPopup">
+    <text class="select-sku-label">{{product.skus.length > 0 ? '选择规格' : '选择数量'}}</text>
+    <view class="select-sku-value">
+      <text wx:if="{{selectedSkuText}}">已选：{{selectedSkuText}}</text>
+      <text wx:else class="select-sku-placeholder">{{product.specHint || '请选择'}}</text>
+      <view class="select-sku-arrow icon icon-arrow"></view>
     </view>
   </view>
 
@@ -47,7 +60,7 @@
         <text class="spec-value">{{product.weight}}</text>
       </view>
       <view class="spec-row" wx:if="{{product.shelfLife}}">
-        <text class="spec-label">保　　质　期</text>
+        <text class="spec-label">保质期</text>
         <text class="spec-value">{{product.shelfLife}}</text>
       </view>
       <view class="spec-row" wx:if="{{product.storageMethod}}">
@@ -80,7 +93,16 @@
 </view>
 
 <!-- Bottom action bar -->
-<view class="action-bar" wx:if="{{!loading && product}}">
-  <button class="btn-cart" bindtap="onAddToCart">加入购物车</button>
-  <button class="btn-buy" bindtap="onBuyNow">立即购买</button>
+<view class="action-bar safe-bottom" wx:if="{{!loading && product && entered}}">
+  <button class="btn-cart btn-plain" hover-class="none" bindtap="onAddToCart">加入购物车</button>
+  <button class="btn-buy btn-primary" hover-class="none" bindtap="onBuyNow">立即购买</button>
 </view>
+
+<!-- 规格选择弹层 -->
+<sku-popup
+  show="{{skuPopupShow}}"
+  product="{{product}}"
+  mode="{{skuPopupMode}}"
+  bind:confirm="onSkuConfirm"
+  bind:close="onSkuPopupClose"
+/>

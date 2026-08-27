@@ -1,3 +1,4 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
 
   <view wx:if="{{loading}}" class="loading-wrap">
@@ -5,24 +6,23 @@
   </view>
 
   <view wx:elif="{{items.length === 0}}" class="empty-wrap">
-    <text class="empty-icon">🛒</text>
-    <text class="empty-text">购物车是空的</text>
-    <navigator url="/pages/index/index" open-type="switchTab" class="go-shop-btn">
-      去购物
+    <empty-state type="cart" text="购物车还是空的" />
+    <navigator url="/pages/index/index" open-type="switchTab" class="go-shop-btn btn-primary">
+      去逛逛
     </navigator>
   </view>
 
   <view wx:else>
     <!-- Cart items -->
     <view class="cart-list">
-      <view wx:for="{{items}}" wx:key="id" class="cart-item">
+      <view wx:for="{{items}}" wx:key="id" class="cart-item card">
         <!-- Checkbox -->
         <view
-          class="checkbox {{item.isSelected ? 'checked' : ''}}"
+          class="checkbox {{item.isSelected ? 'checked' : ''}} {{item.status !== 'ON_SHELF' ? 'checkbox-disabled' : ''}}"
           bindtap="onToggleSelect"
           data-id="{{item.id}}"
         >
-          <text wx:if="{{item.isSelected}}" class="check-mark">✓</text>
+          <view wx:if="{{item.isSelected}}" class="check-mark icon icon-check"></view>
         </view>
 
         <!-- Image -->
@@ -33,22 +33,25 @@
             src="{{item.productImage}}"
             mode="aspectFill"
           />
-          <view wx:else class="item-img-placeholder">
-            <text>暂无图片</text>
-          </view>
+          <view wx:else class="item-img-placeholder img-placeholder"></view>
         </view>
 
         <!-- Info -->
         <view class="item-info">
           <text class="item-name">{{item.productName}}</text>
+          <text class="item-spec" wx:if="{{item.specText}}">{{item.specText}}</text>
           <view class="item-row">
-            <text class="item-price">¥{{item.priceText}}</text>
-            <view class="qty-control">
-              <view class="qty-btn" bindtap="onDecrease" data-id="{{item.id}}">
-                <text>-</text>
+            <view class="item-price-wrap">
+              <text class="price-symbol">¥</text>
+              <text class="price-int item-price-int">{{pricefmt.int(item.priceText)}}</text>
+              <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
+            </view>
+            <view class="qty-control stepper {{item.status !== 'ON_SHELF' ? 'stepper-disabled' : ''}}">
+              <view class="qty-btn stepper-btn" bindtap="onDecrease" data-id="{{item.id}}">
+                <text>−</text>
               </view>
-              <text class="qty-num">{{item.quantity}}</text>
-              <view class="qty-btn" bindtap="onIncrease" data-id="{{item.id}}">
+              <text class="qty-num stepper-num">{{item.quantity}}</text>
+              <view class="qty-btn stepper-btn" bindtap="onIncrease" data-id="{{item.id}}">
                 <text>+</text>
               </view>
             </view>
@@ -66,11 +69,13 @@
     <!-- Bottom bar -->
     <view class="bottom-bar">
       <view class="total-wrap">
-        <text class="total-label">合计：</text>
-        <text class="total-price">¥{{totalAmount / 100}}</text>
+        <text class="total-label">合计</text>
+        <text class="price-symbol">¥</text>
+        <text class="price-int total-price-int">{{pricefmt.int(pricefmt.fen(totalAmount))}}</text>
+        <text class="price-dec">{{pricefmt.dec(pricefmt.fen(totalAmount))}}</text>
       </view>
       <view
-        class="checkout-btn {{selectedCount === 0 ? 'disabled' : ''}}"
+        class="checkout-btn btn-primary {{selectedCount === 0 ? 'btn-disabled' : ''}}"
         bindtap="onCheckout"
       >
         <text>结算（{{selectedCount}}）</text>

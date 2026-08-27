@@ -92,12 +92,15 @@ model Product {
   qrScene       String?   @map("qr_scene") @db.VarChar(64)
   qrCodeUrl     String?   @map("qr_code_url") @db.VarChar(500)
   qrGeneratedAt DateTime? @map("qr_generated_at")
+  // 规格维度定义 [{name:"辣度",values:["微辣","中辣"]},...]；null=无规格商品
+  specDimensions Json?    @map("spec_dimensions")
   deletedAt     DateTime? @map("deleted_at")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
   category   Category       @relation(fields: [categoryId], references: [id])
   images     ProductImage[]
+  skus       ProductSku[]
   carts      Cart[]
   orderItems OrderItem[]
   scanLogs   ScanLog[]
@@ -105,6 +108,30 @@ model Product {
   @@index([categoryId, status])
   @@index([status, isRecommended])
   @@map("products")
+}
+
+// ─────────────────────────────────────────────────────────
+// 商品规格 SKU（有 SKU 的商品：product.price=min(sku.price)、product.stock=sum(sku.stock) 由服务端写入时同步）
+// ─────────────────────────────────────────────────────────
+model ProductSku {
+  id            Int      @id @default(autoincrement())
+  productId     Int      @map("product_id")
+  // 展示与匹配键，如 "中辣/去骨/250g"（各维度值按 specDimensions 顺序以 / 连接）
+  specText      String   @map("spec_text") @db.VarChar(128)
+  // ["中辣","去骨","250g"] 与 specDimensions 顺序一一对应
+  specValues    Json     @map("spec_values")
+  price         Int
+  originalPrice Int?     @map("original_price")
+  stock         Int      @default(0)
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  carts   Cart[]
+
+  @@unique([productId, specText])
+  @@map("product_skus")
 }
 
 // ─────────────────────────────────────────────────────────
@@ -131,15 +158,18 @@ model Cart {
   id         Int      @id @default(autoincrement())
   userId     Int      @map("user_id")
   productId  Int      @map("product_id")
+  skuId      Int?     @map("sku_id")
   quantity   Int      @default(1)
   isSelected Int      @default(1) @map("is_selected") @db.TinyInt
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  user    User    @relation(fields: [userId], references: [id])
-  product Product @relation(fields: [productId], references: [id])
+  user    User        @relation(fields: [userId], references: [id])
+  product Product     @relation(fields: [productId], references: [id])
+  sku     ProductSku? @relation(fields: [skuId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, productId])
+  // 同一 user+product+sku 一行；skuId 为 NULL 时 MySQL 唯一索引不生效，由代码 findFirst 保证
+  @@unique([userId, productId, skuId])
   @@map("carts")
 }
 
@@ -212,6 +242,9 @@ model OrderItem {
   id           Int      @id @default(autoincrement())
   orderId      Int      @map("order_id")
   productId    Int?     @map("product_id")
+  // SKU 快照（无外键，商品规格变更/删除不影响历史订单）
+  skuId        Int?     @map("sku_id")
+  specText     String?  @map("spec_text") @db.VarChar(128)
   productName  String   @map("product_name") @db.VarChar(128)
   productImage String?  @map("product_image") @db.VarChar(500)
   productPrice Int      @map("product_price")

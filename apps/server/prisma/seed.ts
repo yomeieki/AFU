@@ -175,6 +175,61 @@ async function main() {
     console.log('ℹ️  商品已存在，跳过')
   }
 
+  // ── 多规格示例商品：冷吃兔（辣度 × 骨型 = 6 个 SKU）─────────
+  const coldRabbit = await prisma.product.findFirst({
+    where: { name: '冷吃兔', deletedAt: null },
+  })
+  if (!coldRabbit) {
+    const catLW = await prisma.category.findFirst({ where: { name: '卤味' } })
+    if (catLW) {
+      const skus = [
+        { specValues: ['微辣', '带骨'], price: 3880, originalPrice: 4280, stock: 40, sortOrder: 0 },
+        { specValues: ['微辣', '去骨'], price: 4580, originalPrice: 4980, stock: 30, sortOrder: 1 },
+        { specValues: ['中辣', '带骨'], price: 3880, originalPrice: 4280, stock: 50, sortOrder: 2 },
+        { specValues: ['中辣', '去骨'], price: 4580, originalPrice: 4980, stock: 35, sortOrder: 3 },
+        { specValues: ['特辣', '带骨'], price: 3880, originalPrice: 4280, stock: 20, sortOrder: 4 },
+        { specValues: ['特辣', '去骨'], price: 4580, originalPrice: 4980, stock: 0, sortOrder: 5 }, // 售罄示例
+      ]
+      await prisma.product.create({
+        data: {
+          categoryId: catLW.id,
+          name: '冷吃兔',
+          subtitle: '川味经典，麻辣鲜香',
+          price: Math.min(...skus.map((s) => s.price)),
+          originalPrice: 4280,
+          stock: skus.reduce((sum, s) => sum + s.stock, 0),
+          unit: '份',
+          weight: '250g',
+          shelfLife: '冷藏5天，冷冻30天',
+          storageMethod: '冷藏保存',
+          deliveryInfo: '顺丰冷链发货',
+          description: '选用鲜兔肉，川式冷吃做法，麻辣入味，越嚼越香。可选辣度与去骨/带骨。',
+          status: 'ON_SHELF',
+          deliveryType: 'EXPRESS',
+          isRecommended: 1,
+          salesCount: 156,
+          specDimensions: [
+            { name: '辣度', values: ['微辣', '中辣', '特辣'] },
+            { name: '骨型', values: ['带骨', '去骨'] },
+          ],
+          skus: {
+            create: skus.map((s) => ({
+              specText: s.specValues.join('/'),
+              specValues: s.specValues,
+              price: s.price,
+              originalPrice: s.originalPrice,
+              stock: s.stock,
+              sortOrder: s.sortOrder,
+            })),
+          },
+        },
+      })
+      console.log('✅ 创建多规格示例商品：冷吃兔（辣度×骨型 6 SKU，含 1 个售罄）')
+    }
+  } else {
+    console.log('ℹ️  冷吃兔已存在，跳过')
+  }
+
   console.log('\n🎉 Seed 完成！')
 }
 

@@ -1,0 +1,147 @@
+.sku-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.sku-panel {
+  box-sizing: border-box;
+  background: var(--card, #ffffff);
+  border-radius: var(--radius-xl, 24rpx) var(--radius-xl, 24rpx) 0 0;
+  padding: 30rpx 30rpx 20rpx;
+  max-height: 75vh;
+  display: flex;
+  flex-direction: column;
+  animation: sku-slide-up 0.24s ease-out;
+}
+@keyframes sku-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+/* 头部 */
+.sku-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 20rpx;
+  padding-bottom: 24rpx;
+  border-bottom: 1rpx solid var(--divider, #f0f0f0);
+}
+.sku-img-wrap {
+  width: 160rpx;
+  height: 160rpx;
+  border-radius: var(--radius-md, 16rpx);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.sku-img {
+  width: 100%;
+  height: 100%;
+}
+.sku-header-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  overflow: hidden;
+}
+.sku-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12rpx;
+}
+.sku-price-int {
+  font-size: 44rpx;
+}
+.sku-original-price {
+  font-size: 24rpx;
+  color: var(--text-3, #999999);
+  text-decoration: line-through;
+}
+.sku-stock {
+  font-size: 24rpx;
+  color: var(--text-3, #999999);
+}
+.sku-selected {
+  font-size: 24rpx;
+  color: var(--text-2, #666666);
+}
+.sku-close {
+  flex-shrink: 0;
+  width: 44rpx;
+  height: 44rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3, #999999);
+  font-size: 32rpx;
+  padding: 4rpx;
+}
+
+/* 主体（可滚动） */
+.sku-body {
+  flex: 1;
+  min-height: 0;
+  max-height: 46vh;
+}
+.sku-group {
+  padding: 24rpx 0 4rpx;
+}
+.sku-group-name {
+  font-size: 28rpx;
+  color: var(--text-1, #1a1a1a);
+  font-weight: 500;
+  display: block;
+}
+.sku-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+  margin-top: 16rpx;
+}
+.sku-chip {
+  padding: 12rpx 32rpx;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  color: var(--text-1, #1a1a1a);
+  background: var(--bg, #f5f6f7);
+  border: 2rpx solid transparent;
+}
+.sku-chip-active {
+  color: var(--brand, #e5441e);
+  background: var(--brand-bg, #fdeeea);
+  border-color: var(--brand, #e5441e);
+  font-weight: 500;
+}
+.sku-chip-disabled {
+  color: var(--text-disabled, #cccccc);
+  background: var(--bg, #f5f6f7);
+  border-color: transparent;
+  text-decoration: line-through;
+}
+
+/* 数量行 */
+.sku-qty-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28rpx 0;
+}
+.stepper-btn-disabled {
+  opacity: 0.4;
+}
+
+/* 底部按钮 */
+.sku-footer {
+  padding-top: 16rpx;
+}
+.sku-confirm {
+  box-sizing: border-box;
+  width: 100%;
+}

@@ -34,6 +34,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
           salesCount: true,
           stock: true,
           status: true,
+          _count: { select: { skus: true } },
         },
         orderBy: [{ isRecommended: 'desc' }, { createdAt: 'desc' }],
         skip: (page - 1) * pageSize,
@@ -42,7 +43,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       prisma.product.count({ where }),
     ])
 
-    paginate(res, list, total, page, pageSize)
+    // 多规格商品价格为最低 SKU 价（冗余同步），前端据 hasSkus 显示「¥xx起」
+    const items = list.map(({ _count, ...p }) => ({ ...p, hasSkus: _count.skus > 0 }))
+    paginate(res, items, total, page, pageSize)
   } catch (e) {
     next(e)
   }
@@ -62,6 +65,17 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
           select: { id: true, imageUrl: true, sortOrder: true },
         },
         category: { select: { id: true, name: true } },
+        skus: {
+          orderBy: { sortOrder: 'asc' },
+          select: {
+            id: true,
+            specText: true,
+            specValues: true,
+            price: true,
+            originalPrice: true,
+            stock: true,
+          },
+        },
       },
     })
 

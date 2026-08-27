@@ -21,6 +21,21 @@ export interface Category {
   _count?: { products: number }
 }
 
+export interface SpecDimension {
+  name: string
+  values: string[]
+}
+
+export interface ProductSku {
+  id?: number
+  specText: string
+  specValues: string[]
+  price: number
+  originalPrice: number | null
+  stock: number
+  sortOrder: number
+}
+
 export interface Product {
   id: number
   categoryId: number
@@ -47,6 +62,8 @@ export interface Product {
   createdAt: string
   category?: { id: number; name: string }
   images?: { imageUrl: string }[]
+  specDimensions?: SpecDimension[] | null
+  skus?: ProductSku[]
 }
 
 export interface QrCodeResult {
@@ -58,6 +75,7 @@ export interface QrCodeResult {
 export interface OrderItem {
   productName: string
   productImage: string | null
+  specText?: string | null
   quantity: number
   productPrice: number
   subtotal: number

@@ -39,6 +39,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
             select: {
               productName: true,
               productImage: true,
+              specText: true,
               quantity: true,
               productPrice: true,
               subtotal: true,

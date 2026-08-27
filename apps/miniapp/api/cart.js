@@ -4,8 +4,10 @@ function getCart() {
   return request({ url: '/cart' })
 }
 
-function addToCart(productId, quantity) {
-  return request({ url: '/cart', method: 'POST', data: { productId: productId, quantity: quantity } })
+function addToCart(productId, quantity, skuId) {
+  var data = { productId: productId, quantity: quantity }
+  if (skuId) data.skuId = skuId
+  return request({ url: '/cart', method: 'POST', data: data })
 }
 
 function updateCartItem(id, data) {

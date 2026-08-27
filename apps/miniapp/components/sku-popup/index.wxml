@@ -1,0 +1,61 @@
+<view wx:if="{{show}}" class="sku-mask" bindtap="onClose" catchtouchmove="noop">
+  <view class="sku-panel safe-bottom" catchtap="noop">
+    <!-- 头部：图 + 价格 + 库存 -->
+    <view class="sku-header">
+      <view class="sku-img-wrap">
+        <image wx:if="{{product.coverImage}}" class="sku-img" src="{{product.coverImage}}" mode="aspectFill" />
+        <view wx:else class="sku-img img-placeholder"></view>
+      </view>
+      <view class="sku-header-info">
+        <view class="sku-price-row">
+          <text class="price-symbol">¥</text>
+          <text class="price-int sku-price-int">{{priceText}}</text>
+          <text wx:if="{{originalPriceText}}" class="sku-original-price">¥{{originalPriceText}}</text>
+        </view>
+        <text class="sku-stock">{{stockLabel}}</text>
+        <text wx:if="{{selectedText}}" class="sku-selected">已选：{{selectedText}}</text>
+      </view>
+      <view class="sku-close" bindtap="onClose">✕</view>
+    </view>
+
+    <scroll-view scroll-y class="sku-body">
+      <!-- 规格维度分组 -->
+      <view wx:for="{{dimGroups}}" wx:for-item="group" wx:for-index="di" wx:key="name" class="sku-group">
+        <text class="sku-group-name">{{group.name}}</text>
+        <view class="sku-options">
+          <view
+            wx:for="{{group.options}}"
+            wx:for-item="opt"
+            wx:key="value"
+            class="sku-chip {{opt.active ? 'sku-chip-active' : ''}} {{opt.disabled ? 'sku-chip-disabled' : ''}}"
+            data-dim="{{di}}"
+            data-value="{{opt.value}}"
+            data-disabled="{{opt.disabled}}"
+            bindtap="onSelectValue"
+          >{{opt.value}}</view>
+        </view>
+      </view>
+
+      <!-- 数量 -->
+      <view class="sku-qty-row">
+        <text class="sku-group-name">数量</text>
+        <view class="stepper">
+          <view class="stepper-btn {{quantity <= 1 ? 'stepper-btn-disabled' : ''}}" bindtap="onDecrease">
+            <text>−</text>
+          </view>
+          <text class="stepper-num">{{quantity}}</text>
+          <view class="stepper-btn {{quantity >= maxQty ? 'stepper-btn-disabled' : ''}}" bindtap="onIncrease">
+            <text>+</text>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 确认按钮 -->
+    <view class="sku-footer">
+      <view class="sku-confirm btn-primary {{!canConfirm ? 'btn-disabled' : ''}}" bindtap="onConfirm">
+        {{confirmLabel}}
+      </view>
+    </view>
+  </view>
+</view>

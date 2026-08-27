@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react'
+import { Plus, Search } from 'lucide-react'
 import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
-import type { Product, Category } from '../types'
+import SpecEditor, { type SkuRow } from '../components/SpecEditor'
+import Button from '../components/ui/Button'
+import Modal from '../components/ui/Modal'
+import Table from '../components/ui/Table'
+import Pagination from '../components/ui/Pagination'
+import StatusBadge from '../components/ui/StatusBadge'
+import type { Product, Category, SpecDimension } from '../types'
 
 const DELIVERY_TYPE_LABEL: Record<string, string> = {
   EXPRESS: '快递配送',
@@ -42,6 +49,9 @@ export default function Products() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
   const [form, setForm] = useState(emptyForm)
+  const [specDims, setSpecDims] = useState<SpecDimension[]>([])
+  const [skuRows, setSkuRows] = useState<SkuRow[]>([])
+  const hasSkus = specDims.length > 0 && skuRows.length > 0
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [generatingQrId, setGeneratingQrId] = useState<number | null>(null)
@@ -77,6 +87,8 @@ export default function Products() {
   const openCreate = () => {
     setEditing(null)
     setForm(emptyForm)
+    setSpecDims([])
+    setSkuRows([])
     setError('')
     setShowModal(true)
   }
@@ -102,6 +114,16 @@ export default function Products() {
       status: p.status,
       isRecommended: p.isRecommended,
     })
+    setSpecDims(p.specDimensions ?? [])
+    setSkuRows(
+      (p.skus ?? []).map((s) => ({
+        id: s.id,
+        specValues: s.specValues,
+        price: (s.price / 100).toString(),
+        originalPrice: s.originalPrice ? (s.originalPrice / 100).toString() : '',
+        stock: s.stock,
+      }))
+    )
     setError('')
     setShowModal(true)
   }
@@ -109,19 +131,41 @@ export default function Products() {
   const handleSave = async () => {
     if (!form.categoryId) { setError('请选择分类'); return }
     if (!form.name.trim()) { setError('请输入商品名称'); return }
-    if (!form.price) { setError('请输入价格'); return }
+    if (!hasSkus && !form.price) { setError('请输入价格'); return }
+    if (specDims.length > 0) {
+      if (specDims.some((d) => !d.name.trim())) { setError('请填写规格维度名'); return }
+      if (skuRows.length === 0) { setError('请为规格维度添加规格值'); return }
+      if (skuRows.some((r) => !r.price || parseFloat(r.price) <= 0)) { setError('请填写所有规格组合的价格'); return }
+    }
     setSaving(true)
     setError('')
     try {
+      const skusPayload = hasSkus
+        ? skuRows.map((r, i) => ({
+            ...(r.id ? { id: r.id } : {}),
+            specText: r.specValues.join('/'),
+            specValues: r.specValues,
+            price: Math.round(parseFloat(r.price) * 100),
+            originalPrice: r.originalPrice ? Math.round(parseFloat(r.originalPrice) * 100) : null,
+            stock: r.stock,
+            sortOrder: i,
+          }))
+        : []
+      // 有规格时商品级价格/库存由服务端按 SKU 汇总，这里传占位聚合值以过 schema 校验
+      const price = hasSkus
+        ? Math.min(...skusPayload.map((s) => s.price))
+        : Math.round(parseFloat(form.price) * 100)
+      const stock = hasSkus ? skusPayload.reduce((sum, s) => sum + s.stock, 0) : form.stock
+
       const payload = {
         categoryId: Number(form.categoryId),
         name: form.name,
         subtitle: form.subtitle || null,
         coverImage: form.coverImage || null,
         imageUrls: form.imageUrls,
-        price: Math.round(parseFloat(form.price) * 100),
+        price,
         originalPrice: form.originalPrice ? Math.round(parseFloat(form.originalPrice) * 100) : null,
-        stock: form.stock,
+        stock,
         unit: form.unit,
         weight: form.weight || null,
         shelfLife: form.shelfLife || null,
@@ -131,6 +175,8 @@ export default function Products() {
         deliveryType: form.deliveryType,
         status: form.status,
         isRecommended: form.isRecommended,
+        specDimensions: specDims.length > 0 ? specDims : null,
+        skus: skusPayload,
       }
       if (editing) {
         await updateProduct(editing.id, payload)
@@ -175,19 +221,16 @@ export default function Products() {
     }
   }
 
-  const totalPages = Math.ceil(total / pageSize)
   const isMockUrl = (url: string | null) => !url || url.startsWith('mock://')
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold text-gray-800">商品管理</h2>
-        <button
-          onClick={openCreate}
-          className="bg-orange-500 hover:bg-orange-600 text-white text-sm px-4 py-2 rounded-md transition-colors"
-        >
+        <Button onClick={openCreate}>
+          <Plus className="w-4 h-4" />
           新增商品
-        </button>
+        </Button>
       </div>
 
       <div className="bg-white rounded-lg shadow-sm p-4 flex flex-wrap gap-3 items-end">
@@ -223,105 +266,107 @@ export default function Products() {
             <option value="OFF_SHELF">下架</option>
           </select>
         </div>
-        <button
-          onClick={handleSearch}
-          className="bg-gray-800 hover:bg-gray-900 text-white text-sm px-4 py-1.5 rounded-md"
-        >
+        <Button variant="secondary" size="sm" onClick={handleSearch}>
+          <Search className="w-4 h-4" />
           搜索
-        </button>
+        </Button>
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-        {loading ? (
-          <div className="p-6 text-gray-500 text-sm">加载中...</div>
-        ) : (
-          <>
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-600">
-                <tr>
-                  <th className="text-left px-4 py-3">商品名称</th>
-                  <th className="text-left px-4 py-3">分类</th>
-                  <th className="text-right px-4 py-3">价格</th>
-                  <th className="text-right px-4 py-3">库存</th>
-                  <th className="text-right px-4 py-3">销量</th>
-                  <th className="text-right px-4 py-3">状态</th>
-                  <th className="text-right px-4 py-3">二维码</th>
-                  <th className="text-right px-4 py-3">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {list.map((p) => (
-                  <tr key={p.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-800">{p.name}</td>
-                    <td className="px-4 py-3 text-gray-500">{p.category?.name}</td>
-                    <td className="px-4 py-3 text-right text-gray-800">¥{(p.price / 100).toFixed(2)}</td>
-                    <td className="px-4 py-3 text-right text-gray-600">{p.stock}</td>
-                    <td className="px-4 py-3 text-right text-gray-600">{p.salesCount}</td>
-                    <td className="px-4 py-3 text-right">
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${p.status === 'ON_SHELF' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {p.status === 'ON_SHELF' ? '上架' : '下架'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${p.qrCodeUrl ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>
-                        {p.qrCodeUrl ? '已生成' : '未生成'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right space-x-2">
-                      <button onClick={() => openEdit(p)} className="text-blue-500 hover:text-blue-700">编辑</button>
-                      <button
-                        onClick={() => handleGenerateQr(p)}
-                        disabled={generatingQrId === p.id}
-                        className="text-purple-500 hover:text-purple-700 disabled:opacity-40"
-                      >
-                        {generatingQrId === p.id ? '生成中...' : '生成二维码'}
-                      </button>
-                      {p.qrCodeUrl && (
-                        <button onClick={() => setQrModal(p)} className="text-indigo-500 hover:text-indigo-700">查看</button>
-                      )}
-                      <button onClick={() => handleDelete(p)} className="text-red-500 hover:text-red-700">删除</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
-              <span>共 {total} 条</span>
-              <div className="flex gap-2">
+      <div className="bg-white rounded-lg shadow-card overflow-hidden">
+        <Table
+          columns={8}
+          loading={loading}
+          isEmpty={list.length === 0}
+          emptyText="暂无商品"
+          head={
+            <tr>
+              <th className="text-left px-4 py-3">商品名称</th>
+              <th className="text-left px-4 py-3">分类</th>
+              <th className="text-right px-4 py-3">价格</th>
+              <th className="text-right px-4 py-3">库存</th>
+              <th className="text-right px-4 py-3">销量</th>
+              <th className="text-right px-4 py-3">状态</th>
+              <th className="text-right px-4 py-3">二维码</th>
+              <th className="text-right px-4 py-3">操作</th>
+            </tr>
+          }
+        >
+          {list.map((p) => (
+            <tr key={p.id} className="hover:bg-gray-50">
+              <td className="px-4 py-3 text-gray-800">
+                {p.name}
+                {(p.skus?.length ?? 0) > 0 && (
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded text-xs bg-brand-50 text-brand-600">
+                    {p.skus!.length} 规格
+                  </span>
+                )}
+              </td>
+              <td className="px-4 py-3 text-gray-500">{p.category?.name}</td>
+              <td className="px-4 py-3 text-right font-semibold text-brand-600">
+                {(() => {
+                  const skus = p.skus ?? []
+                  if (skus.length === 0) return `¥${(p.price / 100).toFixed(2)}`
+                  const min = Math.min(...skus.map((s) => s.price))
+                  const max = Math.max(...skus.map((s) => s.price))
+                  return min === max
+                    ? `¥${(min / 100).toFixed(2)}`
+                    : `¥${(min / 100).toFixed(2)}~${(max / 100).toFixed(2)}`
+                })()}
+              </td>
+              <td className="px-4 py-3 text-right text-gray-600">{p.stock}</td>
+              <td className="px-4 py-3 text-right text-gray-600">{p.salesCount}</td>
+              <td className="px-4 py-3 text-right">
+                <StatusBadge status={p.status} />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <span className={`px-2 py-0.5 rounded-full text-xs ${p.qrCodeUrl ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-400'}`}>
+                  {p.qrCodeUrl ? '已生成' : '未生成'}
+                </span>
+              </td>
+              <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
+                <button onClick={() => openEdit(p)} className="text-blue-500 hover:text-blue-700">编辑</button>
                 <button
-                  disabled={page <= 1}
-                  onClick={() => setPage(page - 1)}
-                  className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-50"
+                  onClick={() => handleGenerateQr(p)}
+                  disabled={generatingQrId === p.id}
+                  className="text-purple-500 hover:text-purple-700 disabled:opacity-40"
                 >
-                  上一页
+                  {generatingQrId === p.id ? '生成中...' : '生成二维码'}
                 </button>
-                <span className="px-3 py-1">{page} / {totalPages}</span>
-                <button
-                  disabled={page >= totalPages}
-                  onClick={() => setPage(page + 1)}
-                  className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-50"
-                >
-                  下一页
-                </button>
-              </div>
-            </div>
-          </>
-        )}
+                {p.qrCodeUrl && (
+                  <button onClick={() => setQrModal(p)} className="text-indigo-500 hover:text-indigo-700">查看</button>
+                )}
+                <button onClick={() => handleDelete(p)} className="text-red-500 hover:text-red-700">删除</button>
+              </td>
+            </tr>
+          ))}
+        </Table>
+        {!loading && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
       </div>
 
       {/* 新增/编辑弹窗 */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 overflow-y-auto py-8">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 space-y-4 mx-4">
-            <h3 className="text-lg font-semibold text-gray-800">{editing ? '编辑商品' : '新增商品'}</h3>
-            <div className="space-y-3">
+        <Modal
+          title={editing ? '编辑商品' : '新增商品'}
+          onClose={() => setShowModal(false)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setShowModal(false)}>
+                取消
+              </Button>
+              <Button loading={saving} onClick={handleSave}>
+                {saving ? '保存中...' : '保存'}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">分类 *</label>
                   <select
                     value={form.categoryId}
                     onChange={(e) => setForm({ ...form, categoryId: Number(e.target.value) })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   >
                     <option value={0}>请选择</option>
                     {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -332,7 +377,7 @@ export default function Products() {
                   <input
                     value={form.unit}
                     onChange={(e) => setForm({ ...form, unit: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   />
                 </div>
               </div>
@@ -341,7 +386,7 @@ export default function Products() {
                 <input
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                 />
               </div>
               <div>
@@ -349,7 +394,7 @@ export default function Products() {
                 <input
                   value={form.subtitle}
                   onChange={(e) => setForm({ ...form, subtitle: e.target.value })}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                 />
               </div>
               <div>
@@ -367,17 +412,25 @@ export default function Products() {
                   onChange={(urls) => setForm({ ...form, imageUrls: urls })}
                 />
               </div>
+              <SpecEditor
+                dimensions={specDims}
+                skuRows={skuRows}
+                onChange={(dims, rows) => { setSpecDims(dims); setSkuRows(rows) }}
+              />
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">售价（元）*</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    售价（元）{hasSkus ? '' : '*'}
+                  </label>
                   <input
                     type="number"
                     step="0.01"
                     min="0"
-                    value={form.price}
+                    value={hasSkus ? '' : form.price}
+                    disabled={hasSkus}
                     onChange={(e) => setForm({ ...form, price: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
-                    placeholder="如 29.90"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:bg-gray-100 disabled:text-gray-400"
+                    placeholder={hasSkus ? '由规格自动取最低价' : '如 29.90'}
                   />
                 </div>
                 <div>
@@ -388,7 +441,7 @@ export default function Products() {
                     min="0"
                     value={form.originalPrice}
                     onChange={(e) => setForm({ ...form, originalPrice: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                     placeholder="可选"
                   />
                 </div>
@@ -399,9 +452,10 @@ export default function Products() {
                   <input
                     type="number"
                     min="0"
-                    value={form.stock}
+                    value={hasSkus ? skuRows.reduce((sum, r) => sum + r.stock, 0) : form.stock}
+                    disabled={hasSkus}
                     onChange={(e) => setForm({ ...form, stock: Number(e.target.value) })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:bg-gray-100 disabled:text-gray-400"
                   />
                 </div>
                 <div>
@@ -409,7 +463,7 @@ export default function Products() {
                   <select
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value as 'ON_SHELF' | 'OFF_SHELF' })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   >
                     <option value="ON_SHELF">上架</option>
                     <option value="OFF_SHELF">下架</option>
@@ -423,7 +477,7 @@ export default function Products() {
                     value={form.weight}
                     onChange={(e) => setForm({ ...form, weight: e.target.value })}
                     placeholder="如 500g/袋"
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   />
                 </div>
                 <div>
@@ -432,7 +486,7 @@ export default function Products() {
                     value={form.shelfLife}
                     onChange={(e) => setForm({ ...form, shelfLife: e.target.value })}
                     placeholder="如 冷藏 3 天"
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   />
                 </div>
               </div>
@@ -443,7 +497,7 @@ export default function Products() {
                     value={form.storageMethod}
                     onChange={(e) => setForm({ ...form, storageMethod: e.target.value })}
                     placeholder="如 0-4℃ 冷藏"
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   />
                 </div>
                 <div>
@@ -451,7 +505,7 @@ export default function Products() {
                   <select
                     value={form.deliveryType}
                     onChange={(e) => setForm({ ...form, deliveryType: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   >
                     {Object.entries(DELIVERY_TYPE_LABEL).map(([k, v]) => (
                       <option key={k} value={k}>{v}</option>
@@ -466,7 +520,7 @@ export default function Products() {
                   onChange={(e) => setForm({ ...form, deliveryInfo: e.target.value })}
                   rows={2}
                   placeholder="如 同城当日达，快递次日达"
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                 />
               </div>
               <div>
@@ -476,7 +530,7 @@ export default function Products() {
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={4}
                   placeholder="商品详细介绍"
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -489,32 +543,24 @@ export default function Products() {
                 />
                 <label htmlFor="isRecommended" className="text-sm text-gray-700">推荐商品</label>
               </div>
-            </div>
-            {error && <p className="text-red-500 text-sm">{error}</p>}
-            <div className="flex justify-end space-x-3 pt-2">
-              <button
-                onClick={() => setShowModal(false)}
-                className="text-sm px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="text-sm px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-md disabled:opacity-50"
-              >
-                {saving ? '保存中...' : '保存'}
-              </button>
-            </div>
           </div>
-        </div>
+          {error && <p className="text-red-500 text-sm mt-3">{error}</p>}
+        </Modal>
       )}
 
       {/* 二维码查看弹窗 */}
       {qrModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 space-y-4 mx-4">
-            <h3 className="text-lg font-semibold text-gray-800">二维码信息</h3>
+        <Modal
+          title="二维码信息"
+          width="sm"
+          onClose={() => setQrModal(null)}
+          footer={
+            <Button variant="secondary" onClick={() => setQrModal(null)}>
+              关闭
+            </Button>
+          }
+        >
+          <div className="space-y-4">
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-500">商品</span>
@@ -547,16 +593,8 @@ export default function Products() {
                 当前为 Mock 模式，接入真实微信配置后此处将显示可扫描的小程序码图片。
               </p>
             )}
-            <div className="flex justify-end">
-              <button
-                onClick={() => setQrModal(null)}
-                className="text-sm px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-              >
-                关闭
-              </button>
-            </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )
