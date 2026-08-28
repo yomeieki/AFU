@@ -177,6 +177,59 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 })
 
 // PUT /api/admin/products/:id
+// POST /api/admin/products/batch-status — 批量上/下架（开档/收档）
+// categoryId 缺省 = 全部商品
+const batchStatusSchema = z.object({
+  status: z.enum(['ON_SHELF', 'OFF_SHELF']),
+  categoryId: z.number().int().positive().optional(),
+})
+
+router.post('/batch-status', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { status, categoryId } = batchStatusSchema.parse(req.body ?? {})
+    const result = await prisma.product.updateMany({
+      where: { deletedAt: null, ...(categoryId ? { categoryId } : {}) },
+      data: { status },
+    })
+    success(res, { updated: result.count })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/products/qrcode/batch — 批量生成二维码
+// 注意：必须注册在 /:id 类路由之前，避免 "qrcode" 被当作 :id 匹配
+router.post('/qrcode/batch', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { ids } = z.object({ ids: z.array(z.number().int().positive()).optional() }).parse(req.body ?? {})
+    // 缺省 = 所有无二维码的上架商品
+    const targets = await prisma.product.findMany({
+      where: ids?.length
+        ? { id: { in: ids }, deletedAt: null }
+        : { deletedAt: null, status: 'ON_SHELF', qrCodeUrl: null },
+      select: { id: true },
+    })
+
+    let generated = 0
+    const failed: number[] = []
+    for (const t of targets) {
+      try {
+        const { scene, qrCodeUrl } = await generateProductQrCode(t.id)
+        await prisma.product.update({
+          where: { id: t.id },
+          data: { qrScene: scene, qrCodeUrl, qrGeneratedAt: new Date() },
+        })
+        generated++
+      } catch {
+        failed.push(t.id)
+      }
+    }
+    success(res, { generated, failed })
+  } catch (e) {
+    next(e)
+  }
+})
+
 router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)

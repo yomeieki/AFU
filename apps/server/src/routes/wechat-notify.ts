@@ -5,6 +5,7 @@ import {
   verifyNotifySignature,
   decryptNotifyResource,
 } from '../services/wechat-pay'
+import { notifyOrderPaid } from '../services/order-notify'
 
 interface NotifyBody {
   event_type?: string
@@ -173,6 +174,28 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
         data: { status: 'PAID', paidAt },
       })
     })
+
+    // 事务成功后推送新订单通知（fire-and-forget）
+    prisma.order
+      .findUnique({
+        where: { id: orderId },
+        include: { items: { select: { productName: true, specText: true, quantity: true } } },
+      })
+      .then((paid) => {
+        if (paid && paid.status === 'PAID') {
+          notifyOrderPaid(
+            {
+              orderNo: paid.orderNo,
+              actualAmount: paid.actualAmount,
+              receiverName: paid.receiverName,
+              receiverPhone: paid.receiverPhone,
+              paidAt: paid.paidAt ?? new Date(),
+            },
+            paid.items
+          )
+        }
+      })
+      .catch(() => undefined)
   } catch (err) {
     if (err instanceof AmountMismatchError) {
       // 金额不一致：不更新订单，记录日志并返回 FAIL（微信会重试，需人工介入排查）

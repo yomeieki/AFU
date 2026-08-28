@@ -5,6 +5,8 @@ import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { validatePayConfig, createJsapiOrder, generatePayParams } from '../services/wechat-pay'
 import { config } from '../config'
+import { notifyOrderPaid, notifyRefundRequest } from '../services/order-notify'
+import { rollbackOrderStock } from '../utils/order-stock'
 import { payLimiter } from '../middlewares/rate-limit'
 
 const router = Router()
@@ -164,8 +166,17 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const page = Math.max(1, Number(req.query.page) || 1)
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 20))
     const status = req.query.status as string | undefined
+    // 支持逗号分隔多状态（如「待发货」tab = PAID,PREPARING）
+    const statuses = status ? status.split(',').filter(Boolean) : []
 
-    const where = { userId, ...(status ? { status } : {}) }
+    const where = {
+      userId,
+      ...(statuses.length === 1
+        ? { status: statuses[0] }
+        : statuses.length > 1
+          ? { status: { in: statuses } }
+          : {}),
+    }
 
     const [list, total] = await prisma.$transaction([
       prisma.order.findMany({
@@ -227,9 +238,56 @@ router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunctio
 
     const updated = await prisma.order.update({
       where: { id },
-      data: { status: 'COMPLETED' },
+      data: { status: 'COMPLETED', completedAt: new Date() },
     })
     success(res, updated)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// PUT /api/orders/:id/cancel — 客户自助取消
+// 待付款：直接取消；已付款且商家未接单：进入退款流程（REFUNDING）并通知员工
+// 已接单/已发货：不允许自助，请联系商家协商（员工在后台登记退款）
+router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const userId = req.userId!
+    const order = await prisma.order.findFirst({
+      where: { id, userId },
+      include: { items: true },
+    })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+
+    if (order.status === 'PENDING_PAYMENT') {
+      const updated = await prisma.$transaction(async (tx) => {
+        await rollbackOrderStock(tx, order.items)
+        return tx.order.update({
+          where: { id },
+          data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: '用户取消' },
+        })
+      })
+      return success(res, updated)
+    }
+
+    if (order.status === 'PAID' && !order.acceptedAt) {
+      const updated = await prisma.$transaction(async (tx) => {
+        await rollbackOrderStock(tx, order.items)
+        return tx.order.update({
+          where: { id },
+          data: { status: 'REFUNDING', cancelledAt: new Date(), cancelReason: '用户申请退款' },
+        })
+      })
+      notifyRefundRequest(order)
+      return success(res, updated)
+    }
+
+    throw new AppError(
+      42204,
+      order.status === 'PAID' || order.status === 'PREPARING'
+        ? '商家已接单备餐，请电话联系商家协商退款'
+        : `订单状态为 ${order.status}，不可取消`
+    )
   } catch (e) {
     next(e)
   }
@@ -270,6 +328,14 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
           data: { status: 'PAID', paidAt },
         })
       })
+      // 支付成功推送（fire-and-forget，不阻塞响应）
+      prisma.orderItem
+        .findMany({
+          where: { orderId },
+          select: { productName: true, specText: true, quantity: true },
+        })
+        .then((items) => notifyOrderPaid({ ...order, paidAt }, items))
+        .catch(() => undefined)
       return success(res, { mode: 'mock', status: 'PAID', paidAt })
     }
 

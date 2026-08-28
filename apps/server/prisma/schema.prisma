@@ -204,7 +204,7 @@ model Order {
   id                  Int       @id @default(autoincrement())
   orderNo             String    @unique @map("order_no") @db.VarChar(32)
   userId              Int       @map("user_id")
-  // PENDING_PAYMENT / PAID / SHIPPED / COMPLETED / CANCELLED / REFUNDING / REFUNDED
+  // PENDING_PAYMENT / PAID(待接单) / PREPARING(备餐中) / SHIPPED / COMPLETED / CANCELLED / REFUNDING / REFUNDED
   status              String    @db.VarChar(32)
   totalAmount         Int       @map("total_amount")
   shippingFee         Int       @default(0) @map("shipping_fee")
@@ -220,6 +220,12 @@ model Order {
   receiverDetail      String    @map("receiver_detail") @db.VarChar(255)
   receiverFullAddress String    @map("receiver_full_address") @db.VarChar(500)
   paidAt              DateTime? @map("paid_at")
+  // 商家接单时间（PAID → PREPARING）
+  acceptedAt          DateTime? @map("accepted_at")
+  // 完成时间（确认收货）
+  completedAt         DateTime? @map("completed_at")
+  // 退款完成时间（REFUNDING → REFUNDED）
+  refundedAt          DateTime? @map("refunded_at")
   cancelledAt         DateTime? @map("cancelled_at")
   cancelReason        String?   @map("cancel_reason") @db.VarChar(255)
   createdAt           DateTime  @default(now()) @map("created_at")
@@ -328,4 +334,22 @@ model ScanLog {
   @@index([openid])
   @@index([createdAt])
   @@map("scan_logs")
+}
+
+// 首页轮播 Banner
+model Banner {
+  id        Int      @id @default(autoincrement())
+  title     String?  @db.VarChar(64)
+  imageUrl  String   @map("image_url") @db.VarChar(255)
+  // none | product（跳商品详情）
+  linkType  String   @default("none") @map("link_type") @db.VarChar(16)
+  productId Int?     @map("product_id")
+  sortOrder Int      @default(0) @map("sort_order")
+  // 1 上架 0 下架
+  status    Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, sortOrder])
+  @@map("banners")
 }

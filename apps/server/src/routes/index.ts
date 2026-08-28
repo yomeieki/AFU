@@ -6,6 +6,7 @@ import cartRouter from './cart'
 import addressRouter from './addresses'
 import orderRouter from './orders'
 import scanLogRouter from './scan-logs'
+import bannersRouter from './banners'
 import authRouter from './auth'
 import { verifyUserToken } from '../middlewares/auth'
 
@@ -28,3 +29,4 @@ router.use('/orders', verifyUserToken, orderRouter)
 
 // ── 扫码日志（可选认证：未登录也可记录，userId 为空）───────
 router.use('/scan-logs', scanLogRouter)
+router.use('/banners', bannersRouter)
