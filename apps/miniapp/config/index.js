@@ -1,4 +1,4 @@
-const isDev = true // set to false for production
+const isDev = false // set to true for local development
 
 module.exports = {
   baseURL: isDev ? 'http://localhost:3100/api' : 'https://api.yuegui-hotel.online/api',
