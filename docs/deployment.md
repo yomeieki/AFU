@@ -59,15 +59,13 @@ FLUSH PRIVILEGES;
 
 ```
 /www/
-├── food-shop-server/       # 后端（git clone 或 scp 上传）
-│   ├── dist/               # tsc 编译产物（npm run build 后）
-│   ├── prisma/
-│   ├── .env                # 生产环境变量（手动创建，不入 git）
-│   ├── ecosystem.config.js
-│   └── package.json
+├── food-shop/                  # 整个 monorepo（git clone，deploy.sh 自动拉取更新）
+│   ├── apps/server/            # 后端（dist/、prisma/、.env、keys/、uploads/）
+│   ├── apps/admin/             # 管理端源码（deploy.sh 构建后 rsync 到下方）
+│   └── scripts/                # deploy.sh / backup.sh / nginx.conf
 │
-└── food-shop-admin/
-    └── dist/               # Vite 构建产物（本地 build 后上传）
+├── food-shop-admin/dist/       # 管理端静态产物（nginx root，deploy.sh 自动发布）
+└── backups/                    # pre-deploy/（迁移前备份）+ daily/（每日备份）
 ```
 
 ---
@@ -84,7 +82,7 @@ DATABASE_URL="mysql://foodshop_user:strong-password-here@localhost:3306/food_sho
 JWT_SECRET="your-64-char-random-user-jwt-secret"
 JWT_EXPIRES_IN="7d"
 ADMIN_JWT_SECRET="your-64-char-random-admin-jwt-secret"
-ADMIN_JWT_EXPIRES_IN="24h"
+ADMIN_JWT_EXPIRES_IN="30d"
 
 # 微信小程序
 WECHAT_APP_ID="wx开头的AppID"
@@ -111,9 +109,13 @@ COS_BASE_URL="https://your-cos-domain.com"
 PORT=3000
 NODE_ENV="production"
 
-# Mock 开关（生产全部关闭）
-MOCK_PAYMENT_ENABLED=false
+# Mock 开关（生产全部关闭，config.ts 启动校验会强制拦截 true）
 WECHAT_QRCODE_MOCK=false
+
+# 新订单微信推送（可选，推荐企微群机器人）
+ORDER_NOTIFY_WECOM_WEBHOOK=""
+ORDER_NOTIFY_PUSHPLUS_TOKEN=""
+ORDER_NOTIFY_PUSHPLUS_TOPIC=""
 ```
 
 ### 微信支付私钥存放
@@ -133,30 +135,17 @@ chmod 600 /www/food-shop/apps/server/keys/*.pem
 ```bash
 # 1. 克隆代码
 git clone <repo-url> /www/food-shop
-cd /www/food-shop/apps/server
 
-# 2. 安装依赖
-npm install --omit=dev
+# 2. 创建生产 .env（见上一节）与支付证书目录
+nano /www/food-shop/apps/server/.env
 
-# 3. 编译
-npm run build
-
-# 4. 数据库迁移（首次：部署所有迁移）
-npm run db:migrate:deploy
-
-# 5. 导入初始数据（只在首次执行）
-npm run db:seed
+# 3. 一键部署（含依赖安装、迁移前备份、编译、迁移、seed、admin 发布、PM2、健康检查）
+bash /www/food-shop/scripts/deploy.sh --seed
 # 默认管理员账号：admin / admin123456，上线前务必修改密码
 
-# 6. 启动后端服务
-pm2 start ecosystem.config.js --env production
+# 4. 设置开机自启
+pm2 startup   # 按提示执行输出的命令
 pm2 save
-pm2 startup  # 按提示执行输出的命令，设置开机自启
-
-# 7. 部署后台前端
-# 在本地机器执行：
-cd apps/admin && npm run build
-scp -r dist/ user@your-server:/www/food-shop-admin/dist/
 ```
 
 ---
@@ -164,12 +153,10 @@ scp -r dist/ user@your-server:/www/food-shop-admin/dist/
 ## 六、后续更新部署
 
 ```bash
-cd /www/food-shop
-git pull origin main
-bash scripts/deploy.sh
+bash /www/food-shop/scripts/deploy.sh
 ```
 
-deploy.sh 会自动完成：安装依赖 → 编译 → 数据库迁移 → PM2 热重载 → Nginx reload → 健康检查。
+deploy.sh 会自动完成：git 拉取 → 安装依赖 → **迁移前备份数据库** → prisma generate → 编译 → 迁移（失败给出恢复命令）→ admin 构建发布 → PM2 热重载 → Nginx reload → 健康检查，并在结尾打印代码回滚与数据库恢复命令。
 
 ---
 
@@ -245,7 +232,7 @@ Prisma 不支持自动回滚迁移。操作方式：
 ```
 
 发布前检查：
-- [ ] `apps/miniapp/utils/request.js` 中 `BASE_URL` 指向 `https://api.yourdomain.com`
+- [ ] `apps/miniapp/config/index.js`：`isDev` 改为 `false`，生产 `baseURL` 指向 `https://api.yourdomain.com/api`，`adminUrl` 指向 `https://admin.yourdomain.com`
 - [ ] 微信公众平台 → 开发设置 → 服务器域名已配置 `api.yourdomain.com`
 - [ ] 小程序 AppID 和后端 `WECHAT_APP_ID` 一致
 - [ ] `WECHAT_LOGIN_MOCK=false` 且 AppSecret 正确
@@ -259,7 +246,6 @@ Prisma 不支持自动回滚迁移。操作方式：
 | `WECHAT_LOGIN_MOCK` | `true` | `false` |
 | `WECHAT_PAY_MOCK` | `true` | `false` |
 | `WECHAT_QRCODE_MOCK` | `true` | `false` |
-| `MOCK_PAYMENT_ENABLED` | `true` | `false` |
 | `NODE_ENV` | `development` | `production` |
 | 微信支付回调 | 无法收到（localhost 非公网） | 必须公网 HTTPS |
 | 数据库迁移 | `prisma migrate dev` | `prisma migrate deploy` |
