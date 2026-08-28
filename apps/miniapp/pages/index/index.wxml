@@ -1,8 +1,28 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
 
-  <!-- Banner -->
-  <view class="banner">
+  <!-- Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
+  <swiper
+    wx:if="{{banners.length > 0}}"
+    class="banner-swiper"
+    autoplay
+    circular
+    interval="4000"
+    indicator-dots="{{banners.length > 1}}"
+    indicator-color="rgba(255,255,255,.4)"
+    indicator-active-color="#ffffff"
+  >
+    <swiper-item wx:for="{{banners}}" wx:key="id">
+      <image
+        class="banner-swiper-img"
+        src="{{item.imageUrl}}"
+        mode="aspectFill"
+        data-banner="{{item}}"
+        bindtap="onBannerTap"
+      />
+    </swiper-item>
+  </swiper>
+  <view wx:else class="banner">
     <view class="banner-deco banner-deco-1"></view>
     <view class="banner-deco banner-deco-2"></view>
     <view class="banner-deco banner-deco-3"></view>

@@ -4,7 +4,7 @@ const { formatPrice } = require('../../utils/format')
 var TABS = [
   { label: '全部', status: '' },
   { label: '待付款', status: 'PENDING_PAYMENT' },
-  { label: '待发货', status: 'PAID' },
+  { label: '待发货', status: 'PAID,PREPARING' },
   { label: '已发货', status: 'SHIPPED' },
   { label: '已完成', status: 'COMPLETED' },
   { label: '已取消', status: 'CANCELLED' },
@@ -13,6 +13,8 @@ var TABS = [
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
   PAID: '待发货',
+  PREPARING: '备餐中',
+  REFUNDING: '退款中',
   SHIPPED: '已发货',
   COMPLETED: '已完成',
   CANCELLED: '已取消',

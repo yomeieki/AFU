@@ -2,6 +2,8 @@
 const STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
   PAID: '待发货',
+  PREPARING: '备餐中',
+  REFUNDING: '退款中',
   SHIPPED: '已发货',
   COMPLETED: '已完成',
   CANCELLED: '已取消',

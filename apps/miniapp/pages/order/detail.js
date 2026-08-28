@@ -1,14 +1,58 @@
-const { getOrderDetail, confirmOrder } = require('../../api/order')
+const { getOrderDetail, confirmOrder, cancelOrder } = require('../../api/order')
 const { payOrder } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
 
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
   PAID: '待发货',
+  PREPARING: '备餐中',
+  REFUNDING: '退款中',
   SHIPPED: '已发货',
   COMPLETED: '已完成',
   CANCELLED: '已取消',
   REFUNDED: '已退款',
+}
+
+// 订单进度时间线：已达节点亮起并带时间，未达灰显
+function buildTimeline(order) {
+  function t(v) {
+    return v ? new Date(v).toLocaleString() : ''
+  }
+  var cancelled = order.status === 'CANCELLED'
+  var steps = [
+    { label: '提交订单', time: t(order.createdAt), done: true },
+    { label: '支付成功', time: t(order.paidAt), done: !!order.paidAt },
+    { label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt },
+    {
+      label: '已发货',
+      time: t(order.shipment && order.shipment.shippedAt),
+      done: !!(order.shipment && order.shipment.shippedAt),
+      extra:
+        order.shipment && order.shipment.expressNo
+          ? (order.shipment.expressCompany || '') + ' ' + order.shipment.expressNo
+          : '',
+    },
+    { label: '已完成', time: t(order.completedAt), done: !!order.completedAt },
+  ]
+  if (cancelled) {
+    steps = [
+      { label: '提交订单', time: t(order.createdAt), done: true },
+      { label: '订单已取消', time: t(order.cancelledAt), done: true },
+    ]
+  }
+  if (order.status === 'REFUNDING' || order.status === 'REFUNDED') {
+    steps = [
+      { label: '提交订单', time: t(order.createdAt), done: true },
+      { label: '支付成功', time: t(order.paidAt), done: !!order.paidAt },
+      { label: '申请退款', time: t(order.cancelledAt), done: true },
+      { label: '退款完成（原路退回）', time: t(order.refundedAt), done: !!order.refundedAt },
+    ]
+  }
+  // 直接发货未接单的情况：发货已完成时把接单节点视为跳过（不显示）
+  if (!order.acceptedAt && order.shipment && order.shipment.shippedAt) {
+    steps = steps.filter(function(st) { return st.label.indexOf('商家接单') !== 0 })
+  }
+  return steps
 }
 
 Page({
@@ -37,11 +81,16 @@ Page({
         self.setData({
           order: Object.assign({}, order, {
             statusLabel: STATUS_LABEL[order.status] || order.status,
+            // 自助取消/退款：待付款，或已付款且商家未接单
+            canSelfCancel:
+              order.status === 'PENDING_PAYMENT' ||
+              (order.status === 'PAID' && !order.acceptedAt),
             totalAmountText: formatPrice(order.totalAmount),
             shippingFeeText: formatPrice(order.shippingFee),
             actualAmountText: formatPrice(order.actualAmount),
             createdAtText: new Date(order.createdAt).toLocaleString(),
             paidAtText: order.paidAt ? new Date(order.paidAt).toLocaleString() : null,
+            timeline: buildTimeline(order),
             items: order.items.map(function(item) {
               return Object.assign({}, item, {
                 priceText: formatPrice(item.productPrice),
@@ -131,6 +180,27 @@ Page({
   },
 
   // 确认收货（SHIPPED → COMPLETED）
+  onCancelOrder() {
+    var self = this
+    var isPaid = this.data.order.status !== 'PENDING_PAYMENT'
+    wx.showModal({
+      title: isPaid ? '申请退款' : '取消订单',
+      content: isPaid
+        ? '商家尚未接单，取消后货款将原路退回（1-3 个工作日）。确认申请退款？'
+        : '确认取消该订单？',
+      confirmText: '确认',
+      success: function(res) {
+        if (!res.confirm) return
+        cancelOrder(self.data.order.id)
+          .then(function() {
+            wx.showToast({ title: isPaid ? '已申请退款' : '订单已取消', icon: 'success' })
+            self.loadOrder(self._orderId)
+          })
+          .catch(function() {})
+      },
+    })
+  },
+
   onConfirmReceipt() {
     var self = this
     wx.showModal({

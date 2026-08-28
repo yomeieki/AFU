@@ -14,6 +14,12 @@
 .status-banner.PENDING_PAYMENT .status-label { color: var(--warning); }
 .status-banner.PAID { background-color: var(--info-bg); }
 .status-banner.PAID .status-label { color: var(--info); }
+.status-banner.REFUNDING { background-color: var(--danger-bg); }
+.status-banner.REFUNDING .status-label { color: var(--danger); }
+.status-banner.REFUNDED { background-color: var(--gray-bg); }
+.status-banner.REFUNDED .status-label { color: var(--gray); }
+.status-banner.PREPARING { background-color: var(--warning-bg); }
+.status-banner.PREPARING .status-label { color: var(--warning); }
 .status-banner.SHIPPED { background-color: var(--cyan-bg); }
 .status-banner.SHIPPED .status-label { color: var(--cyan); }
 .status-banner.COMPLETED { background-color: var(--success-bg); }
@@ -224,4 +230,85 @@
   border-radius: 6rpx;
   padding: 2rpx 12rpx;
   align-self: flex-start;
+}
+
+
+/* 订单进度时间线 */
+.timeline {
+  padding: 8rpx 0 0;
+}
+.timeline-step {
+  display: flex;
+  align-items: flex-start;
+}
+.timeline-dot-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 40rpx;
+  flex-shrink: 0;
+}
+.timeline-dot {
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 50%;
+  border: 4rpx solid var(--border);
+  background: var(--card);
+  box-sizing: border-box;
+  margin-top: 6rpx;
+}
+.timeline-step.done .timeline-dot {
+  border-color: var(--brand);
+  background: var(--brand);
+}
+.timeline-line {
+  width: 4rpx;
+  flex: 1;
+  min-height: 40rpx;
+  background: var(--divider);
+}
+.timeline-step.done .timeline-line {
+  background: var(--brand-bg-deep);
+}
+.timeline-info {
+  flex: 1;
+  padding: 0 0 28rpx 16rpx;
+  display: flex;
+  flex-direction: column;
+}
+.timeline-step.last .timeline-info {
+  padding-bottom: 4rpx;
+}
+.timeline-label {
+  font-size: 28rpx;
+  color: var(--text-3);
+}
+.timeline-step.done .timeline-label {
+  color: var(--text-1);
+  font-weight: 500;
+}
+.timeline-extra {
+  font-size: 24rpx;
+  color: var(--info);
+  margin-top: 4rpx;
+}
+.timeline-time {
+  font-size: 22rpx;
+  color: var(--text-3);
+  margin-top: 4rpx;
+}
+
+
+/* 自助取消/申请退款按钮（次级样式） */
+.cancel-btn {
+  flex: 1;
+  height: 80rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 20rpx;
+  border: 2rpx solid var(--border);
+  border-radius: 999rpx;
+  font-size: 28rpx;
+  color: var(--text-2);
 }

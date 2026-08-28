@@ -31,7 +31,7 @@
         <view class="shortcut-icon icon icon-pay"></view>
         <text class="shortcut-label">待付款</text>
       </view>
-      <view class="shortcut-item" hover-class="shortcut-item-hover" bindtap="goToOrdersByStatus" data-status="PAID">
+      <view class="shortcut-item" hover-class="shortcut-item-hover" bindtap="goToOrdersByStatus" data-status="PAID,PREPARING">
         <view class="shortcut-icon icon icon-ship"></view>
         <text class="shortcut-label">待发货</text>
       </view>
@@ -52,6 +52,11 @@
       <view class="menu-item" hover-class="menu-item-hover" bindtap="goToAddresses">
         <view class="menu-icon icon icon-pin"></view>
         <text class="menu-label">收货地址</text>
+        <view class="menu-arrow icon icon-arrow"></view>
+      </view>
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="goToMerchant">
+        <view class="menu-icon icon icon-shop"></view>
+        <text class="menu-label">商家管理</text>
         <view class="menu-arrow icon icon-arrow"></view>
       </view>
     </view>

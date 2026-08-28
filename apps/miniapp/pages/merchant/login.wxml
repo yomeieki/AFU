@@ -1,0 +1,31 @@
+<view class="page">
+  <view class="login-card card">
+    <view class="login-logo">🍱</view>
+    <text class="login-title">商家管理登录</text>
+    <text class="login-sub">仅限管理员使用</text>
+
+    <view class="field">
+      <text class="field-label">账号</text>
+      <input
+        class="field-input"
+        placeholder="请输入管理员账号"
+        value="{{username}}"
+        bindinput="onInputUsername"
+      />
+    </view>
+    <view class="field">
+      <text class="field-label">密码</text>
+      <input
+        class="field-input"
+        password
+        placeholder="请输入密码"
+        value="{{password}}"
+        bindinput="onInputPassword"
+      />
+    </view>
+
+    <view class="login-btn btn-primary {{submitting ? 'btn-disabled' : ''}}" bindtap="onSubmit">
+      <text>{{submitting ? '登录中...' : '登 录'}}</text>
+    </view>
+  </view>
+</view>

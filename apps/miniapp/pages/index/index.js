@@ -4,6 +4,7 @@ const app = getApp()
 
 Page({
   data: {
+    banners: [],
     categories: [],
     products: [],
     loading: true,
@@ -11,6 +12,13 @@ Page({
 
   onLoad() {
     this.loadData()
+  },
+
+  onBannerTap(e) {
+    var banner = e.currentTarget.dataset.banner
+    if (banner && banner.linkType === 'product' && banner.productId) {
+      wx.navigateTo({ url: '/pages/product/detail?id=' + banner.productId })
+    }
   },
 
   onPullDownRefresh() {
@@ -22,9 +30,11 @@ Page({
     Promise.all([
       request({ url: '/categories' }),
       request({ url: '/products?page=1&pageSize=6' }),
+      request({ url: '/banners' }).catch(function() { return [] }),
     ])
-      .then(([categories, productData]) => {
+      .then(([categories, productData, banners]) => {
         this.setData({
+          banners: banners || [],
           categories,
           products: (productData.list || []).map(function(p) {
             return Object.assign({}, p, { priceText: formatPrice(p.price) })

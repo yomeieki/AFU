@@ -1,0 +1,33 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="loading-wrap">
+    <text class="tip-text">加载中...</text>
+  </view>
+
+  <block wx:else>
+    <!-- 待发货概览 -->
+    <view class="pending-card card">
+      <view class="pending-info">
+        <text class="pending-label">待发货订单</text>
+        <text class="pending-count">{{pendingCount}}</text>
+      </view>
+      <view class="pending-icon">📦</view>
+    </view>
+
+    <!-- 完整后台入口 -->
+    <view class="section card">
+      <text class="section-title">完整管理后台</text>
+      <text class="section-desc">发货、商品、订单、扫码统计等完整功能请在浏览器中打开管理后台（已适配手机屏幕）：</text>
+      <view class="url-box">
+        <text class="url-text" user-select>{{adminUrl}}</text>
+      </view>
+      <view class="copy-btn btn-primary" bindtap="onCopyLink">
+        <text>复制链接</text>
+      </view>
+      <text class="section-hint">提示：开发环境下手机需与电脑连接同一 Wi-Fi</text>
+    </view>
+
+    <view class="logout-btn" bindtap="onLogout">
+      <text>退出商家登录</text>
+    </view>
+  </block>
+</view>

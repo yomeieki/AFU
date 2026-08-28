@@ -14,6 +14,10 @@
   background: var(--info-bg, #eff6ff);
   color: var(--info, #3b82f6);
 }
+.tag-PREPARING {
+  background-color: var(--warning-bg);
+  color: var(--warning);
+}
 .tag-SHIPPED {
   background: var(--cyan-bg, #ecfeff);
   color: var(--cyan, #0891b2);
@@ -25,6 +29,10 @@
 .tag-CANCELLED {
   background: var(--gray-bg, #f3f4f6);
   color: var(--gray, #9ca3af);
+}
+.tag-REFUNDING {
+  background-color: var(--danger-bg);
+  color: var(--danger);
 }
 .tag-REFUNDED {
   background: var(--danger-bg, #fef2f2);

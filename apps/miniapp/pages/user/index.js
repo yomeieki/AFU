@@ -75,6 +75,14 @@ Page({
     wx.navigateTo({ url: '/pages/order/list?status=' + status })
   },
 
+  goToMerchant() {
+    // 有商家 token 直接进入口页（该页会自行校验有效性兜底），否则先登录
+    var url = wx.getStorageSync('merchant_token')
+      ? '/pages/merchant/index'
+      : '/pages/merchant/login'
+    wx.navigateTo({ url: url })
+  },
+
   goToAddresses() {
     wx.navigateTo({ url: '/pages/address/list' })
   },

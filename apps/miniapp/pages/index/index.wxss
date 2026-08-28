@@ -3,6 +3,16 @@
   padding-bottom: 30rpx;
 }
 
+/* Banner 轮播（后台配置） */
+.banner-swiper {
+  height: 300rpx;
+}
+.banner-swiper-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 /* Banner */
 .banner {
   position: relative;

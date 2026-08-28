@@ -9,7 +9,9 @@
     "pages/order/confirm",
     "pages/order/list",
     "pages/order/detail",
-    "pages/user/index"
+    "pages/user/index",
+    "pages/merchant/login",
+    "pages/merchant/index"
   ],
   "tabBar": {
     "color": "#999999",
