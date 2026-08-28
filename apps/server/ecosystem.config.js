@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'food-shop-server',
       script: 'dist/app.js',
-      cwd: '/www/food-shop-server',
+      cwd: '/www/food-shop/apps/server',
       instances: 1,
       exec_mode: 'fork',
       env_production: {
