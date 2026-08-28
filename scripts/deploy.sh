@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # 生产部署脚本（在服务器上执行）
-# 用法：bash scripts/deploy.sh
-# 首次部署：bash scripts/deploy.sh --seed
+# 前置：git clone 仓库到 REPO_DIR，apps/server/.env 已配置
+# 用法：bash /www/food-shop/scripts/deploy.sh
+# 首次部署：bash /www/food-shop/scripts/deploy.sh --seed
 
 set -euo pipefail
 
 SEED="${1:-}"
-SERVER_DIR="/www/food-shop-server"
-ADMIN_DIR="/www/food-shop-admin/dist"
+REPO_DIR="/www/food-shop"
+SERVER_DIR="${REPO_DIR}/apps/server"
+ADMIN_DIST_DIR="/www/food-shop-admin/dist"
+BACKUP_DIR="/www/backups/pre-deploy"
 LOG_DIR="/var/log/pm2"
 
 echo "=========================================="
@@ -15,48 +18,81 @@ echo " food-shop 部署脚本"
 echo " $(date '+%Y-%m-%d %H:%M:%S')"
 echo "=========================================="
 
-# ── 预检 ─────────────────────────────────────────────────────────────────────
-echo "[1/7] 预检..."
-
-command -v node   >/dev/null || { echo "ERROR: node not found"; exit 1; }
-command -v npm    >/dev/null || { echo "ERROR: npm not found"; exit 1; }
-command -v pm2    >/dev/null || { echo "ERROR: pm2 not found (npm install -g pm2)"; exit 1; }
-command -v nginx  >/dev/null || { echo "ERROR: nginx not found"; exit 1; }
-
-NODE_VER=$(node -e "process.exit(+process.versions.node.split('.')[0] < 18 ? 1 : 0)" 2>/dev/null && echo "ok" || echo "WARN: Node.js >= 18 required")
+# ── [1/9] 预检 ───────────────────────────────────────────────────────────────
+echo "[1/9] 预检..."
+for cmd in node npm pm2 nginx git mysqldump; do
+  command -v "$cmd" >/dev/null || { echo "ERROR: $cmd not found"; exit 1; }
+done
+node -e "process.exit(+process.versions.node.split('.')[0] < 18 ? 1 : 0)" \
+  || { echo "ERROR: Node.js >= 18 required, got $(node -v)"; exit 1; }
 echo "  node: $(node -v)  npm: $(npm -v)  pm2: $(pm2 -v)"
-
 [[ -f "${SERVER_DIR}/.env" ]] || { echo "ERROR: ${SERVER_DIR}/.env not found"; exit 1; }
 echo "  .env: ok"
 
-# ── 安装依赖 ──────────────────────────────────────────────────────────────────
-echo "[2/7] 安装后端依赖..."
+# ── [2/9] 拉取最新代码 ────────────────────────────────────────────────────────
+echo "[2/9] 拉取最新代码..."
+cd "${REPO_DIR}"
+git fetch origin
+BEFORE=$(git rev-parse --short HEAD)
+git reset --hard origin/main
+AFTER=$(git rev-parse --short HEAD)
+echo "  ${BEFORE} → ${AFTER}"
+
+# ── [3/9] 安装依赖（monorepo 根目录，构建需 devDependencies）──────────────────
+echo "[3/9] 安装依赖..."
+npm install --no-fund --no-audit
+
+# ── [4/9] 迁移前备份数据库 ────────────────────────────────────────────────────
+echo "[4/9] 迁移前备份数据库..."
+mkdir -p "${BACKUP_DIR}"
+# 从 .env 解析 DATABASE_URL（mysql://user:pass@host:port/db）
+DB_URL=$(grep -E '^DATABASE_URL=' "${SERVER_DIR}/.env" | cut -d= -f2- | tr -d '"')
+DB_USER=$(echo "$DB_URL" | sed -E 's|mysql://([^:]+):.*|\1|')
+DB_PASS=$(echo "$DB_URL" | sed -E 's|mysql://[^:]+:([^@]+)@.*|\1|')
+DB_HOST=$(echo "$DB_URL" | sed -E 's|.*@([^:/]+).*|\1|')
+DB_PORT=$(echo "$DB_URL" | sed -E 's|.*@[^:]+:([0-9]+)/.*|\1|')
+DB_NAME=$(echo "$DB_URL" | sed -E 's|.*/([^?]+).*|\1|')
+PRE_BACKUP="${BACKUP_DIR}/pre_deploy_$(date +%Y%m%d_%H%M%S).sql.gz"
+mysqldump -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASS}" \
+  --single-transaction "${DB_NAME}" | gzip > "${PRE_BACKUP}"
+echo "  备份完成：${PRE_BACKUP} ($(du -sh "${PRE_BACKUP}" | cut -f1))"
+# 只保留最近 10 份迁移前备份
+ls -t "${BACKUP_DIR}"/pre_deploy_*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
+
+# ── [5/9] 构建后端（先 generate 再 build，顺序不可反）─────────────────────────
+echo "[5/9] 构建后端..."
 cd "${SERVER_DIR}"
-npm install --omit=dev
-
-# ── 编译 TypeScript ───────────────────────────────────────────────────────────
-echo "[3/7] 编译 TypeScript..."
+npx prisma generate
 npm run build
-echo "  dist/app.js: $(du -sh dist/app.js 2>/dev/null | cut -f1)"
+echo "  dist/app.js: $(du -sh dist/app.js | cut -f1)"
 
-# ── 数据库迁移 ────────────────────────────────────────────────────────────────
-echo "[4/7] 执行数据库迁移..."
-npm run db:migrate:deploy
+# ── [6/9] 数据库迁移 ─────────────────────────────────────────────────────────
+echo "[6/9] 执行数据库迁移..."
+if ! npm run db:migrate:deploy; then
+  echo "=========================================="
+  echo " ERROR: 迁移失败！服务未重启，数据库可用备份恢复："
+  echo "   gunzip < ${PRE_BACKUP} | mysql -h ${DB_HOST} -P ${DB_PORT} -u ${DB_USER} -p ${DB_NAME}"
+  echo "=========================================="
+  exit 1
+fi
 echo "  迁移完成"
-
-# ── 初始数据（首次部署时加 --seed 参数）──────────────────────────────────────
 if [[ "${SEED}" == "--seed" ]]; then
-  echo "[4b] 导入初始数据（seed）..."
+  echo "[6b] 导入初始数据（seed）..."
   npm run db:seed
 fi
 
-# ── 生成 Prisma Client ────────────────────────────────────────────────────────
-echo "[5/7] 生成 Prisma Client..."
-npx prisma generate
+# ── [7/9] 构建并发布管理后台 ──────────────────────────────────────────────────
+echo "[7/9] 构建管理后台..."
+cd "${REPO_DIR}"
+npm run build:admin
+mkdir -p "${ADMIN_DIST_DIR}"
+rsync -a --delete "${REPO_DIR}/apps/admin/dist/" "${ADMIN_DIST_DIR}/"
+echo "  已发布到 ${ADMIN_DIST_DIR}"
 
-# ── 重启 / 启动后端服务 ───────────────────────────────────────────────────────
-echo "[6/7] 重启后端服务（PM2）..."
+# ── [8/9] 重启后端（PM2）────────────────────────────────────────────────────
+echo "[8/9] 重启后端服务（PM2）..."
 mkdir -p "${LOG_DIR}"
+cd "${SERVER_DIR}"
 if pm2 describe food-shop-server >/dev/null 2>&1; then
   pm2 reload food-shop-server --update-env
 else
@@ -64,23 +100,29 @@ else
   pm2 save
 fi
 sleep 2
-pm2 show food-shop-server | grep -E "status|restart|uptime"
+pm2 show food-shop-server | grep -E "status|restart|uptime" || true
 
-# ── 重载 Nginx ────────────────────────────────────────────────────────────────
-echo "[7/7] 重载 Nginx..."
+# ── [9/9] 重载 Nginx + 健康检查 ──────────────────────────────────────────────
+echo "[9/9] 重载 Nginx..."
 nginx -t && nginx -s reload
 echo "  Nginx reloaded"
 
-# ── 健康检查 ──────────────────────────────────────────────────────────────────
+APP_PORT=$(grep -E '^PORT=' "${SERVER_DIR}/.env" | cut -d= -f2- | tr -d '"' || true)
+APP_PORT="${APP_PORT:-3000}"
 echo ""
-echo "健康检查..."
+echo "健康检查（:${APP_PORT}）..."
 sleep 1
-curl -sf http://127.0.0.1:3000/health | python3 -c "import json,sys; d=json.load(sys.stdin); print('  API:', d['status'])" \
-  || echo "  WARN: health check failed, check pm2 logs"
+if curl -sf "http://127.0.0.1:${APP_PORT}/health" >/dev/null; then
+  echo "  API: ok"
+else
+  echo "  ERROR: 健康检查失败！排查：pm2 logs food-shop-server"
+  exit 1
+fi
 
 echo ""
 echo "=========================================="
-echo " 部署完成 $(date '+%Y-%m-%d %H:%M:%S')"
+echo " 部署完成 $(date '+%Y-%m-%d %H:%M:%S')  版本：${AFTER}"
 echo " 后端日志：pm2 logs food-shop-server"
-echo " 错误日志：${LOG_DIR}/food-shop-server-error.log"
+echo " 回滚代码：cd ${REPO_DIR} && git reset --hard ${BEFORE} && bash scripts/deploy.sh"
+echo " 恢复数据库：gunzip < ${PRE_BACKUP} | mysql -u ${DB_USER} -p ${DB_NAME}"
 echo "=========================================="

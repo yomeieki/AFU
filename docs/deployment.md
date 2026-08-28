@@ -74,7 +74,7 @@ FLUSH PRIVILEGES;
 
 ## 四、生产环境变量（.env）
 
-在服务器上手动创建 `/www/food-shop-server/.env`，**不要提交到 git**：
+在服务器上手动创建 `/www/food-shop/apps/server/.env`，**不要提交到 git**：
 
 ```env
 # 数据库
@@ -95,10 +95,10 @@ WECHAT_LOGIN_MOCK=false
 WECHAT_PAY_MOCK=false
 WECHAT_MCH_ID="商户号"
 WECHAT_PAY_SERIAL_NO="商户证书序列号"
-WECHAT_PAY_PRIVATE_KEY_PATH="/www/food-shop-server/keys/apiclient_key.pem"
+WECHAT_PAY_PRIVATE_KEY_PATH="/www/food-shop/apps/server/keys/apiclient_key.pem"
 WECHAT_PAY_API_V3_KEY="32字节APIv3密钥"
 WECHAT_PAY_NOTIFY_URL="https://api.yourdomain.com/api/wechat/pay/notify"
-WECHAT_PAY_PLATFORM_CERT_PATH="/www/food-shop-server/keys/wechatpay_cert.pem"
+WECHAT_PAY_PLATFORM_CERT_PATH="/www/food-shop/apps/server/keys/wechatpay_cert.pem"
 
 # 腾讯云 COS
 COS_SECRET_ID="your-cos-secret-id"
@@ -119,11 +119,11 @@ WECHAT_QRCODE_MOCK=false
 ### 微信支付私钥存放
 
 ```bash
-mkdir -p /www/food-shop-server/keys
-chmod 700 /www/food-shop-server/keys
+mkdir -p /www/food-shop/apps/server/keys
+chmod 700 /www/food-shop/apps/server/keys
 # 将商户私钥上传到服务器（apiclient_key.pem）
 # 将微信支付平台证书上传（wechatpay_cert.pem）
-chmod 600 /www/food-shop-server/keys/*.pem
+chmod 600 /www/food-shop/apps/server/keys/*.pem
 ```
 
 ---
@@ -132,8 +132,8 @@ chmod 600 /www/food-shop-server/keys/*.pem
 
 ```bash
 # 1. 克隆代码
-git clone <repo-url> /www/food-shop-server
-cd /www/food-shop-server/apps/server
+git clone <repo-url> /www/food-shop
+cd /www/food-shop/apps/server
 
 # 2. 安装依赖
 npm install --omit=dev
@@ -164,7 +164,7 @@ scp -r dist/ user@your-server:/www/food-shop-admin/dist/
 ## 六、后续更新部署
 
 ```bash
-cd /www/food-shop-server
+cd /www/food-shop
 git pull origin main
 bash scripts/deploy.sh
 ```
