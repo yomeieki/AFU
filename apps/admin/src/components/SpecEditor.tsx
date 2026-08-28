@@ -125,7 +125,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               value={dim.name}
               onChange={(e) => renameDimension(i, e.target.value)}
               placeholder={`维度名，如 ${['辣度', '重量', '骨型'][i] ?? '口味'}`}
-              className={`${inputCls} w-36`}
+              className={`${inputCls} flex-1 min-w-0 sm:flex-none sm:w-36`}
             />
             <button
               type="button"
@@ -167,7 +167,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               }}
               onBlur={() => addValue(i)}
               placeholder="输入规格值后回车"
-              className={`${inputCls} w-36`}
+              className={`${inputCls} w-full sm:w-36`}
             />
           </div>
         </div>
@@ -176,7 +176,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
       {/* 组合表格 */}
       {skuRows.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-gray-500">批量填充</span>
             <input
               type="number"
@@ -185,7 +185,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               value={batchPrice}
               onChange={(e) => setBatchPrice(e.target.value)}
               placeholder="价格(元)"
-              className={`${inputCls} w-24`}
+              className={`${inputCls} w-24 flex-1 min-w-[5rem] sm:flex-none`}
             />
             <input
               type="number"
@@ -193,7 +193,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               value={batchStock}
               onChange={(e) => setBatchStock(e.target.value)}
               placeholder="库存"
-              className={`${inputCls} w-20`}
+              className={`${inputCls} w-20 flex-1 min-w-[4.5rem] sm:flex-none`}
             />
             <button
               type="button"
@@ -203,7 +203,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               应用到全部
             </button>
           </div>
-          <div className="overflow-x-auto border border-gray-200 rounded-md bg-white">
+          <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-md bg-white">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500">
                 <tr>
@@ -260,6 +260,51 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* <md：组合卡片列表（触控友好） */}
+          <div className="md:hidden space-y-2">
+            {skuRows.map((row, idx) => (
+              <div key={row.specValues.join('/')} className="border border-gray-200 rounded-md bg-white p-3">
+                <p className="text-sm font-medium text-gray-800 mb-2">{row.specValues.join(' / ')}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="block">
+                    <span className="block text-xs text-gray-500 mb-1">价格(元) *</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={row.price}
+                      onChange={(e) => updateRow(idx, { price: e.target.value })}
+                      placeholder="必填"
+                      className={`${inputCls} w-full py-2`}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs text-gray-500 mb-1">原价(元)</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={row.originalPrice}
+                      onChange={(e) => updateRow(idx, { originalPrice: e.target.value })}
+                      placeholder="可选"
+                      className={`${inputCls} w-full py-2`}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs text-gray-500 mb-1">库存</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={row.stock}
+                      onChange={(e) => updateRow(idx, { stock: Number(e.target.value) })}
+                      className={`${inputCls} w-full py-2`}
+                    />
+                  </label>
+                </div>
+              </div>
+            ))}
           </div>
           <p className="text-xs text-gray-400">
             共 {skuRows.length} 个规格组合。商品售价将自动取最低规格价，总库存为各规格之和。

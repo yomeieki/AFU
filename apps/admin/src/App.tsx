@@ -7,6 +7,11 @@ import Categories from './pages/Categories'
 import Products from './pages/Products'
 import Orders from './pages/Orders'
 import Users from './pages/Users'
+import ScanStats from './pages/ScanStats'
+import Banners from './pages/Banners'
+import SystemStatus from './pages/SystemStatus'
+import { ToastHost } from './components/ui/Toast'
+import { ConfirmDialogHost } from './components/ui/ConfirmDialog'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -16,6 +21,8 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <BrowserRouter>
+      <ToastHost />
+      <ConfirmDialogHost />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
@@ -32,6 +39,9 @@ export default function App() {
           <Route path="products" element={<Products />} />
           <Route path="orders" element={<Orders />} />
           <Route path="users" element={<Users />} />
+          <Route path="scan-stats" element={<ScanStats />} />
+          <Route path="banners" element={<Banners />} />
+          <Route path="system" element={<SystemStatus />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

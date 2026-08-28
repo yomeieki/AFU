@@ -35,7 +35,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-brand-gradient relative overflow-hidden">
       {/* 装饰圆 */}
-      <div className="absolute -top-24 -left-24 w-96 h-96 rounded-full bg-white/10" />
+      <div className="absolute -top-24 -left-24 w-full max-w-sm mx-4 h-96 rounded-full bg-white/10" />
       <div className="absolute -bottom-32 -right-16 w-[28rem] h-[28rem] rounded-full bg-white/10" />
       <div className="absolute top-1/3 right-1/4 w-24 h-24 rounded-full bg-white/5" />
 

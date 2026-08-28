@@ -7,9 +7,10 @@ import {
   TrendingUp,
   LucideIcon,
 } from 'lucide-react'
-import { getStats } from '../api/admin'
-import type { Stats } from '../types'
+import { getStats, getSalesTrend } from '../api/admin'
+import type { Stats, SalesTrendPoint } from '../types'
 import Spinner from '../components/ui/Spinner'
+import TrendChart from '../components/ui/TrendChart'
 
 function StatCard({
   label,
@@ -43,11 +44,15 @@ function StatCard({
 
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
+  const [trend, setTrend] = useState<SalesTrendPoint[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getStats()
-      .then((res) => setStats(res.data.data))
+    Promise.all([getStats(), getSalesTrend(7)])
+      .then(([res, t]) => {
+        setStats(res.data.data)
+        setTrend(t.data.data.list)
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -62,7 +67,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-semibold text-gray-800">今日概览</h2>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <StatCard label="今日订单数" value={stats.today.orderCount} icon={ClipboardList} tone="brand" />
         <StatCard
           label="今日销售额"
@@ -73,7 +78,7 @@ export default function Dashboard() {
       </div>
 
       <h2 className="text-xl font-semibold text-gray-800">累计数据</h2>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard label="总订单数" value={stats.total.orderCount} icon={ClipboardList} tone="blue" />
         <StatCard label="在售商品数" value={stats.total.productCount} icon={Package} tone="brand" />
         <StatCard label="分类数" value={stats.total.categoryCount} icon={FolderTree} tone="purple" />
@@ -81,8 +86,17 @@ export default function Dashboard() {
 
       <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-800">
         <TrendingUp className="w-5 h-5 text-brand-500" />
-        热销商品 Top 5
+        近 7 天销售趋势
       </h2>
+      <div className="bg-white rounded-lg shadow-card p-5">
+        <TrendChart
+          data={trend.map((t) => ({ label: t.date, value: t.salesAmount }))}
+          type="bar"
+          valueFormatter={(v) => `¥${(v / 100).toFixed(0)}`}
+        />
+      </div>
+
+      <h2 className="text-xl font-semibold text-gray-800">热销商品 Top 5</h2>
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-600">

@@ -24,6 +24,15 @@ export default {
       backgroundImage: {
         'brand-gradient': 'linear-gradient(135deg, #ff6a3d 0%, #e5441e 100%)',
       },
+      keyframes: {
+        'toast-in': {
+          from: { opacity: '0', transform: 'translateY(-8px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'toast-in': 'toast-in .2s ease-out',
+      },
     },
   },
   plugins: [],

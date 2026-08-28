@@ -81,7 +81,7 @@ export interface OrderItem {
   subtotal: number
 }
 
-export type OrderStatus = 'PENDING_PAYMENT' | 'PAID' | 'SHIPPED' | 'COMPLETED' | 'CANCELLED' | 'REFUNDED'
+export type OrderStatus = 'PENDING_PAYMENT' | 'PAID' | 'PREPARING' | 'SHIPPED' | 'COMPLETED' | 'CANCELLED' | 'REFUNDING' | 'REFUNDED'
 
 export interface Shipment {
   id: number
@@ -103,6 +103,7 @@ export interface Order {
   receiverName: string
   receiverPhone: string
   receiverFullAddress: string
+  remark?: string | null
   paidAt: string | null
   createdAt: string
   items: OrderItem[]
@@ -147,4 +148,45 @@ export interface Stats {
     salesCount: number
     price: number
   }[]
+}
+
+// 扫码统计
+export interface ScanSummary {
+  totalScans: number
+  uniqueOpenids: number
+  todayScans: number
+  conversion: { scans: number; orders: number; rate: number | null }
+}
+
+export interface ScanTrendPoint {
+  date: string
+  scans: number
+  uniqueOpenids: number
+}
+
+export interface ScanProductRow {
+  productId: number
+  productName: string
+  scans: number
+  orders: number
+  conversionRate: number | null
+}
+
+export interface SalesTrendPoint {
+  date: string
+  orderCount: number
+  salesAmount: number
+}
+
+// Banner
+export interface Banner {
+  id: number
+  title: string | null
+  imageUrl: string
+  linkType: 'none' | 'product'
+  productId: number | null
+  sortOrder: number
+  status: number
+  createdAt: string
+  updatedAt: string
 }

@@ -85,6 +85,35 @@ export default function Users() {
               <th className="text-right px-4 py-3">操作</th>
             </tr>
           }
+          mobileCards={
+            <>
+              {list.map((u) => (
+                <div key={u.id} className="border border-gray-100 rounded-lg p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {u.avatarUrl ? (
+                        <img src={u.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />
+                      ) : (
+                        <span className="w-8 h-8 rounded-full bg-brand-50 flex items-center justify-center text-xs text-brand-500 font-medium shrink-0">
+                          {(u.nickname ?? 'U').slice(0, 1)}
+                        </span>
+                      )}
+                      <span className="text-sm text-gray-800 truncate">{u.nickname ?? `用户 #${u.id}`}</span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-xs shrink-0 ${u.status === 1 ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+                      {u.status === 1 ? '正常' : '禁用'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1.5">
+                    {u.phone ?? '未绑定手机'}　订单 {u.orderCount}　注册 {new Date(u.createdAt).toLocaleDateString('zh-CN')}
+                  </p>
+                  <button onClick={() => openOrders(u)} className="mt-2 text-sm text-blue-500">
+                    查看订单
+                  </button>
+                </div>
+              ))}
+            </>
+          }
         >
           {list.map((u) => (
             <tr key={u.id} className="hover:bg-gray-50">

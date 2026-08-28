@@ -18,7 +18,34 @@ type Props = SingleProps | MultiProps
 
 /**
  * 图片上传组件：调 /api/admin/upload，支持单图（封面/图标）与多图（商品详情轮播）两种模式。
+ * 上传前在前端压缩（长边 ≤1280、JPEG 0.8），手机直拍大图无感变小，顾客端加载更快。
  */
+
+// canvas 压缩；gif 或压缩失败/压不小时回退原图
+async function compressImage(file: File): Promise<File> {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') return file
+  const MAX_EDGE = 1280
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height))
+    // 已经够小且不是超大文件，直接用原图
+    if (scale === 1 && file.size < 300 * 1024) return file
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(bitmap.width * scale)
+    canvas.height = Math.round(bitmap.height * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.8)
+    )
+    if (!blob || blob.size >= file.size) return file
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+  } catch {
+    return file
+  }
+}
 export default function ImageUploader(props: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
@@ -38,7 +65,8 @@ export default function ImageUploader(props: Props) {
       const selected = Array.from(files).slice(0, remaining)
       const uploaded: string[] = []
       for (const file of selected) {
-        const res = await uploadImage(file)
+        const compressed = await compressImage(file)
+        const res = await uploadImage(compressed)
         uploaded.push(res.data.data.url)
       }
       if (isMulti) {

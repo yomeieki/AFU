@@ -6,6 +6,8 @@ import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import type { Category } from '../types'
+import { toast } from '../components/ui/Toast'
+import { confirmDialog } from '../components/ui/ConfirmDialog'
 
 const emptyForm = { name: '', iconUrl: '', sortOrder: 0, status: 1 }
 
@@ -63,12 +65,13 @@ export default function Categories() {
   }
 
   const handleDelete = async (cat: Category) => {
-    if (!confirm(`确认删除分类「${cat.name}」？`)) return
+    if (!(await confirmDialog({ title: '删除分类', content: `确认删除分类「${cat.name}」？`, danger: true }))) return
     try {
       await deleteCategory(cat.id)
+      toast.success('已删除')
       load()
     } catch (err: unknown) {
-      alert(
+      toast.error(
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '删除失败'
       )
     }
@@ -84,7 +87,7 @@ export default function Categories() {
         </Button>
       </div>
 
-      <div className="bg-white rounded-lg shadow-card overflow-hidden">
+      <div className="bg-white rounded-lg shadow-card overflow-hidden overflow-x-auto">
         <Table
           columns={6}
           loading={loading}
@@ -153,7 +156,7 @@ export default function Categories() {
                   onChange={(url) => setForm({ ...form, iconUrl: url })}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">排序</label>
                   <input

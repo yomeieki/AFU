@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react'
-import { Plus, Search } from 'lucide-react'
-import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode } from '../api/admin'
+import { useEffect, useRef, useState } from 'react'
+import { Plus, Search, Download, QrCode } from 'lucide-react'
+import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
 import SpecEditor, { type SkuRow } from '../components/SpecEditor'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
-import StatusBadge from '../components/ui/StatusBadge'
 import type { Product, Category, SpecDimension } from '../types'
+import { toast } from '../components/ui/Toast'
+import QRCodeLib from 'qrcode'
+import { confirmDialog } from '../components/ui/ConfirmDialog'
 
 const DELIVERY_TYPE_LABEL: Record<string, string> = {
   EXPRESS: '快递配送',
@@ -194,26 +196,63 @@ export default function Products() {
     }
   }
 
+  // 上下架一键开关（可逆高频操作，不弹确认；局部更新不整页刷新）
+  const handleToggleStatus = async (p: Product) => {
+    const next = p.status === 'ON_SHELF' ? 'OFF_SHELF' : 'ON_SHELF'
+    try {
+      await updateProduct(p.id, { status: next })
+      setList((ls) => ls.map((it) => (it.id === p.id ? { ...it, status: next } : it)))
+      toast.success(next === 'ON_SHELF' ? `「${p.name}」已上架` : `「${p.name}」已下架`)
+    } catch {
+      toast.error('操作失败')
+    }
+  }
+
+  // 库存快改（仅无规格商品；有 SKU 商品的 product.stock=sum(sku.stock)，须在编辑里改各规格）
+  const [stockModal, setStockModal] = useState<Product | null>(null)
+  const [stockValue, setStockValue] = useState(0)
+  const openStockModal = (p: Product) => {
+    if ((p.skus?.length ?? 0) > 0) {
+      toast.info('多规格商品请在「编辑」中修改各规格库存')
+      return
+    }
+    setStockModal(p)
+    setStockValue(p.stock)
+  }
+  const handleStockSave = async () => {
+    if (!stockModal) return
+    const v = Math.max(0, Math.floor(stockValue))
+    try {
+      await updateProduct(stockModal.id, { stock: v })
+      setList((ls) => ls.map((it) => (it.id === stockModal.id ? { ...it, stock: v } : it)))
+      toast.success('库存已更新')
+      setStockModal(null)
+    } catch {
+      toast.error('更新失败')
+    }
+  }
+
   const handleDelete = async (p: Product) => {
-    if (!confirm(`确认删除商品「${p.name}」？`)) return
+    if (!(await confirmDialog({ title: '删除商品', content: `确认删除商品「${p.name}」？`, danger: true }))) return
     try {
       await deleteProduct(p.id)
+      toast.success('已删除')
       load()
     } catch (err: unknown) {
-      alert(
+      toast.error(
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '删除失败'
       )
     }
   }
 
   const handleGenerateQr = async (p: Product) => {
-    if (!confirm(`为「${p.name}」生成二维码？${p.qrCodeUrl ? '（将覆盖已有二维码）' : ''}`)) return
+    if (!(await confirmDialog({ title: '生成二维码', content: `为「${p.name}」生成二维码？${p.qrCodeUrl ? '（将覆盖已有二维码）' : ''}` }))) return
     setGeneratingQrId(p.id)
     try {
       await generateQrCode(p.id)
       load()
     } catch (err: unknown) {
-      alert(
+      toast.error(
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '生成失败'
       )
     } finally {
@@ -222,6 +261,80 @@ export default function Products() {
   }
 
   const isMockUrl = (url: string | null) => !url || url.startsWith('mock://')
+
+  // mock 模式：把 scene 渲染成占位二维码（扫出的是文本 p_<id>，非真实小程序码）
+  const mockCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    if (qrModal && isMockUrl(qrModal.qrCodeUrl) && qrModal.qrScene && mockCanvasRef.current) {
+      QRCodeLib.toCanvas(mockCanvasRef.current, qrModal.qrScene, { width: 160, margin: 1 }).catch(() => {})
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrModal])
+
+  const triggerDownload = (url: string, filename: string) => {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadQr = async (p: Product) => {
+    const filename = `qrcode-p_${p.id}.png`
+    try {
+      if (!isMockUrl(p.qrCodeUrl)) {
+        const resp = await fetch(p.qrCodeUrl!)
+        const blob = await resp.blob()
+        triggerDownload(URL.createObjectURL(blob), filename)
+      } else if (mockCanvasRef.current) {
+        mockCanvasRef.current.toBlob((blob) => {
+          if (blob) triggerDownload(URL.createObjectURL(blob), filename)
+        })
+      }
+    } catch {
+      toast.error('下载失败')
+    }
+  }
+
+  const handleBatchStatus = async (status: 'ON_SHELF' | 'OFF_SHELF') => {
+    const catId = filterCategoryId ? Number(filterCategoryId) : undefined
+    const catName = catId ? categories.find((c) => c.id === catId)?.name : undefined
+    const scope = catName ? `分类「${catName}」下的` : '全部'
+    const action = status === 'ON_SHELF' ? '上架（开档）' : '下架（收档）'
+    const ok = await confirmDialog({
+      title: `批量${action}`,
+      content: `将${scope}所有商品${action}，确认继续？`,
+      danger: status === 'OFF_SHELF',
+    })
+    if (!ok) return
+    try {
+      const res = await batchProductStatus(status, catId)
+      toast.success(`已${action} ${res.data.data.updated} 个商品`)
+      load()
+    } catch {
+      toast.error('操作失败')
+    }
+  }
+
+  const [batchGenerating, setBatchGenerating] = useState(false)
+  const handleBatchQr = async () => {
+    const ok = await confirmDialog({
+      title: '批量生成二维码',
+      content: '将为所有暂无二维码的上架商品生成二维码，确认继续？',
+    })
+    if (!ok) return
+    setBatchGenerating(true)
+    try {
+      const res = await batchGenerateQrCodes()
+      const { generated, failed } = res.data.data
+      toast.success(`已生成 ${generated} 个${failed.length ? `，失败 ${failed.length} 个` : ''}`)
+      load()
+    } catch {
+      toast.error('批量生成失败')
+    } finally {
+      setBatchGenerating(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -270,6 +383,16 @@ export default function Products() {
           <Search className="w-4 h-4" />
           搜索
         </Button>
+        <Button variant="secondary" size="sm" loading={batchGenerating} onClick={handleBatchQr}>
+          <QrCode className="w-4 h-4" />
+          批量生成二维码
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => handleBatchStatus('ON_SHELF')}>
+          一键开档
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => handleBatchStatus('OFF_SHELF')}>
+          一键收档
+        </Button>
       </div>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
@@ -289,6 +412,75 @@ export default function Products() {
               <th className="text-right px-4 py-3">二维码</th>
               <th className="text-right px-4 py-3">操作</th>
             </tr>
+          }
+          mobileCards={
+            <>
+              {list.map((p) => (
+                <div key={p.id} className="border border-gray-100 rounded-lg p-3 flex gap-3">
+                  {p.coverImage ? (
+                    <img src={p.coverImage} alt="" className="w-12 h-12 rounded object-cover bg-gray-100 shrink-0" />
+                  ) : (
+                    <span className="w-12 h-12 rounded bg-gray-100 shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-medium text-gray-800 truncate">
+                        {p.name}
+                        {(p.skus?.length ?? 0) > 0 && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded text-xs bg-brand-50 text-brand-600">
+                            {p.skus!.length} 规格
+                          </span>
+                        )}
+                      </p>
+                      <button
+                        onClick={() => handleToggleStatus(p)}
+                        role="switch"
+                        aria-checked={p.status === 'ON_SHELF'}
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                          p.status === 'ON_SHELF' ? 'bg-green-500' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${
+                            p.status === 'ON_SHELF' ? 'translate-x-5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      <span className="text-brand-600 font-semibold">
+                        ¥{((p.skus?.length ? Math.min(...p.skus.map((sk) => sk.price)) : p.price) / 100).toFixed(2)}
+                      </span>
+                      {'　'}
+                      <button
+                        onClick={() => openStockModal(p)}
+                        className={`underline decoration-dotted underline-offset-2 ${
+                          p.status === 'ON_SHELF' && p.stock <= 5 ? 'text-red-500 font-semibold' : ''
+                        }`}
+                      >
+                        库存 {p.stock}
+                        {(p.skus?.length ?? 0) > 0 && <span className="text-gray-400">(规格)</span>}
+                      </button>
+                      {`　已售 ${p.salesCount}`}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm">
+                      <button onClick={() => openEdit(p)} className="text-blue-500">编辑</button>
+                      <button
+                        onClick={() => handleGenerateQr(p)}
+                        disabled={generatingQrId === p.id}
+                        className="text-purple-500 disabled:opacity-40"
+                      >
+                        {generatingQrId === p.id ? '生成中...' : '生成二维码'}
+                      </button>
+                      {p.qrCodeUrl && (
+                        <button onClick={() => setQrModal(p)} className="text-indigo-500">查看</button>
+                      )}
+                      <button onClick={() => handleDelete(p)} className="text-red-500">删除</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
           }
         >
           {list.map((p) => (
@@ -313,10 +505,35 @@ export default function Products() {
                     : `¥${(min / 100).toFixed(2)}~${(max / 100).toFixed(2)}`
                 })()}
               </td>
-              <td className="px-4 py-3 text-right text-gray-600">{p.stock}</td>
+              <td className="px-4 py-3 text-right">
+                <button
+                  onClick={() => openStockModal(p)}
+                  className={`hover:text-brand-600 underline decoration-dotted underline-offset-2 ${
+                    p.status === 'ON_SHELF' && p.stock <= 5 ? 'text-red-500 font-semibold' : 'text-gray-700'
+                  }`}
+                  title={(p.skus?.length ?? 0) > 0 ? '多规格商品在编辑中改库存' : '点击修改库存'}
+                >
+                  {p.stock}
+                  {(p.skus?.length ?? 0) > 0 && <span className="ml-0.5 text-xs text-gray-400">规</span>}
+                </button>
+              </td>
               <td className="px-4 py-3 text-right text-gray-600">{p.salesCount}</td>
               <td className="px-4 py-3 text-right">
-                <StatusBadge status={p.status} />
+                <button
+                  onClick={() => handleToggleStatus(p)}
+                  role="switch"
+                  aria-checked={p.status === 'ON_SHELF'}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    p.status === 'ON_SHELF' ? 'bg-green-500' : 'bg-gray-300'
+                  }`}
+                  title={p.status === 'ON_SHELF' ? '点击下架' : '点击上架'}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                      p.status === 'ON_SHELF' ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
               </td>
               <td className="px-4 py-3 text-right">
                 <span className={`px-2 py-0.5 rounded-full text-xs ${p.qrCodeUrl ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-400'}`}>
@@ -360,7 +577,7 @@ export default function Products() {
           }
         >
           <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">分类 *</label>
                   <select
@@ -417,7 +634,7 @@ export default function Products() {
                 skuRows={skuRows}
                 onChange={(dims, rows) => { setSpecDims(dims); setSkuRows(rows) }}
               />
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     售价（元）{hasSkus ? '' : '*'}
@@ -446,7 +663,7 @@ export default function Products() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">库存</label>
                   <input
@@ -470,7 +687,7 @@ export default function Products() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">规格/重量</label>
                   <input
@@ -490,7 +707,7 @@ export default function Products() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">储存方式</label>
                   <input
@@ -548,6 +765,38 @@ export default function Products() {
         </Modal>
       )}
 
+      {/* 库存快改弹窗 */}
+      {stockModal && (
+        <Modal
+          title={`修改库存 · ${stockModal.name}`}
+          width="sm"
+          onClose={() => setStockModal(null)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setStockModal(null)}>取消</Button>
+              <Button onClick={handleStockSave}>保存</Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setStockValue((v) => Math.max(0, v - 10))}>-10</Button>
+              <Button variant="secondary" size="sm" onClick={() => setStockValue((v) => Math.max(0, v - 1))}>-1</Button>
+              <input
+                type="number"
+                min={0}
+                value={stockValue}
+                onChange={(e) => setStockValue(Number(e.target.value) || 0)}
+                className="flex-1 min-w-0 border border-gray-300 rounded-md px-3 py-2 text-center text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-brand-400"
+              />
+              <Button variant="secondary" size="sm" onClick={() => setStockValue((v) => v + 1)}>+1</Button>
+              <Button variant="secondary" size="sm" onClick={() => setStockValue((v) => v + 10)}>+10</Button>
+            </div>
+            <p className="text-xs text-gray-400">当前库存 {stockModal.stock}，保存后立即生效</p>
+          </div>
+        </Modal>
+      )}
+
       {/* 二维码查看弹窗 */}
       {qrModal && (
         <Modal
@@ -555,9 +804,15 @@ export default function Products() {
           width="sm"
           onClose={() => setQrModal(null)}
           footer={
-            <Button variant="secondary" onClick={() => setQrModal(null)}>
-              关闭
-            </Button>
+            <>
+              <Button variant="secondary" onClick={() => setQrModal(null)}>
+                关闭
+              </Button>
+              <Button onClick={() => handleDownloadQr(qrModal)}>
+                <Download className="w-4 h-4" />
+                下载图片
+              </Button>
+            </>
           }
         >
           <div className="space-y-4">
@@ -589,9 +844,12 @@ export default function Products() {
               />
             )}
             {isMockUrl(qrModal.qrCodeUrl) && (
-              <p className="text-xs text-amber-600 bg-amber-50 rounded p-2">
-                当前为 Mock 模式，接入真实微信配置后此处将显示可扫描的小程序码图片。
-              </p>
+              <>
+                <canvas ref={mockCanvasRef} className="mx-auto block border border-gray-200 rounded" />
+                <p className="text-xs text-amber-600 bg-amber-50 rounded p-2">
+                  开发占位码（扫描结果为文本 {qrModal.qrScene}，非小程序码）。接入真实微信配置后此处将显示可扫描进入小程序的官方小程序码。
+                </p>
+              </>
             )}
           </div>
         </Modal>

@@ -10,6 +10,11 @@ import type {
   Shipment,
   AdminUser,
   UserOrder,
+  ScanSummary,
+  ScanTrendPoint,
+  ScanProductRow,
+  SalesTrendPoint,
+  Banner,
 } from '../types'
 
 // Auth
@@ -71,8 +76,17 @@ export const getOrders = (params?: {
 export const getOrder = (id: number) =>
   client.get<ApiResponse<Order>>(`/admin/orders/${id}`)
 
+export const acceptOrder = (id: number) =>
+  client.post<ApiResponse<Order>>(`/admin/orders/${id}/accept`)
+
 export const shipOrder = (id: number, data: { expressCompany: string; expressNo: string; remark?: string }) =>
   client.post<ApiResponse<{ shipment: Shipment; order: Order }>>(`/admin/orders/${id}/ship`, data)
+
+export const registerRefund = (id: number, reason?: string) =>
+  client.post<ApiResponse<Order>>(`/admin/orders/${id}/refund`, reason ? { reason } : {})
+
+export const completeRefund = (id: number) =>
+  client.post<ApiResponse<Order>>(`/admin/orders/${id}/refund-complete`)
 
 export const cancelOrder = (id: number) =>
   client.put<ApiResponse<Order>>(`/admin/orders/${id}/status`, { status: 'CANCELLED' })
@@ -92,3 +106,59 @@ export const uploadImage = (file: File) => {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
+
+// 待发货订单数（后台提醒轮询）
+export const getPendingOrderCount = () =>
+  client.get<
+    ApiResponse<{
+      count: number
+      latestPaidAt: string | null
+      refundingCount: number
+      lowStockCount: number
+      lowStockThreshold: number
+    }>
+  >('/admin/orders/pending-count')
+
+// 扫码统计
+export interface ScanRangeParams {
+  startDate?: string
+  endDate?: string
+}
+export const getScanSummary = (params?: ScanRangeParams) =>
+  client.get<ApiResponse<ScanSummary>>('/admin/scan-stats/summary', { params })
+export const getScanTrend = (params?: ScanRangeParams) =>
+  client.get<ApiResponse<{ list: ScanTrendPoint[] }>>('/admin/scan-stats/trend', { params })
+export const getScanProducts = (params?: ScanRangeParams & { page?: number; pageSize?: number }) =>
+  client.get<ApiResponse<{ list: ScanProductRow[]; total: number; page: number; pageSize: number }>>(
+    '/admin/scan-stats/products',
+    { params }
+  )
+
+// 销售趋势
+export const getSalesTrend = (days: 7 | 30 = 7) =>
+  client.get<ApiResponse<{ list: SalesTrendPoint[] }>>('/admin/stats/trend', { params: { days } })
+
+// Banner 管理
+export const getBanners = () => client.get<ApiResponse<Banner[]>>('/admin/banners')
+export const createBanner = (data: Partial<Banner>) =>
+  client.post<ApiResponse<Banner>>('/admin/banners', data)
+export const updateBanner = (id: number, data: Partial<Banner>) =>
+  client.put<ApiResponse<Banner>>(`/admin/banners/${id}`, data)
+export const updateBannerStatus = (id: number, status: number) =>
+  client.put<ApiResponse<Banner>>(`/admin/banners/${id}/status`, { status })
+export const deleteBanner = (id: number) =>
+  client.delete<ApiResponse<null>>(`/admin/banners/${id}`)
+
+// 批量上/下架（开档/收档；categoryId 缺省 = 全部）
+export const batchProductStatus = (status: 'ON_SHELF' | 'OFF_SHELF', categoryId?: number) =>
+  client.post<ApiResponse<{ updated: number }>>('/admin/products/batch-status', {
+    status,
+    ...(categoryId ? { categoryId } : {}),
+  })
+
+// 批量生成二维码（缺省 = 所有无码上架商品）
+export const batchGenerateQrCodes = (ids?: number[]) =>
+  client.post<ApiResponse<{ generated: number; failed: number[] }>>(
+    '/admin/products/qrcode/batch',
+    ids ? { ids } : {}
+  )
