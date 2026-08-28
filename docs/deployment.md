@@ -177,7 +177,7 @@ deploy.sh 会自动完成：安装依赖 → 编译 → 数据库迁移 → PM2 
 
 ```bash
 # 复制配置模板
-cp /www/food-shop-server/scripts/nginx.conf /etc/nginx/conf.d/food-shop.conf
+cp /www/food-shop/scripts/nginx.conf /etc/nginx/conf.d/food-shop.conf
 
 # 编辑：替换 yourdomain.com 和证书路径
 nano /etc/nginx/conf.d/food-shop.conf
@@ -195,12 +195,12 @@ nginx -t && nginx -s reload
 export DB_PASS="strong-password-here"
 export COS_BUCKET="your-bucket"
 export COS_REGION="ap-guangzhou"
-bash /www/food-shop-server/scripts/backup.sh
+bash /www/food-shop/scripts/backup.sh
 
 # 设置每日凌晨 2 点自动备份
 crontab -e
 # 加入：
-0 2 * * * DB_PASS=xxx COS_BUCKET=xxx COS_REGION=ap-guangzhou bash /www/food-shop-server/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
+0 2 * * * DB_PASS=xxx COS_BUCKET=xxx COS_REGION=ap-guangzhou bash /www/food-shop/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
 ```
 
 ---
