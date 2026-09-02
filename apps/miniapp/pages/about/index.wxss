@@ -6,66 +6,16 @@
 
 /* 品牌卡 */
 .brand-card {
-  position: relative;
-  overflow: hidden;
   margin: 20rpx 24rpx 0;
-  padding: 44rpx 40rpx 36rpx;
+  padding: 40rpx 40rpx 36rpx;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  /* 真实 logo 为印章红 + 黑字，用米白纸感底色衬托，不再用橙色渐变 */
-  background: linear-gradient(180deg, #fffdf9 0%, #fbf5ee 100%);
-  border: 1rpx solid rgba(176, 40, 49, 0.08);
-}
-.brand-deco {
-  position: absolute;
-  border-radius: 50%;
-  background: rgba(229, 68, 30, 0.05);
-}
-.brand-deco-1 {
-  width: 260rpx;
-  height: 260rpx;
-  right: -80rpx;
-  top: -100rpx;
-}
-.brand-deco-2 {
-  width: 160rpx;
-  height: 160rpx;
-  left: -50rpx;
-  bottom: -60rpx;
+  justify-content: center;
+  /* 原图为白底 logo，卡片用与页面一致的纯白，不加装饰 */
+  background: #ffffff;
 }
 .brand-logo {
   width: 520rpx;
   display: block;
-}
-.brand-name {
-  margin-top: 20rpx;
-  font-size: 40rpx;
-  font-weight: 700;
-  color: #1f1f1f;
-  letter-spacing: 6rpx;
-}
-.brand-slogan-row {
-  margin-top: 12rpx;
-  display: flex;
-  align-items: center;
-  gap: 18rpx;
-  font-size: 26rpx;
-  font-weight: 600;
-  color: #1f1f1f;
-  letter-spacing: 2rpx;
-}
-.brand-slogan-sep {
-  width: 2rpx;
-  height: 26rpx;
-  background: #1f1f1f;
-  opacity: 0.7;
-}
-.brand-since {
-  margin-top: 14rpx;
-  font-size: 22rpx;
-  color: #b02831;
-  letter-spacing: 8rpx;
 }
 
 /* 菜单区（与「我的」页保持一致） */
