@@ -7,6 +7,9 @@
     <!-- 真实印章 logo（透明底 PNG）+ 店名 + 老店标识 -->
     <image class="brand-logo" src="/assets/brand/logo-seal.png" mode="widthFix" />
     <text class="brand-name">丹桂阿福凉菜</text>
+    <view class="brand-slogan-row">
+      <text>家</text><text class="brand-slogan-sep"></text><text>的</text><text class="brand-slogan-sep"></text><text>味</text><text class="brand-slogan-sep"></text><text>道</text>
+    </view>
     <text class="brand-since">三十年老店</text>
   </view>
 
