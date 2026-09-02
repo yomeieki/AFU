@@ -26,8 +26,11 @@ COS_REGION="${COS_REGION:-ap-guangzhou}"
 # 桶内前缀：多个项目共用同一备份桶时用它隔离
 COS_BACKUP_PATH="${COS_BACKUP_PATH:-backups}"
 
-# 企微群机器人 webhook（可选）：失败告警 + 完成摘要
+# 告警通道（都可选）：失败告警 + 完成摘要
+#   ALERT_WEBHOOK      企微群机器人
+#   ALERT_PUSHPLUS     PushPlus token（一对一推给本人，不进店员群）
 ALERT_WEBHOOK="${ALERT_WEBHOOK:-}"
+ALERT_PUSHPLUS="${ALERT_PUSHPLUS:-}"
 
 # ── 敏感值从 .env 兜底读取，避免写进 crontab ────────────────────────────────
 ENV_FILE="${ENV_FILE:-/www/food-shop/apps/server/.env}"
@@ -49,6 +52,10 @@ if [[ -z "${ALERT_WEBHOOK}" ]]; then
   ALERT_WEBHOOK="$(env_get SYSTEM_ALERT_WECOM_WEBHOOK)"
   [[ -n "${ALERT_WEBHOOK}" ]] || ALERT_WEBHOOK="$(env_get ORDER_NOTIFY_WECOM_WEBHOOK)"
 fi
+if [[ -z "${ALERT_PUSHPLUS}" ]]; then
+  ALERT_PUSHPLUS="$(env_get SYSTEM_ALERT_PUSHPLUS_TOKEN)"
+  [[ -n "${ALERT_PUSHPLUS}" ]] || ALERT_PUSHPLUS="$(env_get ORDER_NOTIFY_PUSHPLUS_TOKEN)"
+fi
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 mkdir -p "${BACKUP_DIR}"
@@ -56,11 +63,24 @@ mkdir -p "${BACKUP_DIR}"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 alert() {
-  [[ -n "${ALERT_WEBHOOK}" ]] || return 0
   local text="$1"
-  local payload
-  payload=$(printf '{"msgtype":"text","text":{"content":"【阿福凉菜-备份】%s\n%s"}}' "$(hostname)" "${text//\"/\\\"}")
-  curl -s -m 10 -H 'Content-Type: application/json' -d "${payload}" "${ALERT_WEBHOOK}" >/dev/null || true
+  # JSON 字符串里不能出现裸换行，也不能出现未转义的双引号——
+  # 完成摘要是多行的，不转义会被两边的接口直接判为非法 JSON 丢弃。
+  local safe="${text//\\/\\\\}"
+  safe="${safe//\"/\\\"}"
+  safe="${safe//$'\n'/\\n}"
+  if [[ -n "${ALERT_WEBHOOK}" ]]; then
+    local payload
+    payload=$(printf '{"msgtype":"text","text":{"content":"【阿福凉菜-备份】%s\\n%s"}}' "$(hostname)" "${safe}")
+    curl -s -m 10 -H 'Content-Type: application/json' -d "${payload}" "${ALERT_WEBHOOK}" >/dev/null || true
+  fi
+  if [[ -n "${ALERT_PUSHPLUS}" ]]; then
+    # 不传 topic：备份结果只推给账号本人，不打扰店员群
+    local pp
+    pp=$(printf '{"token":"%s","title":"【阿福凉菜-备份】%s","content":"%s","template":"txt"}' \
+      "${ALERT_PUSHPLUS}" "$(hostname)" "${safe}")
+    curl -s -m 10 -H 'Content-Type: application/json' -d "${pp}" https://www.pushplus.plus/send >/dev/null || true
+  fi
 }
 
 CURRENT_STEP="init"

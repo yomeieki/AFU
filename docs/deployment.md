@@ -129,6 +129,7 @@ ORDER_NOTIFY_PUSHPLUS_TOPIC=""
 
 # 系统告警（500 / 进程崩溃 / 支付金额不符 / 退款失败），留空回退到上面的订单群
 SYSTEM_ALERT_WECOM_WEBHOOK=""
+SYSTEM_ALERT_PUSHPLUS_TOKEN=""
 ```
 
 > **首次配置 COS 后的存量图片迁移**（只需做一次）：
@@ -352,7 +353,7 @@ pm2 conf pm2-logrotate
    - 勾 "Send as JSON"
 4. **演练**：服务器执行 `pm2 stop food-shop-server`，10 分钟内应收到 Down 告警；`pm2 start food-shop-server` 后收到 Up。
 
-### 13.2 服务内告警（推企微群，`SYSTEM_ALERT_WECOM_WEBHOOK`）
+### 13.2 服务内告警
 
 | 触发 | 位置 | 限频 |
 |---|---|---|
@@ -363,7 +364,16 @@ pm2 conf pm2-logrotate
 | 支付回调金额与订单不符 | `routes/wechat-notify.ts` | 每订单一次 |
 | 退款发起失败 / 退款异常 / 退款关闭 / 退款回调金额不符 | `services/refund.ts` | 每退款单一次 |
 
-被限频抑制的次数会附在下一条同类告警里。未配置任何 webhook 时退化为 `console.error`（pm2 日志可查）。
+被限频抑制的次数会附在下一条同类告警里。
+
+**投递到所有已配置的通道**，一个都没配时退化为 `console.error`（pm2 日志可查）：
+
+| 通道 | env | 回退 | 收件人 |
+|---|---|---|---|
+| 企业微信群机器人 | `SYSTEM_ALERT_WECOM_WEBHOOK` | `ORDER_NOTIFY_WECOM_WEBHOOK` | 告警群 |
+| PushPlus | `SYSTEM_ALERT_PUSHPLUS_TOKEN` | `ORDER_NOTIFY_PUSHPLUS_TOKEN` | **token 所属账号本人** |
+
+PushPlus 告警**刻意不带 `topic`**：订单带群组编码推给全体店员，告警不带群组只推给老板本人。同一个 token 就能把两类消息分给两拨人，不必再申请第二个账号。`backup.sh` 的每日备份结果走同一套取值逻辑。
 
 ### 13.2b 通知通道自检
 

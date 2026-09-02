@@ -3,8 +3,11 @@
  *
  * - postJson：fire-and-forget，失败 5 秒后重试一次，绝不 throw
  * - notifySystemAlert：系统级告警（500 / 进程异常 / 支付退款异常），
- *   webhook 取 SYSTEM_ALERT_WECOM_WEBHOOK，未配置则回退 ORDER_NOTIFY_WECOM_WEBHOOK，
- *   同 key 在窗口期内只发一次（默认 5 分钟），防止告警风暴
+ *   同 key 在窗口期内只发一次（默认 5 分钟），防止告警风暴。
+ *   告警投给所有已配置的渠道：
+ *     · 企微：SYSTEM_ALERT_WECOM_WEBHOOK → 回退 ORDER_NOTIFY_WECOM_WEBHOOK
+ *     · PushPlus：SYSTEM_ALERT_PUSHPLUS_TOKEN → 回退 ORDER_NOTIFY_PUSHPLUS_TOKEN
+ *       **不带 topic**——告警只发给账号本人，不进店员群。店员看订单，老板看告警。
  */
 
 const ALERT_WINDOW_MS = 5 * 60 * 1000
@@ -90,9 +93,12 @@ export function notifySystemAlert(
     .join('\n')
 
   const webhook = process.env.SYSTEM_ALERT_WECOM_WEBHOOK || process.env.ORDER_NOTIFY_WECOM_WEBHOOK
-  if (!webhook) {
+  const pushplusToken = process.env.SYSTEM_ALERT_PUSHPLUS_TOKEN || process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!webhook && !pushplusToken) {
     console.error('[alert]', title, lines.join(' | '))
     return
   }
-  sendWecomMarkdown(webhook, content, '系统告警')
+  if (webhook) sendWecomMarkdown(webhook, content, '系统告警')
+  // 故意不传 topic：告警一对一推给账号本人
+  if (pushplusToken) sendPushPlus(pushplusToken, `【阿福凉菜-告警】${title}`, content)
 }
