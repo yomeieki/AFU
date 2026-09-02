@@ -36,8 +36,10 @@ systemctl enable nginx
 # 安装 PM2
 npm install -g pm2
 
-# 安装 coscli（用于备份上传 COS）
-# https://cloud.tencent.com/document/product/436/63143
+# 安装 coscli（用于备份上传 COS）—— 生产已装于 /usr/local/bin/coscli
+# curl -fsSL -o coscli https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux
+# chmod +x coscli && sudo mv coscli /usr/local/bin/
+# 凭证读 ~/.cos.yaml（coscli config init 生成，密钥在文件里是加密存储的）
 wget -O /usr/local/bin/coscli https://github.com/tencentyun/coscli/releases/latest/download/coscli-linux
 chmod +x /usr/local/bin/coscli
 coscli config init  # 填入 COS 密钥
@@ -203,18 +205,25 @@ nginx -t && nginx -s reload
 
 ## 八、数据库备份
 
-```bash
-# 设置环境变量后手动执行
-export DB_PASS="strong-password-here"
-export COS_BUCKET="your-bucket"
-export COS_REGION="ap-guangzhou"
-bash /www/food-shop/scripts/backup.sh
+**已在生产配置完成（2026-09-02）**，无需重复操作，以下为说明与排障参考。
 
-# 设置每日凌晨 2 点自动备份（ALERT_WEBHOOK 为企微机器人地址：失败告警 + 完成摘要）
-crontab -e
-# 加入：
-0 2 * * * DB_PASS=xxx COS_BUCKET=xxx COS_REGION=ap-guangzhou ALERT_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx bash /www/food-shop/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
+数据库密码与告警 webhook 由脚本自动从 `apps/server/.env` 读取（`DATABASE_URL` / `SYSTEM_ALERT_WECOM_WEBHOOK` → 回退 `ORDER_NOTIFY_WECOM_WEBHOOK`），**crontab 里不出现任何密钥**：
+
+```bash
+# 手动执行一次
+COS_BUCKET=yuegui-booking-backup-1342627167 COS_REGION=ap-shanghai COS_BACKUP_PATH=food-shop \
+  /www/food-shop/scripts/backup.sh
+
+# 已装的 cron（每日 02:00，与酒店项目的 03:00 / 23:00 任务错开）
+0 2 * * * COS_BUCKET=yuegui-booking-backup-1342627167 COS_REGION=ap-shanghai COS_BACKUP_PATH=food-shop /www/food-shop/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
 ```
+
+关于备份目的地与 coscli：
+
+- **coscli 已安装**在 `/usr/local/bin/coscli`（v0.20.0，腾讯云官方 linux 版）。注意该版本 **`cp` 没有 `--region` 参数**，脚本改用 `-e cos.<region>.myqcloud.com`。
+- 备份写入**私有**桶 `yuegui-booking-backup-1342627167` 的 `food-shop/` 前缀（与酒店项目的 `production/` `sandbox/` 隔离）。**切勿指向图片桶 `afu-images-*`，那是公有读的。**
+- 服务器 `~/.cos.yaml` 里的子账号密钥**有写入权限但无删除权限**——这是有意的安全设计（备份不可被脚本或攻击者删除）。因此 **COS 端的过期清理必须用控制台「生命周期规则」**，脚本删不了。
+- 本地保留 7 天（`LOCAL_KEEP_DAYS`），目录 `/www/backups/daily`。
 
 ---
 

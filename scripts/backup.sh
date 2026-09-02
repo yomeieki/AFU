@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # 每日备份：MySQL 数据库 + uploads 图片目录 → 本地持久目录 + 腾讯云 COS
 # 用法：bash scripts/backup.sh
-# crontab 每日凌晨执行（ALERT_WEBHOOK 为企微群机器人地址，失败/完成都会推一条）：
-#   0 2 * * * DB_PASS=xxx COS_BUCKET=xxx ALERT_WEBHOOK=https://qyapi.weixin.qq.com/... /www/food-shop/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
+#
+# 数据库密码与告警 webhook 会自动从 apps/server/.env 读取（ENV_FILE 可覆盖路径），
+# 因此 crontab 里不需要出现任何密钥，只写非敏感的 COS 目标即可：
+#   0 2 * * * COS_BUCKET=xxx COS_REGION=ap-shanghai COS_BACKUP_PATH=food-shop /www/food-shop/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
+#
+# 注意：COS_BUCKET 必须是**私有**桶，切勿指向存放商品图片的公有读桶。
 
 set -euo pipefail
 
@@ -19,10 +23,32 @@ LOCAL_KEEP_DAYS="${LOCAL_KEEP_DAYS:-7}"
 
 COS_BUCKET="${COS_BUCKET:-}"
 COS_REGION="${COS_REGION:-ap-guangzhou}"
-COS_BACKUP_PATH="backups"
+# 桶内前缀：多个项目共用同一备份桶时用它隔离
+COS_BACKUP_PATH="${COS_BACKUP_PATH:-backups}"
 
 # 企微群机器人 webhook（可选）：失败告警 + 完成摘要
 ALERT_WEBHOOK="${ALERT_WEBHOOK:-}"
+
+# ── 敏感值从 .env 兜底读取，避免写进 crontab ────────────────────────────────
+ENV_FILE="${ENV_FILE:-/www/food-shop/apps/server/.env}"
+env_get() {  # env_get KEY —— 取值并去掉引号；文件不存在或键缺失则返回空
+  [[ -f "${ENV_FILE}" ]] || return 0
+  # || true：pipefail 下 grep 未命中会返回 1，不能让它中断脚本
+  grep -E "^$1=" "${ENV_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/' || true
+}
+if [[ -z "${DB_PASS}" ]]; then
+  # 从 DATABASE_URL 解析：mysql://user:pass@host:port/db
+  DB_URL="$(env_get DATABASE_URL)"
+  if [[ -n "${DB_URL}" ]]; then
+    DB_PASS="$(sed -E 's|mysql://[^:]+:([^@]+)@.*|\1|' <<< "${DB_URL}")"
+    # 用户名未被显式覆盖时也一并取自 DATABASE_URL（|| true：set -e 下条件为假不算失败）
+    [[ "${DB_USER}" == "foodshop_user" ]] && DB_USER="$(sed -E 's|mysql://([^:]+):.*|\1|' <<< "${DB_URL}")" || true
+  fi
+fi
+if [[ -z "${ALERT_WEBHOOK}" ]]; then
+  ALERT_WEBHOOK="$(env_get SYSTEM_ALERT_WECOM_WEBHOOK)"
+  [[ -n "${ALERT_WEBHOOK}" ]] || ALERT_WEBHOOK="$(env_get ORDER_NOTIFY_WECOM_WEBHOOK)"
+fi
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 mkdir -p "${BACKUP_DIR}"
@@ -44,9 +70,10 @@ trap 'log "ERROR at step [${CURRENT_STEP}] line ${LINENO}"; alert "❌ 备份失
 CURRENT_STEP="mysqldump"
 DB_FILE="${BACKUP_DIR}/food_shop_${TIMESTAMP}.sql.gz"
 log "Dumping database → ${DB_FILE}"
+# --no-tablespaces：MySQL 8 下普通用户无 PROCESS 权限，不加会报错刷屏
 mysqldump \
   -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASS}" \
-  --single-transaction --routines --triggers \
+  --single-transaction --routines --triggers --no-tablespaces \
   "${DB_NAME}" | gzip > "${DB_FILE}"
 log "DB dump complete ($(du -sh "${DB_FILE}" | cut -f1))"
 
@@ -70,7 +97,7 @@ if command -v coscli &>/dev/null && [[ -n "${COS_BUCKET}" ]]; then
   COS_RESULT="ok"
   for f in "${DB_FILE}" ${UPLOADS_FILE:+"${UPLOADS_FILE}"}; do
     DEST="cos://${COS_BUCKET}/${COS_BACKUP_PATH}/$(basename "$f")"
-    if coscli cp "$f" "${DEST}" --region "${COS_REGION}"; then
+    if coscli cp "$f" "${DEST}" -e "cos.${COS_REGION}.myqcloud.com"; then
       log "Uploaded ${DEST}"
     else
       UPLOAD_OK=false

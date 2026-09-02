@@ -54,7 +54,7 @@ DB_PORT=$(echo "$DB_URL" | sed -E 's|.*@[^:]+:([0-9]+)/.*|\1|')
 DB_NAME=$(echo "$DB_URL" | sed -E 's|.*/([^?]+).*|\1|')
 PRE_BACKUP="${BACKUP_DIR}/pre_deploy_$(date +%Y%m%d_%H%M%S).sql.gz"
 mysqldump -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASS}" \
-  --single-transaction "${DB_NAME}" | gzip > "${PRE_BACKUP}"
+  --single-transaction --no-tablespaces "${DB_NAME}" | gzip > "${PRE_BACKUP}"
 echo "  备份完成：${PRE_BACKUP} ($(du -sh "${PRE_BACKUP}" | cut -f1))"
 # 只保留最近 10 份迁移前备份
 ls -t "${BACKUP_DIR}"/pre_deploy_*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
