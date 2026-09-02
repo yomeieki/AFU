@@ -1,4 +1,5 @@
 const { wechatLogin } = require('../../api/auth')
+const { callShop } = require('../../utils/contact')
 
 Page({
   data: {
@@ -85,5 +86,13 @@ Page({
 
   goToAddresses() {
     wx.navigateTo({ url: '/pages/address/list' })
+  },
+
+  goToAbout() {
+    wx.navigateTo({ url: '/pages/about/index' })
+  },
+
+  onContactShop() {
+    callShop()
   },
 })

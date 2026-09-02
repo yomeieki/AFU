@@ -1,0 +1,11 @@
+<view class="page">
+  <view class="card legal-card" wx:if="{{doc}}">
+    <text class="legal-title">{{doc.title}}</text>
+    <text class="legal-meta">更新日期：{{doc.updatedAt}}</text>
+    <text class="legal-p legal-intro">{{doc.intro}}</text>
+    <block wx:for="{{doc.sections}}" wx:key="heading">
+      <text class="legal-h">{{item.heading}}</text>
+      <text class="legal-p" wx:for="{{item.paragraphs}}" wx:for-item="p" wx:key="*this">{{p}}</text>
+    </block>
+  </view>
+</view>

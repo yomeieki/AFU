@@ -15,6 +15,15 @@ Page({
     selectedSkuText: '', // 「已选」行展示
   },
 
+  onShareAppMessage() {
+    var p = this.data.product || {}
+    return {
+      title: p.name ? p.name + ' · 阿福凉菜' : '阿福凉菜',
+      path: '/pages/product/detail?id=' + (p.id || '') + '&source=share',
+      imageUrl: p.coverImage || '',
+    }
+  },
+
   onLoad(options) {
     var self = this
     var id = options.id

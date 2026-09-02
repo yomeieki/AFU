@@ -5,6 +5,15 @@ const { baseURL } = require('../config/index')
  * Resolves with res.data.data on code===0, rejects otherwise.
  * token 失效（40101/40102）时自动重新登录并重试一次。
  */
+// 把后端/网关的技术性错误翻译成用户能看懂的话；业务 4xx 的中文 message 原样透出
+function friendlyMessage(statusCode, body) {
+  if (body && body.code === 50001) return '系统开小差了，请稍后再试'
+  if (statusCode === 429) return '操作太频繁，请稍后再试'
+  if (statusCode === 502 || statusCode === 503 || statusCode === 504) return '服务繁忙，请稍后再试'
+  if (body && typeof body.message === 'string' && body.message) return body.message
+  return '请求失败，请稍后再试'
+}
+
 function doRequest({ url, method = 'GET', data = {} }, retried) {
   return new Promise((resolve, reject) => {
     const token = wx.getStorageSync('token')
@@ -40,13 +49,15 @@ function doRequest({ url, method = 'GET', data = {} }, retried) {
             return
           }
         }
-        const msg = (body && body.message) || '请求失败'
+        const msg = friendlyMessage(res.statusCode, body)
         wx.showToast({ title: msg, icon: 'none', duration: 2000 })
         reject(new Error(msg))
       },
-      fail() {
-        wx.showToast({ title: '网络错误，请稍后重试', icon: 'none', duration: 2000 })
-        reject(new Error('network error'))
+      fail(err) {
+        const isTimeout = err && err.errMsg && err.errMsg.indexOf('timeout') !== -1
+        const msg = isTimeout ? '网络超时，请检查网络后重试' : '网络错误，请稍后重试'
+        wx.showToast({ title: msg, icon: 'none', duration: 2000 })
+        reject(new Error(msg))
       },
     })
   })

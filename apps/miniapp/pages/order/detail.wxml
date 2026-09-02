@@ -123,7 +123,10 @@
 </view>
 
 <!-- Bottom action bar -->
-<view class="action-bar" wx:if="{{!loading && order && (order.canSelfCancel || order.status === 'SHIPPED')}}">
+<view class="action-bar" wx:if="{{!loading && order && (order.canSelfCancel || order.status === 'PAID' || order.status === 'PREPARING' || order.status === 'SHIPPED' || order.status === 'REFUNDING')}}">
+  <view class="cancel-btn" wx:if="{{order.status === 'PAID' || order.status === 'PREPARING' || order.status === 'SHIPPED' || order.status === 'REFUNDING'}}" bindtap="onContactShop">
+    <text>联系商家</text>
+  </view>
   <view class="cancel-btn" wx:if="{{order.canSelfCancel}}" bindtap="onCancelOrder">
     <text>{{order.status === 'PENDING_PAYMENT' ? '取消订单' : '申请退款'}}</text>
   </view>
