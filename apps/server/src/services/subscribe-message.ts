@@ -71,8 +71,11 @@ async function send(openid: string, templateId: string, page: string, data: Reco
     const body = (await resp.json()) as { errcode?: number; errmsg?: string }
     if (body.errcode && body.errcode !== 0) {
       if ([40001, 40014, 42001].includes(body.errcode)) invalidateAccessToken()
-      // 43101 用户拒绝/未授权 属正常情况，降噪
-      if (body.errcode !== 43101) console.warn(`[subscribe] ${label} 发送失败 ${body.errcode}: ${body.errmsg}`)
+      // 43101 用户拒绝/未授权 属正常情况（小程序未弹授权或用户点了拒绝），记 info 便于排查
+      if (body.errcode === 43101) console.log(`[subscribe] ${label} 未发送：用户未授权该模板`)
+      else console.warn(`[subscribe] ${label} 发送失败 ${body.errcode}: ${body.errmsg}`)
+    } else {
+      console.log(`[subscribe] ${label} 已发送`)
     }
   } catch (e) {
     console.warn(`[subscribe] ${label} 请求失败:`, (e as Error).message)
