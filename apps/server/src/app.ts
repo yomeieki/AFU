@@ -12,6 +12,13 @@ import { notifySystemAlert } from './services/notify'
 const app = express()
 const PORT = config.port
 
+// nginx 在前面做反向代理。不开 trust proxy 时 Express 认为客户端 IP 永远是
+// 127.0.0.1，express-rate-limit 于是把所有人算作同一个来源——限流从"每 IP"退化成
+// "全站共用一个桶"，任何一个人触发就会把所有人一起挡住（登录 5 次/分、支付 20 次/分）。
+// 设为 1 = 只信任一层代理（本机 nginx），取 X-Forwarded-For 的最后一跳，
+// 客户端无法通过伪造该头来绕过限流。
+app.set('trust proxy', 1)
+
 // crossOriginResourcePolicy 放开：/uploads 图片需被 admin/小程序跨域加载
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
 
