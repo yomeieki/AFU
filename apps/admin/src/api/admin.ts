@@ -15,6 +15,7 @@ import type {
   ScanProductRow,
   SalesTrendPoint,
   Banner,
+  RefundSummary,
 } from '../types'
 
 // Auth
@@ -82,8 +83,12 @@ export const acceptOrder = (id: number) =>
 export const shipOrder = (id: number, data: { expressCompany: string; expressNo: string; remark?: string }) =>
   client.post<ApiResponse<{ shipment: Shipment; order: Order }>>(`/admin/orders/${id}/ship`, data)
 
-export const registerRefund = (id: number, reason?: string) =>
-  client.post<ApiResponse<Order>>(`/admin/orders/${id}/refund`, reason ? { reason } : {})
+// 一键退款：amount 必须等于订单实付（分），服务端二次校验
+export const refundOrder = (id: number, data: { amount: number; reason?: string }) =>
+  client.post<ApiResponse<{ order: Order; refund: RefundSummary; mode: 'mock' | 'wechat' }>>(
+    `/admin/orders/${id}/refund`,
+    data
+  )
 
 export const completeRefund = (id: number) =>
   client.post<ApiResponse<Order>>(`/admin/orders/${id}/refund-complete`)

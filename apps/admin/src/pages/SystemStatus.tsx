@@ -17,8 +17,22 @@ interface SystemStatusData {
     notifyUrlSet: boolean
     notifyUrlIsHttps: boolean
     platformCertSet: boolean
+    refundNotifyUrlSet: boolean
+    refundNotifyUrlIsHttps: boolean
+    publicKeySet: boolean
+    publicKeyIdSet: boolean
+    verifyMode: 'public-key' | 'platform-cert' | 'both' | 'none'
+    certAutoDownload: boolean
   }
-  notify: { wecomSet: boolean; pushplusSet: boolean }
+  cos: {
+    secretIdSet: boolean
+    secretKeySet: boolean
+    bucketSet: boolean
+    regionSet: boolean
+    baseUrlSet: boolean
+    enabled: boolean
+  }
+  notify: { wecomSet: boolean; pushplusSet: boolean; systemAlertWecomSet: boolean }
   publicBaseUrl: string
 }
 
@@ -72,13 +86,15 @@ export default function SystemStatus() {
 
   const isDev = data.env !== 'production'
   const anyMock = data.mock.login || data.mock.pay || data.mock.qrcode
+  const verifyReady = data.pay.publicKeySet || data.pay.platformCertSet
   const payReady =
     data.pay.mchIdSet &&
     data.pay.serialNoSet &&
     data.pay.privateKeySet &&
     data.pay.apiV3KeySet &&
     data.pay.notifyUrlSet &&
-    data.pay.notifyUrlIsHttps
+    data.pay.notifyUrlIsHttps &&
+    verifyReady
 
   const groups: { title: string; items: CheckItem[] }[] = [
     {
@@ -97,7 +113,25 @@ export default function SystemStatus() {
         { ok: data.pay.privateKeySet, label: '商户私钥文件（存在性已校验）', hint: 'WECHAT_PAY_PRIVATE_KEY_PATH 指向 apiclient_key.pem' },
         { ok: data.pay.notifyUrlSet, label: '支付回调地址', hint: '在 .env 配置 WECHAT_PAY_NOTIFY_URL（公网 HTTPS）' },
         { ok: data.pay.notifyUrlIsHttps, label: '回调地址为 HTTPS', hint: '微信要求回调必须是 https:// 开头' },
-        { ok: data.pay.platformCertSet, label: '平台证书（生产必须）', hint: 'WECHAT_PAY_PLATFORM_CERT_PATH，用于回调验签', optional: isDev },
+        { ok: data.pay.refundNotifyUrlSet && data.pay.refundNotifyUrlIsHttps, label: '退款回调地址', hint: '默认由支付回调地址派生（/notify → /refund-notify），也可配置 WECHAT_PAY_REFUND_NOTIFY_URL' },
+      ],
+    },
+    {
+      title: '回调验签（公钥 / 平台证书 二选一，商户平台「API 安全」页看当前模式）',
+      items: [
+        { ok: data.pay.publicKeySet, label: '微信支付公钥（2024 年起新商户默认）', hint: 'WECHAT_PAY_PUBLIC_KEY_PATH 指向 pub_key.pem', optional: data.pay.platformCertSet },
+        { ok: data.pay.publicKeyIdSet, label: '公钥 ID（可选，用于校验回调头）', hint: 'WECHAT_PAY_PUBLIC_KEY_ID = PUB_KEY_ID_xxx', optional: true },
+        { ok: data.pay.platformCertSet, label: '平台证书（老商户）', hint: 'WECHAT_PAY_PLATFORM_CERT_PATH；序列号不匹配时会自动拉取', optional: data.pay.publicKeySet },
+        { ok: verifyReady, label: `验签材料就绪（当前：${{ 'public-key': '公钥', 'platform-cert': '平台证书', both: '公钥+证书', none: '未配置' }[data.pay.verifyMode]}）`, hint: '两者都未配置时生产环境会拒绝所有支付/退款回调', optional: isDev },
+      ],
+    },
+    {
+      title: '图片存储 COS（生产必须，未配置服务拒绝启动）',
+      items: [
+        { ok: data.cos.secretIdSet && data.cos.secretKeySet, label: '访问密钥', hint: 'COS_SECRET_ID / COS_SECRET_KEY（建议子账号密钥，仅授权该桶）', optional: isDev },
+        { ok: data.cos.bucketSet && data.cos.regionSet, label: '存储桶与地域', hint: 'COS_BUCKET / COS_REGION', optional: isDev },
+        { ok: data.cos.baseUrlSet, label: '自定义访问域名', hint: 'COS_BASE_URL（未配置时使用桶默认域名）', optional: true },
+        { ok: data.cos.enabled, label: `COS 已启用（当前上传走 ${data.cos.enabled ? 'COS' : '本地磁盘'}）`, hint: '开发环境未配置时回退本地 uploads/', optional: isDev },
       ],
     },
     {
@@ -105,6 +139,12 @@ export default function SystemStatus() {
       items: [
         { ok: data.notify.wecomSet, label: '企业微信群机器人', hint: '在 .env 配置 ORDER_NOTIFY_WECOM_WEBHOOK', optional: true },
         { ok: data.notify.pushplusSet, label: 'PushPlus', hint: '在 .env 配置 ORDER_NOTIFY_PUSHPLUS_TOKEN', optional: true },
+      ],
+    },
+    {
+      title: '系统告警（接口 500 / 进程异常 / 退款失败 推送）',
+      items: [
+        { ok: data.notify.systemAlertWecomSet || data.notify.wecomSet, label: '告警企微群', hint: 'SYSTEM_ALERT_WECOM_WEBHOOK（未配置时回退到新订单推送群）', optional: true },
       ],
     },
   ]

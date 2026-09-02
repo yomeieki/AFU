@@ -92,6 +92,19 @@ export interface Shipment {
   remark: string | null
 }
 
+export type RefundStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'ABNORMAL' | 'CLOSED' | 'FAILED'
+
+/** 订单最近一条退款记录（列表接口附带） */
+export interface RefundSummary {
+  id: number
+  status: RefundStatus
+  outRefundNo: string
+  amount: number
+  mode: 'MOCK' | 'WECHAT'
+  errorMessage: string | null
+  createdAt: string
+}
+
 export interface Order {
   id: number
   orderNo: string
@@ -108,6 +121,7 @@ export interface Order {
   createdAt: string
   items: OrderItem[]
   shipment?: Shipment | null
+  latestRefund?: RefundSummary | null
 }
 
 export interface AdminUser {

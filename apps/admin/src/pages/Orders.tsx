@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Search, Truck } from 'lucide-react'
-import { getOrders, acceptOrder, shipOrder, cancelOrder, registerRefund, completeRefund } from '../api/admin'
+import { getOrders, acceptOrder, shipOrder, cancelOrder, completeRefund } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import Button from '../components/ui/Button'
@@ -9,6 +9,7 @@ import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
 import StatusBadge from '../components/ui/StatusBadge'
+import RefundDialog from '../components/RefundDialog'
 import type { Order } from '../types'
 
 // 状态 Tab（含「全部」；REFUNDED 单量少，并入下拉搜索即可不占 Tab 位）
@@ -22,6 +23,15 @@ const STATUS_TABS: { value: string; label: string }[] = [
   { value: 'CANCELLED', label: '已取消' },
   { value: 'REFUNDING,REFUNDED', label: '退款' },
 ]
+
+const REFUND_LABEL: Record<string, string> = {
+  PENDING: '已发起',
+  PROCESSING: '微信处理中',
+  SUCCESS: '已退款',
+  ABNORMAL: '异常',
+  CLOSED: '已关闭',
+  FAILED: '发起失败',
+}
 
 export default function Orders() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -77,31 +87,14 @@ export default function Orders() {
     }
   }
 
-  const handleRegisterRefund = async (order: Order) => {
-    const shipped = order.status === 'SHIPPED'
-    const ok = await confirmDialog({
-      title: '登记退款',
-      content: `确认为订单 ${order.orderNo} 登记退款？${shipped ? '（已发货订单不回滚库存）' : '库存将回滚。'}登记后请到微信商户平台完成打款，再回来标记「退款完成」。`,
-      danger: true,
-      confirmText: '登记退款',
-    })
-    if (!ok) return
-    try {
-      await registerRefund(order.id)
-      toast.success('已登记，请到商户平台完成打款')
-      load()
-    } catch (err: unknown) {
-      toast.error(
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '操作失败'
-      )
-    }
-  }
+  const [refundTarget, setRefundTarget] = useState<Order | null>(null)
 
   const handleCompleteRefund = async (order: Order) => {
     const ok = await confirmDialog({
-      title: '退款完成',
-      content: `确认已在微信商户平台完成订单 ${order.orderNo} 的退款打款？`,
-      confirmText: '已完成打款',
+      title: '手动标记退款完成',
+      content: `仅在已确认微信商户平台退款成功、但系统未收到回调时使用。确认将订单 ${order.orderNo} 标记为已退款？`,
+      danger: true,
+      confirmText: '确认标记',
     })
     if (!ok) return
     try {
@@ -143,6 +136,37 @@ export default function Orders() {
     } finally {
       setShipping(false)
     }
+  }
+
+  // 退款相关按钮（移动卡片与桌面表格共用）
+  const renderRefundActions = (order: Order, cls: { danger: string; primary: string; muted: string }) => {
+    const r = order.latestRefund
+    const active = r && ['PENDING', 'PROCESSING', 'SUCCESS', 'ABNORMAL'].includes(r.status)
+    if (['PAID', 'PREPARING', 'SHIPPED'].includes(order.status)) {
+      return (
+        <button onClick={() => setRefundTarget(order)} className={cls.danger}>
+          退款
+        </button>
+      )
+    }
+    if (order.status !== 'REFUNDING') return null
+    return (
+      <>
+        {!active && (
+          <button onClick={() => setRefundTarget(order)} className={cls.danger}>
+            {r ? '重试退款' : '发起退款'}
+          </button>
+        )}
+        {r?.status === 'PENDING' || r?.status === 'PROCESSING' ? (
+          <span className={cls.muted}>微信处理中</span>
+        ) : r?.status === 'ABNORMAL' ? (
+          <span className="text-red-500">退款异常</span>
+        ) : null}
+        <button onClick={() => handleCompleteRefund(order)} className={cls.muted}>
+          手动标记完成
+        </button>
+      </>
+    )
   }
 
   const handleCancel = async (order: Order) => {
@@ -247,12 +271,11 @@ export default function Orders() {
                     {order.status === 'PREPARING' && (
                       <button onClick={() => openShipModal(order)} className="text-brand-500 font-medium">发货</button>
                     )}
-                    {['PAID', 'PREPARING', 'SHIPPED'].includes(order.status) && (
-                      <button onClick={() => handleRegisterRefund(order)} className="text-red-400">登记退款</button>
-                    )}
-                    {order.status === 'REFUNDING' && (
-                      <button onClick={() => handleCompleteRefund(order)} className="text-brand-500 font-medium">退款完成</button>
-                    )}
+                    {renderRefundActions(order, {
+                      danger: 'text-red-500 font-medium',
+                      primary: 'text-brand-500 font-medium',
+                      muted: 'text-gray-500',
+                    })}
                     {order.status === 'PENDING_PAYMENT' && (
                       <button onClick={() => handleCancel(order)} className="text-red-500">取消</button>
                     )}
@@ -268,6 +291,12 @@ export default function Orders() {
                       <p className="text-xs text-gray-500">收货地址：{order.receiverFullAddress}</p>
                       {order.paidAt && (
                         <p className="text-xs text-gray-500">支付时间：{new Date(order.paidAt).toLocaleString('zh-CN')}</p>
+                      )}
+                      {order.latestRefund && (
+                        <p className={`text-xs ${order.latestRefund.status === 'SUCCESS' ? 'text-gray-500' : 'text-red-500'}`}>
+                          退款：{REFUND_LABEL[order.latestRefund.status]} ¥{(order.latestRefund.amount / 100).toFixed(2)}
+                          {order.latestRefund.errorMessage && `（${order.latestRefund.errorMessage}）`}
+                        </p>
                       )}
                       {order.shipment?.expressNo && (
                         <p className="text-xs text-gray-500">
@@ -332,22 +361,11 @@ export default function Orders() {
                       发货
                     </button>
                   )}
-                  {['PAID', 'PREPARING', 'SHIPPED'].includes(order.status) && (
-                    <button
-                      onClick={() => handleRegisterRefund(order)}
-                      className="text-red-400 hover:text-red-600"
-                    >
-                      登记退款
-                    </button>
-                  )}
-                  {order.status === 'REFUNDING' && (
-                    <button
-                      onClick={() => handleCompleteRefund(order)}
-                      className="text-brand-500 hover:text-brand-700 font-medium"
-                    >
-                      退款完成
-                    </button>
-                  )}
+                  {renderRefundActions(order, {
+                    danger: 'text-red-500 hover:text-red-700 font-medium',
+                    primary: 'text-brand-500 hover:text-brand-700 font-medium',
+                    muted: 'text-gray-500 hover:text-gray-700',
+                  })}
                   {order.status === 'PENDING_PAYMENT' && (
                     <button
                       onClick={() => handleCancel(order)}
@@ -370,6 +388,10 @@ export default function Orders() {
                     <div className="text-xs text-gray-500 mb-2">
                       收货地址：{order.receiverFullAddress}
                       {order.paidAt && `　支付时间：${new Date(order.paidAt).toLocaleString('zh-CN')}`}
+                      {order.latestRefund &&
+                        `　退款：${REFUND_LABEL[order.latestRefund.status]} ¥${(order.latestRefund.amount / 100).toFixed(2)}${
+                          order.latestRefund.errorMessage ? `（${order.latestRefund.errorMessage}）` : ''
+                        }`}
                       {order.remark && `　买家备注：${order.remark}`}
                     </div>
                     {order.shipment?.expressNo && (
@@ -419,6 +441,17 @@ export default function Orders() {
       </div>
 
       {/* 发货弹窗 */}
+      {refundTarget && (
+        <RefundDialog
+          order={refundTarget}
+          onClose={() => setRefundTarget(null)}
+          onDone={() => {
+            setRefundTarget(null)
+            load()
+          }}
+        />
+      )}
+
       {shipModal && (
         <Modal
           title="订单发货"
