@@ -36,3 +36,6 @@ project.private.config.json
 
 # Claude Code 本地设置
 .claude/settings.local.json
+
+# 验签自测生成的临时密钥
+apps/server/.selftest/
