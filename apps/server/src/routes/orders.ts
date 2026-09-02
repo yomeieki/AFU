@@ -11,7 +11,7 @@ import { rollbackOrderStock } from '../utils/order-stock'
 import { payLimiter } from '../middlewares/rate-limit'
 import { AFTER_SALE_REASONS, AFTER_SALE_REASON_LABEL, AfterSaleReason, payExpireAtOf } from '../utils/constants'
 import { remainingRefundable } from '../services/refund'
-import { getSubscribeTemplateIds } from '../services/subscribe-message'
+import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/subscribe-message'
 
 const router = Router()
 
@@ -459,7 +459,10 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
       })
       prisma.orderItem
         .findMany({ where: { orderId }, select: { productName: true, specText: true, quantity: true } })
-        .then((items) => notifyOrderPaid({ ...order, paidAt }, items))
+        .then((items) => {
+          notifyOrderPaid({ ...order, paidAt }, items)
+          if (req.openid) sendPaidSubscribeMessage(req.openid, { ...order, paidAt }, items[0]?.productName)
+        })
         .catch(() => undefined)
       return success(res, { mode: 'mock', status: 'PAID', paidAt })
     }

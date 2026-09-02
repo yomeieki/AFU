@@ -45,6 +45,8 @@ const envSchema = z.object({
   SCHEDULER_DISABLED: z.string().optional(),
 
   // 小程序订阅消息模板（公众平台「订阅消息」选用公共模板后填入）
+  WECHAT_TMPL_PAID: z.string().optional(),
+  WECHAT_TMPL_PAID_FIELDS: z.string().optional(),
   WECHAT_TMPL_SHIP: z.string().optional(),
   WECHAT_TMPL_SHIP_FIELDS: z.string().optional(),
   WECHAT_TMPL_REFUND: z.string().optional(),
@@ -133,6 +135,8 @@ export const config = {
   },
   schedulerEnabled: env.SCHEDULER_DISABLED !== 'true',
   subscribe: {
+    paidTemplateId: env.WECHAT_TMPL_PAID ?? '',
+    paidFields: env.WECHAT_TMPL_PAID_FIELDS ?? '',
     shipTemplateId: env.WECHAT_TMPL_SHIP ?? '',
     shipFields: env.WECHAT_TMPL_SHIP_FIELDS ?? '',
     refundTemplateId: env.WECHAT_TMPL_REFUND ?? '',

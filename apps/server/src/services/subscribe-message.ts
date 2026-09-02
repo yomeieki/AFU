@@ -10,6 +10,7 @@
  *   WECHAT_TMPL_REFUND_FIELDS=orderNo=character_string1,amount=amount2,reason=thing3,time=time4
  *
  * 可用字段：
+ *   下单/付款成功：orderNo / amount / time / shopName / deliveryType / address / productName / receiverName
  *   发货：orderNo / expressCompany / expressNo / productName / time / remark
  *   退款：orderNo / amount / reason / productName / time
  * 值按微信类型限制自动截断（thing ≤20 字、character_string ≤32、name ≤10、phrase ≤5）。
@@ -78,6 +79,40 @@ async function send(openid: string, templateId: string, page: string, data: Reco
   }
 }
 
+/** 付款成功通知（mock 支付与微信回调两处调用） */
+export function sendPaidSubscribeMessage(
+  openid: string,
+  order: {
+    id: number
+    orderNo: string
+    actualAmount: number
+    paidAt?: Date | null
+    deliveryType?: string
+    receiverName?: string
+    receiverFullAddress?: string
+  },
+  productName?: string
+): void {
+  const { paidTemplateId, paidFields } = config.subscribe
+  if (!paidTemplateId || !paidFields) return
+  const deliveryLabel: Record<string, string> = { EXPRESS: '快递发货', LOCAL: '同城配送', PICKUP: '到店自取' }
+  const data = buildData(
+    {
+      orderNo: order.orderNo,
+      amount: `¥${(order.actualAmount / 100).toFixed(2)}`,
+      time: fmtTime(order.paidAt ?? new Date()),
+      shopName: '阿福凉菜',
+      deliveryType: deliveryLabel[order.deliveryType ?? ''] ?? '快递发货',
+      address: order.receiverFullAddress ?? '',
+      receiverName: order.receiverName ?? '',
+      productName: productName ?? '',
+    },
+    parseFieldMap(paidFields)
+  )
+  if (!data) return
+  void send(openid, paidTemplateId, `pages/order/detail?id=${order.id}`, data, '下单成功通知')
+}
+
 export function sendShipSubscribeMessage(
   openid: string,
   order: { id: number; orderNo: string },
@@ -125,5 +160,5 @@ export function sendRefundSubscribeMessage(
 
 /** 供小程序读取：当前配置的模板 ID（顾客端 wx.requestSubscribeMessage 用） */
 export function getSubscribeTemplateIds(): string[] {
-  return [config.subscribe.shipTemplateId, config.subscribe.refundTemplateId].filter(Boolean)
+  return [config.subscribe.paidTemplateId, config.subscribe.shipTemplateId, config.subscribe.refundTemplateId].filter(Boolean)
 }

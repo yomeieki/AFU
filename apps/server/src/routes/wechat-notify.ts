@@ -6,6 +6,7 @@ import { notifyOrderPaid } from '../services/order-notify'
 import { notifySystemAlert } from '../services/notify'
 import { finalizeRefundSuccess, initiateRefund, markRefundAbnormal, markRefundClosed } from '../services/refund'
 import { config } from '../config'
+import { sendPaidSubscribeMessage } from '../services/subscribe-message'
 
 interface NotifyBody {
   event_type?: string
@@ -214,10 +215,11 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
     prisma.order
       .findUnique({
         where: { id: orderId },
-        include: { items: { select: { productName: true, specText: true, quantity: true } } },
+        include: { items: { select: { productName: true, specText: true, quantity: true } }, user: { select: { openid: true } } },
       })
       .then((paid) => {
         if (paid && paid.status === 'PAID') {
+          sendPaidSubscribeMessage(paid.user.openid, paid, paid.items[0]?.productName)
           notifyOrderPaid(
             {
               orderNo: paid.orderNo,

@@ -67,6 +67,7 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         schedulerEnabled: config.schedulerEnabled,
       },
       subscribe: {
+        paidTemplateSet: !!config.subscribe.paidTemplateId && !!config.subscribe.paidFields,
         shipTemplateSet: !!config.subscribe.shipTemplateId && !!config.subscribe.shipFields,
         refundTemplateSet: !!config.subscribe.refundTemplateId && !!config.subscribe.refundFields,
       },
