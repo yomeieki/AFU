@@ -49,6 +49,15 @@ export interface JsapiOrderParams {
   amount: number
   openid: string
   notifyUrl: string
+  /** 订单失效时间（与本系统超时自动取消对齐，微信侧过期后用户无法再付款） */
+  timeExpire?: Date
+}
+
+/** 微信要求 RFC3339 且带东八区偏移：2026-09-02T18:30:00+08:00 */
+export function formatWechatTime(d: Date): string {
+  const cst = new Date(d.getTime() + 8 * 60 * 60 * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${cst.getUTCFullYear()}-${p(cst.getUTCMonth() + 1)}-${p(cst.getUTCDate())}T${p(cst.getUTCHours())}:${p(cst.getUTCMinutes())}:${p(cst.getUTCSeconds())}+08:00`
 }
 
 export async function createJsapiOrder(params: JsapiOrderParams): Promise<string> {
@@ -64,6 +73,7 @@ export async function createJsapiOrder(params: JsapiOrderParams): Promise<string
     notify_url: params.notifyUrl,
     amount: { total: params.amount, currency: 'CNY' },
     payer: { openid: params.openid },
+    ...(params.timeExpire ? { time_expire: formatWechatTime(params.timeExpire) } : {}),
   })
 
   const authorization = generateWxPayAuthorization('POST', apiUrl, body)
@@ -87,6 +97,32 @@ export async function createJsapiOrder(params: JsapiOrderParams): Promise<string
     throw new Error(`WeChat Pay order failed: ${data.code} - ${data.message}`)
   }
   return data.prepay_id
+}
+
+/**
+ * 关闭未支付订单 POST /v3/pay/transactions/out-trade-no/{no}/close（204 成功）。
+ * 用于超时取消 / 用户取消后防止其继续付款。best-effort：失败只 warn，不抛。
+ */
+export async function closeOrder(outTradeNo: string): Promise<boolean> {
+  const mchId = process.env.WECHAT_MCH_ID
+  if (!mchId) return false
+  const apiUrl = `https://api.mch.weixin.qq.com/v3/pay/transactions/out-trade-no/${encodeURIComponent(outTradeNo)}/close`
+  const body = JSON.stringify({ mchid: mchId })
+  try {
+    const authorization = generateWxPayAuthorization('POST', apiUrl, body)
+    const resp = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: authorization },
+      body,
+    })
+    if (resp.status === 204) return true
+    const text = await resp.text().catch(() => '')
+    console.warn(`[wechat-pay] closeOrder ${outTradeNo} HTTP ${resp.status}: ${text.slice(0, 200)}`)
+    return false
+  } catch (e) {
+    console.warn(`[wechat-pay] closeOrder ${outTradeNo} 请求失败:`, (e as Error).message)
+    return false
+  }
 }
 
 export function generatePayParams(prepayId: string): {
@@ -152,7 +188,7 @@ export function getRefundNotifyUrl(): string {
   return payNotify.replace(/\/notify\/?$/, '/refund-notify')
 }
 
-/** 申请退款 POST /v3/refund/domestic/refunds（全额或部分由调用方决定，本项目只用全额）。 */
+/** 申请退款 POST /v3/refund/domestic/refunds（全额或部分由调用方决定；amount 为本次退款额，total 为原订单实付）。 */
 export async function createRefund(params: RefundParams): Promise<RefundResult> {
   const apiUrl = 'https://api.mch.weixin.qq.com/v3/refund/domestic/refunds'
   const body = JSON.stringify({

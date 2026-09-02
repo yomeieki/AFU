@@ -38,6 +38,18 @@ const envSchema = z.object({
   WECHAT_PAY_PUBLIC_KEY_ID: z.string().optional(),
   WECHAT_PAY_CERT_AUTO_DOWNLOAD: z.string().optional(),
 
+  // 订单生命周期：待付款超时（分钟）、发货后自动确认收货（天）
+  PAY_TIMEOUT_MIN: z.coerce.number().int().min(1).default(15),
+  AUTO_COMPLETE_DAYS: z.coerce.number().int().min(1).default(7),
+  // 定时任务开关（多实例或调试时可关）
+  SCHEDULER_DISABLED: z.string().optional(),
+
+  // 小程序订阅消息模板（公众平台「订阅消息」选用公共模板后填入）
+  WECHAT_TMPL_SHIP: z.string().optional(),
+  WECHAT_TMPL_SHIP_FIELDS: z.string().optional(),
+  WECHAT_TMPL_REFUND: z.string().optional(),
+  WECHAT_TMPL_REFUND_FIELDS: z.string().optional(),
+
   // 通知/告警
   ORDER_NOTIFY_WECOM_WEBHOOK: z.string().optional(),
   ORDER_NOTIFY_PUSHPLUS_TOKEN: z.string().optional(),
@@ -114,6 +126,17 @@ export const config = {
     pay: env.WECHAT_PAY_MOCK === 'true',
     login: env.WECHAT_LOGIN_MOCK === 'true',
     qrcode: env.WECHAT_QRCODE_MOCK === 'true',
+  },
+  order: {
+    payTimeoutMin: env.PAY_TIMEOUT_MIN,
+    autoCompleteDays: env.AUTO_COMPLETE_DAYS,
+  },
+  schedulerEnabled: env.SCHEDULER_DISABLED !== 'true',
+  subscribe: {
+    shipTemplateId: env.WECHAT_TMPL_SHIP ?? '',
+    shipFields: env.WECHAT_TMPL_SHIP_FIELDS ?? '',
+    refundTemplateId: env.WECHAT_TMPL_REFUND ?? '',
+    refundFields: env.WECHAT_TMPL_REFUND_FIELDS ?? '',
   },
   cos: {
     enabled: cosEnabled,

@@ -8,6 +8,7 @@ import orderRouter from './orders'
 import scanLogRouter from './scan-logs'
 import bannersRouter from './banners'
 import authRouter from './auth'
+import uploadRouter from './upload'
 import { verifyUserToken } from '../middlewares/auth'
 
 export const router = Router()
@@ -26,6 +27,7 @@ router.use('/admin', adminRouter)
 router.use('/cart', verifyUserToken, cartRouter)
 router.use('/addresses', verifyUserToken, addressRouter)
 router.use('/orders', verifyUserToken, orderRouter)
+router.use('/upload', verifyUserToken, uploadRouter)
 
 // ── 扫码日志（可选认证：未登录也可记录，userId 为空）───────
 router.use('/scan-logs', scanLogRouter)

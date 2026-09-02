@@ -4,7 +4,7 @@ import { decryptNotifyResource } from '../services/wechat-pay'
 import { verifyWechatNotify, hasVerifyMaterial } from '../services/wechat-pay-verify'
 import { notifyOrderPaid } from '../services/order-notify'
 import { notifySystemAlert } from '../services/notify'
-import { finalizeRefundSuccess, markRefundAbnormal, markRefundClosed } from '../services/refund'
+import { finalizeRefundSuccess, initiateRefund, markRefundAbnormal, markRefundClosed } from '../services/refund'
 import { config } from '../config'
 
 interface NotifyBody {
@@ -134,6 +134,8 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
   }
   const orderId = Number(match[1])
 
+  // 订单已取消（超时/用户取消）却收到付款成功：钱已扣，必须记账并自动原路退回，绝不静默吞掉
+  let lateCancelled: { orderNo: string; actualAmount: number } | null = null
   try {
     await prisma.$transaction(async (tx) => {
       const order = await tx.order.findUnique({
@@ -143,7 +145,7 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       if (!order) return
 
       // Idempotent: already paid (or moved on)
-      if (order.status !== 'PENDING_PAYMENT') return
+      if (order.status !== 'PENDING_PAYMENT' && order.status !== 'CANCELLED') return
 
       // 金额比对：回调金额必须与订单实付金额（分）一致，否则拒绝处理
       if (!transaction.amount || transaction.amount.total !== order.actualAmount) {
@@ -153,6 +155,7 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       }
 
       const paidAt = transaction.success_time ? new Date(transaction.success_time) : new Date()
+      const wasCancelled = order.status === 'CANCELLED'
 
       await tx.payment.upsert({
         where: { orderId },
@@ -176,11 +179,36 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
         },
       })
 
+      if (wasCancelled) {
+        // 库存已在取消时回滚，这里只把订单转入退款流程，由下面自动发起全额退款
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: 'REFUNDING', paidAt, cancelReason: '订单取消后仍付款成功，系统自动退款' },
+        })
+        lateCancelled = { orderNo: order.orderNo, actualAmount: order.actualAmount }
+        return
+      }
       await tx.order.update({
         where: { id: orderId },
         data: { status: 'PAID', paidAt },
       })
     })
+
+    if (lateCancelled) {
+      const info = lateCancelled as { orderNo: string; actualAmount: number }
+      try {
+        await initiateRefund({ orderId, amount: info.actualAmount, reason: '订单已取消，自动退款', operator: 'system' })
+        notifySystemAlert('取消订单收到付款，已自动退款', [`订单 ${info.orderNo}`, `金额 ¥${(info.actualAmount / 100).toFixed(2)}`], {
+          key: `late-pay:${orderId}`,
+        })
+      } catch (err) {
+        notifySystemAlert('取消订单收到付款，自动退款失败（请到后台退款 Tab 重试）', [`订单 ${info.orderNo}`, (err as Error).message], {
+          key: `late-pay-fail:${orderId}`,
+        })
+      }
+      replyOk(res)
+      return
+    }
 
     // 事务成功后推送新订单通知（fire-and-forget）
     prisma.order

@@ -224,18 +224,23 @@ model Order {
   acceptedAt          DateTime? @map("accepted_at")
   // 完成时间（确认收货）
   completedAt         DateTime? @map("completed_at")
-  // 退款完成时间（REFUNDING → REFUNDED）
+  // 退款完成时间（REFUNDING → REFUNDED，仅全额退完时写）
   refundedAt          DateTime? @map("refunded_at")
+  // 已成功退款累计金额（分），部分退款多次累加；== actualAmount 即全额退完
+  refundedAmount      Int       @default(0) @map("refunded_amount")
+  // 付款后超时未接单的催单已推送时间（定时任务只催一次）
+  acceptRemindedAt    DateTime? @map("accept_reminded_at")
   cancelledAt         DateTime? @map("cancelled_at")
   cancelReason        String?   @map("cancel_reason") @db.VarChar(255)
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
-  user     User        @relation(fields: [userId], references: [id])
-  items    OrderItem[]
-  payment  Payment?
-  shipment Shipment?
-  refunds  Refund[]
+  user       User        @relation(fields: [userId], references: [id])
+  items      OrderItem[]
+  payment    Payment?
+  shipment   Shipment?
+  refunds    Refund[]
+  afterSales AfterSale[]
 
   @@index([userId, status])
   @@index([status, createdAt])
@@ -295,7 +300,7 @@ model Payment {
 }
 
 // ─────────────────────────────────────────────────────────
-// 退款记录（微信退款 API 全额退款；每笔发起一条）
+// 退款记录（微信退款 API，支持全额与部分退款；每笔发起一条）
 // ─────────────────────────────────────────────────────────
 model Refund {
   id             Int       @id @default(autoincrement())
@@ -314,8 +319,11 @@ model Refund {
   mode           String    @db.VarChar(16)
   reason         String?   @db.VarChar(80)
   operator       String?   @db.VarChar(64)
-  // 并发防线：活跃态（PENDING/PROCESSING/SUCCESS/ABNORMAL）= orderId，终态 FAILED/CLOSED 置 NULL
-  // MySQL 唯一索引允许多个 NULL → 同一订单同时只能有一条活跃退款，失败后可重试
+  // 关联售后单（顾客申请售后 → 店员同意退款时写入）
+  afterSaleId    Int?      @map("after_sale_id")
+  // 并发防线：在途态（PENDING/PROCESSING/ABNORMAL）= orderId，终态 SUCCESS/FAILED/CLOSED 置 NULL
+  // MySQL 唯一索引允许多个 NULL → 同一订单同时只能有一条在途退款；成功后可再发起部分退款
+  // 超额由 initiateRefund 校验 amount <= actualAmount - refundedAmount
   activeOrderId  Int?      @unique @map("active_order_id")
   channel        String?   @db.VarChar(32)
   errorCode      String?   @map("error_code") @db.VarChar(64)
@@ -331,6 +339,36 @@ model Refund {
   @@index([orderId])
   @@index([status])
   @@map("refunds")
+}
+
+// ─────────────────────────────────────────────────────────
+// 售后单（顾客收货后申请，店员审核后走部分/全额退款）
+// ─────────────────────────────────────────────────────────
+model AfterSale {
+  id          Int       @id @default(autoincrement())
+  orderId     Int       @map("order_id")
+  orderNo     String    @map("order_no") @db.VarChar(32)
+  userId      Int       @map("user_id")
+  // SHORTAGE 少发/漏发  WRONG 错发  DAMAGED 变质/破损  OTHER 其他
+  reason      String    @db.VarChar(32)
+  description String?   @db.Text
+  // 图片 URL 数组（最多 3 张）
+  images      Json
+  // PENDING 待处理 / APPROVED 已同意（退款发起中） / DONE 退款到账 / REJECTED 已拒绝
+  status      String    @default("PENDING") @db.VarChar(16)
+  // 店员回复（顾客可见）
+  reply       String?   @db.VarChar(255)
+  refundId    Int?      @map("refund_id")
+  handledBy   String?   @map("handled_by") @db.VarChar(64)
+  handledAt   DateTime? @map("handled_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([status])
+  @@map("after_sales")
 }
 
 // ─────────────────────────────────────────────────────────

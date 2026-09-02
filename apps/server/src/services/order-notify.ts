@@ -110,3 +110,62 @@ export function notifyOrderPaid(order: NotifyOrderInfo, items: NotifyItemInfo[])
     sendPushPlus(pushplusToken, `新订单 ¥${fmtYuan(order.actualAmount)}`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
   }
 }
+
+/** 顾客提交售后申请 → 通知员工到后台处理 */
+export function notifyAfterSaleRequest(
+  order: { orderNo: string; actualAmount: number; receiverName: string; receiverPhone: string },
+  afterSale: { reasonLabel: string; description?: string | null; imageCount: number }
+): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const content = [
+    `**🛎 顾客申请售后**`,
+    `订单号：${order.orderNo}`,
+    `订单金额：**¥${fmtYuan(order.actualAmount)}**`,
+    `原因：${afterSale.reasonLabel}${afterSale.imageCount ? `（附 ${afterSale.imageCount} 张图）` : ''}`,
+    afterSale.description ? `说明：${afterSale.description.slice(0, 100)}` : '',
+    `客户：${order.receiverName} ${order.receiverPhone}`,
+    `请到后台「订单管理 → 售后」处理：同意并填退款金额，或拒绝并回复`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, `售后申请 ${order.orderNo}`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
+/** 已付款超 15 分钟未接单 → 催单（定时任务，每单一次） */
+export function notifyAcceptReminder(
+  orders: { orderNo: string; actualAmount: number; receiverName: string; receiverPhone: string; paidAt: Date | null }[]
+): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const lines = orders
+    .slice(0, 10)
+    .map((o) => `- ${o.orderNo} ¥${fmtYuan(o.actualAmount)} ${o.receiverName}（付款 ${o.paidAt ? fmtTime(o.paidAt) : '-'}）`)
+  const content = [
+    `**⏰ ${orders.length} 单已付款超过 15 分钟仍未接单**`,
+    ...lines,
+    orders.length > 10 ? `…其余 ${orders.length - 10} 单` : '',
+    `请尽快到后台接单备餐`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, `${orders.length} 单待接单催单`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
+/** 低库存推送（定时任务，12 小时最多一次） */
+export function notifyLowStock(products: { name: string; stock: number }[], threshold: number): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const content = [
+    `**📉 库存预警（≤${threshold}）**`,
+    ...products.map((p) => `- ${p.name}：剩 ${p.stock}${p.stock === 0 ? '（已售罄）' : ''}`),
+    `请及时补货或在后台下架`,
+  ].join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, `库存预警 ${products.length} 项`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
