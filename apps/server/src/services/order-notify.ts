@@ -45,7 +45,7 @@ function buildContent(order: NotifyOrderInfo, items: NotifyItemInfo[]) {
   ].join('\n')
 }
 
-/** 客户申请退款时通知员工（未接单订单的自助取消）。 */
+/** 客户自助取消（未接单）但自动退款发起失败时通知员工到后台重试。 */
 export function notifyRefundRequest(order: {
   orderNo: string
   actualAmount: number
@@ -56,11 +56,11 @@ export function notifyRefundRequest(order: {
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
   if (!wecom && !pushplusToken) return
   const content = [
-    `**🔁 客户申请退款**`,
+    `**🔁 客户申请退款（自动退款未成功，需人工重试）**`,
     `订单号：${order.orderNo}`,
     `金额：**¥${fmtYuan(order.actualAmount)}**`,
     `客户：${order.receiverName} ${order.receiverPhone}`,
-    `请在后台「订单管理 → 退款」标签页点击「发起退款」，款项将原路退回客户微信`,
+    `请到后台「订单管理 → 退款」标签页点击「重试退款」，款项将原路退回客户微信`,
   ].join('\n')
   if (wecom) sendWecomMarkdown(wecom, content)
   if (pushplusToken) {

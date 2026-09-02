@@ -10,7 +10,7 @@ import { notifyOrderPaid, notifyRefundRequest, notifyAfterSaleRequest } from '..
 import { rollbackOrderStock } from '../utils/order-stock'
 import { payLimiter } from '../middlewares/rate-limit'
 import { AFTER_SALE_REASONS, AFTER_SALE_REASON_LABEL, AfterSaleReason, payExpireAtOf } from '../utils/constants'
-import { remainingRefundable } from '../services/refund'
+import { initiateRefund, remainingRefundable } from '../services/refund'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/subscribe-message'
 
 const router = Router()
@@ -317,8 +317,10 @@ router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunctio
 })
 
 // PUT /api/orders/:id/cancel — 客户自助取消
-// 待付款：直接取消（并关闭微信订单）；已付款且商家未接单：进入退款流程（REFUNDING）并通知员工
-// 已接单/已发货：不允许自助，请联系商家协商（员工在后台登记退款）
+// 待付款：直接取消（并关闭微信订单）
+// 已付款且商家未接单：秒退——回滚库存、订单转 REFUNDING 后立即向微信发起全额退款，无需店员审核；
+//   发起失败时订单停在 REFUNDING 并通知店员到后台重试
+// 已接单/已发货：不允许自助，请联系商家协商（员工在后台退款）
 router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
@@ -346,15 +348,33 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
     }
 
     if (order.status === 'PAID' && !order.acceptedAt) {
-      const updated = await prisma.$transaction(async (tx) => {
-        await rollbackOrderStock(tx, order.items)
-        return tx.order.update({
-          where: { id },
+      await prisma.$transaction(async (tx) => {
+        // 条件更新：与店员「接单」并发时以先落库者为准（已接单则本次取消失败）
+        const moved = await tx.order.updateMany({
+          where: { id, status: 'PAID', acceptedAt: null },
           data: { status: 'REFUNDING', cancelledAt: new Date(), cancelReason: '用户申请退款' },
         })
+        if (moved.count === 0) throw new AppError(42204, '商家已接单备餐，请电话联系商家协商退款')
+        await rollbackOrderStock(tx, order.items)
       })
-      notifyRefundRequest(updated)
-      return success(res, updated)
+      // 秒退：走公共退款逻辑（REFUNDING 状态下全额），mock 即时到账，微信一般数秒内回调
+      let autoRefunded = false
+      try {
+        const result = await initiateRefund({
+          orderId: id,
+          amount: remainingRefundable(order),
+          reason: '用户申请退款',
+          operator: 'customer',
+        })
+        autoRefunded = result.refund.status === 'SUCCESS' || result.refund.status === 'PROCESSING' || result.refund.status === 'PENDING'
+      } catch (e) {
+        // 微信发起失败：退款单已标 FAILED 并告警，通知店员到后台「退款」标签重试
+        console.warn('[orders] 自助退款自动发起失败:', (e as Error).message)
+        const latest = await prisma.order.findUniqueOrThrow({ where: { id } })
+        notifyRefundRequest(latest)
+      }
+      const updated = await prisma.order.findUniqueOrThrow({ where: { id } })
+      return success(res, { ...withPayExpire(updated), autoRefunded })
     }
 
     throw new AppError(

@@ -317,14 +317,15 @@ Page({
     wx.showModal({
       title: isPaid ? '申请退款' : '取消订单',
       content: isPaid
-        ? '商家尚未接单，取消后货款将原路退回微信（1-3 个工作日）。确认申请退款？'
+        ? '商家尚未接单，取消后货款会立即原路退回微信，一般几分钟内到账。确认退款？'
         : '确认取消该订单？取消后需重新下单。',
       confirmText: '确认',
       success: function(res) {
         if (!res.confirm) return
         cancelOrder(self.data.order.id)
-          .then(function() {
-            wx.showToast({ title: isPaid ? '已申请退款' : '订单已取消', icon: 'success' })
+          .then(function(data) {
+            var title = !isPaid ? '订单已取消' : (data && data.autoRefunded ? '已退款，请留意微信到账通知' : '已申请退款，商家将尽快处理')
+            wx.showToast({ title: title, icon: 'none', duration: 2000 })
             self.loadOrder(self._orderId, true)
           })
           .catch(function() {

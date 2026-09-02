@@ -92,13 +92,18 @@ assert_eq "Refund SUCCESS" "$(latest_refund $ONO)" "SUCCESS"
 R=$(req POST "/api/admin/orders/$O1/refund" "$AT" "{\"amount\":$AMT}")
 [[ "$(code "$R")" != "0" ]] && ok "已退款订单再退被拒 ($(code "$R"))" || fail "已退款订单重复退款未被拒"
 
-echo "== 7. 用户自助取消（PAID 未接单）→ REFUNDING → 后台发起退款 =="
+echo "== 7. 用户自助取消（PAID 未接单）→ 秒退（无需店员审核）；已接单不可自助 =="
 O2=$(make_paid_order); [[ -n "$O2" ]] && ok "订单 #$O2 已支付" || { fail "下单/支付"; exit 1; }
-R=$(req PUT "/api/orders/$O2/cancel" "$UT"); assert_eq "用户取消 → REFUNDING" "$(jq -r .data.status <<<"$R")" "REFUNDING"
-AMT2=$(req GET "/api/admin/orders/$O2" "$AT" | jq -r .data.actualAmount)
-R=$(req POST "/api/admin/orders/$O2/refund" "$AT" "{\"amount\":$AMT2}")
-assert_eq "REFUNDING 订单发起退款 code 0" "$(code "$R")" "0"
-assert_eq "订单 → REFUNDED" "$(order_status $O2)" "REFUNDED"
+ST_BEFORE=$(req GET "/api/products/$PID" "$UT" | jq -r .data.stock)
+R=$(req PUT "/api/orders/$O2/cancel" "$UT")
+assert_eq "用户取消 → 自动退款 autoRefunded=true" "$(jq -r .data.autoRefunded <<<"$R")" "true"
+assert_eq "订单 → REFUNDED（mock 即时）" "$(order_status $O2)" "REFUNDED"
+assert_eq "库存回滚 +1" "$(req GET "/api/products/$PID" "$UT" | jq -r .data.stock)" "$((ST_BEFORE+1))"
+R=$(req POST "/api/admin/orders/$O2/refund" "$AT" "{\"amount\":1}"); [[ "$(code "$R")" != "0" ]] && ok "已退完不可再退 ($(code "$R"))" || fail "已退完仍可退"
+O2B=$(make_paid_order); [[ -n "$O2B" ]] && ok "订单 #$O2B 已支付" || { fail "下单/支付"; exit 1; }
+req POST "/api/admin/orders/$O2B/accept" "$AT" >/dev/null
+R=$(req PUT "/api/orders/$O2B/cancel" "$UT"); assert_eq "已接单后自助取消被拒 42204" "$(code "$R")" "42204"
+assert_eq "订单仍 PREPARING" "$(order_status $O2B)" "PREPARING"
 
 echo "== 8. 并发双击退款：一成一败 =="
 O3=$(make_paid_order); [[ -n "$O3" ]] && ok "订单 #$O3 已支付" || { fail "下单/支付"; exit 1; }
@@ -111,11 +116,10 @@ C1=$(code "$(cat $R1)"); C2=$(code "$(cat $R2)")
 if { [[ "$C1" == "0" && "$C2" != "0" ]] || [[ "$C2" == "0" && "$C1" != "0" ]]; }; then ok "并发一成一败 ($C1 / $C2)"; else fail "并发保护" "$C1 / $C2"; fi
 assert_eq "订单 → REFUNDED" "$(order_status $O3)" "REFUNDED"
 
-echo "== 9. 人工兜底 refund-complete =="
+echo "== 9. 人工兜底 refund-complete（仅退款中订单）=="
 O4=$(make_paid_order); [[ -n "$O4" ]] && ok "订单 #$O4 已支付" || { fail "下单/支付"; exit 1; }
 req PUT "/api/orders/$O4/cancel" "$UT" >/dev/null
-R=$(req POST "/api/admin/orders/$O4/refund-complete" "$AT"); assert_eq "手动标记 → REFUNDED" "$(jq -r .data.status <<<"$R")" "REFUNDED"
-R=$(req POST "/api/admin/orders/$O4/refund-complete" "$AT"); assert_eq "重复标记被拒 42204" "$(code "$R")" "42204"
+R=$(req POST "/api/admin/orders/$O4/refund-complete" "$AT"); assert_eq "已自动退完的订单再标记被拒 42204" "$(code "$R")" "42204"
 
 echo "== 10. pending-count 字段 =="
 R=$(req GET /api/admin/orders/pending-count "$AT")
