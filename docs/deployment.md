@@ -105,11 +105,13 @@ WECHAT_PAY_PUBLIC_KEY_ID="PUB_KEY_ID_xxx"
 WECHAT_PAY_CERT_AUTO_DOWNLOAD="true"
 
 # 腾讯云 COS —— 生产必填，未配置服务拒绝启动（图片全部走 COS）
+# 桶已创建：afu-images-1342627167（上海 ap-shanghai，公有读私有写，单 AZ，默认告警已开）
+# 密钥请用 CAM 子用户（编程访问），策略仅授权该桶，勿用主账号密钥
 COS_SECRET_ID="子账号 SecretId"
 COS_SECRET_KEY="子账号 SecretKey"
-COS_BUCKET="bucket-1250000000"
-COS_REGION="ap-guangzhou"
-COS_BASE_URL="https://img.yourdomain.com"   # 可留空用桶默认域名
+COS_BUCKET="afu-images-1342627167"
+COS_REGION="ap-shanghai"
+COS_BASE_URL=""   # 留空即用 https://afu-images-1342627167.cos.ap-shanghai.myqcloud.com
 
 # 服务器
 PORT=3000
@@ -333,14 +335,26 @@ pm2 conf pm2-logrotate
 
 被限频抑制的次数会附在下一条同类告警里。未配置任何 webhook 时退化为 `console.error`（pm2 日志可查）。
 
-### 13.3 日志与磁盘
+### 13.3 对象存储（COS）
+
+账号 APPID `1342627167`，三个桶均在上海 `ap-shanghai`，已按 `app` / `env` / `usage` 三个标签分类便于分账：
+
+| 桶 | 访问 | app | env | usage | 说明 |
+|---|---|---|---|---|---|
+| `afu-images-1342627167` | 公有读私有写 | afu-liangcai | prod | images | 本项目商品/Banner 图片，单 AZ，默认流量告警已开 |
+| `yuegui-booking-backup-1342627167` | 私有 | yuegui-hotel | prod | backup | 酒店预订备份（另有原标签「预定信息=1」）|
+| `yuegui-room-service-sandbox-1342627167` | 公有读 | yuegui-hotel | sandbox | sandbox | 客房配送沙箱（另有原标签「客房配送=2」）|
+
+图片桶的成本护栏：控制台「默认告警」已开（1 分钟外网下行 >5000MB 触发）。如需进一步防盗刷，可在桶的「安全管理 → 防盗链」配 Referer 白名单——**注意小程序请求不带 Referer，必须勾选「允许空 Referer」，否则图片全裂**。
+
+### 13.4 日志与磁盘
 
 - `deploy.sh` 每次部署自动确保 `pm2-logrotate`：单文件 20M、保留 14 份、gzip、每日 0 点轮转
 - nginx 日志由系统 logrotate 管理（Ubuntu 默认每日）
 - 备份脚本每日凌晨 2 点跑，成功/失败都会推企微（见第八节 `ALERT_WEBHOOK`）
 - 磁盘水位：轻量服务器建议每月 `df -h` 看一眼；备份目录只保留 7 天
 
-### 13.4 上线后看什么
+### 13.5 上线后看什么
 
 | 频率 | 看哪里 |
 |---|---|

@@ -46,10 +46,10 @@
 |---|---|---|
 | request 合法域名 | `https://api.yuegui-hotel.online` | 已配 ✅ |
 | uploadFile 合法域名 | `https://api.yuegui-hotel.online` | 已配 ✅ |
-| **downloadFile 合法域名** | COS 访问域名(`.env` 里的 `COS_BASE_URL`,或 `https://<bucket>.cos.<region>.myqcloud.com`) | ☐ **新增** |
+| **downloadFile 合法域名** | `https://afu-images-1342627167.cos.ap-shanghai.myqcloud.com` | ☐ **新增** |
 | 业务域名(可选) | `https://admin.yuegui-hotel.online`(后台 web-view 内嵌用,可后置) | ☐ |
 
-> 每月只能修改 5 次,一次配齐。
+> 每月只能修改 5 次,一次配齐。图片桶 `afu-images-1342627167`(上海 ap-shanghai,公有读私有写)已于 2026-09-02 建好。
 
 ### 2.4 用户隐私保护指引(设置 → 基本设置 → 服务内容声明 → 用户隐私保护指引)
 **必须填写并通过,否则提审直接被拒。** 按本小程序实际收集情况逐项勾选:
