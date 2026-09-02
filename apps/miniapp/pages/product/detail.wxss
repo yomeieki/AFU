@@ -209,3 +209,12 @@
 .btn-buy {
   flex: 1;
 }
+
+/* 多规格未选规格时显示最低价「起」 */
+.detail-price-from {
+  font-size: 22rpx;
+  color: var(--text-3);
+  margin-left: 6rpx;
+  align-self: flex-end;
+  padding-bottom: 6rpx;
+}

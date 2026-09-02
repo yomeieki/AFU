@@ -3,5 +3,7 @@
   "usingComponents": {
     "empty-state": "/components/empty-state/index",
     "order-status-tag": "/components/order-status-tag/index"
-  }
+  },
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark"
 }

@@ -25,6 +25,7 @@
         <text class="price-symbol detail-price-symbol">¥</text>
         <text class="price-int detail-price-int">{{pricefmt.int(product.priceText)}}</text>
         <text class="price-dec detail-price-dec">{{pricefmt.dec(product.priceText)}}</text>
+        <text wx:if="{{product.skus.length > 0 && !selectedSkuText}}" class="detail-price-from">起</text>
       </view>
       <text class="original-price" wx:if="{{product.originalPriceText}}">¥{{product.originalPriceText}}</text>
       <text class="unit">/ {{product.unit}}</text>

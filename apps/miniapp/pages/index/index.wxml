@@ -111,6 +111,7 @@
               <text class="price-symbol">¥</text>
               <text class="price-int product-price-int">{{pricefmt.int(item.priceText)}}</text>
               <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
+              <text wx:if="{{item.hasSkus}}" class="price-from">起</text>
             </view>
             <text class="product-sales">已售{{item.salesCount}}</text>
           </view>

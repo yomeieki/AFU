@@ -124,7 +124,9 @@ Component({
         dimGroups: dimGroups,
         priceText: formatPrice(price),
         originalPriceText: originalPrice ? formatPrice(originalPrice) : null,
-        stockLabel: current ? formatStock(current.stock) : '请选择规格',
+        stockLabel: current
+          ? (current.stock <= 0 ? '该规格已售罄' : '该规格剩 ' + current.stock + ' ' + (p.unit || '份'))
+          : '请选择规格',
         maxQty: maxQty2,
         currentSkuId: current ? current.id : null,
         selectedText: complete ? selected.join('/') : '',

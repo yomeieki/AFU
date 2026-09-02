@@ -78,7 +78,7 @@
     ▼
 PENDING_PAYMENT（待付款）
     │
-    ├──── 超时未付款（后续可实现自动取消，第一版手动）──────► CANCELLED（已取消）
+    ├──── 超时未付款（15 分钟，定时任务自动取消+回滚库存+微信关单）► CANCELLED（已取消）
     │
     ├──── 用户主动取消 ─────────────────────────────────────► CANCELLED（已取消）
     │
@@ -95,7 +95,12 @@ SHIPPED（已发货）
     │
     ├──── 用户确认收货 ──────────────────────────────────────► COMPLETED（已完成）
     │
-    └──── 系统自动完成（N天后，第一版暂不实现）─────────────► COMPLETED（已完成）
+    └──── 系统自动完成（发货 7 天后定时任务）───────────────► COMPLETED（已完成）
+
+部分退款（不改变订单状态）：PAID / PREPARING / SHIPPED / COMPLETED 任一状态下，商家可发起 amount < 可退余额 的退款，
+成功后 order.refundedAmount 累加，订单继续履约；退完全部余额即视为全额退款，走 REFUNDING → REFUNDED。
+
+售后：SHIPPED / COMPLETED 且有可退余额时顾客可提交 AfterSale（PENDING）→ 商家 approve（按金额发起退款，APPROVED → 回调成功 DONE）或 reject（REJECTED）。
 ```
 
 **状态流转规则：**
@@ -107,8 +112,10 @@ SHIPPED（已发货）
 | PAID | SHIPPED | 管理员 |
 | PAID | REFUNDING | 用户申请（第一版手动处理） |
 | SHIPPED | COMPLETED | 用户确认收货 |
-| REFUNDING | REFUNDED | 管理员操作 |
-| REFUNDING | PAID | 管理员拒绝退款（预留） |
+| REFUNDING | REFUNDED | 退款回调 / 管理员手动标记 |
+| SHIPPED | COMPLETED | 管理员「标记完成」或定时任务（7 天） |
+| COMPLETED | REFUNDING → REFUNDED | 管理员全额退款（货已出不回滚库存） |
+| CANCELLED | REFUNDING → REFUNDED | 已取消订单收到迟到的支付成功回调：自动全额退款并告警 |
 
 **禁止的状态变更（后端必须拒绝）：**
 - COMPLETED → 任何状态
@@ -217,15 +224,17 @@ async function createOrder(userId, { cartItemIds, addressId, deliveryType, remar
 
 ---
 
-## 五、订单超时自动取消（第一版暂不实现，预留设计）
+## 五、订单超时自动取消（已实现：services/scheduler.ts）
 
-第一版不实现自动取消，超时订单由管理员手动处理。
+进程内 `setInterval` 每 60 秒一轮（PM2 单实例；多实例时其余进程设 `SCHEDULER_DISABLED=true`）：
+1. `PENDING_PAYMENT` 且 `createdAt < now - PAY_TIMEOUT_MIN` → 条件 `updateMany` 置 CANCELLED + `rollbackOrderStock` + best-effort 微信关单 `closeOrder`
+2. `SHIPPED` 且发货超 `AUTO_COMPLETE_DAYS` → COMPLETED
+3. `PAID` 超 15 分钟未接单且未催过 → 企微催单，写 `acceptRemindedAt`
+4. 低库存（≤5）每 12 小时推送一次
 
-后续可通过以下方案实现：
-1. 定时任务（cron job）：每分钟扫描 PENDING_PAYMENT 状态且创建时间超过 N 分钟的订单，自动取消并归还库存。
-2. 延迟队列：创建订单时写入延迟消息，超时触发取消逻辑。
-
-注意：取消订单时需要归还库存（`stock: { increment: quantity }`）。
+配套：微信预下单带 `time_expire`（= createdAt + 超时），`/pay` 对超时订单直接拒绝，顾客端按 `payExpireAt` 显示倒计时；
+支付回调若命中已 CANCELLED 订单，记账后自动全额退款并告警（`wechat-notify.ts`）。
+非生产环境可 `POST /api/admin/system/run-scheduler {payTimeoutMin,autoCompleteDays,remindAfterMin}` 手动触发（e2e 用）。
 
 ---
 

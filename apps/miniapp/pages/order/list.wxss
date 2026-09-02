@@ -161,3 +161,28 @@
   padding: 2rpx 12rpx;
   align-self: flex-start;
 }
+
+/* 待付款倒计时 */
+.countdown-text {
+  font-size: 22rpx;
+  color: var(--warning, #ff9500);
+  margin-right: 16rpx;
+}
+.order-action {
+  display: flex;
+  align-items: center;
+}
+/* 退款/售后附加信息 */
+.order-extra {
+  margin-top: 12rpx;
+  padding-top: 12rpx;
+  border-top: 1rpx solid var(--border, #f0f0f0);
+  font-size: 22rpx;
+  color: var(--danger, #e5441e);
+}
+.footer-tip {
+  padding: 24rpx 0 32rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: var(--text-3);
+}

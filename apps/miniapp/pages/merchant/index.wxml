@@ -4,26 +4,39 @@
   </view>
 
   <block wx:else>
-    <!-- 待发货概览 -->
+    <!-- 待处理概览 -->
     <view class="pending-card card">
       <view class="pending-info">
-        <text class="pending-label">待发货订单</text>
+        <text class="pending-label">待接单 / 备餐中</text>
         <text class="pending-count">{{pendingCount}}</text>
       </view>
-      <view class="pending-icon">📦</view>
+      <view class="pending-side">
+        <text class="pending-side-item" wx:if="{{refundingCount > 0}}">退款中 {{refundingCount}}</text>
+        <text class="pending-side-item" wx:if="{{afterSaleCount > 0}}">售后待处理 {{afterSaleCount}}</text>
+      </view>
     </view>
 
-    <!-- 完整后台入口 -->
+    <!-- 进入后台 -->
     <view class="section card">
-      <text class="section-title">完整管理后台</text>
-      <text class="section-desc">发货、商品、订单、扫码统计等完整功能请在浏览器中打开管理后台（已适配手机屏幕）：</text>
-      <view class="url-box">
-        <text class="url-text" user-select>{{adminUrl}}</text>
+      <text class="section-title">管理后台</text>
+      <text class="section-desc">接单、发货、退款、售后、商品上下架、库存、轮播图等全部功能，与电脑端完全一致，已适配手机操作。</text>
+      <view class="open-btn btn-primary {{opening ? 'btn-disabled' : ''}}" bindtap="onOpenAdmin">
+        <text>{{opening ? '正在打开...' : '进入管理后台'}}</text>
       </view>
-      <view class="copy-btn btn-primary" bindtap="onCopyLink">
-        <text>复制链接</text>
+      <view class="quick-row">
+        <view class="quick-item" bindtap="onOpenAdmin" data-target="orders?status=PAID">
+          <text class="quick-num">{{pendingCount}}</text>
+          <text class="quick-label">待处理订单</text>
+        </view>
+        <view class="quick-item" bindtap="onOpenAdmin" data-target="orders?status=AFTER_SALE">
+          <text class="quick-num">{{afterSaleCount}}</text>
+          <text class="quick-label">售后申请</text>
+        </view>
+        <view class="quick-item" bindtap="onOpenAdmin" data-target="products">
+          <text class="quick-num">·</text>
+          <text class="quick-label">商品/库存</text>
+        </view>
       </view>
-      <text class="section-hint">提示：开发环境下手机需与电脑连接同一 Wi-Fi</text>
     </view>
 
     <view class="logout-btn" bindtap="onLogout">

@@ -1,8 +1,5 @@
 {
-  "navigationBarTitleText": "商品列表",
-  "enablePullDownRefresh": true,
-  "backgroundTextStyle": "dark",
-  "onReachBottomDistance": 100,
+  "navigationBarTitleText": "分类",
   "usingComponents": {
     "empty-state": "/components/empty-state/index"
   }

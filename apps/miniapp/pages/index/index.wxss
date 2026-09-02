@@ -233,3 +233,10 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+/* 多规格商品最低价后缀 */
+.price-from {
+  font-size: 20rpx;
+  color: var(--text-3);
+  margin-left: 4rpx;
+}

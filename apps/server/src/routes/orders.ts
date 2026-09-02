@@ -252,6 +252,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 })
 
+// GET /api/orders/meta — 下单页需要的公共参数（订阅消息模板、支付超时），必须注册在 /:id 之前
+router.get('/meta', (_req: Request, res: Response) => {
+  success(res, { subscribeTemplateIds: getSubscribeTemplateIds(), payTimeoutMin: config.order.payTimeoutMin })
+})
+
 // GET /api/orders/:id
 router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {

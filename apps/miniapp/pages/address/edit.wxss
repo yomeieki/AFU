@@ -8,6 +8,37 @@
   flex-direction: column;
   gap: 20rpx;
 }
+
+/* 导入微信收货地址入口（浅品牌底、胶囊感卡片） */
+.import-btn {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 24rpx 30rpx;
+  background-color: var(--brand-bg);
+  border: 1rpx solid var(--brand-bg-deep);
+  border-radius: var(--radius-lg);
+}
+.import-btn-hover {
+  background-color: var(--brand-bg-deep);
+}
+.import-icon {
+  width: 36rpx;
+  height: 36rpx;
+  flex-shrink: 0;
+}
+.import-text {
+  flex: 1;
+  font-size: 28rpx;
+  font-weight: 500;
+  color: var(--brand);
+}
+.import-arrow {
+  width: 32rpx;
+  height: 32rpx;
+  flex-shrink: 0;
+}
+
 .field-group {
   background-color: var(--card);
   border-radius: var(--radius-lg);
@@ -24,6 +55,10 @@
 .field:last-child {
   border-bottom: none;
 }
+/* picker 外层包裹后，.field 不再是 group 的直接子元素，手动保留分隔线 */
+.picker-field {
+  border-bottom: 1rpx solid var(--divider);
+}
 .label {
   width: 152rpx;
   font-size: 28rpx;
@@ -37,6 +72,21 @@
 }
 .input-placeholder {
   color: var(--text-disabled);
+}
+
+/* 省市区选择器行 */
+.picker-value {
+  flex: 1;
+  font-size: 28rpx;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-arrow {
+  width: 32rpx;
+  height: 32rpx;
+  flex-shrink: 0;
 }
 
 /* 默认地址开关（品牌渐变） */

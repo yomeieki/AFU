@@ -29,7 +29,10 @@ export default function WebviewLogin() {
       .then((res) => {
         const { token, adminInfo } = res.data.data
         setAuth(token, adminInfo)
-        navigate('/orders?status=PAID', { replace: true })
+        // to=orders?status=PAID 之类的站内相对路径；防止外部跳转只允许无协议的相对路径
+        const to = params.get('to') ?? ''
+        const safeTo = /^[a-z0-9-]+(\?[^\s]*)?$/i.test(to) ? `/${to}` : '/orders?status=PAID'
+        navigate(safeTo, { replace: true })
       })
       .catch((err: unknown) => {
         setError(
