@@ -4,6 +4,17 @@ import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { rollbackOrderStock } from '../../utils/order-stock'
+import { Prisma } from '@prisma/client'
+import { config } from '../../config'
+import { createRefund, getRefundNotifyUrl, validatePayConfig, WechatRefundError } from '../../services/wechat-pay'
+import {
+  ACTIVE_REFUND_STATUSES,
+  buildOutRefundNo,
+  finalizeRefundSuccess,
+  markRefundAbnormal,
+  markRefundClosed,
+  markRefundFailed,
+} from '../../services/refund'
 
 const router = Router()
 
@@ -58,6 +69,19 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
               remark: true,
             },
           },
+          refunds: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              outRefundNo: true,
+              amount: true,
+              mode: true,
+              errorMessage: true,
+              createdAt: true,
+            },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
@@ -66,7 +90,13 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       prisma.order.count({ where }),
     ])
 
-    paginate(res, list, total, page, pageSize)
+    paginate(
+      res,
+      list.map(({ refunds, ...o }) => ({ ...o, latestRefund: refunds[0] ?? null })),
+      total,
+      page,
+      pageSize
+    )
   } catch (e) {
     next(e)
   }
@@ -189,51 +219,165 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
   }
 })
 
-// POST /api/admin/orders/:id/refund — 登记退款（协商一致后员工操作）
-// 待接单/备餐中：取消订单+回滚库存；已发货：仅登记（货已出，库存不回滚）
-const refundSchema = z.object({ reason: z.string().max(255).optional() })
+// POST /api/admin/orders/:id/refund — 一键退款（全额，微信退款 API 原路退回）
+// 允许：PAID/PREPARING/SHIPPED（登记 + 执行），或 REFUNDING（用户自助取消 / 上次发起失败后重试）
+// 待接单/备餐中：回滚库存；已发货：不回滚（货已出）
+// 服务端二次校验：amount 必须等于订单实付（前端已让操作员手输确认，这里再挡一道）
+const refundSchema = z.object({
+  amount: z.number().int().positive(),
+  reason: z.string().trim().max(80).optional(),
+})
 
 router.post('/:id/refund', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const { reason } = refundSchema.parse(req.body ?? {})
-    const order = await prisma.order.findUnique({ where: { id }, include: { items: true } })
+    const { amount, reason } = refundSchema.parse(req.body ?? {})
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { items: true, payment: true, refunds: true },
+    })
     if (!order) throw new AppError(40401, '订单不存在', 404)
-    if (!['PAID', 'PREPARING', 'SHIPPED'].includes(order.status)) {
-      throw new AppError(42204, `订单状态为 ${order.status}，不可登记退款`)
+    if (amount !== order.actualAmount) {
+      throw new AppError(42206, '退款金额与订单实付不一致')
     }
-    const updated = await prisma.$transaction(async (tx) => {
-      if (order.status !== 'SHIPPED') {
-        await rollbackOrderStock(tx, order.items)
+
+    const fromRefunding = order.status === 'REFUNDING'
+    if (!fromRefunding && !['PAID', 'PREPARING', 'SHIPPED'].includes(order.status)) {
+      throw new AppError(42204, `订单状态为 ${order.status}，不可退款`)
+    }
+    if (order.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))) {
+      throw new AppError(42205, '该订单已有退款处理中')
+    }
+    if (!order.payment || order.payment.status !== 'SUCCESS') {
+      throw new AppError(42207, '订单无成功支付记录，无法退款')
+    }
+    const mode = config.mock.pay ? 'MOCK' : 'WECHAT'
+    if (mode === 'WECHAT' && (order.payment.paymentType === 'MOCK' || !order.payment.outTradeNo)) {
+      throw new AppError(42207, '模拟支付订单无法发起微信退款')
+    }
+
+    // 事务 A：状态流转 + 库存回滚 + 创建退款记录（不含外呼）
+    const refund = await prisma.$transaction(async (tx) => {
+      if (!fromRefunding) {
+        const moved = await tx.order.updateMany({
+          where: { id, status: { in: ['PAID', 'PREPARING', 'SHIPPED'] } },
+          data: {
+            status: 'REFUNDING',
+            cancelledAt: new Date(),
+            cancelReason: reason || '商家退款',
+          },
+        })
+        if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
+        if (order.status !== 'SHIPPED') {
+          await rollbackOrderStock(tx, order.items)
+        }
       }
-      return tx.order.update({
-        where: { id },
+      try {
+        return await tx.refund.create({
+          data: {
+            orderId: id,
+            orderNo: order.orderNo,
+            outTradeNo: order.payment!.outTradeNo,
+            outRefundNo: buildOutRefundNo(id),
+            amount,
+            totalAmount: order.actualAmount,
+            status: 'PENDING',
+            mode,
+            reason: reason || null,
+            operator: req.adminUsername ?? null,
+            activeOrderId: id,
+          },
+        })
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          throw new AppError(42205, '该订单已有退款处理中')
+        }
+        throw e
+      }
+    })
+
+    // mock：直接成功
+    if (mode === 'MOCK') {
+      await finalizeRefundSuccess({ refundId: refund.id, operator: req.adminUsername ?? undefined })
+      const [updatedOrder, updatedRefund] = await Promise.all([
+        prisma.order.findUnique({ where: { id } }),
+        prisma.refund.findUnique({ where: { id: refund.id } }),
+      ])
+      success(res, { order: updatedOrder, refund: updatedRefund, mode: 'mock' })
+      return
+    }
+
+    // 真实：调微信退款 API
+    validatePayConfig()
+    try {
+      const result = await createRefund({
+        outTradeNo: order.payment.outTradeNo!,
+        outRefundNo: refund.outRefundNo,
+        amount,
+        total: order.actualAmount,
+        reason: reason || undefined,
+        notifyUrl: getRefundNotifyUrl(),
+      })
+      await prisma.refund.update({
+        where: { id: refund.id },
         data: {
-          status: 'REFUNDING',
-          cancelledAt: new Date(),
-          cancelReason: reason ?? '商家登记退款',
+          wxRefundId: result.refund_id,
+          status: result.status,
+          channel: result.channel ?? null,
+          wxResponseData: JSON.stringify(result),
         },
       })
-    })
-    success(res, updated)
+      if (result.status === 'SUCCESS') {
+        await finalizeRefundSuccess({
+          refundId: refund.id,
+          wxRefundId: result.refund_id,
+          successTime: result.success_time ? new Date(result.success_time) : new Date(),
+          channel: result.channel,
+        })
+      } else if (result.status === 'ABNORMAL') {
+        await markRefundAbnormal(refund.id)
+      } else if (result.status === 'CLOSED') {
+        await markRefundClosed(refund.id)
+      }
+    } catch (e) {
+      const code = e instanceof WechatRefundError ? e.code : 'REQUEST_ERROR'
+      const message = (e as Error).message || '微信退款请求失败'
+      await markRefundFailed(refund.id, code, message)
+      // 订单保持 REFUNDING（库存已回滚、商家已决定退），后台可重试
+      throw new AppError(50201, `微信退款发起失败：${message}`, 502)
+    }
+
+    const [updatedOrder, updatedRefund] = await Promise.all([
+      prisma.order.findUnique({ where: { id } }),
+      prisma.refund.findUnique({ where: { id: refund.id } }),
+    ])
+    success(res, { order: updatedOrder, refund: updatedRefund, mode: 'wechat' })
   } catch (e) {
     next(e)
   }
 })
 
-// POST /api/admin/orders/:id/refund-complete — 商户平台打款完成后标记
+// POST /api/admin/orders/:id/refund-complete — 人工兜底：确认已在商户平台退款成功但系统未收到回调时标记
 router.post('/:id/refund-complete', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const order = await prisma.order.findUnique({ where: { id } })
+    const order = await prisma.order.findUnique({ where: { id }, include: { refunds: true } })
     if (!order) throw new AppError(40401, '订单不存在', 404)
     if (order.status !== 'REFUNDING') {
       throw new AppError(42204, `订单状态为 ${order.status}，仅退款中订单可标记完成`)
     }
-    const updated = await prisma.order.update({
-      where: { id },
-      data: { status: 'REFUNDED', refundedAt: new Date() },
-    })
+    const active = order.refunds.find((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))
+    if (active && active.status !== 'SUCCESS') {
+      await finalizeRefundSuccess({ refundId: active.id, operator: `manual:${req.adminUsername ?? ''}` })
+    } else {
+      const moved = await prisma.order.updateMany({
+        where: { id, status: 'REFUNDING' },
+        data: { status: 'REFUNDED', refundedAt: new Date() },
+      })
+      if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
+      await prisma.payment.updateMany({ where: { orderId: id }, data: { status: 'REFUNDED' } })
+    }
+    const updated = await prisma.order.findUnique({ where: { id } })
     success(res, updated)
   } catch (e) {
     next(e)

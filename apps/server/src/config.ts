@@ -22,6 +22,34 @@ const envSchema = z.object({
   WECHAT_PAY_MOCK: z.string().optional(),
   WECHAT_LOGIN_MOCK: z.string().optional(),
   WECHAT_QRCODE_MOCK: z.string().optional(),
+
+  // 微信小程序 / 支付（懒校验：下单/退款时 validatePayConfig 再查缺项；这里只登记以便集中管理）
+  WECHAT_APP_ID: z.string().optional(),
+  WECHAT_APP_SECRET: z.string().optional(),
+  WECHAT_MCH_ID: z.string().optional(),
+  WECHAT_PAY_SERIAL_NO: z.string().optional(),
+  WECHAT_PAY_PRIVATE_KEY_PATH: z.string().optional(),
+  WECHAT_PAY_API_V3_KEY: z.string().optional(),
+  WECHAT_PAY_NOTIFY_URL: z.string().optional(),
+  WECHAT_PAY_REFUND_NOTIFY_URL: z.string().optional(),
+  // 回调验签材料：二选一（新商户默认「微信支付公钥」）
+  WECHAT_PAY_PLATFORM_CERT_PATH: z.string().optional(),
+  WECHAT_PAY_PUBLIC_KEY_PATH: z.string().optional(),
+  WECHAT_PAY_PUBLIC_KEY_ID: z.string().optional(),
+  WECHAT_PAY_CERT_AUTO_DOWNLOAD: z.string().optional(),
+
+  // 通知/告警
+  ORDER_NOTIFY_WECOM_WEBHOOK: z.string().optional(),
+  ORDER_NOTIFY_PUSHPLUS_TOKEN: z.string().optional(),
+  ORDER_NOTIFY_PUSHPLUS_TOPIC: z.string().optional(),
+  SYSTEM_ALERT_WECOM_WEBHOOK: z.string().optional(),
+
+  // 腾讯云 COS（图片存储）：生产必填，开发未配置时回退本地 uploads/
+  COS_SECRET_ID: z.string().optional(),
+  COS_SECRET_KEY: z.string().optional(),
+  COS_BUCKET: z.string().optional(),
+  COS_REGION: z.string().optional(),
+  COS_BASE_URL: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)
@@ -35,6 +63,10 @@ if (!parsed.success) {
 
 const env = parsed.data
 const isProduction = env.NODE_ENV === 'production'
+
+const isSet = (v: string | undefined): v is string => !!v && v.trim() !== ''
+const cosEnabled =
+  isSet(env.COS_SECRET_ID) && isSet(env.COS_SECRET_KEY) && isSet(env.COS_BUCKET) && isSet(env.COS_REGION)
 
 // 生产环境额外校验：mock 一律不允许开启
 if (isProduction) {
@@ -50,6 +82,17 @@ if (isProduction) {
       `[config] 生产环境禁止开启 mock：${enabledMocks.map(([k]) => k).join(', ')}，服务拒绝启动`
     )
     process.exit(1)
+  }
+
+  // 图片存储：生产必须走 COS（本地盘已迁移，不再接受新写入）
+  if (!cosEnabled) {
+    console.error('[config] 生产环境必须配置 COS_SECRET_ID / COS_SECRET_KEY / COS_BUCKET / COS_REGION，服务拒绝启动')
+    process.exit(1)
+  }
+
+  // 回调验签材料缺失只警告（商户号配置可能晚于部署），回调侧会直接拒绝
+  if (env.WECHAT_PAY_MOCK !== 'true' && !isSet(env.WECHAT_PAY_PUBLIC_KEY_PATH) && !isSet(env.WECHAT_PAY_PLATFORM_CERT_PATH)) {
+    console.warn('[config] 未配置 WECHAT_PAY_PUBLIC_KEY_PATH 或 WECHAT_PAY_PLATFORM_CERT_PATH，微信支付/退款回调将被拒绝')
   }
 }
 
@@ -71,5 +114,13 @@ export const config = {
     pay: env.WECHAT_PAY_MOCK === 'true',
     login: env.WECHAT_LOGIN_MOCK === 'true',
     qrcode: env.WECHAT_QRCODE_MOCK === 'true',
+  },
+  cos: {
+    enabled: cosEnabled,
+    secretId: env.COS_SECRET_ID ?? '',
+    secretKey: env.COS_SECRET_KEY ?? '',
+    bucket: env.COS_BUCKET ?? '',
+    region: env.COS_REGION ?? '',
+    baseUrl: (env.COS_BASE_URL ?? '').replace(/\/+$/, ''),
   },
 }
