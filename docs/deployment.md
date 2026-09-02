@@ -365,6 +365,18 @@ pm2 conf pm2-logrotate
 
 被限频抑制的次数会附在下一条同类告警里。未配置任何 webhook 时退化为 `console.error`（pm2 日志可查）。
 
+### 13.2b 通知通道自检
+
+配完 `ORDER_NOTIFY_*` / `SYSTEM_ALERT_WECOM_WEBHOOK` 后，用自检脚本验证**真的能推到店员手机上**：
+
+```bash
+node /www/food-shop/apps/server/scripts/check-notify.mjs
+```
+
+会往订单群和告警群各发一条标注「测试」的消息。**不能只看 HTTP 200** —— 企微机器人 key 无效时照样返回 200，真正的结果在响应体 `errcode`（93000 = key 无效），脚本已经按 errcode 判定。
+
+三个人工确认项（脚本验不了）：店员手机确实收到、群没设免打扰、`pm2 restart food-shop-server` 已执行让服务读到新值。
+
 ### 13.3 对象存储（COS）
 
 账号 APPID `1342627167`，三个桶均在上海 `ap-shanghai`，已按 `app` / `env` / `usage` 三个标签分类便于分账：
