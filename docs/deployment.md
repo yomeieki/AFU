@@ -180,7 +180,9 @@ pm2 save
 bash /www/food-shop/scripts/deploy.sh
 ```
 
-deploy.sh 会自动完成：git 拉取 → 安装依赖 → **迁移前备份数据库** → prisma generate → 编译 → 迁移（失败给出恢复命令）→ admin 构建发布 → PM2 热重载 → **pm2-logrotate 安装/配置（幂等）** → Nginx reload → 健康检查（含 DB 探活），并在结尾打印代码回滚与数据库恢复命令。
+deploy.sh 会自动完成：**预检（生产环境缺 COS 配置会在动服务之前就中止）** → git 拉取 → 安装依赖 → **迁移前备份数据库** → prisma generate → 编译 → 迁移（失败给出恢复命令）→ admin 构建发布 → PM2 热重载 → **pm2-logrotate 安装/配置（幂等）** → Nginx reload → 健康检查（含 DB 探活），并在结尾打印代码回滚与数据库恢复命令。
+
+> ⚠️ 首次部署本版本前，务必先在 `apps/server/.env` 填好 `COS_SECRET_ID/KEY/BUCKET/REGION`，否则预检会直接拒绝部署（这是有意的：新版图片上传只走 COS，配置缺失时启动即失败）。
 
 ---
 

@@ -29,6 +29,23 @@ echo "  node: $(node -v)  npm: $(npm -v)  pm2: $(pm2 -v)"
 [[ -f "${SERVER_DIR}/.env" ]] || { echo "ERROR: ${SERVER_DIR}/.env not found"; exit 1; }
 echo "  .env: ok"
 
+# 生产环境图片必须走 COS（config.ts 启动时强制校验）。在这里提前拦截，
+# 避免走到 [8/9] 重启后才因缺配置崩溃、导致服务已经停掉。
+env_val() { grep -E "^$1=" "${SERVER_DIR}/.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"'"'"'"; }
+if [[ "$(env_val NODE_ENV)" == "production" ]]; then
+  MISSING=""
+  for k in COS_SECRET_ID COS_SECRET_KEY COS_BUCKET COS_REGION; do
+    [[ -n "$(env_val "$k")" ]] || MISSING="${MISSING} ${k}"
+  done
+  if [[ -n "${MISSING}" ]]; then
+    echo "ERROR: 生产环境缺少 COS 配置：${MISSING# }"
+    echo "       新版后端的图片上传只走对象存储，缺配置会拒绝启动。"
+    echo "       请先在 ${SERVER_DIR}/.env 补齐（子账号密钥，仅授权图片桶）后重试部署。"
+    exit 1
+  fi
+  echo "  COS: ok"
+fi
+
 # ── [2/9] 拉取最新代码 ────────────────────────────────────────────────────────
 echo "[2/9] 拉取最新代码..."
 cd "${REPO_DIR}"
