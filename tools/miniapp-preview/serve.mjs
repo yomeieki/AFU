@@ -71,6 +71,7 @@ const PAGE_WXSS = {
   user: 'pages/user/index.wxss',
   'order-list': 'pages/order/list.wxss',
   'order-detail': 'pages/order/detail.wxss',
+  'after-sale': 'pages/order/after-sale.wxss',
   'order-confirm': 'pages/order/confirm.wxss',
   'address-list': 'pages/address/list.wxss',
   'address-edit': 'pages/address/edit.wxss',

@@ -17,11 +17,14 @@
         <div class="tab-item">待发货</div>
         <div class="tab-item">已发货</div>
         <div class="tab-item">已完成</div>
+        <div class="tab-item">退款/售后</div>
+        <div class="tab-item">已取消</div>
       </div>
     </div>
 
     <div class="order-list">
 
+      <!-- 待付款：倒计时 + 去支付 -->
       <div class="order-card card">
         <div class="order-header">
           <span class="order-no">订单号：ORD20260707905563</span>
@@ -34,10 +37,11 @@
         </div>
         <div class="order-footer">
           <div class="order-amount-wrap"><span class="order-amount-label">合计</span><span class="price-symbol">¥</span><span class="price-int order-amount-int">65</span><span class="price-dec">.70</span></div>
-          <div class="order-action"><span class="action-btn pay">去支付</span></div>
+          <div class="order-action"><span class="countdown-text">剩余 12:34 自动取消</span><span class="action-btn pay">去支付</span></div>
         </div>
       </div>
 
+      <!-- 已发货：部分退款 + 售后已退款（order-extra） -->
       <div class="order-card card">
         <div class="order-header">
           <span class="order-no">订单号：ORD20260707448142</span>
@@ -45,12 +49,14 @@
         </div>
         <div class="order-item-row">
           <div class="order-item-img-wrap"><div class="order-item-img-ph img-placeholder"></div></div>
-          <div class="order-item-info"><span class="order-item-name">秘制酱牛肉</span><span class="order-item-qty">× 1</span></div>
+          <div class="order-item-info"><span class="order-item-name">冷吃兔</span><span class="order-item-spec">中辣/去骨</span><span class="order-item-qty">× 1</span></div>
+          <span class="more-count">等2件</span>
         </div>
         <div class="order-footer">
-          <div class="order-amount-wrap"><span class="order-amount-label">合计</span><span class="price-symbol">¥</span><span class="price-int order-amount-int">49</span><span class="price-dec">.80</span></div>
+          <div class="order-amount-wrap"><span class="order-amount-label">合计</span><span class="price-symbol">¥</span><span class="price-int order-amount-int">53</span><span class="price-dec">.80</span></div>
           <div class="order-action"></div>
         </div>
+        <div class="order-extra"><span>已退 ¥8.00 · 售后已退款</span></div>
       </div>
 
       <div class="order-card card">
@@ -68,6 +74,7 @@
         </div>
       </div>
 
+      <div class="footer-tip"><span>- 没有更多了 -</span></div>
     </div>
   </div>
 </div>
