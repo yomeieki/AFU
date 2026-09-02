@@ -20,6 +20,8 @@
     "ignore": [],
     "include": []
   },
-  "appid": "wx79509a2dfe6b65e2",
-  "editorSetting": {}
+  "appid": "wx11aa80fcd1bfd2bb",
+  "editorSetting": {},
+  "miniprogramRoot": "apps/miniapp/",
+  "projectname": "afu-liangcai"
 }
