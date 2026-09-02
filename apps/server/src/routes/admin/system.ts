@@ -59,7 +59,11 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
       notify: {
         wecomSet: isSet(process.env.ORDER_NOTIFY_WECOM_WEBHOOK),
         pushplusSet: isSet(process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN),
+        pushplusTopicSet: isSet(process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC),
         systemAlertWecomSet: isSet(process.env.SYSTEM_ALERT_WECOM_WEBHOOK),
+        systemAlertPushplusSet: isSet(
+          process.env.SYSTEM_ALERT_PUSHPLUS_TOKEN || process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+        ),
       },
       order: {
         payTimeoutMin: config.order.payTimeoutMin,

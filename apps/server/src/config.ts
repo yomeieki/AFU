@@ -57,6 +57,7 @@ const envSchema = z.object({
   ORDER_NOTIFY_PUSHPLUS_TOKEN: z.string().optional(),
   ORDER_NOTIFY_PUSHPLUS_TOPIC: z.string().optional(),
   SYSTEM_ALERT_WECOM_WEBHOOK: z.string().optional(),
+  SYSTEM_ALERT_PUSHPLUS_TOKEN: z.string().optional(),
 
   // 腾讯云 COS（图片存储）：生产必填，开发未配置时回退本地 uploads/
   COS_SECRET_ID: z.string().optional(),

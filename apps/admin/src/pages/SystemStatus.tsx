@@ -32,7 +32,13 @@ interface SystemStatusData {
     baseUrlSet: boolean
     enabled: boolean
   }
-  notify: { wecomSet: boolean; pushplusSet: boolean; systemAlertWecomSet: boolean }
+  notify: {
+    wecomSet: boolean
+    pushplusSet: boolean
+    pushplusTopicSet: boolean
+    systemAlertWecomSet: boolean
+    systemAlertPushplusSet: boolean
+  }
   publicBaseUrl: string
 }
 
@@ -135,15 +141,20 @@ export default function SystemStatus() {
       ],
     },
     {
-      title: '新订单推送',
+      title: '新订单推送（店员收）',
       items: [
-        { ok: data.notify.wecomSet, label: '企业微信群机器人', hint: '在 .env 配置 ORDER_NOTIFY_WECOM_WEBHOOK', optional: true },
+        // 这一项不是 optional：两个通道都空 = 顾客付了钱店员完全不知道
+        { ok: data.notify.wecomSet || data.notify.pushplusSet, label: '至少有一个推送通道', hint: '都未配置时，店员只能靠盯着本页面才知道来单了' },
         { ok: data.notify.pushplusSet, label: 'PushPlus', hint: '在 .env 配置 ORDER_NOTIFY_PUSHPLUS_TOKEN', optional: true },
+        { ok: data.notify.pushplusTopicSet, label: 'PushPlus 群组（多店员共享）', hint: 'ORDER_NOTIFY_PUSHPLUS_TOPIC；不配则只推给 token 所属账号本人', optional: true },
+        { ok: data.notify.wecomSet, label: '企业微信群机器人', hint: '在 .env 配置 ORDER_NOTIFY_WECOM_WEBHOOK', optional: true },
       ],
     },
     {
-      title: '系统告警（接口 500 / 进程异常 / 退款失败 推送）',
+      title: '系统告警（接口 500 / 进程异常 / 退款失败，老板收）',
       items: [
+        { ok: data.notify.systemAlertWecomSet || data.notify.wecomSet || data.notify.systemAlertPushplusSet, label: '至少有一个告警通道', hint: '都未配置时告警只写进 pm2 日志，没人会看到' },
+        { ok: data.notify.systemAlertPushplusSet, label: '告警 PushPlus（一对一）', hint: 'SYSTEM_ALERT_PUSHPLUS_TOKEN；不配则回退订单 token，且不带群组——只推给本人，不进店员群', optional: true },
         { ok: data.notify.systemAlertWecomSet || data.notify.wecomSet, label: '告警企微群', hint: 'SYSTEM_ALERT_WECOM_WEBHOOK（未配置时回退到新订单推送群）', optional: true },
       ],
     },
