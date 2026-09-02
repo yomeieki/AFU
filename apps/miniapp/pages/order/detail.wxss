@@ -314,33 +314,27 @@
 }
 
 /* 待付款倒计时 */
-.status-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16rpx;
-}
-/* 待付款倒计时：白底胶囊 + 深橙大号数字，浅黄横幅上一眼可见 */
-.status-countdown {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8rpx;
-  padding: 10rpx 20rpx;
-  border-radius: 999rpx;
-  background: #ffffff;
-  border: 2rpx solid var(--warning);
-  box-shadow: 0 2rpx 8rpx rgba(255, 149, 0, 0.18);
-}
-.status-countdown-time {
-  font-size: 40rpx;
-  font-weight: 700;
-  color: #d97706;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-.status-countdown-hint {
-  font-size: 22rpx;
+/* 待付款：支付截止提示（横幅第二行） */
+.status-deadline {
+  display: block;
+  font-size: 28rpx;
+  font-weight: 600;
   color: #b45309;
+  line-height: 1.4;
+}
+/* 去支付按钮内嵌倒计时（两行） */
+.pay-btn-with-countdown {
+  flex-direction: column;
+  gap: 2rpx;
+  height: 96rpx;
+  line-height: 1.1;
+}
+.pay-btn-countdown {
+  font-size: 22rpx;
+  font-weight: 500;
+  opacity: 0.92;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1rpx;
 }
 /* 已退款金额 */
 .amount-value.refunded {

@@ -37,14 +37,21 @@ function t(v) {
   return v ? new Date(v).toLocaleString() : ''
 }
 
-// 待付款倒计时文案：mm:ss；到期返回 ''
+// 待付款倒计时文案：hh:mm:ss；到期返回 ''
 function countdownText(expireAt) {
   if (!expireAt) return ''
   var left = Math.floor((new Date(expireAt).getTime() - Date.now()) / 1000)
   if (left <= 0) return ''
-  var m = Math.floor(left / 60)
-  var s = left % 60
-  return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s)
+  var p = function(n) { return n < 10 ? '0' + n : '' + n }
+  return p(Math.floor(left / 3600)) + ':' + p(Math.floor((left % 3600) / 60)) + ':' + p(left % 60)
+}
+
+// 支付截止时刻：HH:mm（横幅「请在 19:23 前完成支付」）
+function deadlineText(expireAt) {
+  if (!expireAt) return ''
+  var d = new Date(expireAt)
+  var p = function(n) { return n < 10 ? '0' + n : '' + n }
+  return p(d.getHours()) + ':' + p(d.getMinutes())
 }
 
 // 订单进度时间线：已达节点亮起并带时间，未达灰显
@@ -117,6 +124,7 @@ function decorateOrder(order) {
     shippingFeeText: formatPrice(order.shippingFee),
     actualAmountText: formatPrice(order.actualAmount),
     refundedAmountText: formatPrice(order.refundedAmount || 0),
+    payDeadlineText: order.status === 'PENDING_PAYMENT' ? deadlineText(order.payExpireAt) : '',
     createdAtText: t(order.createdAt),
     paidAtText: order.paidAt ? t(order.paidAt) : null,
     timeline: buildTimeline(order),
