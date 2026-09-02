@@ -4,9 +4,10 @@
   <view class="brand-card card">
     <view class="brand-deco brand-deco-1"></view>
     <view class="brand-deco brand-deco-2"></view>
-    <!-- 真实印章 logo（含店名与「家的味道」），透明底 PNG -->
-    <image class="brand-logo" src="/assets/brand/logo-wordmark.png" mode="widthFix" />
-    <text class="brand-since">三十年老店 · 1995 至今</text>
+    <!-- 真实印章 logo（透明底 PNG）+ 店名 + 老店标识 -->
+    <image class="brand-logo" src="/assets/brand/logo-seal.png" mode="widthFix" />
+    <text class="brand-name">丹桂阿福凉菜</text>
+    <text class="brand-since">三十年老店</text>
   </view>
 
   <!-- 联系我们 -->

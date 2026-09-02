@@ -35,14 +35,21 @@
   bottom: -60rpx;
 }
 .brand-logo {
-  width: 460rpx;
+  width: 200rpx;
   display: block;
 }
+.brand-name {
+  margin-top: 20rpx;
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #1f1f1f;
+  letter-spacing: 6rpx;
+}
 .brand-since {
-  margin-top: 18rpx;
-  font-size: 22rpx;
-  color: var(--text-3);
-  letter-spacing: 3rpx;
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: #b02831;
+  letter-spacing: 8rpx;
 }
 
 /* 菜单区（与「我的」页保持一致） */
