@@ -5,7 +5,9 @@ import helmet from 'helmet'
 import path from 'path'
 import { router } from './routes'
 import { errorHandler } from './middlewares/error'
-import { wechatPayNotifyHandler } from './routes/wechat-notify'
+import { wechatPayNotifyHandler, wechatRefundNotifyHandler } from './routes/wechat-notify'
+import prisma from './utils/prisma'
+import { notifySystemAlert } from './services/notify'
 
 const app = express()
 const PORT = config.port
@@ -26,24 +28,54 @@ app.use(
 
 // Mount before express.json() so wechat-pay notify receives raw body for signature verification
 app.post('/api/wechat/pay/notify', express.text({ type: '*/*' }), wechatPayNotifyHandler)
+app.post('/api/wechat/pay/refund-notify', express.text({ type: '*/*' }), wechatRefundNotifyHandler)
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
-// 本地上传的图片静态托管（后续迁移 COS）
+// 本地上传图片静态托管：开发回退 + 生产存量图片过渡期兼容（COS 迁移完成一个部署周期后可下线）
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')))
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+// 健康检查：带 DB 探活（3 秒超时），供 deploy.sh / UptimeRobot 拨测；DB 不可用返回 503，不暴露细节
+app.get('/health', async (_req, res) => {
+  const dbOk = await Promise.race([
+    prisma.$queryRaw`SELECT 1`.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
+  ]).catch(() => false)
+  res.status(dbOk ? 200 : 503).json({
+    status: dbOk ? 'ok' : 'degraded',
+    db: dbOk ? 'ok' : 'fail',
+    timestamp: new Date().toISOString(),
+  })
 })
 
 app.use('/api', router)
 
 app.use(errorHandler)
 
+// 进程级兜底：未处理的 Promise 拒绝只告警不退出（多为通知类副作用）；
+// 未捕获异常告警后退出，交给 PM2 重启（进程状态已不可信）
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection:', reason)
+  notifySystemAlert('unhandledRejection', [String(reason instanceof Error ? reason.stack ?? reason.message : reason)], {
+    key: 'unhandledRejection',
+  })
+})
+process.on('uncaughtException', (err) => {
+  console.error('[process] uncaughtException:', err)
+  notifySystemAlert('uncaughtException（进程将重启）', [`${err.name}: ${err.message}`, (err.stack ?? '').split('\n')[1]?.trim() ?? ''], {
+    key: 'uncaughtException',
+  })
+  setTimeout(() => process.exit(1), 1500)
+})
+
 app.listen(PORT, () => {
   console.log(`[server] running on http://localhost:${PORT}`)
   console.log(`[server] env: ${config.nodeEnv}`)
+  if (config.isProduction) {
+    // 生产启动打点：频繁收到即说明重启风暴
+    notifySystemAlert('服务启动', [`端口 ${PORT}`], { key: 'boot', windowMs: 60 * 1000 })
+  }
 })
 
 export default app

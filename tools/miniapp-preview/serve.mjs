@@ -74,6 +74,8 @@ const PAGE_WXSS = {
   'order-confirm': 'pages/order/confirm.wxss',
   'address-list': 'pages/address/list.wxss',
   'address-edit': 'pages/address/edit.wxss',
+  about: 'pages/about/index.wxss',
+  legal: 'pages/legal/index.wxss',
 }
 
 let version = Date.now()

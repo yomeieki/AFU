@@ -1,0 +1,79 @@
+<view class="page">
+
+  <!-- 品牌 -->
+  <view class="brand-card card">
+    <view class="brand-deco brand-deco-1"></view>
+    <view class="brand-deco brand-deco-2"></view>
+    <view class="brand-seal">
+      <text class="brand-seal-text">阿福</text>
+      <text class="brand-seal-text">凉菜</text>
+    </view>
+    <text class="brand-name">{{shop.fullName}}</text>
+    <text class="brand-slogan">{{shop.slogan}}</text>
+  </view>
+
+  <!-- 联系我们 -->
+  <view class="menu-section card">
+    <view class="menu-section-header">
+      <text class="menu-section-title">联系我们</text>
+    </view>
+    <view class="menu-list">
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="onCall">
+        <view class="menu-icon icon icon-phone"></view>
+        <text class="menu-label">客服电话</text>
+        <text class="menu-value">{{shop.phone}}</text>
+        <view class="menu-arrow icon icon-arrow"></view>
+      </view>
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="onCopyAddress">
+        <view class="menu-icon icon icon-pin"></view>
+        <text class="menu-label">门店地址</text>
+        <text class="menu-value menu-value-wrap">{{shop.address}}</text>
+      </view>
+      <view class="menu-item">
+        <view class="menu-icon icon icon-info"></view>
+        <text class="menu-label">营业时间</text>
+        <text class="menu-value">{{shop.businessHours}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 资质信息 -->
+  <view class="menu-section card">
+    <view class="menu-section-header">
+      <text class="menu-section-title">资质信息</text>
+    </view>
+    <view class="info-list">
+      <view class="info-row">
+        <text class="info-label">经营主体</text>
+        <text class="info-value">{{shop.companyName}}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">统一社会信用代码</text>
+        <text class="info-value">{{shop.licenseNo}}</text>
+      </view>
+      <view class="info-row">
+        <text class="info-label">食品经营许可证</text>
+        <text class="info-value">{{shop.foodLicenseNo}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 协议与政策 -->
+  <view class="menu-section card">
+    <view class="menu-list">
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="goLegal" data-type="agreement">
+        <view class="menu-icon icon icon-doc"></view>
+        <text class="menu-label">用户协议</text>
+        <view class="menu-arrow icon icon-arrow"></view>
+      </view>
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="goLegal" data-type="privacy">
+        <view class="menu-icon icon icon-doc"></view>
+        <text class="menu-label">隐私政策</text>
+        <view class="menu-arrow icon icon-arrow"></view>
+      </view>
+    </view>
+  </view>
+
+  <text class="version">{{shop.name}} v{{shop.version}}</text>
+
+</view>

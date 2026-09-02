@@ -235,6 +235,7 @@ model Order {
   items    OrderItem[]
   payment  Payment?
   shipment Shipment?
+  refunds  Refund[]
 
   @@index([userId, status])
   @@index([status, createdAt])
@@ -294,6 +295,45 @@ model Payment {
 }
 
 // ─────────────────────────────────────────────────────────
+// 退款记录（微信退款 API 全额退款；每笔发起一条）
+// ─────────────────────────────────────────────────────────
+model Refund {
+  id             Int       @id @default(autoincrement())
+  orderId        Int       @map("order_id")
+  orderNo        String    @map("order_no") @db.VarChar(32)
+  outTradeNo     String?   @map("out_trade_no") @db.VarChar(64)
+  // 商户退款单号 refund_<orderId>_<timestamp>，微信侧幂等键
+  outRefundNo    String    @unique @map("out_refund_no") @db.VarChar(64)
+  wxRefundId     String?   @unique @map("wx_refund_id") @db.VarChar(64)
+  // 退款金额 / 原订单实付（分）
+  amount         Int
+  totalAmount    Int       @map("total_amount")
+  // PENDING(已发起) / PROCESSING / SUCCESS / ABNORMAL / CLOSED / FAILED(发起即失败)
+  status         String    @db.VarChar(16)
+  // MOCK / WECHAT
+  mode           String    @db.VarChar(16)
+  reason         String?   @db.VarChar(80)
+  operator       String?   @db.VarChar(64)
+  // 并发防线：活跃态（PENDING/PROCESSING/SUCCESS/ABNORMAL）= orderId，终态 FAILED/CLOSED 置 NULL
+  // MySQL 唯一索引允许多个 NULL → 同一订单同时只能有一条活跃退款，失败后可重试
+  activeOrderId  Int?      @unique @map("active_order_id")
+  channel        String?   @db.VarChar(32)
+  errorCode      String?   @map("error_code") @db.VarChar(64)
+  errorMessage   String?   @map("error_message") @db.VarChar(255)
+  wxResponseData String?   @map("wx_response_data") @db.Text
+  wxNotifyData   String?   @map("wx_notify_data") @db.Text
+  successTime    DateTime? @map("success_time")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([status])
+  @@map("refunds")
+}
+
+// ─────────────────────────────────────────────────────────
 // 发货/物流信息
 // ─────────────────────────────────────────────────────────
 model Shipment {
@@ -340,7 +380,7 @@ model ScanLog {
 model Banner {
   id        Int      @id @default(autoincrement())
   title     String?  @db.VarChar(64)
-  imageUrl  String   @map("image_url") @db.VarChar(255)
+  imageUrl  String   @map("image_url") @db.VarChar(500)
   // none | product（跳商品详情）
   linkType  String   @default("none") @map("link_type") @db.VarChar(16)
   productId Int?     @map("product_id")

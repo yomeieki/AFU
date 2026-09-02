@@ -66,6 +66,11 @@ Page({
     this.setData({ remark: e.detail.value })
   },
 
+  goLegal(e) {
+    var type = e.currentTarget.dataset.type
+    wx.navigateTo({ url: '/pages/legal/index?type=' + type })
+  },
+
   onSubmit() {
     if (!this.data.address) {
       wx.showToast({ title: '请选择收货地址', icon: 'none' })

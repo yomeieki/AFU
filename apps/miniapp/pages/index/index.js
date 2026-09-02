@@ -25,6 +25,17 @@ Page({
     this.loadData()
   },
 
+  onShareAppMessage() {
+    return {
+      title: '阿福凉菜 · 家的味道，三十年老店',
+      path: '/pages/index/index',
+    }
+  },
+
+  onShareTimeline() {
+    return { title: '阿福凉菜 · 家的味道，三十年老店' }
+  },
+
   loadData() {
     this.setData({ loading: true })
     Promise.all([

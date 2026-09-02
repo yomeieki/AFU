@@ -187,9 +187,9 @@ server {
 
 在微信公众平台 → 小程序 → 开发设置 → 服务器域名中配置：
 
-- request 合法域名：`https://api.yourdomain.com`
-- uploadFile 合法域名：`https://api.yourdomain.com`
-- downloadFile 合法域名：`https://cos.yourdomain.com`（COS 自定义域名）
+- request 合法域名：`https://api.yuegui-hotel.online`
+- uploadFile 合法域名：`https://api.yuegui-hotel.online`
+- downloadFile 合法域名：COS 访问域名（`.env` 的 `COS_BASE_URL`，未配置时为 `https://<bucket>.cos.<region>.myqcloud.com`）
 
 ### 4.4 环境变量（.env.example）
 

@@ -1,10 +1,16 @@
 import crypto from 'crypto'
 import fs from 'fs'
 
+// 商户私钥模块级缓存（路径变化时重新读取）
+let cachedPrivateKey: { path: string; pem: string } | null = null
+
 function readPrivateKey(): string {
   const path = process.env.WECHAT_PAY_PRIVATE_KEY_PATH
   if (!path) throw new Error('WECHAT_PAY_PRIVATE_KEY_PATH not configured')
-  return fs.readFileSync(path, 'utf-8')
+  if (cachedPrivateKey && cachedPrivateKey.path === path) return cachedPrivateKey.pem
+  const pem = fs.readFileSync(path, 'utf-8')
+  cachedPrivateKey = { path, pem }
+  return pem
 }
 
 function generateNonce(): string {
@@ -102,6 +108,75 @@ export function generatePayParams(prepayId: string): {
   const paySign = sign.sign(privateKey, 'base64')
 
   return { timeStamp, nonceStr, package: pkg, signType: 'RSA', paySign }
+}
+
+// ---------------- 退款 ----------------
+
+export interface RefundParams {
+  outTradeNo: string
+  outRefundNo: string
+  amount: number // 退款金额（分）
+  total: number // 原订单金额（分）
+  reason?: string
+  notifyUrl: string
+}
+
+export interface RefundResult {
+  refund_id: string
+  out_refund_no: string
+  transaction_id?: string
+  out_trade_no?: string
+  channel?: string
+  status: 'SUCCESS' | 'CLOSED' | 'PROCESSING' | 'ABNORMAL'
+  success_time?: string
+  amount: { refund: number; total: number; payer_refund?: number }
+}
+
+/** 微信退款 API 返回业务错误（非 2xx），code 如 NOT_ENOUGH / PARAM_ERROR / FREQUENCY_LIMITED */
+export class WechatRefundError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public httpStatus: number
+  ) {
+    super(message)
+    this.name = 'WechatRefundError'
+  }
+}
+
+/** 退款回调地址：优先 WECHAT_PAY_REFUND_NOTIFY_URL，否则由支付回调地址把末尾 /notify 换成 /refund-notify */
+export function getRefundNotifyUrl(): string {
+  const explicit = process.env.WECHAT_PAY_REFUND_NOTIFY_URL
+  if (explicit && explicit.trim()) return explicit.trim()
+  const payNotify = process.env.WECHAT_PAY_NOTIFY_URL ?? ''
+  return payNotify.replace(/\/notify\/?$/, '/refund-notify')
+}
+
+/** 申请退款 POST /v3/refund/domestic/refunds（全额或部分由调用方决定，本项目只用全额）。 */
+export async function createRefund(params: RefundParams): Promise<RefundResult> {
+  const apiUrl = 'https://api.mch.weixin.qq.com/v3/refund/domestic/refunds'
+  const body = JSON.stringify({
+    out_trade_no: params.outTradeNo,
+    out_refund_no: params.outRefundNo,
+    reason: params.reason,
+    notify_url: params.notifyUrl,
+    amount: { refund: params.amount, total: params.total, currency: 'CNY' },
+  })
+  const authorization = generateWxPayAuthorization('POST', apiUrl, body)
+  const resp = await fetch(apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: authorization,
+    },
+    body,
+  })
+  const data = (await resp.json()) as Partial<RefundResult> & { code?: string; message?: string }
+  if (!resp.ok || !data.refund_id) {
+    throw new WechatRefundError(data.code ?? `HTTP_${resp.status}`, data.message ?? '微信退款请求失败', resp.status)
+  }
+  return data as RefundResult
 }
 
 export function verifyNotifySignature(

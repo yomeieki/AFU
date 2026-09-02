@@ -9,6 +9,8 @@ interface ModalProps {
   children: ReactNode
   footer?: ReactNode
   width?: Width
+  /** 点击遮罩 / 按 Esc 是否关闭（危险操作弹窗传 false，防误触） */
+  closeOnOverlay?: boolean
 }
 
 const WIDTH: Record<Width, string> = {
@@ -17,19 +19,20 @@ const WIDTH: Record<Width, string> = {
   lg: 'max-w-2xl',
 }
 
-export default function Modal({ title, onClose, children, footer, width = 'md' }: ModalProps) {
+export default function Modal({ title, onClose, children, footer, width = 'md', closeOnOverlay = true }: ModalProps) {
   useEffect(() => {
+    if (!closeOnOverlay) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, closeOnOverlay])
 
   return (
     <div
       className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 overflow-y-auto py-8"
-      onClick={onClose}
+      onClick={closeOnOverlay ? onClose : undefined}
     >
       <div
         className={`bg-white rounded-lg shadow-xl w-full ${WIDTH[width]} mx-4 my-auto max-h-[85vh] overflow-y-auto`}

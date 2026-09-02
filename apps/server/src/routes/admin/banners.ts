@@ -8,7 +8,7 @@ const router = Router()
 
 const bannerSchema = z.object({
   title: z.string().max(64).optional().nullable(),
-  imageUrl: z.string().min(1, '请上传图片').max(255),
+  imageUrl: z.string().min(1, '请上传图片').max(500),
   linkType: z.enum(['none', 'product']).default('none'),
   productId: z.number().int().positive().optional().nullable(),
   sortOrder: z.number().int().default(0),

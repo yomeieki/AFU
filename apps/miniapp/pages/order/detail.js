@@ -1,4 +1,5 @@
 const { getOrderDetail, confirmOrder, cancelOrder } = require('../../api/order')
+const { callShop } = require('../../utils/contact')
 const { payOrder } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
 
@@ -199,6 +200,10 @@ Page({
           .catch(function() {})
       },
     })
+  },
+
+  onContactShop() {
+    callShop()
   },
 
   onConfirmReceipt() {

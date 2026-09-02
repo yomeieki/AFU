@@ -11,7 +11,9 @@
     "pages/order/detail",
     "pages/user/index",
     "pages/merchant/login",
-    "pages/merchant/index"
+    "pages/merchant/index",
+    "pages/about/index",
+    "pages/legal/index"
   ],
   "tabBar": {
     "color": "#999999",
@@ -47,7 +49,7 @@
   "window": {
     "backgroundTextStyle": "dark",
     "navigationBarBackgroundColor": "#ffffff",
-    "navigationBarTitleText": "食品商城",
+    "navigationBarTitleText": "阿福凉菜",
     "navigationBarTextStyle": "black"
   },
   "networkTimeout": {

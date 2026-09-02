@@ -1,6 +1,6 @@
 {
-  "name": "食品商城管理后台",
-  "short_name": "商城后台",
+  "name": "阿福凉菜管理后台",
+  "short_name": "阿福后台",
   "start_url": "/",
   "display": "standalone",
   "theme_color": "#e5441e",

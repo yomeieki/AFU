@@ -535,6 +535,12 @@
 
 ---
 
+#### POST /api/wechat/pay/refund-notify
+
+微信退款结果回调（`REFUND.SUCCESS` / `REFUND.ABNORMAL` / `REFUND.CLOSED`）。与支付回调共用验签逻辑：按 `Wechatpay-Serial` 头自动识别「微信支付公钥」（`PUB_KEY_ID_` 前缀）或「平台证书」模式，时间戳偏差 >5 分钟拒绝。
+
+处理：按 `out_refund_no` 找到退款记录 → 已 SUCCESS 直接 ack（幂等）→ 回调 `amount.refund` 必须等于记录金额否则 400 FAIL → SUCCESS 时事务写 `refunds.status=SUCCESS`、`orders.status=REFUNDED`、`payments.status=REFUNDED` 并推送通知；ABNORMAL/CLOSED 写状态并告警。
+
 ### 2.8 扫码日志
 
 #### POST /api/scan-logs
@@ -779,6 +785,31 @@
 **说明：** 成功后订单状态变为 `SHIPPED`，创建 shipments 记录。
 
 ---
+
+#### POST /api/admin/orders/:id/refund
+
+一键退款（全额，微信退款 API 原路退回）。允许状态：`PAID` / `PREPARING` / `SHIPPED`（登记并执行），或 `REFUNDING`（用户自助取消 / 上次发起失败后重试）。
+
+请求：
+```json
+{ "amount": 3800, "reason": "商品缺货" }
+```
+- `amount`（必填，分）必须等于订单 `actualAmount`，否则 `42206`
+- 同一订单已有进行中的退款 → `42205`；订单状态并发变化 → `42204`；无成功支付记录 / 模拟支付订单 → `42207`
+- 待接单/备餐中退款回滚库存，已发货不回滚
+- `WECHAT_PAY_MOCK=true` 时直接置 `REFUNDED`（`mode: "mock"`）
+- 微信 API 返回失败 → 退款记录 `FAILED`、订单保持 `REFUNDING`、企微告警，响应 `50201`（HTTP 502）
+
+响应：
+```json
+{ "code": 0, "data": { "order": { "status": "REFUNDING" }, "refund": { "outRefundNo": "refund_12_1725...", "status": "PROCESSING" }, "mode": "wechat" } }
+```
+
+#### POST /api/admin/orders/:id/refund-complete
+
+人工兜底：确认商户平台已退款成功但系统未收到回调时，把 `REFUNDING` 订单标记为 `REFUNDED`（同时把进行中的退款记录标 SUCCESS）。仅 `REFUNDING` 可调用；重复调用 `42204`。
+
+`GET /api/admin/orders` 列表每项附带 `latestRefund`（最近一条退款记录：`status` / `outRefundNo` / `amount` / `mode` / `errorMessage`）。
 
 ### 3.6 用户管理
 

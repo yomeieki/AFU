@@ -83,16 +83,24 @@
 
 <!-- Bottom bar -->
 <view class="bottom-bar">
-  <view class="bottom-total-wrap">
-    <text class="bottom-total-label">合计</text>
-    <text class="price-symbol">¥</text>
-    <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(totalAmount))}}</text>
-    <text class="price-dec">{{pricefmt.dec(pricefmt.fen(totalAmount))}}</text>
+  <view class="agree-row">
+    <text>提交订单即表示同意</text>
+    <text class="agree-link" bindtap="goLegal" data-type="agreement">《用户协议》</text>
+    <text>和</text>
+    <text class="agree-link" bindtap="goLegal" data-type="privacy">《隐私政策》</text>
   </view>
-  <view
-    class="submit-btn btn-primary {{submitting ? 'btn-disabled' : ''}}"
-    bindtap="onSubmit"
-  >
-    <text>{{submitting ? '提交中...' : '提交订单'}}</text>
+  <view class="bottom-main">
+    <view class="bottom-total-wrap">
+      <text class="bottom-total-label">合计</text>
+      <text class="price-symbol">¥</text>
+      <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(totalAmount))}}</text>
+      <text class="price-dec">{{pricefmt.dec(pricefmt.fen(totalAmount))}}</text>
+    </view>
+    <view
+      class="submit-btn btn-primary {{submitting ? 'btn-disabled' : ''}}"
+      bindtap="onSubmit"
+    >
+      <text>{{submitting ? '提交中...' : '提交订单'}}</text>
+    </view>
   </view>
 </view>
