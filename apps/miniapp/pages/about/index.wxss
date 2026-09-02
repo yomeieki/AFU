@@ -35,7 +35,7 @@
   bottom: -60rpx;
 }
 .brand-logo {
-  width: 200rpx;
+  width: 520rpx;
   display: block;
 }
 .brand-name {

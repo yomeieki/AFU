@@ -4,12 +4,8 @@
   <view class="brand-card card">
     <view class="brand-deco brand-deco-1"></view>
     <view class="brand-deco brand-deco-2"></view>
-    <!-- 真实印章 logo（透明底 PNG）+ 店名 + 老店标识 -->
-    <image class="brand-logo" src="/assets/brand/logo-seal.png" mode="widthFix" />
-    <text class="brand-name">丹桂阿福凉菜</text>
-    <view class="brand-slogan-row">
-      <text>家</text><text class="brand-slogan-sep"></text><text>的</text><text class="brand-slogan-sep"></text><text>味</text><text class="brand-slogan-sep"></text><text>道</text>
-    </view>
+    <!-- 真实 logo 原图（印章 + 丹桂阿福凉菜 + 家的味道），白底已转透明 -->
+    <image class="brand-logo" src="/assets/brand/logo-standard.png" mode="widthFix" />
     <text class="brand-since">三十年老店</text>
   </view>
 
