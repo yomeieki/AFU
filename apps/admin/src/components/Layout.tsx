@@ -32,7 +32,8 @@ const navItems: { to: string; label: string; icon: LucideIcon }[] = [
 export default function Layout() {
   const { admin, clearAuth } = useAuthStore()
   const navigate = useNavigate()
-  const { count: pendingCount } = usePendingOrders()
+  const { count: pendingCount, afterSaleCount } = usePendingOrders()
+  const orderBadge = pendingCount + afterSaleCount
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const handleBellClick = () => {
@@ -81,9 +82,12 @@ export default function Layout() {
             >
               <item.icon className="w-5 h-5" strokeWidth={1.8} />
               {item.label}
-              {item.to === '/orders' && pendingCount > 0 && (
-                <span className="ml-auto min-w-[1.25rem] h-5 px-1 rounded-full bg-red-500 text-white text-xs flex items-center justify-center">
-                  {pendingCount > 99 ? '99+' : pendingCount}
+              {item.to === '/orders' && orderBadge > 0 && (
+                <span
+                  className="ml-auto min-w-[1.25rem] h-5 px-1 rounded-full bg-red-500 text-white text-xs flex items-center justify-center"
+                  title={`待处理 ${pendingCount} · 售后 ${afterSaleCount}`}
+                >
+                  {orderBadge > 99 ? '99+' : orderBadge}
                 </span>
               )}
             </NavLink>

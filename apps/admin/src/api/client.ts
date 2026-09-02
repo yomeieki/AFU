@@ -16,7 +16,8 @@ client.interceptors.request.use((config) => {
 client.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    // /m 是小程序 web-view 免登录入口：换码失败要在页内提示「回小程序重进」，不能跳到账号密码页
+    if (err.response?.status === 401 && window.location.pathname !== '/m') {
       localStorage.removeItem('admin_token')
       localStorage.removeItem('admin_info')
       window.location.href = '/login'

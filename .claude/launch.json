@@ -4,15 +4,41 @@
     {
       "name": "admin",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3100 npm run dev"],
+      "runtimeArgs": [
+        "-c",
+        "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3100 npm run dev"
+      ],
       "port": 5173,
       "autoPort": true
     },
     {
       "name": "miniapp-preview",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["tools/miniapp-preview/serve.mjs", "--port", "5180"],
+      "runtimeArgs": [
+        "tools/miniapp-preview/serve.mjs",
+        "--port",
+        "5180"
+      ],
       "port": 5180
+    },
+    {
+      "name": "admin-3101",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3101 npm run dev -- --port 5174 --strictPort"
+      ],
+      "port": 5174
+    },
+    {
+      "name": "miniapp-preview-5181",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/miniapp-preview/serve.mjs",
+        "--port",
+        "5181"
+      ],
+      "port": 5181
     }
   ]
 }

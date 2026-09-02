@@ -58,7 +58,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response, next: Ne
 // ── 小程序 web-view 免登录：一次性换码 ────────────────────
 // 商家在小程序里用账号密码登录后持有 admin token；打开内嵌后台时先换一个 60 秒一次性 code，
 // 由 web-view 页面 /m?code= 用 code 换回 token（token 本身不进 URL）。
-const WEBVIEW_CODE_TTL_MS = 60 * 1000
+const WEBVIEW_CODE_TTL_MS = 2 * 60 * 1000
 const webviewCodes = new Map<string, { adminId: number; username: string; role: string; expiresAt: number }>()
 
 function pruneWebviewCodes() {

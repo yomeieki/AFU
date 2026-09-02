@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/auth'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import WebviewLogin from './pages/WebviewLogin'
 import Dashboard from './pages/Dashboard'
 import Categories from './pages/Categories'
 import Products from './pages/Products'
@@ -25,6 +26,7 @@ export default function App() {
       <ConfirmDialogHost />
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/m" element={<WebviewLogin />} />
         <Route
           path="/"
           element={

@@ -10,6 +10,7 @@ const ORIGINAL_TITLE = document.title
 // ① toast ② 系统 Notification（需授权，仅 localhost/HTTPS）③ 标签页失焦时标题闪烁
 export function usePendingOrders() {
   const [count, setCount] = useState(0)
+  const [afterSaleCount, setAfterSaleCount] = useState(0)
   const lastPaidAtRef = useRef<string | null>(null)
   const initializedRef = useRef(false)
   const lowStockNotifiedRef = useRef(false)
@@ -40,8 +41,9 @@ export function usePendingOrders() {
       try {
         const res = await getPendingOrderCount()
         if (disposed) return
-        const { count: c, latestPaidAt, lowStockCount, lowStockThreshold } = res.data.data
+        const { count: c, latestPaidAt, lowStockCount, lowStockThreshold, afterSaleCount: asc } = res.data.data
         setCount(c)
+        setAfterSaleCount(asc ?? 0)
         // 低库存预警：每次会话只提醒一次
         if (lowStockCount > 0 && !lowStockNotifiedRef.current) {
           lowStockNotifiedRef.current = true
@@ -87,7 +89,7 @@ export function usePendingOrders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { count }
+  return { count, afterSaleCount }
 }
 
 // 铃铛点击时调用：在用户手势内请求 Notification 权限
