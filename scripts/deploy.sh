@@ -102,6 +102,17 @@ fi
 sleep 2
 pm2 show food-shop-server | grep -E "status|restart|uptime" || true
 
+# ── [8b] 日志轮转（幂等）：防 /var/log/pm2 撑爆磁盘 ───────────────────────────
+if ! pm2 ls 2>/dev/null | grep -q pm2-logrotate; then
+  echo "  安装 pm2-logrotate..."
+  pm2 install pm2-logrotate >/dev/null
+fi
+pm2 set pm2-logrotate:max_size 20M >/dev/null
+pm2 set pm2-logrotate:retain 14 >/dev/null
+pm2 set pm2-logrotate:compress true >/dev/null
+pm2 set pm2-logrotate:rotateInterval '0 0 * * *' >/dev/null
+echo "  pm2-logrotate: 20M × 14 份，每日 0 点轮转"
+
 # ── [9/9] 重载 Nginx + 健康检查 ──────────────────────────────────────────────
 echo "[9/9] 重载 Nginx..."
 nginx -t && nginx -s reload
