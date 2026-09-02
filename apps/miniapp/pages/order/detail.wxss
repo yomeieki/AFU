@@ -314,11 +314,33 @@
 }
 
 /* 待付款倒计时 */
+.status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+/* 待付款倒计时：白底胶囊 + 深橙大号数字，浅黄横幅上一眼可见 */
 .status-countdown {
-  display: block;
-  font-size: 24rpx;
-  color: rgba(255, 255, 255, 0.9);
-  margin-top: 8rpx;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8rpx;
+  padding: 10rpx 20rpx;
+  border-radius: 999rpx;
+  background: #ffffff;
+  border: 2rpx solid var(--warning);
+  box-shadow: 0 2rpx 8rpx rgba(255, 149, 0, 0.18);
+}
+.status-countdown-time {
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #d97706;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.status-countdown-hint {
+  font-size: 22rpx;
+  color: #b45309;
 }
 /* 已退款金额 */
 .amount-value.refunded {

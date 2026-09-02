@@ -3,8 +3,13 @@
 
   <!-- Status banner -->
   <view class="status-banner {{order.status}}">
-    <text class="status-label">{{order.statusLabel}}</text>
-    <text wx:if="{{order.status === 'PENDING_PAYMENT' && countdown}}" class="status-countdown">剩余 {{countdown}} 未支付将自动取消</text>
+    <view class="status-head">
+      <text class="status-label">{{order.statusLabel}}</text>
+      <view wx:if="{{order.status === 'PENDING_PAYMENT' && countdown}}" class="status-countdown">
+        <text class="status-countdown-time">{{countdown}}</text>
+        <text class="status-countdown-hint">后自动取消</text>
+      </view>
+    </view>
     <text class="status-order-no">{{order.orderNo}}</text>
   </view>
 
