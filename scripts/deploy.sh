@@ -58,13 +58,25 @@ if [[ "$(env_val NODE_ENV)" == "production" ]]; then
 fi
 
 # ── [2/9] 拉取最新代码 ────────────────────────────────────────────────────────
+# SKIP_FETCH=1：跳过 git fetch，直接用本地已有的 origin/main。
+# 用在 GitHub 从本机连不上的时候（国内机器常态：GnuTLS recv error / 443 超时），
+# 此时可从一台能连 GitHub 的机器把 ref 推过来：
+#   git push ubuntu@<服务器>:/www/food-shop <sha>:refs/remotes/origin/main
+# 然后 SKIP_FETCH=1 bash scripts/deploy.sh
 echo "[2/9] 拉取最新代码..."
 cd "${REPO_DIR}"
-git fetch origin
+if [[ "${SKIP_FETCH:-0}" == "1" ]]; then
+  echo "  SKIP_FETCH=1，跳过 git fetch，使用本地 origin/main"
+else
+  git fetch origin
+fi
 BEFORE=$(git rev-parse --short HEAD)
 git reset --hard origin/main
 AFTER=$(git rev-parse --short HEAD)
 echo "  ${BEFORE} → ${AFTER}"
+if [[ "${BEFORE}" == "${AFTER}" ]]; then
+  echo "  （代码无变化）"
+fi
 
 # ── [3/9] 安装依赖（monorepo 根目录，构建需 devDependencies）──────────────────
 echo "[3/9] 安装依赖..."
