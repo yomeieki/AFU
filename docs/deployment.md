@@ -96,14 +96,20 @@ WECHAT_PAY_SERIAL_NO="商户证书序列号"
 WECHAT_PAY_PRIVATE_KEY_PATH="/www/food-shop/apps/server/keys/apiclient_key.pem"
 WECHAT_PAY_API_V3_KEY="32字节APIv3密钥"
 WECHAT_PAY_NOTIFY_URL="https://api.yourdomain.com/api/wechat/pay/notify"
-WECHAT_PAY_PLATFORM_CERT_PATH="/www/food-shop/apps/server/keys/wechatpay_cert.pem"
+# 退款回调留空自动派生为 .../refund-notify
+WECHAT_PAY_REFUND_NOTIFY_URL=""
+# 回调验签材料二选一（商户平台 → API 安全 查看模式）：
+WECHAT_PAY_PUBLIC_KEY_PATH="/www/food-shop/apps/server/keys/pub_key.pem"
+WECHAT_PAY_PUBLIC_KEY_ID="PUB_KEY_ID_xxx"
+# WECHAT_PAY_PLATFORM_CERT_PATH="/www/food-shop/apps/server/keys/wechatpay_cert.pem"
+WECHAT_PAY_CERT_AUTO_DOWNLOAD="true"
 
-# 腾讯云 COS
-COS_SECRET_ID="your-cos-secret-id"
-COS_SECRET_KEY="your-cos-secret-key"
-COS_BUCKET="your-bucket-ap-region"
+# 腾讯云 COS —— 生产必填，未配置服务拒绝启动（图片全部走 COS）
+COS_SECRET_ID="子账号 SecretId"
+COS_SECRET_KEY="子账号 SecretKey"
+COS_BUCKET="bucket-1250000000"
 COS_REGION="ap-guangzhou"
-COS_BASE_URL="https://your-cos-domain.com"
+COS_BASE_URL="https://img.yourdomain.com"   # 可留空用桶默认域名
 
 # 服务器
 PORT=3000
@@ -116,7 +122,21 @@ WECHAT_QRCODE_MOCK=false
 ORDER_NOTIFY_WECOM_WEBHOOK=""
 ORDER_NOTIFY_PUSHPLUS_TOKEN=""
 ORDER_NOTIFY_PUSHPLUS_TOPIC=""
+
+# 系统告警（500 / 进程崩溃 / 支付金额不符 / 退款失败），留空回退到上面的订单群
+SYSTEM_ALERT_WECOM_WEBHOOK=""
 ```
+
+> **首次配置 COS 后的存量图片迁移**（只需做一次）：
+> ```bash
+> cd /www/food-shop/apps/server
+> npx ts-node --compiler-options '{"module":"CommonJS"}' scripts/migrate-uploads-to-cos.ts --dry-run \
+>     --old-prefix https://api.yuegui-hotel.online/uploads/
+> # 看输出无误后去掉 --dry-run 实跑，并保留报告
+> npx ts-node --compiler-options '{"module":"CommonJS"}' scripts/migrate-uploads-to-cos.ts \
+>     --old-prefix https://api.yuegui-hotel.online/uploads/ --report /www/backups/migrate-cos-report.json
+> ```
+> 脚本先上传再改库、可重复执行；跑完后 nginx 的 `/uploads/` 与 `express.static` 保留一个部署周期做兜底，之后可删。
 
 ### 微信支付私钥存放
 
@@ -124,7 +144,7 @@ ORDER_NOTIFY_PUSHPLUS_TOPIC=""
 mkdir -p /www/food-shop/apps/server/keys
 chmod 700 /www/food-shop/apps/server/keys
 # 将商户私钥上传到服务器（apiclient_key.pem）
-# 将微信支付平台证书上传（wechatpay_cert.pem）
+# 将验签材料上传：微信支付公钥 pub_key.pem（新商户）或 平台证书 wechatpay_cert.pem（老商户）
 chmod 600 /www/food-shop/apps/server/keys/*.pem
 ```
 
@@ -156,7 +176,7 @@ pm2 save
 bash /www/food-shop/scripts/deploy.sh
 ```
 
-deploy.sh 会自动完成：git 拉取 → 安装依赖 → **迁移前备份数据库** → prisma generate → 编译 → 迁移（失败给出恢复命令）→ admin 构建发布 → PM2 热重载 → Nginx reload → 健康检查，并在结尾打印代码回滚与数据库恢复命令。
+deploy.sh 会自动完成：git 拉取 → 安装依赖 → **迁移前备份数据库** → prisma generate → 编译 → 迁移（失败给出恢复命令）→ admin 构建发布 → PM2 热重载 → **pm2-logrotate 安装/配置（幂等）** → Nginx reload → 健康检查（含 DB 探活），并在结尾打印代码回滚与数据库恢复命令。
 
 ---
 
@@ -173,6 +193,10 @@ nano /etc/nginx/conf.d/food-shop.conf
 nginx -t && nginx -s reload
 ```
 
+模板要点：
+- `location /api/wechat/pay/` 单独反代且不限流、不缓冲 body——同时覆盖支付回调 `/notify` 与退款回调 `/refund-notify`（**升级到自动退款后必须是这个前缀**，老配置只写了 `/notify`）
+- `location /uploads/` 存量本地图片过渡期直出；COS 迁移完成一个部署周期后可删
+
 ---
 
 ## 八、数据库备份
@@ -184,10 +208,10 @@ export COS_BUCKET="your-bucket"
 export COS_REGION="ap-guangzhou"
 bash /www/food-shop/scripts/backup.sh
 
-# 设置每日凌晨 2 点自动备份
+# 设置每日凌晨 2 点自动备份（ALERT_WEBHOOK 为企微机器人地址：失败告警 + 完成摘要）
 crontab -e
 # 加入：
-0 2 * * * DB_PASS=xxx COS_BUCKET=xxx COS_REGION=ap-guangzhou bash /www/food-shop/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
+0 2 * * * DB_PASS=xxx COS_BUCKET=xxx COS_REGION=ap-guangzhou ALERT_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx bash /www/food-shop/scripts/backup.sh >> /var/log/food-shop-backup.log 2>&1
 ```
 
 ---
@@ -231,11 +255,7 @@ Prisma 不支持自动回滚迁移。操作方式：
 微信开发者工具 → 上传代码 → 微信公众平台 → 版本管理 → 提审 → 发布
 ```
 
-发布前检查：
-- [ ] `apps/miniapp/config/index.js`：`isDev` 改为 `false`，生产 `baseURL` 指向 `https://api.yourdomain.com/api`，`adminUrl` 指向 `https://admin.yourdomain.com`
-- [ ] 微信公众平台 → 开发设置 → 服务器域名已配置 `api.yourdomain.com`
-- [ ] 小程序 AppID 和后端 `WECHAT_APP_ID` 一致
-- [ ] `WECHAT_LOGIN_MOCK=false` 且 AppSecret 正确
+完整的提审材料、平台侧设置（类目/隐私保护指引/域名）、审核备注模板与常见打回对策见 **[miniapp-release-checklist.md](miniapp-release-checklist.md)**。
 
 ---
 
@@ -272,4 +292,58 @@ tail -f /var/log/nginx/access.log
 
 # 查看 Nginx 错误日志
 tail -f /var/log/nginx/error.log
+
+# 日志轮转状态（deploy.sh 已自动装 pm2-logrotate：20M × 14 份，每日 0 点）
+pm2 conf pm2-logrotate
 ```
+
+---
+
+## 十三、监控与告警
+
+采用「外部拨测 + 服务内告警 + 日志轮转 + 备份摘要」的轻量组合，零新服务、零费用。
+
+### 13.1 外部拨测（UptimeRobot，免费版 50 个监控 / 5 分钟）
+
+1. 注册 [uptimerobot.com](https://uptimerobot.com)
+2. **Add New Monitor** 三个：
+
+| 类型 | URL | Keyword（Alert when keyword **not exists**） | 说明 |
+|---|---|---|---|
+| HTTP(s) – Keyword | `https://api.yuegui-hotel.online/health` | `"status":"ok"` | 后端进程 + MySQL 探活（DB 挂了返回 503 `degraded`） |
+| HTTP(s) – Keyword | `https://admin.yuegui-hotel.online/` | `阿福` | 后台静态站 + HTTPS 证书 |
+| HTTP(s) | `https://api.yuegui-hotel.online/api/categories` | — | 业务接口可用 |
+
+3. **Alert Contacts**：邮件（免费）+ Webhook 推企微群：
+   - Type = Webhook，URL 填企微机器人地址，POST Value (JSON)：
+     `{"msgtype":"text","text":{"content":"【UptimeRobot】*monitorFriendlyName* *alertTypeFriendlyName*\n*monitorURL*\n*alertDetails*"}}`
+   - 勾 "Send as JSON"
+4. **演练**：服务器执行 `pm2 stop food-shop-server`，10 分钟内应收到 Down 告警；`pm2 start food-shop-server` 后收到 Up。
+
+### 13.2 服务内告警（推企微群，`SYSTEM_ALERT_WECOM_WEBHOOK`）
+
+| 触发 | 位置 | 限频 |
+|---|---|---|
+| 接口未捕获异常（HTTP 500） | `middlewares/error.ts` | 同路由 5 分钟一次 |
+| `unhandledRejection`（只告警不退出） | `app.ts` | 5 分钟一次 |
+| `uncaughtException`（告警后 1.5s 退出，PM2 自动重启） | `app.ts` | 5 分钟一次 |
+| 生产启动打点（短时间频繁收到 = 重启风暴） | `app.ts` | 1 分钟一次 |
+| 支付回调金额与订单不符 | `routes/wechat-notify.ts` | 每订单一次 |
+| 退款发起失败 / 退款异常 / 退款关闭 / 退款回调金额不符 | `services/refund.ts` | 每退款单一次 |
+
+被限频抑制的次数会附在下一条同类告警里。未配置任何 webhook 时退化为 `console.error`（pm2 日志可查）。
+
+### 13.3 日志与磁盘
+
+- `deploy.sh` 每次部署自动确保 `pm2-logrotate`：单文件 20M、保留 14 份、gzip、每日 0 点轮转
+- nginx 日志由系统 logrotate 管理（Ubuntu 默认每日）
+- 备份脚本每日凌晨 2 点跑，成功/失败都会推企微（见第八节 `ALERT_WEBHOOK`）
+- 磁盘水位：轻量服务器建议每月 `df -h` 看一眼；备份目录只保留 7 天
+
+### 13.4 上线后看什么
+
+| 频率 | 看哪里 |
+|---|---|
+| 每天 | 企微「新订单」群有单就说明链路活着；告警群安静 |
+| 每周 | UptimeRobot 可用率 ≥ 99.5%；`pm2 logs --err --lines 200` 无重复报错 |
+| 每月 | 备份文件能从 COS 拉下来并解压；`df -h`；商户平台对账 |
