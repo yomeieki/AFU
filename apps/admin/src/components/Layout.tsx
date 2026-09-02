@@ -63,7 +63,7 @@ export default function Layout() {
           <span className="w-8 h-8 rounded-lg bg-brand-gradient flex items-center justify-center">
             <UtensilsCrossed className="text-white" size={18} />
           </span>
-          <span className="text-lg font-bold text-gray-800">食品商城</span>
+          <span className="text-lg font-bold text-gray-800">阿福凉菜</span>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
           {navItems.map((item) => (

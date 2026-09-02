@@ -44,7 +44,7 @@ export default function Login() {
           <span className="w-14 h-14 rounded-2xl bg-brand-gradient flex items-center justify-center shadow-md mb-3">
             <UtensilsCrossed className="text-white" size={28} />
           </span>
-          <h1 className="text-xl font-bold text-gray-800">食品商城管理后台</h1>
+          <h1 className="text-xl font-bold text-gray-800">阿福凉菜管理后台</h1>
           <p className="text-xs text-gray-400 mt-1">Food Shop Admin</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
