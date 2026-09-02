@@ -75,14 +75,17 @@ console.log(`公网前缀：${PUBLIC_BASE}${BASE_URL ? '' : '（未配 COS_BASE_
 console.log('')
 
 // 1. 带签名上传
+//    只签 host：Node 的 fetch 会把字符串 body 的 content-type 自动改成
+//    "text/plain;charset=UTF-8"，若把 content-type 也纳入签名，签的和发的不一致
+//    会得到 SignatureDoesNotMatch。COS 允许只签 host。
 const pathname = `/${KEY}`
-const headers = { host: HOST, 'content-type': 'text/plain' }
-const auth = authorization('PUT', pathname, headers)
+const signedHeaders = { host: HOST }
+const auth = authorization('PUT', pathname, signedHeaders)
 let resp
 try {
   resp = await fetch(`https://${HOST}${pathname}`, {
     method: 'PUT',
-    headers: { ...headers, Authorization: auth },
+    headers: { 'content-type': 'text/plain', Authorization: auth },
     body: BODY,
   })
 } catch (e) {
