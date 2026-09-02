@@ -6,6 +6,17 @@
 
 set -euo pipefail
 
+# [2/9] 会 git reset --hard 覆盖本仓库，包括这个脚本自己。bash 是按字节偏移边读边
+# 执行的，运行中被替换会导致执行错乱（且症状诡异、极难排查）。先把自己复制到临时
+# 文件再接管执行。
+if [[ "${DEPLOY_SELF_COPY:-}" != "1" ]]; then
+  _self="$(mktemp)"
+  cp "$0" "${_self}"
+  chmod +x "${_self}"
+  DEPLOY_SELF_COPY=1 exec "${_self}" "$@"
+fi
+trap 'rm -f "$0"' EXIT
+
 SEED="${1:-}"
 REPO_DIR="/www/food-shop"
 SERVER_DIR="${REPO_DIR}/apps/server"
@@ -132,8 +143,28 @@ echo "  pm2-logrotate: 20M × 14 份，每日 0 点轮转"
 
 # ── [9/9] 重载 Nginx + 健康检查 ──────────────────────────────────────────────
 echo "[9/9] 重载 Nginx..."
-nginx -t && nginx -s reload
-echo "  Nginx reloaded"
+# 以普通用户跑 nginx -t 读不到 /etc/letsencrypt 下的证书（Permission denied），
+# 会静默失败。原先无论成败都打印 "Nginx reloaded"，等于骗人。
+NGINX="nginx"
+if [[ "${EUID}" -ne 0 ]]; then
+  if sudo -n true 2>/dev/null; then
+    NGINX="sudo nginx"
+  else
+    NGINX=""
+    echo "  WARN: 非 root 且无免密 sudo，跳过 nginx 重载"
+    echo "        如本次改了 nginx 配置，请手动执行：sudo nginx -t && sudo nginx -s reload"
+  fi
+fi
+if [[ -n "${NGINX}" ]]; then
+  if ${NGINX} -t; then
+    ${NGINX} -s reload
+    echo "  Nginx: 已重载"
+  else
+    echo "  ERROR: nginx 配置检查未通过，未重载。"
+    echo "         后端已是新版本，但 nginx 仍在用旧配置——请立即排查上面的报错。"
+    exit 1
+  fi
+fi
 
 APP_PORT=$(grep -E '^PORT=' "${SERVER_DIR}/.env" | cut -d= -f2- | tr -d '"' || true)
 APP_PORT="${APP_PORT:-3000}"
