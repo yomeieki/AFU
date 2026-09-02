@@ -142,6 +142,25 @@ SYSTEM_ALERT_WECOM_WEBHOOK=""
 > ```
 > 脚本先上传再改库、可重复执行；跑完后 nginx 的 `/uploads/` 与 `express.static` 保留一个部署周期做兜底，之后可删。
 
+### 安全修改生产 .env
+
+生产 `.env` 不要手动 vim —— 漏引号、键名写错、写出重复键（dotenv 只认最后一条，症状极难排查）都很常见。用配套脚本：
+
+```bash
+# 写入密钥类（输入不回显，不进 shell 历史、不出现在 ps 里）
+bash /www/food-shop/scripts/set-env.sh WECHAT_PAY_API_V3_KEY
+bash /www/food-shop/scripts/set-env.sh COS_SECRET_ID
+bash /www/food-shop/scripts/set-env.sh COS_SECRET_KEY
+
+# 非敏感值可回显方便核对
+bash /www/food-shop/scripts/set-env.sh WECHAT_PAY_PUBLIC_KEY_ID --show
+
+# 体检：只列键与是否已填，并检查重复键
+bash /www/food-shop/scripts/set-env.sh --list
+```
+
+每次写入自动备份为 `.env.bak-<时间戳>`；改完需 `pm2 restart food-shop-server` 才生效。
+
 ### 微信支付私钥存放
 
 ```bash
