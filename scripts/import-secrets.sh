@@ -19,6 +19,8 @@ set -euo pipefail
 SRC="${1:-}"
 ENV_FILE="${ENV_FILE:-/www/food-shop/apps/server/.env}"
 KEEP="${KEEP:-0}"
+# 这些键只作说明用途，不写进 .env
+NOTE_ONLY_KEYS="${NOTE_ONLY_KEYS:-API_SECURITY_MODE PUBKEY_DOWNLOADED NOTE REMARK}"
 
 [[ -n "${SRC}" ]] || { echo "用法：$0 <清单文件>"; exit 1; }
 [[ -f "${SRC}" ]] || { echo "找不到清单文件：${SRC}"; exit 1; }
@@ -56,12 +58,18 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
     SKIPPED+=("${key}（留空）")
     continue
   fi
-  # 非 .env 变量的说明性字段，只记录不写入
-  if [[ "${key}" == "API_SECURITY_MODE" ]]; then
-    NOTES+=("商户平台 API 安全模式填的是：${val}")
-    continue
-  fi
+  # 说明性字段：只记录、不写入 .env（清单里用来跟操作者沟通的行）
+  case " ${NOTE_ONLY_KEYS} " in
+    *" ${key} "*) NOTES+=("${key} = ${val}"); continue ;;
+  esac
   case "${val}" in *'"'*) SKIPPED+=("${key}（值里有双引号）"); continue ;; esac
+
+  # 微信支付公钥 ID：商户平台上显示为 PUB_KEY_ID_xxxx，很多人只复制了后面的数字。
+  # 回调头 Wechatpay-Serial 传来的是带前缀的完整串，缺前缀会导致验签比对失败。
+  if [[ "${key}" == "WECHAT_PAY_PUBLIC_KEY_ID" && "${val}" != PUB_KEY_ID_* ]]; then
+    val="PUB_KEY_ID_${val}"
+    NOTES+=("WECHAT_PAY_PUBLIC_KEY_ID 缺少 PUB_KEY_ID_ 前缀，已自动补上")
+  fi
 
   # 写入 .env（键名精确匹配 + 顺手去重）
   TMP="$(mktemp)"; chmod 600 "${TMP}"
@@ -93,7 +101,13 @@ if [[ ${#NOTES[@]} -gt 0 ]]; then
 fi
 echo "备份：${BACKUP}"
 
-# 安全删除清单文件
+# 安全删除清单文件 —— 只有确实导入到内容时才删。
+# （踩过的坑：编辑器里填了但没保存，读到空文件却把源文件删了，等于毁掉对方的输入。）
+if [[ ${#IMPORTED[@]} -eq 0 ]]; then
+  echo "⚠ 没有导入到任何值，清单文件已保留：${SRC}"
+  echo "  多半是编辑器里没保存（Cmd+S），保存后重新执行本命令即可。"
+  exit 2
+fi
 if [[ "${KEEP}" != "1" ]]; then
   if command -v shred &>/dev/null; then shred -u "${SRC}" 2>/dev/null || rm -f "${SRC}"
   else rm -f "${SRC}"; fi
