@@ -8,6 +8,7 @@ import { errorHandler } from './middlewares/error'
 import { wechatPayNotifyHandler, wechatRefundNotifyHandler } from './routes/wechat-notify'
 import prisma from './utils/prisma'
 import { notifySystemAlert } from './services/notify'
+import { startScheduler } from './services/scheduler'
 
 const app = express()
 const PORT = config.port
@@ -79,6 +80,7 @@ process.on('uncaughtException', (err) => {
 app.listen(PORT, () => {
   console.log(`[server] running on http://localhost:${PORT}`)
   console.log(`[server] env: ${config.nodeEnv}`)
+  startScheduler()
   if (config.isProduction) {
     // 生产启动打点：频繁收到即说明重启风暴
     notifySystemAlert('服务启动', [`端口 ${PORT}`], { key: 'boot', windowMs: 60 * 1000 })

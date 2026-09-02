@@ -34,7 +34,7 @@ export function publicUrl(key: string): string {
   return `${getCosBaseUrl()}/${key.replace(/^\/+/, '')}`
 }
 
-export function buildObjectKey(prefix: 'uploads' | 'qrcodes', ext: string): string {
+export function buildObjectKey(prefix: 'uploads' | 'qrcodes' | 'after-sale', ext: string): string {
   const d = new Date()
   const ym = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`
   const normalizedExt = ext.startsWith('.') ? ext : `.${ext}`

@@ -1,0 +1,88 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
+<view class="page" wx:if="{{!loading && order}}">
+
+  <!-- 订单摘要 -->
+  <view class="card order-card">
+    <view class="order-no-row">
+      <text class="order-no-label">订单号</text>
+      <text class="order-no">{{order.orderNo}}</text>
+    </view>
+    <view class="order-item-row">
+      <view class="order-item-info">
+        <text class="order-item-name">{{order.firstItemName}}</text>
+        <text class="order-item-spec" wx:if="{{order.firstItemSpec}}">{{order.firstItemSpec}}</text>
+        <text class="order-item-qty">×{{order.firstItemQty}}<block wx:if="{{order.hasMoreItems}}"> 等 {{order.itemCount}} 件商品</block></text>
+      </view>
+      <view class="order-amount">
+        <text class="order-amount-label">实付</text>
+        <text class="price-symbol">¥</text>
+        <text class="price-int order-amount-int">{{pricefmt.int(order.actualAmountText)}}</text>
+        <text class="price-dec">{{pricefmt.dec(order.actualAmountText)}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 售后原因 -->
+  <view class="card">
+    <view class="card-title">售后原因<text class="required">*</text></view>
+    <view class="chips">
+      <view
+        wx:for="{{reasons}}"
+        wx:key="value"
+        class="chip {{reason === item.value ? 'active' : ''}}"
+        hover-class="chip-hover"
+        bindtap="onSelectReason"
+        data-value="{{item.value}}"
+      >{{item.label}}</view>
+    </view>
+  </view>
+
+  <!-- 问题说明 -->
+  <view class="card">
+    <view class="card-title">问题说明<text class="required" wx:if="{{reason === 'OTHER'}}">*</text><text class="optional" wx:else>（选填）</text></view>
+    <textarea
+      class="desc-input"
+      placeholder-class="desc-placeholder"
+      placeholder="{{reason === 'OTHER' ? '请描述遇到的问题，便于商家处理' : '补充说明（如少了哪件、破损情况等）'}}"
+      value="{{description}}"
+      maxlength="{{maxDesc}}"
+      bindinput="onDescInput"
+    />
+    <view class="desc-counter">{{descLength}}/{{maxDesc}}</view>
+  </view>
+
+  <!-- 凭证图片 -->
+  <view class="card">
+    <view class="card-title">凭证图片<text class="optional">（最多 {{maxImages}} 张）</text></view>
+    <view class="img-grid">
+      <view wx:for="{{images}}" wx:key="key" class="img-cell">
+        <image
+          class="img-thumb"
+          src="{{item.url || item.localPath}}"
+          mode="aspectFill"
+          bindtap="onPreviewImage"
+          data-key="{{item.key}}"
+        />
+        <view wx:if="{{item.uploading}}" class="img-uploading">
+          <view class="img-spinner"></view>
+          <text class="img-uploading-text">上传中</text>
+        </view>
+        <view class="img-remove" catchtap="onRemoveImage" data-key="{{item.key}}">×</view>
+      </view>
+      <view wx:if="{{canAddImage}}" class="img-cell img-add" hover-class="img-add-hover" bindtap="onChooseImage">
+        <text class="img-add-plus">+</text>
+        <text class="img-add-text">添加照片</text>
+      </view>
+    </view>
+    <view class="img-note">如少发/错发/变质请附照片，便于快速处理</view>
+  </view>
+
+  <view class="spacer"></view>
+</view>
+
+<!-- 底部固定提交栏 -->
+<view class="action-bar safe-bottom" wx:if="{{!loading && order}}">
+  <view class="submit-btn btn-primary {{submitting ? 'btn-disabled' : ''}}" bindtap="onSubmit">
+    <text>{{submitting ? '提交中...' : '提交申请'}}</text>
+  </view>
+</view>

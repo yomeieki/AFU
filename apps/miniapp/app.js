@@ -12,6 +12,8 @@ App({
     // Stores a pending categoryId when navigating from homepage to product list via switchTab
     pendingCategoryId: null,
     pendingCategoryName: null,
+    // 首页「全部商品」入口：置 true 后 switchTab，分类页 onShow 选中「全部」并复位
+    pendingCategoryAll: false,
     // Stores address selected in address list for order confirm page
     selectedAddress: null,
   },

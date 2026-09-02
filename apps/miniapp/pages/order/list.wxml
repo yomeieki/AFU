@@ -62,10 +62,16 @@
           <text class="price-dec">{{pricefmt.dec(item.actualAmountText)}}</text>
         </view>
         <view class="order-action">
+          <text wx:if="{{item.status === 'PENDING_PAYMENT' && item.countdown}}" class="countdown-text">剩余 {{item.countdown}} 自动取消</text>
           <text wx:if="{{item.status === 'PENDING_PAYMENT'}}" class="action-btn pay">去支付</text>
         </view>
       </view>
+      <view class="order-extra" wx:if="{{item.extraText}}">
+        <text>{{item.extraText}}</text>
+      </view>
     </view>
+    <view class="footer-tip" wx:if="{{loadingMore}}"><text>加载中...</text></view>
+    <view class="footer-tip" wx:elif="{{!hasMore && orders.length > 0}}"><text>- 没有更多了 -</text></view>
   </view>
 
 </view>

@@ -16,6 +16,7 @@ import type {
   SalesTrendPoint,
   Banner,
   RefundSummary,
+  AfterSale,
 } from '../types'
 
 // Auth
@@ -71,7 +72,8 @@ export const getOrders = (params?: {
   page?: number
   pageSize?: number
   status?: string
-  orderNo?: string
+  /** 订单号 / 收货人 / 手机号 模糊 */
+  keyword?: string
 }) => client.get<ApiResponse<PaginatedData<Order>>>('/admin/orders', { params })
 
 export const getOrder = (id: number) =>
@@ -83,12 +85,36 @@ export const acceptOrder = (id: number) =>
 export const shipOrder = (id: number, data: { expressCompany: string; expressNo: string; remark?: string }) =>
   client.post<ApiResponse<{ shipment: Shipment; order: Order }>>(`/admin/orders/${id}/ship`, data)
 
-// 一键退款：amount 必须等于订单实付（分），服务端二次校验
+// 退款：amount（分）可为部分或全额，服务端校验 0 < amount <= 可退余额
 export const refundOrder = (id: number, data: { amount: number; reason?: string }) =>
-  client.post<ApiResponse<{ order: Order; refund: RefundSummary; mode: 'mock' | 'wechat' }>>(
+  client.post<ApiResponse<{ order: Order; refund: RefundSummary; mode: 'mock' | 'wechat'; isFull: boolean }>>(
     `/admin/orders/${id}/refund`,
     data
   )
+
+// 商家标记完成（SHIPPED → COMPLETED）
+export const completeOrder = (id: number) =>
+  client.post<ApiResponse<Order>>(`/admin/orders/${id}/complete`)
+
+// 售后
+export const getAfterSales = (params?: { page?: number; pageSize?: number; status?: string }) =>
+  client.get<ApiResponse<PaginatedData<AfterSale>>>('/admin/after-sales', { params })
+export const approveAfterSale = (id: number, data: { amount: number; reply?: string }) =>
+  client.post<ApiResponse<{ afterSale: AfterSale; refund: RefundSummary; mode: 'mock' | 'wechat' }>>(
+    `/admin/after-sales/${id}/approve`,
+    data
+  )
+export const rejectAfterSale = (id: number, reply: string) =>
+  client.post<ApiResponse<AfterSale>>(`/admin/after-sales/${id}/reject`, { reply })
+
+// 小程序 web-view 免登录：一次性 code 换 token
+export const loginWithWebviewCode = (code: string) =>
+  client.post<
+    ApiResponse<{
+      token: string
+      adminInfo: { id: number; username: string; name: string | null; role: string }
+    }>
+  >('/admin/login/webview', { code })
 
 export const completeRefund = (id: number) =>
   client.post<ApiResponse<Order>>(`/admin/orders/${id}/refund-complete`)
@@ -121,6 +147,7 @@ export const getPendingOrderCount = () =>
       refundingCount: number
       lowStockCount: number
       lowStockThreshold: number
+      afterSaleCount: number
     }>
   >('/admin/orders/pending-count')
 

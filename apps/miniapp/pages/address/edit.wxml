@@ -1,6 +1,13 @@
 <view class="page">
   <view class="form">
 
+    <!-- 导入微信收货地址 -->
+    <view class="import-btn" hover-class="import-btn-hover" bindtap="onImportWechatAddress">
+      <view class="import-icon icon icon-pin"></view>
+      <text class="import-text">导入微信收货地址</text>
+      <view class="import-arrow icon icon-arrow"></view>
+    </view>
+
     <view class="field-group">
       <view class="field">
         <text class="label">收货人</text>
@@ -29,45 +36,19 @@
     </view>
 
     <view class="field-group">
-      <view class="field">
-        <text class="label">省份</text>
-        <input
-          class="input"
-          placeholder-class="input-placeholder"
-          placeholder="如：广东省"
-          value="{{form.province}}"
-          data-field="province"
-          bindinput="onInput"
-        />
-      </view>
-      <view class="field">
-        <text class="label">城市</text>
-        <input
-          class="input"
-          placeholder-class="input-placeholder"
-          placeholder="如：广州市"
-          value="{{form.city}}"
-          data-field="city"
-          bindinput="onInput"
-        />
-      </view>
-      <view class="field">
-        <text class="label">区县</text>
-        <input
-          class="input"
-          placeholder-class="input-placeholder"
-          placeholder="如：天河区"
-          value="{{form.district}}"
-          data-field="district"
-          bindinput="onInput"
-        />
-      </view>
+      <picker mode="region" value="{{region}}" bindchange="onRegionChange">
+        <view class="field picker-field">
+          <text class="label">所在地区</text>
+          <text class="picker-value {{regionText ? '' : 'input-placeholder'}}">{{regionText || '请选择省市区'}}</text>
+          <view class="picker-arrow icon icon-arrow"></view>
+        </view>
+      </picker>
       <view class="field">
         <text class="label">详细地址</text>
         <input
           class="input"
           placeholder-class="input-placeholder"
-          placeholder="街道、门牌号等"
+          placeholder="街道、小区、门牌号（如：丹桂大街 xx 号）"
           value="{{form.detail}}"
           data-field="detail"
           bindinput="onInput"

@@ -1,10 +1,13 @@
 import { useRef, useState } from 'react'
 import { uploadImage } from '../api/admin'
+import CropModal from './CropModal'
 
 interface SingleProps {
   mode?: 'single'
   value: string
   onChange: (url: string) => void
+  /** 传入则选图后先弹固定比例裁剪（如轮播 2.5），输出统一尺寸 */
+  aspect?: number
 }
 
 interface MultiProps {
@@ -50,6 +53,8 @@ export default function ImageUploader(props: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [cropFile, setCropFile] = useState<File | null>(null)
+  const aspect = props.mode === 'multi' ? undefined : props.aspect
 
   const isMulti = props.mode === 'multi'
   const urls: string[] = isMulti ? props.value : props.value ? [props.value] : []
@@ -59,10 +64,20 @@ export default function ImageUploader(props: Props) {
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     setError('')
+    // 需要裁剪：先进裁剪弹窗，确定后再走上传
+    if (aspect && files[0].type !== 'image/gif') {
+      setCropFile(files[0])
+      if (inputRef.current) inputRef.current.value = ''
+      return
+    }
+    await uploadFiles(Array.from(files))
+  }
+
+  const uploadFiles = async (files: File[]) => {
     setUploading(true)
     try {
       const remaining = max - urls.length
-      const selected = Array.from(files).slice(0, remaining)
+      const selected = files.slice(0, remaining)
       const uploaded: string[] = []
       for (const file of selected) {
         const compressed = await compressImage(file)
@@ -133,6 +148,17 @@ export default function ImageUploader(props: Props) {
         className="hidden"
       />
       {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+      {cropFile && aspect && (
+        <CropModal
+          file={cropFile}
+          aspect={aspect}
+          onCancel={() => setCropFile(null)}
+          onDone={(f) => {
+            setCropFile(null)
+            void uploadFiles([f])
+          }}
+        />
+      )}
     </div>
   )
 }

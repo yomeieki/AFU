@@ -19,10 +19,11 @@ async function main() {
   console.log('✅ 开发测试用户: id=1, openid=dev_openid_001')
 
   // ── 管理员 ────────────────────────────────────────────
+  // 仅首次创建写入默认密码；已存在的管理员绝不覆盖（生产误跑 seed 不得重置密码）
   const passwordHash = await bcrypt.hash('admin123456', 12)
   await prisma.admin.upsert({
     where: { username: 'admin' },
-    update: { passwordHash },
+    update: {},
     create: {
       username: 'admin',
       passwordHash,
@@ -30,7 +31,13 @@ async function main() {
       role: 'admin',
     },
   })
-  console.log('✅ 管理员账号: admin / admin123456')
+  console.log('✅ 管理员账号: admin（首次创建使用默认密码，请登录后修改）')
+
+  // ── 演示数据（分类/示例商品）仅非生产环境写入 ─────────────
+  if (process.env.NODE_ENV === 'production') {
+    console.log('ℹ️  生产环境：跳过演示分类/商品，请在后台自行录入')
+    return
+  }
 
   // ── 商品分类 ──────────────────────────────────────────
   const categoryCount = await prisma.category.count()

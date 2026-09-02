@@ -9,9 +9,11 @@
     "pages/order/confirm",
     "pages/order/list",
     "pages/order/detail",
+    "pages/order/after-sale",
     "pages/user/index",
     "pages/merchant/login",
     "pages/merchant/index",
+    "pages/merchant/webview",
     "pages/about/index",
     "pages/legal/index"
   ],

@@ -2,6 +2,7 @@ const { getOrderDetail, confirmOrder, cancelOrder } = require('../../api/order')
 const { callShop } = require('../../utils/contact')
 const { payOrder } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
+const { requestSubscribe } = require('../../utils/subscribe')
 
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
@@ -14,52 +15,127 @@ var STATUS_LABEL = {
   REFUNDED: '已退款',
 }
 
+// 退款单状态 → 顾客可见文案
+var REFUND_STATUS_LABEL = {
+  PENDING: '处理中',
+  PROCESSING: '微信处理中',
+  SUCCESS: '已原路退回',
+  ABNORMAL: '处理中（银行侧异常，商家跟进中）',
+  CLOSED: '未成功，商家将重新处理',
+  FAILED: '未成功，商家将重新处理',
+}
+
+var AFTER_SALE_REASON_LABEL = { SHORTAGE: '少发/漏发', WRONG: '错发', DAMAGED: '变质/破损', OTHER: '其他' }
+var AFTER_SALE_STATUS_LABEL = {
+  PENDING: '待商家处理',
+  APPROVED: '商家已同意，退款中',
+  DONE: '已退款',
+  REJECTED: '商家已拒绝',
+}
+
+function t(v) {
+  return v ? new Date(v).toLocaleString() : ''
+}
+
+// 待付款倒计时文案：mm:ss；到期返回 ''
+function countdownText(expireAt) {
+  if (!expireAt) return ''
+  var left = Math.floor((new Date(expireAt).getTime() - Date.now()) / 1000)
+  if (left <= 0) return ''
+  var m = Math.floor(left / 60)
+  var s = left % 60
+  return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s)
+}
+
 // 订单进度时间线：已达节点亮起并带时间，未达灰显
 function buildTimeline(order) {
-  function t(v) {
-    return v ? new Date(v).toLocaleString() : ''
+  var shipped = order.shipment && order.shipment.shippedAt
+  var shipExtra = order.shipment && order.shipment.expressNo
+    ? (order.shipment.expressCompany || '') + ' ' + order.shipment.expressNo
+    : ''
+  var steps = [{ label: '提交订单', time: t(order.createdAt), done: true }]
+
+  if (order.status === 'CANCELLED') {
+    if (order.paidAt) steps.push({ label: '支付成功', time: t(order.paidAt), done: true })
+    steps.push({ label: '订单已取消', time: t(order.cancelledAt), done: true, extra: order.cancelReason || '' })
+    return steps
   }
-  var cancelled = order.status === 'CANCELLED'
-  var steps = [
-    { label: '提交订单', time: t(order.createdAt), done: true },
-    { label: '支付成功', time: t(order.paidAt), done: !!order.paidAt },
-    { label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt },
-    {
-      label: '已发货',
-      time: t(order.shipment && order.shipment.shippedAt),
-      done: !!(order.shipment && order.shipment.shippedAt),
-      extra:
-        order.shipment && order.shipment.expressNo
-          ? (order.shipment.expressCompany || '') + ' ' + order.shipment.expressNo
-          : '',
-    },
-    { label: '已完成', time: t(order.completedAt), done: !!order.completedAt },
-  ]
-  if (cancelled) {
-    steps = [
-      { label: '提交订单', time: t(order.createdAt), done: true },
-      { label: '订单已取消', time: t(order.cancelledAt), done: true },
-    ]
-  }
+
   if (order.status === 'REFUNDING' || order.status === 'REFUNDED') {
-    steps = [
-      { label: '提交订单', time: t(order.createdAt), done: true },
-      { label: '支付成功', time: t(order.paidAt), done: !!order.paidAt },
-      { label: '申请退款', time: t(order.cancelledAt), done: true },
-      { label: '退款完成（原路退回）', time: t(order.refundedAt), done: !!order.refundedAt },
-    ]
+    steps.push({ label: '支付成功', time: t(order.paidAt), done: !!order.paidAt })
+    if (order.acceptedAt) steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: true })
+    if (shipped) steps.push({ label: '已发货', time: t(shipped), done: true, extra: shipExtra })
+    if (order.completedAt) steps.push({ label: '已完成', time: t(order.completedAt), done: true })
+    var byCustomer = order.cancelReason === '用户申请退款'
+    steps.push({
+      label: byCustomer ? '申请退款' : '商家发起退款',
+      time: t(order.cancelledAt),
+      done: true,
+      extra: byCustomer ? '' : (order.cancelReason || ''),
+    })
+    var latest = order.refunds && order.refunds[0]
+    var stuck = latest && (latest.status === 'CLOSED' || latest.status === 'FAILED' || latest.status === 'ABNORMAL')
+    steps.push({
+      label: '退款完成（原路退回）',
+      time: t(order.refundedAt),
+      done: !!order.refundedAt,
+      extra: !order.refundedAt ? (stuck ? '退款处理中，如有疑问请联系商家' : '预计 1-3 个工作日到账') : '',
+    })
+    return steps
   }
-  // 直接发货未接单的情况：发货已完成时把接单节点视为跳过（不显示）
-  if (!order.acceptedAt && order.shipment && order.shipment.shippedAt) {
-    steps = steps.filter(function(st) { return st.label.indexOf('商家接单') !== 0 })
+
+  steps.push({ label: '支付成功', time: t(order.paidAt), done: !!order.paidAt })
+  // 直接发货未接单：跳过接单节点
+  if (order.acceptedAt || !shipped) {
+    steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt })
   }
+  steps.push({ label: '已发货', time: t(shipped), done: !!shipped, extra: shipExtra })
+  steps.push({ label: '已完成', time: t(order.completedAt), done: !!order.completedAt })
   return steps
+}
+
+function decorateOrder(order) {
+  var refunds = (order.refunds || []).map(function(r) {
+    return Object.assign({}, r, {
+      amountText: formatPrice(r.amount),
+      statusLabel: REFUND_STATUS_LABEL[r.status] || r.status,
+      timeText: t(r.successTime || r.createdAt),
+    })
+  })
+  var afterSale = order.afterSale
+    ? Object.assign({}, order.afterSale, {
+        reasonLabel: AFTER_SALE_REASON_LABEL[order.afterSale.reason] || order.afterSale.reason,
+        statusLabel: AFTER_SALE_STATUS_LABEL[order.afterSale.status] || order.afterSale.status,
+        timeText: t(order.afterSale.createdAt),
+      })
+    : null
+  return Object.assign({}, order, {
+    statusLabel: STATUS_LABEL[order.status] || order.status,
+    // 自助取消/退款：待付款，或已付款且商家未接单
+    canSelfCancel: order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt),
+    totalAmountText: formatPrice(order.totalAmount),
+    shippingFeeText: formatPrice(order.shippingFee),
+    actualAmountText: formatPrice(order.actualAmount),
+    refundedAmountText: formatPrice(order.refundedAmount || 0),
+    createdAtText: t(order.createdAt),
+    paidAtText: order.paidAt ? t(order.paidAt) : null,
+    timeline: buildTimeline(order),
+    refunds: refunds,
+    afterSale: afterSale,
+    items: order.items.map(function(item) {
+      return Object.assign({}, item, {
+        priceText: formatPrice(item.productPrice),
+        subtotalText: formatPrice(item.subtotal),
+      })
+    }),
+  })
 }
 
 Page({
   data: {
     order: null,
     loading: true,
+    countdown: '',
   },
 
   onLoad(options) {
@@ -70,134 +146,182 @@ Page({
       return
     }
     this._orderId = id
+    // 从确认页跳来：自动拉起支付（订阅消息已在确认页点击时请求过）
+    this._autopay = options.autopay === '1'
     this.loadOrder(id)
   },
 
-  loadOrder(id) {
+  onShow() {
+    // 从售后申请页返回时刷新
+    if (this._orderId && !this.data.loading && this._needRefresh) {
+      this._needRefresh = false
+      this.loadOrder(this._orderId, true)
+    }
+    this.startTicker()
+  },
+
+  onHide() {
+    this.stopTicker()
+  },
+
+  onUnload() {
+    this.stopTicker()
+  },
+
+  onPullDownRefresh() {
+    this.loadOrder(this._orderId, true)
+  },
+
+  loadOrder(id, silent) {
     var self = this
-    wx.showLoading({ title: '加载中...' })
+    if (!silent) wx.showLoading({ title: '加载中...' })
     getOrderDetail(id)
       .then(function(order) {
-        wx.hideLoading()
+        if (!silent) wx.hideLoading()
+        wx.stopPullDownRefresh()
         self.setData({
-          order: Object.assign({}, order, {
-            statusLabel: STATUS_LABEL[order.status] || order.status,
-            // 自助取消/退款：待付款，或已付款且商家未接单
-            canSelfCancel:
-              order.status === 'PENDING_PAYMENT' ||
-              (order.status === 'PAID' && !order.acceptedAt),
-            totalAmountText: formatPrice(order.totalAmount),
-            shippingFeeText: formatPrice(order.shippingFee),
-            actualAmountText: formatPrice(order.actualAmount),
-            createdAtText: new Date(order.createdAt).toLocaleString(),
-            paidAtText: order.paidAt ? new Date(order.paidAt).toLocaleString() : null,
-            timeline: buildTimeline(order),
-            items: order.items.map(function(item) {
-              return Object.assign({}, item, {
-                priceText: formatPrice(item.productPrice),
-                subtotalText: formatPrice(item.subtotal),
-              })
-            }),
-          }),
+          order: decorateOrder(order),
           loading: false,
+          countdown: order.status === 'PENDING_PAYMENT' ? countdownText(order.payExpireAt) : '',
         })
+        if (self._autopay) {
+          self._autopay = false
+          if (order.status === 'PENDING_PAYMENT') self.startPay()
+        }
       })
       .catch(function() {
-        wx.hideLoading()
-        self.setData({ loading: false })
-        setTimeout(function() { wx.navigateBack() }, 1500)
+        if (!silent) wx.hideLoading()
+        wx.stopPullDownRefresh()
+        if (!self.data.order) {
+          self.setData({ loading: false })
+          setTimeout(function() { wx.navigateBack() }, 1500)
+        }
       })
   },
 
+  // 待付款倒计时；到期后刷新（服务端已自动取消）
+  startTicker() {
+    var self = this
+    this.stopTicker()
+    this._ticker = setInterval(function() {
+      var order = self.data.order
+      if (!order || order.status !== 'PENDING_PAYMENT') return
+      var text = countdownText(order.payExpireAt)
+      if (text !== self.data.countdown) self.setData({ countdown: text })
+      if (!text) {
+        self.stopTicker()
+        setTimeout(function() { self.loadOrder(self._orderId, true) }, 1500)
+      }
+    }, 1000)
+  },
+
+  stopTicker() {
+    if (this._ticker) {
+      clearInterval(this._ticker)
+      this._ticker = null
+    }
+  },
+
+  // 点击「去支付」：先在点击手势内请求订阅消息（发货/退款通知），再发起支付
   onPay() {
     var self = this
-    wx.showModal({
-      title: '确认支付',
-      content: '确认支付此订单？',
-      confirmText: '确认',
-      success: function(modalRes) {
-        if (!modalRes.confirm) return
-        wx.showLoading({ title: '支付中...' })
-        payOrder(self.data.order.id)
-          .then(function(data) {
-            wx.hideLoading()
-            if (data.mode === 'mock') {
-              wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
-              self.pollPaidStatus()
-            } else {
-              wx.requestPayment({
-                timeStamp: data.timeStamp,
-                nonceStr: data.nonceStr,
-                package: data.package,
-                signType: data.signType,
-                paySign: data.paySign,
-                success: function() {
-                  // PAID 状态由后端支付回调异步写入，轮询等待
-                  wx.showToast({ title: '支付成功', icon: 'success', duration: 1500 })
-                  self.pollPaidStatus()
-                },
-                fail: function(err) {
-                  if (err.errMsg && err.errMsg.indexOf('cancel') !== -1) {
-                    wx.showToast({ title: '已取消支付', icon: 'none' })
-                  } else {
-                    wx.showToast({ title: '支付失败，请重试', icon: 'none' })
-                  }
-                },
-              })
-            }
-          })
-          .catch(function() {
-            wx.hideLoading()
-          })
-      },
+    requestSubscribe(this.data.order.subscribeTemplateIds, function() {
+      self.startPay()
     })
   },
 
-  // 支付后轮询订单状态：1.5s 间隔，最多 8 次，见 PAID 即停
+  startPay() {
+    var self = this
+    if (this._paying) return
+    this._paying = true
+    wx.showLoading({ title: '支付中...' })
+    payOrder(this.data.order.id)
+      .then(function(data) {
+        wx.hideLoading()
+        if (data.mode === 'mock') {
+          self._paying = false
+          wx.showToast({ title: '支付成功，正在确认…', icon: 'none', duration: 1500 })
+          self.pollPaidStatus()
+          return
+        }
+        wx.requestPayment({
+          timeStamp: data.timeStamp,
+          nonceStr: data.nonceStr,
+          package: data.package,
+          signType: data.signType,
+          paySign: data.paySign,
+          success: function() {
+            // PAID 状态由后端支付回调异步写入，轮询等待
+            wx.showToast({ title: '支付成功，正在确认…', icon: 'none', duration: 1500 })
+            self.pollPaidStatus()
+          },
+          fail: function(err) {
+            if (err.errMsg && err.errMsg.indexOf('cancel') !== -1) {
+              wx.showToast({ title: '已取消支付，可稍后在订单中继续支付', icon: 'none', duration: 2000 })
+            } else {
+              wx.showToast({ title: '支付失败，请重试', icon: 'none' })
+            }
+          },
+          complete: function() {
+            self._paying = false
+          },
+        })
+      })
+      .catch(function() {
+        self._paying = false
+        wx.hideLoading()
+        // 订单已超时等业务错误 request 已 toast；刷新以显示最新状态
+        self.loadOrder(self._orderId, true)
+      })
+  },
+
+  // 支付后轮询订单状态：1.5s 间隔，最多 12 次，单次失败不中断
   pollPaidStatus() {
     var self = this
     var attempts = 0
-    var maxAttempts = 8
+    var maxAttempts = 12
 
     function check() {
       attempts++
       getOrderDetail(self._orderId)
         .then(function(order) {
           if (order.status !== 'PENDING_PAYMENT') {
-            self.loadOrder(self._orderId)
+            self.loadOrder(self._orderId, true)
           } else if (attempts < maxAttempts) {
             setTimeout(check, 1500)
           } else {
             wx.showToast({ title: '支付结果确认中，请稍后下拉刷新', icon: 'none', duration: 2500 })
-            self.loadOrder(self._orderId)
+            self.loadOrder(self._orderId, true)
           }
         })
         .catch(function() {
-          self.loadOrder(self._orderId)
+          if (attempts < maxAttempts) setTimeout(check, 1500)
+          else self.loadOrder(self._orderId, true)
         })
     }
 
     setTimeout(check, 1500)
   },
 
-  // 确认收货（SHIPPED → COMPLETED）
   onCancelOrder() {
     var self = this
     var isPaid = this.data.order.status !== 'PENDING_PAYMENT'
     wx.showModal({
       title: isPaid ? '申请退款' : '取消订单',
       content: isPaid
-        ? '商家尚未接单，取消后货款将原路退回（1-3 个工作日）。确认申请退款？'
-        : '确认取消该订单？',
+        ? '商家尚未接单，取消后货款将原路退回微信（1-3 个工作日）。确认申请退款？'
+        : '确认取消该订单？取消后需重新下单。',
       confirmText: '确认',
       success: function(res) {
         if (!res.confirm) return
         cancelOrder(self.data.order.id)
           .then(function() {
             wx.showToast({ title: isPaid ? '已申请退款' : '订单已取消', icon: 'success' })
-            self.loadOrder(self._orderId)
+            self.loadOrder(self._orderId, true)
           })
-          .catch(function() {})
+          .catch(function() {
+            self.loadOrder(self._orderId, true)
+          })
       },
     })
   },
@@ -206,11 +330,21 @@ Page({
     callShop()
   },
 
+  onApplyAfterSale() {
+    this._needRefresh = true
+    wx.navigateTo({ url: '/pages/order/after-sale?id=' + this.data.order.id })
+  },
+
+  onPreviewImage(e) {
+    var urls = (this.data.order.afterSale && this.data.order.afterSale.images) || []
+    wx.previewImage({ current: e.currentTarget.dataset.url, urls: urls })
+  },
+
   onConfirmReceipt() {
     var self = this
     wx.showModal({
       title: '确认收货',
-      content: '确认已收到商品？',
+      content: '确认已收到商品？确认后如有问题仍可申请售后。',
       confirmText: '确认',
       success: function(modalRes) {
         if (!modalRes.confirm) return
@@ -219,7 +353,7 @@ Page({
           .then(function() {
             wx.hideLoading()
             wx.showToast({ title: '已确认收货', icon: 'success', duration: 1500 })
-            self.loadOrder(self._orderId)
+            self.loadOrder(self._orderId, true)
           })
           .catch(function() {
             wx.hideLoading()
