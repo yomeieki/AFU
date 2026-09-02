@@ -239,11 +239,14 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void>
 
   if (!result || result.alreadyDone) return
   prisma.order
-    .findUnique({ where: { id: result.refund.orderId }, include: { user: { select: { openid: true } } } })
+    .findUnique({
+      where: { id: result.refund.orderId },
+      include: { user: { select: { openid: true } }, items: { select: { productName: true }, take: 1 } },
+    })
     .then((order) => {
       if (!order) return
       notifyRefundResult(order, result.refund, 'SUCCESS')
-      sendRefundSubscribeMessage(order.user.openid, order, result.refund)
+      sendRefundSubscribeMessage(order.user.openid, order, result.refund, order.items[0]?.productName)
     })
     .catch(() => undefined)
 }

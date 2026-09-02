@@ -12,7 +12,7 @@
  * 可用字段：
  *   下单/付款成功：orderNo / amount / time / shopName / deliveryType / address / productName / receiverName
  *   发货：orderNo / expressCompany / expressNo / productName / time / remark
- *   退款：orderNo / amount / reason / productName / time
+ *   退款：orderNo / amount / reason / note（「退款已受理：原因」≤20 字）/ productName / time
  * 值按微信类型限制自动截断（thing ≤20 字、character_string ≤32、name ≤10、phrase ≤5）。
  * 全部 fire-and-forget：未配置模板/用户未授权（43101）/token 失败都只 warn，绝不影响主流程。
  */
@@ -149,6 +149,7 @@ export function sendRefundSubscribeMessage(
       orderNo: order.orderNo,
       amount: `¥${(refund.amount / 100).toFixed(2)}`,
       reason: refund.reason || order.cancelReason || '商家退款',
+      note: `已原路退回微信：${refund.reason || order.cancelReason || '商家退款'}`,
       productName: productName ?? '',
       time: fmtTime(refund.successTime ?? new Date()),
     },
