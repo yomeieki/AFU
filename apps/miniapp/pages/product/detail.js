@@ -116,21 +116,24 @@ Page({
     var quantity = e.detail.quantity
     var specText = e.detail.specText
     var isBuy = this.data.skuPopupMode === 'buy'
+    var selectedSkuText = specText ? specText + ' ×' + quantity : '×' + quantity
 
-    wx.showLoading({ title: isBuy ? '处理中...' : '加入中...' })
+    // 立即购买：不经购物车，直接带商品/规格/数量去确认页（避免与已加购数量合并）
+    if (isBuy) {
+      this.setData({ skuPopupShow: false, selectedSkuText: selectedSkuText })
+      var url = '/pages/order/confirm?mode=direct&productId=' + product.id + '&quantity=' + quantity
+      if (skuId) url += '&skuId=' + skuId
+      wx.navigateTo({ url: url })
+      return
+    }
+
+    wx.showLoading({ title: '加入中...' })
     addToCart(product.id, quantity, skuId)
-      .then(function(res) {
+      .then(function() {
         wx.hideLoading()
-        self.setData({
-          skuPopupShow: false,
-          selectedSkuText: specText ? specText + ' ×' + quantity : '×' + quantity,
-        })
-        if (isBuy) {
-          wx.navigateTo({ url: '/pages/order/confirm?cartItemIds=' + res.id })
-        } else {
-          wx.showToast({ title: '已加入购物车', icon: 'success', duration: 1500 })
-          getApp().updateCartCount()
-        }
+        self.setData({ skuPopupShow: false, selectedSkuText: selectedSkuText })
+        wx.showToast({ title: '已加入购物车', icon: 'success', duration: 1500 })
+        getApp().updateCartCount()
       })
       .catch(function() {
         wx.hideLoading()

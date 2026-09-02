@@ -55,6 +55,8 @@ Page({
         wx.stopPullDownRefresh()
       })
       .catch(function() {
+        // 断网/接口失败：必须收起骨架屏，否则首页永远停在加载态
+        this.setData({ loading: false })
         wx.stopPullDownRefresh()
       })
   },
@@ -73,6 +75,7 @@ Page({
   goToAllProducts() {
     app.globalData.pendingCategoryId = null
     app.globalData.pendingCategoryName = null
+    app.globalData.pendingCategoryAll = true
     wx.switchTab({ url: '/pages/product/list' })
   },
 

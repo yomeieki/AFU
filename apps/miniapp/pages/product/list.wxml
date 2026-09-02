@@ -20,59 +20,93 @@
     </view>
   </view>
 
-  <!-- Active category tag -->
-  <view class="category-tag-bar" wx:if="{{categoryName}}">
+  <!-- Active search chip（搜索模式：点 × 清除并回到分类模式） -->
+  <view class="category-tag-bar" wx:if="{{searchKeyword}}">
     <view class="category-tag">
-      <text class="category-tag-text">{{categoryName}}</text>
-      <text class="category-tag-close" bindtap="clearCategory">×</text>
+      <text class="category-tag-text">搜索：{{searchKeyword}}</text>
+      <text class="category-tag-close" bindtap="clearSearch">×</text>
     </view>
   </view>
 
-  <!-- Product list -->
-  <empty-state wx:if="{{list.length === 0 && !loading}}" type="product" text="暂无商品" />
+  <!-- Two-column body -->
+  <view class="body">
 
-  <view class="product-list">
-    <view
-      wx:for="{{list}}"
-      wx:key="id"
-      class="product-row"
-      hover-class="product-row-hover"
-      bindtap="goToDetail"
-      data-id="{{item.id}}"
+    <!-- Left: category sidebar -->
+    <scroll-view class="cat-panel" scroll-y enhanced="{{true}}" show-scrollbar="{{false}}">
+      <view
+        wx:for="{{categories}}"
+        wx:key="name"
+        class="cat-item {{!searchKeyword && activeCategoryId === item.id ? 'active' : ''}}"
+        hover-class="cat-item-hover"
+        bindtap="onSelectCategory"
+        data-id="{{item.id}}"
+      >
+        <view class="cat-item-bar"></view>
+        <text class="cat-item-name">{{item.name}}</text>
+      </view>
+    </scroll-view>
+
+    <!-- Right: product list -->
+    <scroll-view
+      class="prod-panel"
+      scroll-y
+      enhanced="{{true}}"
+      show-scrollbar="{{false}}"
+      scroll-top="{{rightScrollTop}}"
+      lower-threshold="120"
+      bindscrolltolower="onScrollToLower"
     >
-      <view class="product-row-img-wrap">
-        <image
-          wx:if="{{item.coverImage}}"
-          class="product-row-img"
-          src="{{item.coverImage}}"
-          mode="aspectFill"
-          lazy-load="{{true}}"
-        />
-        <view wx:else class="product-row-img-placeholder img-placeholder"></view>
-      </view>
-      <view class="product-row-info">
-        <text class="product-row-name">{{item.name}}</text>
-        <text class="product-row-subtitle" wx:if="{{item.subtitle}}">{{item.subtitle}}</text>
-        <view class="product-row-meta">
-          <text class="product-row-stock">{{item.stockLabel}}</text>
-          <text class="product-row-sales">已售{{item.salesCount}}</text>
-        </view>
-        <view class="product-row-bottom">
-          <text class="price-symbol">¥</text>
-          <text class="price-int product-row-price-int">{{pricefmt.int(item.priceText)}}</text>
-          <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
-          <text class="product-row-unit">/ {{item.unit}}</text>
-        </view>
-      </view>
-    </view>
-  </view>
+      <empty-state
+        wx:if="{{list.length === 0 && !loading}}"
+        type="product"
+        text="{{searchKeyword ? '没有找到相关商品' : '该分类暂无商品'}}"
+      />
 
-  <!-- Footer -->
-  <view wx:if="{{loading}}" class="footer-tip">
-    <text>加载中...</text>
-  </view>
-  <view wx:elif="{{!hasMore && list.length > 0}}" class="footer-tip">
-    <text>- 没有更多了 -</text>
-  </view>
+      <view class="product-list">
+        <view
+          wx:for="{{list}}"
+          wx:key="id"
+          class="product-row"
+          hover-class="product-row-hover"
+          bindtap="goToDetail"
+          data-id="{{item.id}}"
+        >
+          <view class="product-row-img-wrap">
+            <image
+              wx:if="{{item.coverImage}}"
+              class="product-row-img"
+              src="{{item.coverImage}}"
+              mode="aspectFill"
+              lazy-load="{{true}}"
+            />
+            <view wx:else class="product-row-img-placeholder img-placeholder"></view>
+          </view>
+          <view class="product-row-info">
+            <text class="product-row-name">{{item.name}}</text>
+            <text class="product-row-subtitle" wx:if="{{item.subtitle}}">{{item.subtitle}}</text>
+            <view class="product-row-meta">
+              <text class="product-row-stock">{{item.stockLabel}}</text>
+              <text class="product-row-sales">已售{{item.salesCount}}</text>
+            </view>
+            <view class="product-row-bottom">
+              <text class="price-symbol">¥</text>
+              <text class="price-int product-row-price-int">{{pricefmt.int(item.priceText)}}</text>
+              <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
+              <text wx:if="{{item.hasSkus}}" class="product-row-price-from">起</text>
+              <text class="product-row-unit">/ {{item.unit}}</text>
+            </view>
+          </view>
+        </view>
+      </view>
 
+      <!-- Footer -->
+      <view wx:if="{{loading}}" class="footer-tip">
+        <text>加载中...</text>
+      </view>
+      <view wx:elif="{{!hasMore && list.length > 0}}" class="footer-tip">
+        <text>- 没有更多了 -</text>
+      </view>
+    </scroll-view>
+
+  </view>
 </view>

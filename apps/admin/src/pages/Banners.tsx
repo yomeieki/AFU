@@ -223,8 +223,9 @@ export default function Banners() {
         >
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Banner 图片 *（建议 690×280）</label>
-              <ImageUploader value={form.imageUrl} onChange={(url) => setForm({ ...form, imageUrl: url })} />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Banner 图片 *</label>
+              <ImageUploader value={form.imageUrl} aspect={2.5} onChange={(url) => setForm({ ...form, imageUrl: url })} />
+              <p className="text-xs text-gray-400 mt-1">任意尺寸照片均可，上传后按 5:2（750×300）裁剪，首页轮播即按此比例铺满显示。</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">标题</label>

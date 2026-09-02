@@ -1,4 +1,5 @@
 const { request } = require('../utils/request')
+const { baseURL } = require('../config/index')
 
 function createOrder(data) {
   return request({ url: '/orders', method: 'POST', data: data })
@@ -15,6 +16,11 @@ function getOrders(params) {
   return request({ url: url })
 }
 
+// 下单页公共参数：{ subscribeTemplateIds, payTimeoutMin }
+function getOrderMeta() {
+  return request({ url: '/orders/meta' })
+}
+
 function getOrderDetail(id) {
   return request({ url: '/orders/' + id })
 }
@@ -28,4 +34,49 @@ function cancelOrder(id) {
   return request({ url: '/orders/' + id + '/cancel', method: 'PUT' })
 }
 
-module.exports = { createOrder, getOrders, getOrderDetail, confirmOrder, cancelOrder }
+// 售后申请（已发货/已完成订单）：{ reason, description, images: [url] }
+function applyAfterSale(orderId, data) {
+  return request({ url: '/orders/' + orderId + '/after-sale', method: 'POST', data: data })
+}
+
+// 上传售后凭证图片：POST /upload（multipart 字段名 file），resolve 图片绝对 URL。
+// 与 utils/request 一致：token 取 storage，失败统一 toast 后 reject。
+function uploadImage(filePath) {
+  return new Promise(function(resolve, reject) {
+    var token = wx.getStorageSync('token')
+    wx.uploadFile({
+      url: baseURL + '/upload',
+      filePath: filePath,
+      name: 'file',
+      header: token ? { Authorization: 'Bearer ' + token } : {},
+      success: function(res) {
+        var body = null
+        try { body = JSON.parse(res.data) } catch (e) { body = null }
+        if (body && body.code === 0 && body.data && body.data.url) {
+          resolve(body.data.url)
+          return
+        }
+        var msg = (body && body.message) || '图片上传失败，请重试'
+        wx.showToast({ title: msg, icon: 'none', duration: 2000 })
+        reject(new Error(msg))
+      },
+      fail: function(err) {
+        var isTimeout = err && err.errMsg && err.errMsg.indexOf('timeout') !== -1
+        var msg = isTimeout ? '上传超时，请检查网络后重试' : '图片上传失败，请重试'
+        wx.showToast({ title: msg, icon: 'none', duration: 2000 })
+        reject(new Error(msg))
+      },
+    })
+  })
+}
+
+module.exports = {
+  createOrder,
+  getOrders,
+  getOrderMeta,
+  getOrderDetail,
+  confirmOrder,
+  cancelOrder,
+  applyAfterSale,
+  uploadImage,
+}

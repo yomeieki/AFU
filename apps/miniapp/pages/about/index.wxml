@@ -2,14 +2,8 @@
 
   <!-- 品牌 -->
   <view class="brand-card card">
-    <view class="brand-deco brand-deco-1"></view>
-    <view class="brand-deco brand-deco-2"></view>
-    <view class="brand-seal">
-      <text class="brand-seal-text">阿福</text>
-      <text class="brand-seal-text">凉菜</text>
-    </view>
-    <text class="brand-name">{{shop.fullName}}</text>
-    <text class="brand-slogan">{{shop.slogan}}</text>
+    <!-- 真实 logo 原图（印章 + 丹桂阿福凉菜 + 家的味道），白底已转透明 -->
+    <image class="brand-logo" src="/assets/brand/logo-standard.png" mode="widthFix" />
   </view>
 
   <!-- 联系我们 -->

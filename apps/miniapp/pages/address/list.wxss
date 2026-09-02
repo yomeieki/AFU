@@ -107,11 +107,14 @@
   left: 0;
   right: 0;
   padding: 16rpx 24rpx;
+  box-sizing: border-box;
   background-color: var(--card);
   border-top: 1rpx solid var(--divider);
 }
+/* btn-primary 自带左右 48rpx 内边距，width:100% 不加 border-box 会溢出屏幕右侧 */
 .add-btn {
   width: 100%;
+  box-sizing: border-box;
 }
 .add-btn-spacer {
   height: 140rpx;

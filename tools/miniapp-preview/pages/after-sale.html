@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/after-sale.generated.css">
+<style>
+  html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}
+  /* fixed 操作栏在 iframe 内按内容高度落底 */
+  .mp-page{position:relative;min-height:720px}
+  .action-bar{position:absolute}
+</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page">
+
+    <div class="card order-card">
+      <div class="order-no-row"><span class="order-no-label">订单号</span><span class="order-no">ORD20260707448142</span></div>
+      <div class="order-item-row">
+        <div class="order-item-info">
+          <span class="order-item-name">冷吃兔</span>
+          <span class="order-item-spec">中辣/去骨</span>
+          <span class="order-item-qty">×1 等 2 件商品</span>
+        </div>
+        <div class="order-amount"><span class="order-amount-label">实付</span><span class="price-symbol">¥</span><span class="price-int order-amount-int">57</span><span class="price-dec">.80</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">售后原因<span class="required">*</span></div>
+      <div class="chips">
+        <div class="chip active">少发/漏发</div>
+        <div class="chip">错发</div>
+        <div class="chip">变质/破损</div>
+        <div class="chip">其他</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">问题说明<span class="optional">（选填）</span></div>
+      <textarea class="desc-input" placeholder="补充说明（如少了哪件、破损情况等）">少了一份凉拌折耳根</textarea>
+      <div class="desc-counter">9/200</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">凭证图片<span class="optional">（最多 3 张）</span></div>
+      <div class="img-grid">
+        <div class="img-cell"><div class="img-thumb img-placeholder"></div><div class="img-remove">×</div></div>
+        <div class="img-cell">
+          <div class="img-thumb img-placeholder"></div>
+          <div class="img-uploading"><div class="img-spinner"></div><span class="img-uploading-text">上传中</span></div>
+          <div class="img-remove">×</div>
+        </div>
+        <div class="img-cell img-add"><span class="img-add-plus">+</span><span class="img-add-text">添加照片</span></div>
+      </div>
+      <div class="img-note">如少发/错发/变质请附照片，便于快速处理</div>
+    </div>
+
+    <div class="spacer"></div>
+  </div>
+
+  <div class="action-bar safe-bottom">
+    <div class="submit-btn btn-primary"><span>提交申请</span></div>
+  </div>
+</div>
+</body>
+</html>

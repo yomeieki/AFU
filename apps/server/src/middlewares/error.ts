@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import { ZodError } from 'zod'
+import { Prisma } from '@prisma/client'
 import { notifySystemAlert } from '../services/notify'
 
 export class AppError extends Error {
@@ -34,6 +35,11 @@ export function errorHandler(
       message: `参数错误：${message}`,
       data: null,
     })
+  }
+
+  // 路径参数非法（如 /orders/abc → id=NaN）导致的 Prisma 校验错误：属客户端错误，不算 500、不告警
+  if (err instanceof Prisma.PrismaClientValidationError) {
+    return res.status(400).json({ code: 40001, message: '参数错误：请求参数无效', data: null })
   }
 
   console.error('[Error]', err)

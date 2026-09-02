@@ -36,10 +36,11 @@
       </view>
     </view>
 
-    <view class="add-btn-wrap safe-bottom" wx:if="{{mode !== 'select'}}">
+    <!-- 选择模式（从下单页进来）同样可以新增：填错/换地址时不用退回「我的」再来 -->
+    <view class="add-btn-wrap safe-bottom">
       <view class="add-btn btn-primary" bindtap="onAddAddress">+ 新增收货地址</view>
     </view>
-    <view class="add-btn-spacer" wx:if="{{mode !== 'select'}}"></view>
+    <view class="add-btn-spacer"></view>
   </view>
 
 </view>

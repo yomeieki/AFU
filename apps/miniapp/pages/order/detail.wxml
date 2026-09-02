@@ -4,6 +4,7 @@
   <!-- Status banner -->
   <view class="status-banner {{order.status}}">
     <text class="status-label">{{order.statusLabel}}</text>
+    <text wx:if="{{order.status === 'PENDING_PAYMENT' && countdown}}" class="status-deadline">请在 {{order.payDeadlineText}} 前完成支付，超时订单自动取消</text>
     <text class="status-order-no">{{order.orderNo}}</text>
   </view>
 
@@ -50,6 +51,10 @@
       <text class="amount-label">运费</text>
       <text class="amount-value">{{order.shippingFee === 0 ? '免运费' : '¥' + order.shippingFeeText}}</text>
     </view>
+    <view class="amount-row" wx:if="{{order.refundedAmount > 0}}">
+      <text class="amount-label">已退款</text>
+      <text class="amount-value refunded">-¥{{order.refundedAmountText}}</text>
+    </view>
     <view class="amount-row total-row">
       <text class="amount-label">合计</text>
       <view class="total-price-wrap">
@@ -77,6 +82,54 @@
     <view class="info-row" wx:if="{{order.paidAtText}}">
       <text class="info-label">支付时间</text>
       <text class="info-value">{{order.paidAtText}}</text>
+    </view>
+  </view>
+
+  <!-- 售后申请 -->
+  <view class="card" wx:if="{{order.afterSale}}">
+    <view class="card-title">售后申请</view>
+    <view class="info-row">
+      <text class="info-label">状态</text>
+      <text class="info-value after-sale-status {{order.afterSale.status}}">{{order.afterSale.statusLabel}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">原因</text>
+      <text class="info-value">{{order.afterSale.reasonLabel}}</text>
+    </view>
+    <view class="info-row" wx:if="{{order.afterSale.description}}">
+      <text class="info-label">说明</text>
+      <text class="info-value">{{order.afterSale.description}}</text>
+    </view>
+    <view class="after-sale-images" wx:if="{{order.afterSale.images.length > 0}}">
+      <image
+        wx:for="{{order.afterSale.images}}"
+        wx:key="*this"
+        class="after-sale-img"
+        src="{{item}}"
+        mode="aspectFill"
+        data-url="{{item}}"
+        bindtap="onPreviewImage"
+      />
+    </view>
+    <view class="info-row" wx:if="{{order.afterSale.reply}}">
+      <text class="info-label">商家回复</text>
+      <text class="info-value reply">{{order.afterSale.reply}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">申请时间</text>
+      <text class="info-value">{{order.afterSale.timeText}}</text>
+    </view>
+  </view>
+
+  <!-- 退款记录 -->
+  <view class="card" wx:if="{{order.refunds.length > 0}}">
+    <view class="card-title">退款记录</view>
+    <view wx:for="{{order.refunds}}" wx:key="id" class="refund-row">
+      <view class="refund-main">
+        <text class="refund-amount">¥{{item.amountText}}</text>
+        <text class="refund-status {{item.status}}">{{item.statusLabel}}</text>
+      </view>
+      <text class="refund-meta">{{item.reason ? item.reason + ' · ' : ''}}{{item.timeText}}</text>
     </view>
   </view>
 
@@ -113,6 +166,10 @@
       <text class="info-label">快递单号</text>
       <text class="info-value">{{order.shipment.expressNo}}</text>
     </view>
+    <view class="info-row" wx:if="{{order.shipment.remark}}">
+      <text class="info-label">商家备注</text>
+      <text class="info-value">{{order.shipment.remark}}</text>
+    </view>
   </view>
 
   <view class="spacer"></view>
@@ -122,16 +179,20 @@
   <text class="loading-text">加载中...</text>
 </view>
 
-<!-- Bottom action bar -->
-<view class="action-bar" wx:if="{{!loading && order && (order.canSelfCancel || order.status === 'PAID' || order.status === 'PREPARING' || order.status === 'SHIPPED' || order.status === 'REFUNDING')}}">
-  <view class="cancel-btn" wx:if="{{order.status === 'PAID' || order.status === 'PREPARING' || order.status === 'SHIPPED' || order.status === 'REFUNDING'}}" bindtap="onContactShop">
+<!-- Bottom action bar：联系商家常驻；其余按状态 -->
+<view class="action-bar" wx:if="{{!loading && order}}">
+  <view class="cancel-btn" bindtap="onContactShop">
     <text>联系商家</text>
   </view>
   <view class="cancel-btn" wx:if="{{order.canSelfCancel}}" bindtap="onCancelOrder">
     <text>{{order.status === 'PENDING_PAYMENT' ? '取消订单' : '申请退款'}}</text>
   </view>
-  <view class="pay-btn btn-primary" wx:if="{{order.status === 'PENDING_PAYMENT'}}" bindtap="onPay">
+  <view class="cancel-btn" wx:if="{{order.canApplyAfterSale}}" bindtap="onApplyAfterSale">
+    <text>申请售后</text>
+  </view>
+  <view class="pay-btn btn-primary {{countdown ? 'pay-btn-with-countdown' : ''}}" wx:if="{{order.status === 'PENDING_PAYMENT'}}" bindtap="onPay">
     <text>去支付</text>
+    <text wx:if="{{countdown}}" class="pay-btn-countdown">{{countdown}}</text>
   </view>
   <view class="pay-btn btn-primary" wx:if="{{order.status === 'SHIPPED'}}" bindtap="onConfirmReceipt">
     <text>确认收货</text>

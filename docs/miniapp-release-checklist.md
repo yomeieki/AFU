@@ -48,7 +48,7 @@
 | request 合法域名 | `https://api.yuegui-hotel.online` | ✅ |
 | uploadFile 合法域名 | `https://api.yuegui-hotel.online` | ✅ |
 | downloadFile 合法域名 | `https://afu-images-1342627167.cos.ap-shanghai.myqcloud.com` | ✅ |
-| 业务域名(可选) | `https://admin.yuegui-hotel.online`(后台 web-view 内嵌用,可后置) | ☐ 暂不需要 |
+| **业务域名** | `https://admin.yuegui-hotel.online`(小程序「商家管理」内嵌后台 web-view 用) | ☐ **需要**:下载校验文件 `MP_verify_xxx.txt` 放到 `apps/admin/public/`,重新部署后台后再在公众平台点校验 |
 
 > 每月只能修改 5 次,一次配齐。图片桶 `afu-images-1342627167`(上海 ap-shanghai,公有读私有写)已于 2026-09-02 建好。
 
@@ -72,6 +72,13 @@
 
 ### 2.5 客服(功能 → 客服)
 - 本小程序采用**拨打电话**方式,不需要配置微信客服人员;审核备注里写明「客服方式:小程序内「联系商家」直拨 xxx」即可
+
+### 2.6 订阅消息(功能 → 订阅消息 → 公共模板库)
+顾客付款时会弹一次授权,之后发货 / 退款到账会推微信通知。需要选 2 个**一次性**公共模板:
+- [ ] 「发货通知」类(关键词建议:订单编号、快递公司、快递单号、发货时间)→ 记下模板 ID 与各字段的 key(如 `character_string1`)
+- [ ] 「退款通知」类(关键词建议:订单编号、退款金额、退款原因、退款时间)
+- [ ] 把模板 ID 和字段映射填入服务器 `.env` 的 `WECHAT_TMPL_SHIP / WECHAT_TMPL_SHIP_FIELDS / WECHAT_TMPL_REFUND / WECHAT_TMPL_REFUND_FIELDS`(格式见 `.env.example`),重启后「系统状态」页订阅消息两项变绿
+- 未配置时小程序不会弹授权,其余功能不受影响
 
 ---
 
@@ -104,7 +111,13 @@
 - [ ] 首页 / 商品详情右上角「…」→ 转发,分享卡片标题带「阿福凉菜」、商品分享带封面图
 - [ ] 服务器 `.env`:`WECHAT_*_MOCK` 全为 `false`,`COS_*` 已配置,`NODE_ENV=production`
 - [ ] 服务器已跑 `migrate-uploads-to-cos.ts`(先 `--dry-run`),小程序里商品图片正常显示
-- [ ] 管理后台 → 系统状态:全部分组无灰项(「可选」除外)
+- [ ] 管理后台 → 系统状态:全部分组无灰项(「可选」除外);「订单生命周期」显示 15 分钟 / 7 天 / 定时任务开启
+- [ ] 服务器 `.env` 新增项:`PAY_TIMEOUT_MIN`、`AUTO_COMPLETE_DAYS`、`WECHAT_TMPL_*`(见 `.env.example`);部署后 `npx prisma migrate deploy`(新增 after_sales 表与订单字段)
+- [ ] 真机:下单不付款,15 分钟后订单自动变「已取消」且商品库存恢复
+- [ ] 真机:一分钱支付 → 后台部分退款 0.01 → 顾客订单页显示「已退款 -¥0.01」且订单状态不变 → 再全额退剩余 → 订单「已退款」
+- [ ] 真机:已发货订单「申请售后」传 1 张图 → 后台「售后」标签同意退款 → 顾客端显示商家回复
+- [ ] 真机:「我的 → 商家管理」登录后「进入管理后台」能在小程序内打开后台并已登录(需 2.3 业务域名生效)
+- [ ] 真机:收货地址「导入微信收货地址」与省市区选择器可用
 - [ ] UptimeRobot 监控已建,企微告警群已收到「服务启动」测试消息
 - [ ] 微信开发者工具:上传代码 → 公众平台「版本管理」出现开发版本 → 设为体验版 → 真机用体验版走完整流程
 

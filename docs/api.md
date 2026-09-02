@@ -895,3 +895,41 @@
 6. **SQL 注入**：使用 Prisma ORM，参数化查询，不拼接 SQL。
 7. **XSS**：富文本字段存储前做 sanitize。
 8. **CORS**：后端配置白名单域名。
+
+
+---
+
+## 附录 A：2026-09 新增/变更接口速查
+
+### 小程序端
+| 接口 | 说明 |
+|---|---|
+| `POST /api/orders` | 新增 `directItem {productId, skuId?, quantity}` 与 `cartItemIds` 二选一（立即购买不经购物车）；响应增 `payExpireAt`、`subscribeTemplateIds` |
+| `GET /api/orders/meta` | `{ subscribeTemplateIds, payTimeoutMin }`（下单页请求订阅消息用） |
+| `GET /api/orders` / `GET /api/orders/:id` | 增 `payExpireAt`（待付款）、`refundedAmount`、`latestRefund`、`afterSale`；详情增 `refunds[]`、`canApplyAfterSale`、`subscribeTemplateIds` |
+| `POST /api/orders/:id/after-sale` | `{ reason: SHORTAGE\|WRONG\|DAMAGED\|OTHER, description?, images?: url[] ≤3 }`；仅 SHIPPED/COMPLETED、有可退余额、无处理中售后单 |
+| `GET /api/orders/:id/after-sale` | 该订单售后单列表 |
+| `POST /api/upload` | 顾客上传售后图片（3MB，每分钟 10 张） |
+| `POST /api/orders/:id/pay` | 超时返回 42209；未过期的预下单复用 prepay_id |
+
+### 管理端
+| 接口 | 说明 |
+|---|---|
+| `GET /api/admin/orders?keyword=` | 订单号 / 收货人 / 手机号模糊；列表增 `remark`、`refundedAmount`、`remainingRefundable`、`afterSale` |
+| `POST /api/admin/orders/:id/refund` | `amount` 可为部分（≤ 可退余额）；响应增 `isFull` |
+| `POST /api/admin/orders/:id/complete` | SHIPPED → COMPLETED |
+| `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`） |
+| `POST /api/admin/after-sales/:id/approve` | `{ amount, reply? }` → 发起退款并置 APPROVED（回调成功 → DONE） |
+| `POST /api/admin/after-sales/:id/reject` | `{ reply }` → REJECTED |
+| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount` |
+| `POST /api/admin/webview-code` | admin token → 一次性 code（2 分钟） |
+| `POST /api/admin/login/webview` | `{ code }` → token（小程序 web-view `/m?code=` 用） |
+| `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖 |
+
+### 错误码新增
+| code | 含义 |
+|---|---|
+| 42206 | 退款金额超过可退余额 / 已全额退款 |
+| 42208 | 已有售后申请处理中 |
+| 42209 | 订单已超时，请重新下单 |
+| 40103 | web-view 登录凭证失效 |

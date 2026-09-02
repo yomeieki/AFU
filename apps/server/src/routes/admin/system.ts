@@ -4,6 +4,8 @@ import { success } from '../../utils/response'
 import { config } from '../../config'
 import { getVerifyStatus } from '../../services/wechat-pay-verify'
 import { getRefundNotifyUrl } from '../../services/wechat-pay'
+import { runSchedulerTick } from '../../services/scheduler'
+import { AppError } from '../../middlewares/error'
 
 const router = Router()
 
@@ -63,8 +65,37 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
           process.env.SYSTEM_ALERT_PUSHPLUS_TOKEN || process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
         ),
       },
+      order: {
+        payTimeoutMin: config.order.payTimeoutMin,
+        autoCompleteDays: config.order.autoCompleteDays,
+        schedulerEnabled: config.schedulerEnabled,
+      },
+      subscribe: {
+        paidTemplateSet: !!config.subscribe.paidTemplateId && !!config.subscribe.paidFields,
+        shipTemplateSet: !!config.subscribe.shipTemplateId && !!config.subscribe.shipFields,
+        refundTemplateSet: !!config.subscribe.refundTemplateId && !!config.subscribe.refundFields,
+      },
       publicBaseUrl: config.publicBaseUrl,
     })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/system/run-scheduler — 手动跑一轮定时任务（仅非生产，供联调/e2e）
+router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (config.isProduction) throw new AppError(40301, '生产环境不允许手动触发', 403)
+    const body = (_req.body ?? {}) as Record<string, unknown>
+    const num = (v: unknown) => (typeof v === 'number' && v >= 0 ? v : undefined)
+    success(
+      res,
+      await runSchedulerTick({
+        payTimeoutMin: num(body.payTimeoutMin),
+        autoCompleteDays: num(body.autoCompleteDays),
+        remindAfterMin: num(body.remindAfterMin),
+      })
+    )
   } catch (e) {
     next(e)
   }

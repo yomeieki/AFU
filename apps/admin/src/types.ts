@@ -105,6 +105,30 @@ export interface RefundSummary {
   createdAt: string
 }
 
+export type AfterSaleStatus = 'PENDING' | 'APPROVED' | 'DONE' | 'REJECTED'
+export type AfterSaleReason = 'SHORTAGE' | 'WRONG' | 'DAMAGED' | 'OTHER'
+
+export const AFTER_SALE_REASON_LABEL: Record<AfterSaleReason, string> = {
+  SHORTAGE: '少发/漏发',
+  WRONG: '错发',
+  DAMAGED: '变质/破损',
+  OTHER: '其他',
+}
+export const AFTER_SALE_STATUS_LABEL: Record<AfterSaleStatus, string> = {
+  PENDING: '待处理',
+  APPROVED: '已同意·退款中',
+  DONE: '已退款',
+  REJECTED: '已拒绝',
+}
+
+/** 订单列表附带的售后摘要（最近一条） */
+export interface AfterSaleSummary {
+  id: number
+  status: AfterSaleStatus
+  reason: AfterSaleReason
+  createdAt: string
+}
+
 export interface Order {
   id: number
   orderNo: string
@@ -112,16 +136,56 @@ export interface Order {
   totalAmount: number
   shippingFee: number
   actualAmount: number
+  /** 已成功退款累计（分） */
+  refundedAmount: number
+  /** 可退余额（分），服务端计算 */
+  remainingRefundable: number
   deliveryType: string
   receiverName: string
   receiverPhone: string
   receiverFullAddress: string
   remark?: string | null
+  cancelReason?: string | null
   paidAt: string | null
+  acceptedAt?: string | null
+  completedAt?: string | null
   createdAt: string
   items: OrderItem[]
   shipment?: Shipment | null
   latestRefund?: RefundSummary | null
+  afterSale?: AfterSaleSummary | null
+}
+
+/** 售后单（后台列表，含订单摘要） */
+export interface AfterSale {
+  id: number
+  orderId: number
+  orderNo: string
+  userId: number
+  reason: AfterSaleReason
+  reasonLabel: string
+  description: string | null
+  images: string[]
+  status: AfterSaleStatus
+  reply: string | null
+  refundId: number | null
+  handledBy: string | null
+  handledAt: string | null
+  createdAt: string
+  remainingRefundable: number
+  order: {
+    id: number
+    orderNo: string
+    status: OrderStatus
+    actualAmount: number
+    refundedAmount: number
+    receiverName: string
+    receiverPhone: string
+    receiverFullAddress: string
+    completedAt: string | null
+    items: { productName: string; specText: string | null; quantity: number; subtotal: number }[]
+    shipment: { expressCompany: string | null; expressNo: string | null; shippedAt: string | null } | null
+  }
 }
 
 export interface AdminUser {

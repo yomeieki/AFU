@@ -312,3 +312,75 @@
   font-size: 28rpx;
   color: var(--text-2);
 }
+
+/* 待付款倒计时 */
+/* 待付款：支付截止提示（横幅第二行） */
+.status-deadline {
+  display: block;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #b45309;
+  line-height: 1.4;
+}
+/* 去支付按钮内嵌倒计时（两行） */
+.pay-btn-with-countdown {
+  flex-direction: column;
+  gap: 2rpx;
+  height: 96rpx;
+  line-height: 1.1;
+}
+.pay-btn-countdown {
+  font-size: 22rpx;
+  font-weight: 500;
+  opacity: 0.92;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1rpx;
+}
+/* 已退款金额 */
+.amount-value.refunded {
+  color: var(--danger);
+}
+/* 售后 */
+.after-sale-status.PENDING, .after-sale-status.APPROVED { color: var(--warning); }
+.after-sale-status.DONE { color: var(--success, #16a34a); }
+.after-sale-status.REJECTED { color: var(--text-3); }
+.info-value.reply { color: var(--brand-600, #c2410c); }
+.after-sale-images {
+  display: flex;
+  gap: 12rpx;
+  padding: 12rpx 0;
+}
+.after-sale-img {
+  width: 140rpx;
+  height: 140rpx;
+  border-radius: var(--radius-md, 12rpx);
+  background: var(--bg);
+}
+/* 退款记录 */
+.refund-row {
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid var(--border);
+}
+.refund-row:last-child { border-bottom: none; }
+.refund-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.refund-amount {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.refund-status {
+  font-size: 24rpx;
+  color: var(--warning);
+}
+.refund-status.SUCCESS { color: var(--success, #16a34a); }
+.refund-status.CLOSED, .refund-status.FAILED { color: var(--danger); }
+.refund-meta {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+}
