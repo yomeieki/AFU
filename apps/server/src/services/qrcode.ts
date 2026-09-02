@@ -26,8 +26,7 @@ export async function generateProductQrCode(
   //   3. Validate response content-type is image/*
   //      (WeChat returns JSON on error, not an image)
   //
-  //   4. Upload buffer to COS:
-  //      path = qrcodes/product_${productId}_${Date.now()}.png
+  //   4. Upload buffer to COS（已有封装 services/cos.ts：putObject(buildObjectKey('qrcodes', '.png'), buf, 'image/png')）
   //      Returns a public URL
   //
   //   5. Return { scene, qrCodeUrl }
