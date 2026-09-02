@@ -1,4 +1,4 @@
-// 用户协议与隐私政策文案。主体信息取自 config/shop.js，【待填】项替换后即生效。
+// 用户协议与隐私政策文案。主体信息（经营主体/地址/电话/邮箱/许可证号）全部取自 config/shop.js，改那一处即可。
 const shop = require('./shop')
 
 const agreement = {
