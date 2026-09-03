@@ -3,7 +3,7 @@
 分支：`claude/same-city-delivery-plan-2ffa20`（独立 worktree，不影响上架中的功能）。
 v2 = v1 + Opus 架构审阅（13 条阻断 / 12 条建议）+ Sonnet 产品运营审阅 + Opus 复核（N1–N15）+ 用户两轮决策。
 v3 = v2 + 用户追加需求：云打印机出票与语音播报（D7）、同城运营工作台（D8），含飞鹅/芯烨/易联云调研结论。
-批准后：本方案落为 `docs/superpowers/specs/2026-09-03-local-delivery-design.md` → `writing-plans` 拆任务 → 按里程碑实施，每个里程碑由不同模型审阅。
+实施计划：`docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md`（M1）；M2/M2b/M3/M4 计划在前序里程碑落地后再写。每个里程碑由不同模型审阅。
 
 ## Context
 
