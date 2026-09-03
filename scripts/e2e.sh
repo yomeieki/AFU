@@ -469,6 +469,58 @@ assert_eq "queue code 0" "$(code "$R")" "0"
 R=$(req GET /api/admin/system/kd100-mock/calls "$AT"); assert_eq "calls 初始为空数组" "$(jq -r '.data | length' <<<"$R")" "0"
 R=$(req GET /api/admin/system/kd100-mock/salt/D999999-1 "$AT"); assert_eq "未知单号 salt 404" "$(code "$R")" "40401"
 
+echo "== 26. 呼叫骑手三分支 =="
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+# 第 22 段的「改文字清坐标」断言清掉了 $LADDR 的坐标，同城下单要重新报价必须先恢复；
+# 顺手把库存加足——26-31 段要造十几笔单，50 件不保险
+req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000,"lngE6":104790000}' >/dev/null
+req PUT "/api/admin/products/$LPID" "$AT" '{"stock":500}' >/dev/null
+mk_local_paid() {  # 造一笔已支付同城单，echo orderId
+  local r cid oid
+  r=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); cid=$(jq -r '.data.id // empty' <<<"$r")
+  r=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$cid],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\"}")
+  oid=$(jq -r '.data.orderId // empty' <<<"$r"); [[ -n "$oid" ]] || { echo ""; return; }
+  req POST "/api/orders/$oid/pay" "$UT" >/dev/null; echo "$oid"
+}
+DLO1=$(mk_local_paid); [[ -n "$DLO1" ]] && ok "同城单 #$DLO1 已支付" || fail "造单失败"
+R=$(req POST "/api/admin/local/orders/$DLO1/call" "$AT"); assert_eq "未接单不能呼叫 42204" "$(code "$R")" "42204"
+R=$(req POST "/api/admin/local/orders/$DLO1/accept" "$AT"); assert_eq "同城接单 code 0" "$(code "$R")" "0"
+assert_eq "接单后 PREPARING" "$(req GET "/api/admin/orders/$DLO1" "$AT" | jq -r .data.status)" "PREPARING"
+# —— 分支①成功：CALLING + taskId + quotedFee
+R=$(req POST "/api/admin/local/orders/$DLO1/call" "$AT"); assert_eq "呼叫成功 code 0" "$(code "$R")" "0"
+assert_eq "返回 status=CALLING" "$(jq -r .data.status <<<"$R")" "CALLING"
+DNO1=$(jq -r .data.deliveryNo <<<"$R"); [[ "$DNO1" == D${DLO1}-1 ]] && ok "deliveryNo=D${DLO1}-1" || fail "deliveryNo 格式" "$DNO1"
+R=$(req GET "/api/admin/local/orders/$DLO1/delivery" "$AT")
+assert_eq "落库 CALLING" "$(jq -r .data.delivery.status <<<"$R")" "CALLING"
+assert_eq "quotedFee=500" "$(jq -r .data.delivery.quotedFee <<<"$R")" "500"
+[[ "$(jq -r .data.delivery.providerTaskId <<<"$R")" == MOCKTASK-* ]] && ok "taskId 已写" || fail "taskId"
+R=$(req POST "/api/admin/local/orders/$DLO1/call" "$AT"); assert_eq "重复呼叫 42228" "$(code "$R")" "42228"
+# mock 记录了 callbackUrl 拼装
+R=$(req GET /api/admin/system/kd100-mock/calls "$AT")
+[[ "$(jq -r '.data[-1].input.callbackUrl' <<<"$R")" == */api/kd/D${DLO1}-1 ]] && ok "callbackUrl 含 deliveryNo" || fail "callbackUrl" "$R"
+# —— 分支②超时：UNKNOWN 占位不释放；作废后可重呼且 seq 递增
+DLO2=$(mk_local_paid); req POST "/api/admin/local/orders/$DLO2/accept" "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"timeout"}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$DLO2/call" "$AT"); assert_eq "超时返回 UNKNOWN" "$(jq -r .data.status <<<"$R")" "UNKNOWN"
+R=$(req POST "/api/admin/local/orders/$DLO2/call" "$AT"); assert_eq "UNKNOWN 占位期间再呼 42228" "$(code "$R")" "42228"
+R=$(req POST "/api/admin/local/orders/$DLO2/delivery/void" "$AT"); assert_eq "作废 code 0" "$(code "$R")" "0"
+R=$(req GET "/api/admin/local/orders/$DLO2/delivery" "$AT"); assert_eq "作废后 FAILED" "$(jq -r .data.delivery.status <<<"$R")" "FAILED"
+R=$(req POST "/api/admin/local/orders/$DLO2/call" "$AT"); assert_eq "作废后重呼 code 0" "$(code "$R")" "0"
+assert_eq "重呼单号 seq=2" "$(jq -r .data.deliveryNo <<<"$R")" "D${DLO2}-2"
+# —— 分支③明确失败：30005 ADMIN 不重试→42225；30004 熔断→42232→恢复
+DLO3=$(mk_local_paid); req POST "/api/admin/local/orders/$DLO3/accept" "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"error","code":"30005"}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$DLO3/call" "$AT"); assert_eq "30005 手动呼叫不重试 42225" "$(code "$R")" "42225"
+assert_eq "ADMIN 来源只外呼一次" "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -r '[.data[]|select(.op=="createOrder")]|length')" "1"
+R=$(req GET "/api/admin/local/orders/$DLO3/delivery" "$AT"); assert_eq "失败后 FAILED" "$(jq -r .data.delivery.status <<<"$R")" "FAILED"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"error","code":"30004"}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$DLO3/call" "$AT"); assert_eq "30004 → 42225" "$(code "$R")" "42225"
+R=$(req POST "/api/admin/local/orders/$DLO3/call" "$AT"); assert_eq "熔断后直接拒 42232" "$(code "$R")" "42232"
+assert_eq "熔断可见于 status" "$(req GET /api/admin/system/status "$AT" | jq -r .data.kd100.circuitTripped)" "true"
+R=$(req POST /api/admin/system/kd100-circuit/reset "$AT"); assert_eq "恢复 code 0" "$(code "$R")" "0"
+R=$(req POST "/api/admin/local/orders/$DLO3/call" "$AT"); assert_eq "恢复后可呼 code 0" "$(code "$R")" "0"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
@@ -481,6 +533,7 @@ rm -f "$PNG" "$R1" "$R2"
 [[ -n "${ECAT:-}" ]] && req DELETE "/api/admin/categories/$ECAT" "$AT" >/dev/null
 [[ -n "${LCID:-}" ]] && req DELETE "/api/cart/$LCID" "$UT" >/dev/null
 for o in ${LO1:-} ${LO2:-}; do docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set status='CANCELLED' where id=$o and status in ('PENDING_PAYMENT','PAID','PREPARING');" 2>/dev/null; done
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null 2>&1 || true
 
 echo "== 24. 渠道一致性 =="
 node scripts/check-channel-consistency.mjs && ok "product.channel = category.channel" || fail "渠道不一致"

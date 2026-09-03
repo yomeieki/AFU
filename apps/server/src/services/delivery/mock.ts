@@ -15,6 +15,10 @@ export type MockDirective =
 const queues = new Map<string, MockDirective[]>()
 const calls: { op: string; input: unknown; at: string }[] = []
 let seq = 0
+// 进程启动时间戳做前缀：providerTaskId 在库里有唯一索引，仅靠进程内自增 seq 在热重载/重启后归零，
+// 会与仍存活的历史配送单（前一次进程生成的）撞号（P2002）。真实供应商的任务号本就全局唯一，
+// mock 也应如此——不影响 e2e 里 `MOCKTASK-*` 前缀断言。
+const procTag = Date.now().toString(36)
 
 export function queueDirective(op: 'createOrder' | 'cancelOrder' | 'precancelOrder' | 'addTip' | 'queryCourier' | 'price', d: MockDirective): void {
   if (!queues.has(op)) queues.set(op, [])
@@ -28,7 +32,9 @@ export function getCalls(): { op: string; input: unknown; at: string }[] {
 export function resetMock(): void {
   queues.clear()
   calls.length = 0
-  seq = 0
+  // seq 故意不重置：providerTaskId 在库里有唯一索引，一次 e2e 运行中会多次 reset
+  // （不同订单/场景之间清状态），若 seq 归零会与仍存活的历史配送单撞号（P2002）。
+  // 真实供应商的任务号本就不会因为「重置」而复用，这里让 mock 的行为与之一致。
 }
 
 function take(op: string): MockDirective {
@@ -60,8 +66,8 @@ export const mockProvider: DeliveryProvider = {
     const d = act('createOrder', input)
     seq += 1
     return {
-      taskId: (d.kind === 'ok' && d.taskId) || `MOCKTASK-${seq}`,
-      providerOrderId: (d.kind === 'ok' && d.providerOrderId) || `MOCKORD-${seq}`,
+      taskId: (d.kind === 'ok' && d.taskId) || `MOCKTASK-${procTag}-${seq}`,
+      providerOrderId: (d.kind === 'ok' && d.providerOrderId) || `MOCKORD-${procTag}-${seq}`,
       quotedFeeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500,
       distanceM: d.kind === 'ok' && d.distanceM != null ? d.distanceM : 2600,
       raw: { mock: true },

@@ -91,6 +91,16 @@ export function notifyCancelRequest(order: {
   if (pushplusToken) sendPushPlus(pushplusToken, '同城订单申请取消', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }
 
+/** 同城配送异常告警（呼叫失败/运力异常/回调超时等，orchestrator 调用）：店员双通道，自由行文本。 */
+export function notifyLocalDeliveryAlert(title: string, lines: string[]): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const content = [`**🛵 ${title}**`, ...lines.map((l) => `> ${l}`)].join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, title, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
 /** 退款结果通知（微信回调或同步返回）。status: SUCCESS / ABNORMAL / CLOSED */
 export function notifyRefundResult(
   order: { orderNo: string; receiverName: string; receiverPhone: string },

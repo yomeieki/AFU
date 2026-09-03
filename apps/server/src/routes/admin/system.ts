@@ -6,6 +6,7 @@ import { getVerifyStatus } from '../../services/wechat-pay-verify'
 import { getRefundNotifyUrl } from '../../services/wechat-pay'
 import { runSchedulerTick } from '../../services/scheduler'
 import { AppError } from '../../middlewares/error'
+import { isCircuitTripped, resetCircuit, getCircuitState } from '../../services/delivery/circuit'
 
 const router = Router()
 
@@ -81,6 +82,7 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         mock: config.mock.delivery,
         callbackUrlSample: `${config.publicBaseUrl}/api/kd/D999999-99`,
         callbackUrlOk: `${config.publicBaseUrl}/api/kd/D999999-99`.length <= 50,
+        circuitTripped: isCircuitTripped(),
       },
       publicBaseUrl: config.publicBaseUrl,
     })
@@ -103,6 +105,16 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         remindAfterMin: num(body.remindAfterMin),
       })
     )
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/system/kd100-circuit/reset — 手动恢复快递100 余额熔断（充值后点击）
+router.post('/kd100-circuit/reset', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    resetCircuit(req.adminUsername ?? 'admin')
+    success(res, getCircuitState())
   } catch (e) {
     next(e)
   }
