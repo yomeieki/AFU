@@ -915,14 +915,26 @@ export async function callRider(input: CallRiderInput) {
   }
 
   if (result) {
-    await prisma.$transaction(async (tx) => {
-      await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
-        status: 'CALLING', statusRank: 10, calledAt: new Date(),
-        providerTaskId: result!.taskId, providerOrderId: trunc(result!.providerOrderId, 64),
-        quotedFee: result!.quotedFeeFen, providerDistanceM: result!.distanceM,
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
+          status: 'CALLING', statusRank: 10, calledAt: new Date(),
+          providerTaskId: trunc(result!.taskId, 64), providerOrderId: trunc(result!.providerOrderId, 64),
+          quotedFee: result!.quotedFeeFen, providerDistanceM: result!.distanceM,
+        } })
+        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: '已向运力方下单（并呼抢单中）', operator })
+      })
+    } catch (e) {
+      // 落库失败（如 providerTaskId 撞唯一索引）会让占位行永远停在 PENDING：
+      // voidUnknownDelivery 只收 UNKNOWN、cancelDelivery 要求有 taskId，没有任何人能救它，
+      // 该订单就此永久不可再呼。所以这里必须同条 update 释放占位再抛。
+      await prisma.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
+        status: 'FAILED', activeOrderId: null, errorCode: 'PERSIST',
+        failReason: trunc(`下单成功但落库失败：${(e as Error).message}`, 255),
       } })
-      await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: '已向运力方下单（并呼抢单中）', operator })
-    })
+      notifySystemAlert('呼叫骑手成功但落库失败', [`订单 ${order.orderNo}（${deliveryNo}）`, '运力方可能已产生真实单，请到快递100 后台核对', (e as Error).message], { key: `kd100-persist:${orderId}` })
+      throw new AppError(42225, '呼叫已发出但本地记录失败，请到快递100 后台核对后重试')
+    }
     return { deliveryId, deliveryNo, status: 'CALLING' as const, quotedFeeFen: result.quotedFeeFen }
   }
 

@@ -520,6 +520,15 @@ R=$(req POST "/api/admin/local/orders/$DLO3/call" "$AT"); assert_eq "熔断后�
 assert_eq "熔断可见于 status" "$(req GET /api/admin/system/status "$AT" | jq -r .data.kd100.circuitTripped)" "true"
 R=$(req POST /api/admin/system/kd100-circuit/reset "$AT"); assert_eq "恢复 code 0" "$(code "$R")" "0"
 R=$(req POST "/api/admin/local/orders/$DLO3/call" "$AT"); assert_eq "恢复后可呼 code 0" "$(code "$R")" "0"
+# —— 落库失败必须释放占位（否则该订单永久不可再呼）
+DLO4=$(mk_local_paid); req POST "/api/admin/local/orders/$DLO4/accept" "$AT" >/dev/null
+DUPT=$(req GET "/api/admin/local/orders/$DLO1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+req POST /api/admin/system/kd100-mock/queue "$AT" "{\"op\":\"createOrder\",\"directive\":{\"kind\":\"ok\",\"taskId\":\"$DUPT\"}}" >/dev/null
+R=$(req POST "/api/admin/local/orders/$DLO4/call" "$AT"); assert_eq "落库失败返 42225" "$(code "$R")" "42225"
+R=$(req GET "/api/admin/local/orders/$DLO4/delivery" "$AT")
+assert_eq "落库失败后置 FAILED" "$(jq -r .data.delivery.status <<<"$R")" "FAILED"
+assert_eq "落库失败后释放占位" "$(jq -r .data.delivery.activeOrderId <<<"$R")" "null"
+R=$(req POST "/api/admin/local/orders/$DLO4/call" "$AT"); assert_eq "释放后可重呼 code 0" "$(code "$R")" "0"
 
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
