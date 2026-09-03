@@ -56,12 +56,15 @@ model Category {
   iconUrl   String?   @map("icon_url") @db.VarChar(500)
   sortOrder Int       @default(0) @map("sort_order")
   status    Int       @default(1) @db.TinyInt
+  // 渠道：EXPRESS=全国邮寄 LOCAL=同城配送。一个分类只属于一个渠道，商品随分类归属
+  channel   String    @default("EXPRESS") @db.VarChar(16)
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
   products Product[]
 
   @@index([status, sortOrder])
+  @@index([channel, status, sortOrder])
   @@map("categories")
 }
 
@@ -86,8 +89,12 @@ model Product {
   description   String?   @db.Text
   // ON_SHELF=上架  OFF_SHELF=下架  DELETED=已删除
   status        String    @default("ON_SHELF") @db.VarChar(16)
-  // EXPRESS,LOCAL,PICKUP 逗号分隔
+  // @deprecated 历史列，渠道以 channel 为准；后台不再写入
   deliveryType  String    @default("EXPRESS") @map("delivery_type") @db.VarChar(64)
+  // 渠道冗余自分类（只在 services/product-channel.ts 写入），列表按渠道过滤不必 join
+  channel       String    @default("EXPRESS") @db.VarChar(16)
+  // 净重（克），同城下单换算快递100 weight(kg)；空则用同城设置的默认值
+  netWeightG    Int?      @map("net_weight_g")
   isRecommended Int       @default(0) @map("is_recommended") @db.TinyInt
   qrScene       String?   @map("qr_scene") @db.VarChar(64)
   qrCodeUrl     String?   @map("qr_code_url") @db.VarChar(500)
@@ -107,6 +114,7 @@ model Product {
 
   @@index([categoryId, status])
   @@index([status, isRecommended])
+  @@index([channel, status])
   @@map("products")
 }
 
@@ -186,6 +194,10 @@ model Address {
   district      String    @db.VarChar(32)
   detail        String    @db.VarChar(255)
   fullAddress   String    @map("full_address") @db.VarChar(500)
+  // GCJ-02 微度坐标 + 地图选点 POI 名；EXPRESS 地址可为空，LOCAL 下单必填
+  latE6         Int?      @map("lat_e6")
+  lngE6         Int?      @map("lng_e6")
+  poiName       String?   @map("poi_name") @db.VarChar(128)
   isDefault     Int       @default(0) @map("is_default") @db.TinyInt
   deletedAt     DateTime? @map("deleted_at")
   createdAt     DateTime  @default(now()) @map("created_at")
@@ -232,6 +244,20 @@ model Order {
   acceptRemindedAt    DateTime? @map("accept_reminded_at")
   cancelledAt         DateTime? @map("cancelled_at")
   cancelReason        String?   @map("cancel_reason") @db.VarChar(255)
+  // ── 同城配送快照（deliveryType=LOCAL 时写入）──
+  receiverLatE6       Int?      @map("receiver_lat_e6")
+  receiverLngE6       Int?      @map("receiver_lng_e6")
+  receiverPoiName     String?   @map("receiver_poi_name") @db.VarChar(128)
+  // 计费距离（米）= 直线 × detourFactor
+  distanceM           Int?      @map("distance_m")
+  estimatedDeliveryAt DateTime? @map("estimated_delivery_at")
+  // 顾客在接单后宽限期内申请取消（D6 ②）；快照当时有效配送单状态，NONE=无单
+  cancelRequestedAt   DateTime? @map("cancel_requested_at")
+  cancelRequestNote   String?   @map("cancel_request_note") @db.VarChar(255)
+  cancelRequestDeliveryStatus String? @map("cancel_request_delivery_status") @db.VarChar(16)
+  // 未接单重复播报（M2b）
+  announceCount       Int       @default(0) @map("announce_count")
+  lastAnnouncedAt     DateTime? @map("last_announced_at")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
@@ -241,6 +267,7 @@ model Order {
   shipment   Shipment?
   refunds    Refund[]
   afterSales AfterSale[]
+  deliveries Delivery[]
 
   @@index([userId, status])
   @@index([status, createdAt])
@@ -442,4 +469,109 @@ model Setting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("settings")
+}
+
+// ─────────────────────────────────────────────────────────
+// 同城配送单（M2 使用）。同一订单可有多张（重呼/换运力），同一时刻只一张有效：
+// activeOrderId 有效时 = orderId，终态置 NULL，与 Refund.activeOrderId 同款并发防线。
+// ─────────────────────────────────────────────────────────
+model Delivery {
+  id                Int       @id @default(autoincrement())
+  orderId           Int       @map("order_id")
+  orderNo           String    @map("order_no") @db.VarChar(32)
+  // 商户单号 D<orderId>-<seq>，传给运力方，回调回退查找键
+  deliveryNo        String    @unique @map("delivery_no") @db.VarChar(32)
+  // 普通 Int 列（非关系字段）：有效单 = orderId，终态 NULL
+  activeOrderId     Int?      @unique @map("active_order_id")
+  // KD100 | SELF | MOCK
+  provider          String    @db.VarChar(16)
+  // PENDING CALLING ACCEPTED ARRIVING ARRIVED DELIVERING REASSIGNING ABNORMAL DELIVERED CANCELLED FAILED UNKNOWN
+  status            String    @db.VarChar(16)
+  statusRank        Int       @default(0) @map("status_rank")
+  providerStatus    Int?      @map("provider_status")
+  statusDesc        String?   @map("status_desc") @db.VarChar(255)
+  providerTaskId    String?   @unique @map("provider_task_id") @db.VarChar(64)
+  providerOrderId   String?   @map("provider_order_id") @db.VarChar(64)
+  courierCompany    String?   @map("courier_company") @db.VarChar(32)
+  courierName       String?   @map("courier_name") @db.VarChar(64)
+  courierMobile     String?   @map("courier_mobile") @db.VarChar(20)
+  callbackSalt      String    @map("callback_salt") @db.VarChar(20)
+  quotedFee         Int?      @map("quoted_fee")
+  actualFee         Int?      @map("actual_fee")
+  tipFee            Int       @default(0) @map("tip_fee")
+  cancelFee         Int       @default(0) @map("cancel_fee")
+  providerDistanceM Int?      @map("provider_distance_m")
+  errorCode         String?   @map("error_code") @db.VarChar(16)
+  failReason        String?   @map("fail_reason") @db.VarChar(255)
+  calledAt          DateTime? @map("called_at")
+  acceptedAt        DateTime? @map("accepted_at")
+  pickedUpAt        DateTime? @map("picked_up_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  cancelledAt       DateTime? @map("cancelled_at")
+  cancelReason      String?   @map("cancel_reason") @db.VarChar(255)
+  lastCallbackAt    DateTime? @map("last_callback_at")
+  callTimeoutRemindedAt   DateTime? @map("call_timeout_reminded_at")
+  acceptedStuckRemindedAt DateTime? @map("accepted_stuck_reminded_at")
+  deliveringRemindedAt    DateTime? @map("delivering_reminded_at")
+  operator          String?   @db.VarChar(64)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  order  Order           @relation(fields: [orderId], references: [id])
+  events DeliveryEvent[]
+
+  @@index([orderId])
+  @@index([status, calledAt])
+  @@map("deliveries")
+}
+
+// 配送单事件流水：回调幂等去重 + 时间线 + 对账
+model DeliveryEvent {
+  id                 Int      @id @default(autoincrement())
+  deliveryId         Int      @map("delivery_id")
+  // sha1(deliveryId|providerStatus|updateTime ?? sha1(rawBody))；ADMIN/SCHEDULER 事件用 uuid
+  dedupeKey          String   @unique @map("dedupe_key") @db.VarChar(64)
+  // CALLBACK | API | ADMIN | SCHEDULER
+  source             String   @db.VarChar(16)
+  providerStatus     Int?     @map("provider_status")
+  statusDesc         String?  @map("status_desc") @db.VarChar(255)
+  courierName        String?  @map("courier_name") @db.VarChar(64)
+  courierMobile      String?  @map("courier_mobile") @db.VarChar(20)
+  providerUpdateTime String?  @map("provider_update_time") @db.VarChar(32)
+  operator           String?  @db.VarChar(64)
+  latencyMs          Int?     @map("latency_ms")
+  rawPayload         Json?    @map("raw_payload")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id])
+
+  @@index([deliveryId, createdAt])
+  @@map("delivery_events")
+}
+
+// 云打印作业（M2b 使用）
+model PrintJob {
+  id            Int       @id @default(autoincrement())
+  orderId       Int       @map("order_id")
+  orderNo       String    @map("order_no") @db.VarChar(32)
+  // NEW_ORDER | REPEAT | CANCEL | REPRINT | TEST
+  kind          String    @db.VarChar(16)
+  // FEIE | MOCK
+  provider      String    @db.VarChar(16)
+  printerSn     String    @map("printer_sn") @db.VarChar(32)
+  // PENDING | SENT | PRINTED | FAILED | SKIPPED
+  status        String    @db.VarChar(16)
+  providerJobId String?   @map("provider_job_id") @db.VarChar(64)
+  attempts      Int       @default(0)
+  lastError     String?   @map("last_error") @db.VarChar(255)
+  content       String    @db.Text
+  dedupeKey     String    @unique @map("dedupe_key") @db.VarChar(64)
+  sentAt        DateTime? @map("sent_at")
+  printedAt     DateTime? @map("printed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([orderId])
+  @@map("print_jobs")
 }
