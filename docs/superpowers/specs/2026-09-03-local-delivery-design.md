@@ -29,7 +29,12 @@ v3 = v2 + 用户追加需求：云打印机出票与语音播报（D7）、同�
 - 下单/询价响应：`taskId`（32 位生命周期 ID）、`orderId`（快递100 同城单号）、`deliveryDistance`（米）、`discountFee`（元，折扣后运费）；`batchOrder` 返回 `fee[]{kuaidiCom, deliveryDistance, discountFee}`。
 - 下单参数含 `remark`（≤255，**传给运力/骑手的备注**）、`goods[{name,type:'食品',count}]`、`weight`(kg 必填)、`price`(元 必填)、`insurance`、`salt`(≤20)、`callbackUrl`(**≤50 字符**)、`lbsType=2`(GCJ-02)。
 - 运力编码：`shunfengtongcheng / fengniaotongcheng / meituantongcheng / shansongtongcheng / dadatongcheng / uupaotui / gxdtongcheng`。覆盖「以询价/下单响应为准」。
-- 开通：企业版 + 企业认证 + 预充值 ≥100 元；无接口费；下单预扣、取消退回、次月账单；达达可能需绑自有商户号。
+- 开通：企业版 + 企业认证 + 预充值 ≥100 元；无接口费；下单预扣、取消退回、次月账单。
+- **2026-09-03 企微答复已确认（以下为定论，不再是待核实项）**：
+  - 自贡市覆盖蜂鸟、顺丰同城、闪送、达达、UU跑腿、裹小递**共 6 家**，开户后即可下单，**均无需我方绑定自有商户号**。`kd100.providers` 默认全选、并呼抢单可行。
+  - **预充值可退**，最低 100 元 —— M0 的开户资金风险已排除。
+  - 费用只有预估价，**实际以接口回传扣费为准**；下单前可调预下单/批量查询价格接口。这正是 `Delivery.quotedFee`（报价）与 `actualFee`（实扣）分成两列的理由，保留。
+  - **`bsamecity/order` 不支持传商户自有单号。** 官方给的替代办法是**把商户单号拼在 `callbackUrl` 后面**——本方案据此把回调路由定为 `POST /api/kd/:deliveryNo`（见 §5.5），幽灵单的认领因此从「试签猜」变成「URL 直取」。
 - 回调：POST form `taskId / sign / param(JSON: orderId, kuaidicom, status, statusDesc, courierName, courierMobile, updateTime)`，`sign = MD5(param + salt)`；须回 `{"result":true,"returnCode":"200","message":"提交成功"}`；失败再回调 2 次（间隔 1 分钟）。
 - 状态：`0 待抢单 → 100 已接单 → 210 待取件 → 230 已到店 → 310 配送中 → 520 已完成`；`515 改派中`、`510 异常(非终态)`、`720 已取消`。
 - **无沙箱、无主动查单接口**；`queryCourier` 仅接单后可用。错误码 `30001 参数 / 30002 签名 / 30003 账号 / 30004 余额不足 / 30005 运力异常 / 30006 参数转换`。
@@ -262,7 +267,8 @@ interface LocalDeliverySettings {
   tip: { maxPerCall: number; maxPerOrder: number }         // 2000 / 5000 分
 }
 ```
-密钥走 env：`KD100_KEY`、`KD100_SECRET`、`KD100_CALLBACK_URL`（默认 `PUBLIC_BASE_URL + /api/kd/cb`；生产超过 50 字符或缺失 `process.exit(1)`）、`LOCAL_DELIVERY_PROVIDER_MOCK=true`（生产开启拒绝启动）。
+密钥走 env：`KD100_KEY`、`KD100_SECRET`、`LOCAL_DELIVERY_PROVIDER_MOCK=true`（生产开启拒绝启动）。
+回调地址**不再是一个 env 常量**——它按单拼成 `PUBLIC_BASE_URL + '/api/kd/' + deliveryNo`（见 §5.5）；启动时用最坏值 `D999999-99` 断言总长 ≤ 50，生产超长 `process.exit(1)`。
 
 ---
 
@@ -302,16 +308,34 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 - `autoCompleteShippedOrders` 不受影响（LOCAL 无 Shipment）；`remindUnacceptedOrders` 对 LOCAL 用独立阈值（5 分钟）与文案。
 - M1 迁移前核对历史数据：`select delivery_type, count(*) from orders group by 1` 必须只有 EXPRESS（zod 早已接受 LOCAL/PICKUP，需确认为零）。
 
-### 5.4 呼叫、幽灵单与错误分流
+### 5.4 呼叫、下单超时认领与错误分流
 1. 事务内创建 `Delivery(status=PENDING→CALLING, deliveryNo, callbackSalt, activeOrderId=orderId)`；P2002 = 已有有效单 → 42228。
 2. 事务外外呼 `batchOrder`（8s 超时）。成功 → 写 `providerTaskId/providerOrderId/quotedFee/providerDistanceM`。
 3. 明确失败：`30001/30002/30003/30006` → `FAILED` + 老板告警（配置问题）；`30005` → 自动退避重试 2 次（1s/3s）后 `FAILED` + 店员推送；`30004` → `FAILED` + 熔断标志（运行期，看板红条，后续呼叫直接拒绝直至店员点「已充值，恢复」）+ 老板告警；设置 `autoDowngradeToSelfOnNoBalance` 开启时看板提示改自送。
-4. 超时/网络错误 → `UNKNOWN` + 告警；回调到达时按 §5.5 的三级查找认领并回填 `taskId/providerOrderId`；店员可「作废」；定时任务 3 分钟未认领再提醒一次。M0 追加核实：`bsamecity/order` 是否支持商户自有单号字段并在回调回显；若支持则用它承载 `deliveryNo`，试签认领降为兜底。
+4. 超时/网络错误 → `UNKNOWN` + 告警；店员可「作废」；定时任务 3 分钟未认领再提醒一次。
+   **幽灵单在本设计下基本不成立**：`deliveryNo` 在**发出下单请求之前**就已经写进 `callbackUrl`（`/api/kd/{deliveryNo}`），所以即使 `order` 请求超时、拿不到 `taskId`，运力方的回调仍会带着这个 URL 打回来，按 path 里的 `deliveryNo` 就能直接命中本地记录并回填 `taskId/providerOrderId`。`UNKNOWN` 状态保留（下单响应超时先落它），但认领路径是确定性的，不再依赖猜测。
 5. 「重新呼叫」= 旧单 `cancel`（记 cancelFee）→ 旧单终态释放 → 新建单再 `batchOrder`。
 
-### 5.5 回调 `POST /api/kd/cb`
+### 5.5 回调 `POST /api/kd/:deliveryNo`
+
+**回调 URL 形态（定稿）**：`{PUBLIC_BASE_URL}/api/kd/{deliveryNo}`
+- 生产示例：`https://api.yuegui-hotel.online/api/kd/D123456-1` = **48 字符**
+- 最坏情况：`https://api.yuegui-hotel.online/api/kd/D999999-99` = **49 字符**（上限 50，安全）
+- `deliveryNo` 维持 `D<orderId>-<seq>`，`orderId` 按六位预算。
+- 走 `/api/` 前缀，**nginx 现有反代即可，不需要新增 location**。
+- **启动校验**：断言 `PUBLIC_BASE_URL + '/api/kd/' + 'D999999-99'` 长度 ≤ 50；生产环境超长直接 `process.exit(1)`（与 COS 缺配置的处理方式一致）。域名一旦换长就会在部署时立刻暴露，而不是等到某笔订单的回调被运力方静默丢弃。
+- **余量只有 1 个字符，这不是宽松预算**（控制器已验算）：
+  | URL | 长度 |
+  |---|---|
+  | `…/api/kd/D123456-1` | 48 |
+  | `…/api/kd/D999999-99`（最坏） | 49 |
+  | `…/api/kd/D9999999-999` | 51 ✗ |
+  推论与约束：当前域名 `api.yuegui-hotel.online` 占 23 字符，**域名上限是 24 字符**——换任何更长的 API 域名都会顶破，启动断言会拦住但也会拦住整个服务，所以换域名时必须同步缩短路径前缀（例如 `/api/k/`）。同理，`orderId` 到七位（百万单）或 `seq` 到三位（同一单重呼 100 次）也会溢出；前者对单店是几十年后的事，后者不可能发生，但都由那条启动断言与 `deliveryNo` 生成处的长度校验兜住。
+
+**实现要点**
 - 路由自带 `express.urlencoded({ extended:false, limit:'64kb' })`（全局中间件不动），放在公开区；IP 限流（复用 `rate-limit.ts` 写法）。
-- 三级查找：① `taskId`（白名单 `^[A-Za-z0-9_-]{1,64}$`）→ ② `param.orderId == providerOrderId` → ③ **按 salt 试签认领**：取最近 2 小时内 `status ∈ {CALLING, UNKNOWN}` 且 `providerTaskId IS NULL` 的 Delivery（上限 20 条，超出只告警不遍历），逐个用其 `callbackSalt` 验签，命中唯一一条即认领并回填 `providerTaskId/providerOrderId`；命中 0 或 >1 → `result:false` + 限频告警，不落 rawPayload。
+- 三级查找：① **URL path 里的 `deliveryNo`**（最可靠，下单前就已确定，白名单 `^D\d{1,10}-\d{1,3}$`）→ ② `taskId`（白名单 `^[A-Za-z0-9_-]{1,64}$`）→ ③ `param.orderId == providerOrderId`。三者皆未命中 → `result:false` + 限频告警，不落 rawPayload。
+  （原设计里「按 salt 逐个试签认领最近 2 小时的 CALLING/UNKNOWN 记录」这一兜底**已删除**：`deliveryNo` 进 URL 后不再需要靠猜。）
 - 验签 `MD5(param + salt)` 大小写归一 + `timingSafeEqual`；失败同上。
 - 顺序：先 `findUnique(dedupeKey)`（存在 → 直接 200）→ insert event（P2002 吞掉）→ try { 推进 Delivery/Order 状态机 } catch { 告警 } → **无论如何**返回规定 JSON 200。
 - 字符串截断到列宽；`latencyMs = now − updateTime`。
@@ -336,7 +360,7 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 - 公开：`GET /local/meta`（设置公开子集 + `isOpen/nextOpenText/paused` + 门店坐标；独立于需登录的 `/orders/meta`，因菜单页需未登录可浏览）、`POST /local/quote`、`POST /kd/cb`。
 - 用户态：`POST /orders`（LOCAL 分支）、`GET /orders/:id`（含 delivery 白名单）、`GET /orders/:id/courier`、`POST /orders/:id/cancel-request`（D6 ②）、`PUT /orders/:id/cancel`（加 42221 前置）。
 - 管理：`GET /admin/local/orders?tab=&keyword=`（单层 Tab：待接单 / 待呼叫 / 呼叫中 / 骑手已接 / 已到店 / 配送中 / 异常 / 已完成 / 已取消退款）、`POST /:id/accept`、`POST /:id/accept-and-call`、`POST /:id/call`、`POST /:id/cancel-auto-call`、`POST /:id/tip`、`POST /:id/delivery/precancel`、`POST /:id/delivery/cancel`、`POST /:id/delivery/claim|void`、`POST /:id/self-deliver {name, phone}`、`POST /:id/delivered`、`GET /:id/delivery/events`、`POST /admin/local/circuit/reset`；`GET/PUT /admin/settings/local-delivery`、`PATCH .../store-location`（商家端一键定位）、`POST .../probe`（batchPrice 探测）、`POST .../pause`；`GET /admin/orders?deliveryType=`（默认 EXPRESS）；`pending-count` 加 `localPendingCount`。
-- 非生产：`POST /admin/system/delivery-mock {orderId, scenario}`，场景由服务端用真实 salt 构造：`advance:<status>`、`out_of_order`、`replay_last_callback`、`callback_without_update_time`、`callback_bad_sign`、`oversized_status_desc`、`create_timeout_then_callback`（幽灵单）、`error:30004`、`error:30005`、`cancel_after_delivering`（720 在 310 后）。
+- 非生产：`POST /admin/system/delivery-mock {orderId, scenario}`，场景由服务端用真实 salt 构造：`advance:<status>`、`out_of_order`、`replay_last_callback`、`callback_without_update_time`、`callback_bad_sign`、`oversized_status_desc`、`create_timeout_then_callback`（下单响应超时后回调仍按 deliveryNo 命中）、`error:30004`、`error:30005`、`cancel_after_delivering`（720 在 310 后）。
 
 ### 5.10 错误码
 `42220` 超出配送范围 · `42221` 请先取消配送单 · `42222` 非营业时间 · `42223` 地址缺少定位 · `42224` 商品渠道不符 · `42225` 呼叫骑手失败(附原文) · `42226` 同城暂未开通/暂停 · `42227` 配送费已更新 · `42228` 已有进行中的配送单 · `42229` 已超过可取消时间 · `42230` 超出单次配送上限。
@@ -447,16 +471,16 @@ model PrintJob {
 |---|---|---|
 | 同城新订单 / 顾客申请取消（超 3 分钟未处理再推一次）/ 待抢单超时 / 运力取消 / 改派 / 备餐 20 分钟未呼叫 / 骑手接单后卡住 | 店员 | PushPlus topic + 企微 |
 | 呼叫失败(30005 重试后) | 店员 | 同上 |
-| 余额不足 30004 / 配置类错误 / 510 异常 / 配送中超时 / 幽灵单 / 回调验签失败(限频) / 定时任务失败 | 老板 | 系统告警 |
+| 余额不足 30004 / 配置类错误 / 510 异常 / 配送中超时 / 下单响应超时未认领 / 回调验签失败(限频) / 定时任务失败 | 老板 | 系统告警 |
 | 配送中 | 顾客 | 订阅消息（一条） |
 | 付款成功（两渠道）/ 未接单重复播报 / 取消退款提醒 | 店内 | **云打印机出票 + 语音播报（主通道）** + 工作台响铃 + 商家端铃声 |
 | 打印失败(重试耗尽) / 打印机离线或缺纸 ≥5 分钟 / 重复播报耗尽仍未接单 | 老板 | 系统告警；打印失败时新单回退强化推送 |
 
 ## 9. 里程碑
 
-- **M0 开户与核实（用户侧，与开发并行）**：快递100 企业版注册/认证/充值 100 元、取 key/secret（`scripts/set-env.sh`）；客服确认自贡可用运力、达达是否需绑商户号；公众平台核实位置接口是否需类目审批及周期、申请之；隐私保护指引勾选「位置信息」+ 第三方共享；尝试申请「配送通知」订阅模板；提供门店坐标/营业时段/半径/运费阶梯/起送；开户后 `apps/server/scripts/kd100-probe.mjs`（`batchPrice` 只读）验证覆盖与报价，记录 `discountFee` 实际含义与各运力重量限制。
+- **M0 开户与核实（用户侧，与开发并行）**：快递100 企业版注册/认证/充值 100 元、取 key/secret（`scripts/set-env.sh`）；（自贡 6 家运力覆盖、无需绑商户号、预充值可退，均已于 2026-09-03 经企微答复确认，不必再问）；公众平台核实位置接口是否需类目审批及周期、申请之；隐私保护指引勾选「位置信息」+ 第三方共享；尝试申请「配送通知」订阅模板；提供门店坐标/营业时段/半径/运费阶梯/起送；开户后 `apps/server/scripts/kd100-probe.mjs`（`batchPrice` 只读）验证覆盖与报价，记录 `discountFee` 实际含义与各运力重量限制。
 - **M1 渠道与数据基础**：迁移（§4 全部表结构一次落库）、`channel` 贯通、`product-channel.ts`、`local-settings.ts`（含 `isOpenNow/paused/haversine/calcLocalFee/quoteToken`）、`/local/meta|quote`、`createOrder` LOCAL 分支（绕开全局运费）、`cancel-request`、后台分类/商品渠道 Tab、`LocalSettings.tsx`、商家端一键定位、`.env.example`、一致性脚本、e2e（渠道双向校验、范围内外、打烊/暂停、起送、阶梯三档、quoteToken 过期、LOCAL 运费与全局运费无关）。
-- **M2 配送服务与看板**：`provider.ts`、`kuaidi100.ts`、`self.ts`、`mock.ts`（可注入异常）、回调路由、编排（呼叫/幽灵单/错误分流/熔断/重呼/自送/送达/认领作废）、状态机白名单、退款联动（入口前置 42221）、scheduler 6 任务、通知、`admin/local-orders.ts`、`LocalOrders.tsx`、`RefundDialog` 参考行、`pending-count`、e2e（§10 全部场景）、`selftest-kd100.ts`。
+- **M2 配送服务与看板**：`provider.ts`、`kuaidi100.ts`、`self.ts`、`mock.ts`（可注入异常）、回调路由、编排（呼叫/下单超时认领/错误分流/熔断/重呼/自送/送达/认领作废）、状态机白名单、退款联动（入口前置 42221）、scheduler 6 任务、通知、`admin/local-orders.ts`、`LocalOrders.tsx`、`RefundDialog` 参考行、`pending-count`、e2e（§10 全部场景）、`selftest-kd100.ts`。
 - **M2b 出票与工作台**：`PrintJob` 表（并入同一迁移）、`services/ticket/*`（printer 接口 + feie + mock）、票面渲染器（单测比对 32 列排版）、触发点接入两处支付成功与退款/取消、重复播报与打印机健康两项 scheduler、`PrinterSettings.tsx`、`/workbench` 页 + `snapshot` 接口 + 声音/通知层、`Layout` 首项与登录落地改工作台、小程序商家端铃声震动；e2e：付款→PrintJob PENDING→mock PRINTED；打印失败三次→FAILED+回退推送；离线→告警一次→恢复补打且 30 分钟前旧单不补；未接单 2 分钟播报、接单后停止、5 次耗尽告警；重打幂等；snapshot 四列归类断言。
 - **M3 小程序**：`pages/local/*`、隐私弹窗、地址地图选点、订单详情同城分支/地图/轮询/取消窗口、渠道标签、购物车提示、`legal.js`、`app.json`、预览台、封面入口契约。
 - **M4 联调与文档**：真机真钱联调（`batchPrice` 探测 → 1 单全流程 → 1 单立即取消看取消费 → 记录 `statusDesc` 文案与回调时延）；`docs/order-flow.md`（同城状态表 + Order×Delivery 非法组合矩阵）、`docs/staff-guide.md` 新章节（术语大白话：呼叫骑手/预扣/改派/取消费 vs 小费；「接单」在同城的含义；无人接单处理顺序；门店坐标设置；暂停接单；常见问题）、`docs/api.md`、`docs/deployment.md`（env、callbackUrl 长度预算、nginx 无需新 location 但需 curl 演练）、`docs/miniapp-release-checklist.md`（隐私一致性检查章节）。
@@ -465,7 +489,7 @@ model PrintJob {
 
 ## 10. 验证
 
-- e2e（mock provider，`LOCAL_DELIVERY_PROVIDER_MOCK=true`）场景：happy path 0→100→230→310→520；终态后迟到 310 不复活；720 后 activeOrderId 已释放且可重呼；自动呼叫每单只触发一次、有 cancelRequest 时不触发；cancel-request 快照为 CALLING 而店员处理时已 DELIVERING 仍预填全额；quoteToken 下单实收取 min；邮寄端点 ship/complete 对 LOCAL 单返回 42204；乱序（310 先于 210 不回退）；重复回调（同 updateTime 去重、缺 updateTime 用 rawBody 去重）；缺字段/超长 statusDesc 仍 200；验签失败 200 不改状态；下单超时后回调认领（幽灵单）；30004 熔断 → 后续呼叫被拒 → reset 恢复；30005 重试后失败；720 在 310 之后：无退款/售后 → 回 PREPARING，有在途退款 → 仅告警；有有效配送单时 admin 退款 / 用户 cancel / 售后 approve 均 42221；取消配送后退款成功且 cancelFee 入账；顾客 5 分钟窗口内 cancel-request 成功、窗口外 42229；自送全流程；标记送达释放 activeOrderId；小费超上限被拒；courier 接口越权 403、非活跃态 null；`autoComplete` 不碰 LOCAL；顾客端响应不含敏感字段（断言 key 集合）。
+- e2e（mock provider，`LOCAL_DELIVERY_PROVIDER_MOCK=true`）场景：happy path 0→100→230→310→520；终态后迟到 310 不复活；720 后 activeOrderId 已释放且可重呼；自动呼叫每单只触发一次、有 cancelRequest 时不触发；cancel-request 快照为 CALLING 而店员处理时已 DELIVERING 仍预填全额；quoteToken 下单实收取 min；邮寄端点 ship/complete 对 LOCAL 单返回 42204；乱序（310 先于 210 不回退）；重复回调（同 updateTime 去重、缺 updateTime 用 rawBody 去重）；缺字段/超长 statusDesc 仍 200；验签失败 200 不改状态；下单响应超时后回调按 URL 里的 deliveryNo 认领并回填 taskId；回调 URL 长度上限的启动断言；30004 熔断 → 后续呼叫被拒 → reset 恢复；30005 重试后失败；720 在 310 之后：无退款/售后 → 回 PREPARING，有在途退款 → 仅告警；有有效配送单时 admin 退款 / 用户 cancel / 售后 approve 均 42221；取消配送后退款成功且 cancelFee 入账；顾客 5 分钟窗口内 cancel-request 成功、窗口外 42229；自送全流程；标记送达释放 activeOrderId；小费超上限被拒；courier 接口越权 403、非活跃态 null；`autoComplete` 不碰 LOCAL；顾客端响应不含敏感字段（断言 key 集合）。
 - `selftest-kd100.ts`：签名向量、form 编码、回调验签、错误码映射；`--integration` 只读 `batchPrice`。
 - 后台浏览器（桌面 + 375px）：工作台四列归类/主按钮/响铃（一次点击授权后触发）/打印机状态灯/手机单列；同城列表页全部按钮路径、取消并退款引导、设置页校验/试算/探测/暂停、打印机绑定/测试页/重打、分类商品渠道 Tab、邮寄订单页行为不变。
 - 打印实物联调（用户）：绑定真机 → 测试页 → 一分钱下单出票 + 语音播报 → 拔网线 5 分钟收到离线告警 → 恢复自动补打 → 不接单 2 分钟重复播报。
@@ -486,7 +510,8 @@ model PrintJob {
 ## 13. 风险与对策
 - 自贡运力覆盖不确定 → M0 探测前置；SELF 模式先上线。
 - 无沙箱 → mock 覆盖 §10 全部异常场景；真钱联调 2 单。
-- 无查单 → 事件先落库、状态单调、幽灵单认领、6 个定时提醒、店员「标记送达/作废」出口。
+- 无查单 → 事件先落库、状态单调、6 个定时提醒、店员「标记送达/作废」出口。
+- 下单响应超时 → `deliveryNo` 已在回调 URL 里，按 path 直取即可认领，不依赖 taskId（原「幽灵单」风险基本消除）。
 - 资金一致性 → 退款入口前置取消配送单；取消费/小费入账；小费上限 + 审计；30004 熔断。
 - 直线距离偏差 → `detourFactor`，M4 用快递100 `deliveryDistance` 回归校准。
 - 坐标系与填反 → 全链路 GCJ-02 微度 Int；商家端一键定位为主，手填 bbox 校验。
