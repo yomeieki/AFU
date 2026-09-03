@@ -86,7 +86,7 @@
             <text class="product-row-subtitle" wx:if="{{item.subtitle}}">{{item.subtitle}}</text>
             <view class="product-row-meta">
               <text class="product-row-stock">{{item.stockLabel}}</text>
-              <text class="product-row-sales">已售{{item.salesCount}}</text>
+              <text wx:if="{{item.salesCount > 0}}" class="product-row-sales">已售{{item.salesCount}}</text>
             </view>
             <view class="product-row-bottom">
               <text class="price-symbol">¥</text>
