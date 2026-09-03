@@ -62,7 +62,7 @@
 | 42201 | 库存不足 |
 | 42202 | 商品已下架 |
 | 42203 | 订单状态错误 |
-| 42204 | 支付金额不匹配 |
+| 42204 | 支付金额不匹配（另见附录 B：该码值已被复用于其他场景） |
 | 50001 | 服务器内部错误 |
 | 50002 | 第三方服务错误（微信/COS） |
 
@@ -967,13 +967,14 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 
 共享的邮寄端点 `POST /api/admin/orders/:id/accept|ship|complete` 命中 `deliveryType='LOCAL'` 的订单一律返回 42204「同城订单请在同城看板操作」（M1 尚无同城看板，这条防线先挡住误操作；避免给 LOCAL 订单写出 `Shipment` 记录）。
 
-### 新错误码（11 个）
+### 新错误码（12 个）
 
 | code | HTTP | 含义 | 出现位置 |
 |---|---|---|---|
 | 42204 | 400 | 同城订单请在同城看板操作 | 邮寄端点 `admin/orders/:id/{accept,ship,complete}` 命中 LOCAL 订单（沿用既有「订单状态错误」码，非新增码值，此处为新用法） |
 | 42210 | 400 | 同城配送未达起送金额 | `POST /api/orders`（LOCAL 分支）/ `POST /api/local/quote`（沿用既有「未达起送门槛」码，LOCAL 走独立门槛 `minOrderAmount`） |
 | 42220 | 400 | 超出配送范围 | `POST /api/orders`（LOCAL）、`POST /api/local/quote` 隐含在 `inRange=false` |
+| 42221 | — | 请先取消配送单 | 属于 M2（依赖尚未实现的 `Delivery` 配送单模型），M1 代码不会抛出，仅在设计中预留码值 |
 | 42222 | 400 | 当前非营业时间 | `POST /api/orders`（LOCAL 分支下单时校验；`/local/quote` 只提示不拦截） |
 | 42223 | 400 | 地址缺少定位（未在地图上选点） | `POST /api/local/quote`、`POST /api/orders`（LOCAL） |
 | 42224 | 400 | 商品渠道与下单渠道不符 | `POST /api/orders` 逐行校验 `product.channel === channelOfDeliveryType(deliveryType)` |
@@ -983,4 +984,4 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 | 42230 | 400 | 超出单次配送件数/重量上限 | `POST /api/orders`（LOCAL） |
 | 42231 | 400 | 该分类下有待付款订单，暂不可切换渠道 | `PUT /api/admin/categories/:id`（改 `channel` 时，`services/product-channel.ts`） |
 
-> 上述 11 个码值均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出；`42221`（请先取消配送单）、`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）三个码值已在设计中预留，但业务逻辑属于 M2（依赖尚未实现的 `Delivery` 配送单模型），M1 代码不会抛出。
+> 上述 12 个码值均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出（`42221` 已在设计中预留，但业务逻辑属于 M2，见上表「出现位置」列，M1 代码不会抛出）；`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）两个码值不在该清单中，同样已在设计中预留但属于 M2，M1 代码不会抛出。

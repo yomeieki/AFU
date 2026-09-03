@@ -18,7 +18,14 @@ if (!process.env.DATABASE_URL) {
 // 但也可能就地留在 apps/server/node_modules（未提升时）。用 bare specifier
 // 让 Node 的模块解析从 apps/server/ 逐级向上查找，两种布局都能命中，
 // 不要写死相对路径（那样只会精确匹配一处，另一种布局下必炸）。
-const require = createRequire(new URL('../apps/server/', import.meta.url))
+//
+// 锚点必须是 apps/server/ 目录内「确实存在的一个文件」（这里用 package.json），
+// 不能直接锚在目录路径上：createRequire 内部用 path.dirname(锚点) 决定搜索起点，
+// 而带尾斜杠的目录路径会被先剥离尾斜杠再取 dirname，结果是上一级目录
+// （dirname('/repo/apps/server/') === '/repo/apps'，而不是 '/repo/apps/server'）。
+// 用目录路径当锚点会导致搜索链跳过 apps/server/node_modules，
+// 在 @prisma/client 未被提升、就地生成于 apps/server/node_modules 时直接报错。
+const require = createRequire(new URL('../apps/server/package.json', import.meta.url))
 const { PrismaClient } = require('@prisma/client')
 const prisma = new PrismaClient()
 const rows = await prisma.$queryRaw`
