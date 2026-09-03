@@ -385,18 +385,25 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     const { note } = cancelRequestSchema.parse(req.body ?? {})
     const order = await prisma.order.findFirst({ where: { id, userId } })
     if (!order) throw new AppError(40401, '订单不存在', 404)
+    // 「已申请过」与「已超窗口」是两种不同原因，必须分开判断且前者优先：
+    // 顾客在窗口内申请后，等到窗口过了再点一次，他需要知道的是「已在处理中」而不是「超时了」。
+    if (order.cancelRequestedAt) {
+      throw new AppError(42229, '已提交过取消申请，商家会尽快处理')
+    }
     const win = await cancelWindowOf(order)
     if (!win.canRequestCancel) {
       throw new AppError(42229, order.status === 'PAID' ? '商家尚未接单，请直接申请退款' : '已超过可取消时间，如有问题请联系商家')
     }
     // M2 接入配送单后此处改为快照有效 Delivery 的状态；M1 无配送单一律 NONE
+    const cancelRequestedAt = new Date()
     const moved = await prisma.order.updateMany({
       where: { id, status: 'PREPARING', cancelRequestedAt: null },
-      data: { cancelRequestedAt: new Date(), cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: 'NONE' },
+      data: { cancelRequestedAt, cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: 'NONE' },
     })
+    // 真并发兜底：两个请求同时读到 cancelRequestedAt=null，只有一个能写入
     if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')
     notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note })
-    success(res, { cancelRequestedAt: new Date() })
+    success(res, { cancelRequestedAt })
   } catch (e) {
     next(e)
   }
