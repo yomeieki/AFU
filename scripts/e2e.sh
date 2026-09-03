@@ -462,6 +462,13 @@ assert_eq "isDefault 仍 1（未被清零）" "$(jq -r .data.isDefault <<<"$R")"
 [[ -n "$DCID" ]] && req DELETE "/api/admin/categories/$DCID" "$AT" >/dev/null
 [[ -n "$ADDR2" ]] && req DELETE "/api/addresses/$ADDR2" "$UT" >/dev/null
 
+echo "== 25. 同城运力 mock 基建 =="
+R=$(req POST /api/admin/system/kd100-mock/reset "$AT"); assert_eq "mock reset code 0" "$(code "$R")" "0"
+R=$(req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"error","code":"30005"}}')
+assert_eq "queue code 0" "$(code "$R")" "0"
+R=$(req GET /api/admin/system/kd100-mock/calls "$AT"); assert_eq "calls 初始为空数组" "$(jq -r '.data | length' <<<"$R")" "0"
+R=$(req GET /api/admin/system/kd100-mock/salt/D999999-1 "$AT"); assert_eq "未知单号 salt 404" "$(code "$R")" "40401"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

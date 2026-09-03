@@ -12,6 +12,8 @@ import usersRouter from './users'
 import uploadRouter from './upload'
 import settingsRouter from './settings'
 import { verifyAdminToken } from '../../middlewares/auth'
+import { config } from '../../config'
+import kd100MockRouter from './kd100-mock'
 
 const router = Router()
 
@@ -29,6 +31,8 @@ router.use('/stats', statsRouter)
 router.use('/scan-stats', scanStatsRouter)
 router.use('/banners', bannersAdminRouter)
 router.use('/system', systemRouter)
+// Mock control plane: only in dev/e2e (production disables via config layer)
+if (config.mock.delivery) router.use('/system/kd100-mock', kd100MockRouter)
 router.use('/users', usersRouter)
 router.use('/upload', uploadRouter)
 router.use('/settings', settingsRouter)
