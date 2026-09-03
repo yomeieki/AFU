@@ -278,6 +278,30 @@ R=$(req GET /api/cart "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] 
 R=$(req GET "/api/cart?channel=LOCAL" "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] | length" <<<"$R")" == "1" ]] && ok "同城购物车含该行" || fail "同城购物车" "$R"
 assert_eq "同城购物车小计=2400" "$(jq -r .data.totalAmount <<<"$R")" "2400"
 
+echo "== 21. 同城设置/报价 =="
+# enabled 初值与 version 初值都是持久化状态，重复跑 e2e 时不为默认值：
+# 这里改成相对断言（记录旧 version，断言新 version = 旧值+1；enabled 断言保存开启后的值），
+# 而不是假设库里还是刚建库的初始状态。
+R=$(req GET /api/admin/settings/local-delivery "$AT"); assert_eq "读取同城设置 code 0" "$(code "$R")" "0"
+OLDVER=$(jq -r '.data.version' <<<"$R")
+LS=$(jq -c '.data | .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:8000,minOrderAmount:2000} | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true' <<<"$R")
+R=$(req PUT /api/admin/settings/local-delivery "$AT" "$LS"); assert_eq "保存并开启 code 0" "$(code "$R")" "0"
+assert_eq "保存并开启后 enabled=true" "$(jq -r '.data.enabled' <<<"$R")" "true"
+assert_eq "version 递增 1" "$(jq -r '.data.version' <<<"$R")" "$((OLDVER + 1))"
+R=$(req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.businessHours=[{start:"18:00",end:"01:00"}]' <<<"$LS")"); assert_eq "跨零点被拒 40001" "$(code "$R")" "40001"
+R=$(req PATCH /api/admin/settings/local-delivery/store-location "$AT" '{"latE6":29339500,"lngE6":104778500}'); assert_eq "PATCH 门店坐标" "$(jq -r .data.store.latE6 <<<"$R")" "29339500"
+R=$(req GET /api/local/meta ""); assert_eq "公开 meta isOpen=true" "$(jq -r .data.isOpen <<<"$R")" "true"
+assert_eq "meta 不泄漏 tip" "$(jq -r '.data.tip // "absent"' <<<"$R")" "absent"
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}'); assert_eq "匿名坐标报价 code 0" "$(code "$R")" "0"
+assert_eq "范围内" "$(jq -r .data.inRange <<<"$R")" "true"
+QFEE=$(jq -r .data.fee <<<"$R"); [[ "$QFEE" =~ ^[0-9]+$ ]] && ok "fee=$QFEE" || fail "fee 非整数" "$R"
+QTOKEN=$(jq -r '.data.quoteToken // empty' <<<"$R"); [[ -n "$QTOKEN" ]] && ok "返回 quoteToken" || fail "quoteToken 缺失"
+R=$(req POST /api/local/quote "" '{"latE6":29600000,"lngE6":105100000,"subtotal":3000}'); assert_eq "超范围 inRange=false" "$(jq -r .data.inRange <<<"$R")" "false"
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR}"); assert_eq "旧地址无坐标 42223" "$(code "$R")" "42223"
+R=$(req POST /api/admin/settings/local-delivery/pause "$AT" '{"reason":"暴雨暂停"}'); assert_eq "暂停 code 0" "$(code "$R")" "0"
+assert_eq "meta 暂停后 isOpen=false" "$(req GET /api/local/meta "" | jq -r .data.isOpen)" "false"
+R=$(req DELETE /api/admin/settings/local-delivery/pause "$AT"); assert_eq "恢复后 isOpen=true" "$(req GET /api/local/meta "" | jq -r .data.isOpen)" "true"
+
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
 rm -f "$PNG" "$R1" "$R2"

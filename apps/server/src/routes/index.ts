@@ -9,6 +9,7 @@ import scanLogRouter from './scan-logs'
 import bannersRouter from './banners'
 import authRouter from './auth'
 import uploadRouter from './upload'
+import localRouter from './local'
 import { verifyUserToken } from '../middlewares/auth'
 
 export const router = Router()
@@ -16,6 +17,7 @@ export const router = Router()
 // ── 公开接口 ──────────────────────────────────────────────
 router.use('/categories', categoriesRouter)
 router.use('/products', productsRouter)
+router.use('/local', localRouter)
 
 // ── 认证接口 ──────────────────────────────────────────────
 router.use('/auth', authRouter)

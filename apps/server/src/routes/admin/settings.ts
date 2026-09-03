@@ -7,6 +7,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { getShippingSettings, setShippingSettings } from '../../services/settings'
+import { AppError } from '../../middlewares/error'
+import {
+  getLocalSettings, setLocalSettings, patchLocalSettings, sanitizeLocalSettings,
+  validateLocalSettings, validateForEnable,
+} from '../../services/local-settings'
 
 const router = Router()
 
@@ -30,6 +35,60 @@ router.put('/shipping', async (req, res, next) => {
   try {
     const body = shippingSchema.parse(req.body)
     res.json({ code: 0, message: 'ok', data: await setShippingSettings(body) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+router.get('/local-delivery', async (_req, res, next) => {
+  try {
+    res.json({ code: 0, message: 'ok', data: await getLocalSettings() })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// 全量保存：先 sanitize 再业务校验；开启总开关时额外做完整性校验
+router.put('/local-delivery', async (req, res, next) => {
+  try {
+    const next_ = sanitizeLocalSettings(req.body)
+    const errs = next_.enabled ? validateForEnable(next_) : validateLocalSettings(next_)
+    if (errs.length) throw new AppError(40001, errs.join('；'))
+    res.json({ code: 0, message: 'ok', data: await setLocalSettings(next_) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+const locationSchema = z.object({
+  latE6: z.number().int().min(-90_000_000).max(90_000_000),
+  lngE6: z.number().int().min(-180_000_000).max(180_000_000),
+})
+router.patch('/local-delivery/store-location', async (req, res, next) => {
+  try {
+    const { latE6, lngE6 } = locationSchema.parse(req.body)
+    const current = await getLocalSettings()
+    res.json({ code: 0, message: 'ok', data: await patchLocalSettings({ store: { ...current.store, latE6, lngE6 } }) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+const pauseSchema = z.object({
+  reason: z.string().trim().min(1, '请填写暂停原因').max(60),
+  until: z.string().datetime().optional(),
+})
+router.post('/local-delivery/pause', async (req, res, next) => {
+  try {
+    const { reason, until } = pauseSchema.parse(req.body)
+    res.json({ code: 0, message: 'ok', data: await patchLocalSettings({ paused: { reason, until: until ?? null } }) })
+  } catch (e) {
+    next(e)
+  }
+})
+router.delete('/local-delivery/pause', async (_req, res, next) => {
+  try {
+    res.json({ code: 0, message: 'ok', data: await patchLocalSettings({ paused: null }) })
   } catch (e) {
     next(e)
   }
