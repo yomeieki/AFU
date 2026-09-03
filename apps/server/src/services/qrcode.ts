@@ -4,7 +4,7 @@
  * 码里带 scene=p_<商品id>，扫码后落在 pages/product/detail，
  * 由小程序解析出商品 id 并记一条 scan_log（后台「扫码统计」用的就是它）。
  *
- * 对象 key 用固定的 `qrcodes/p_<id>.png` 而不是 buildObjectKey 的随机名：
+ * 对象 key 用固定的 `qrcodes/p_<id>.<ext>` 而不是 buildObjectKey 的随机名：
  * 重新生成时覆盖同一个对象，不会在桶里堆孤儿文件。同一个 scene 生成出来的
  * 码内容本来就一样，所以即使 CDN 缓存了旧的也无所谓。
  */
@@ -22,7 +22,7 @@ interface WxErrorBody {
 
 /**
  * 码的尺寸（像素）。280 在屏幕上够用，但贴纸/海报打印会糊；
- * 1280 是微信允许的上限，单张约 50KB，存储成本可以忽略。
+ * 1280 是微信允许的上限，实测单张约 300KB，存储成本可以忽略。
  */
 const QR_WIDTH = 1280
 
@@ -36,7 +36,20 @@ function getEnvVersion(): 'release' | 'trial' | 'develop' {
   return v === 'trial' || v === 'develop' ? v : 'release'
 }
 
-async function requestQrCode(accessToken: string, scene: string): Promise<Buffer | WxErrorBody> {
+/** 微信实际返回的图片格式：is_hyaline=false 给 JPEG，true 给 PNG。别写死。 */
+function sniffImageType(buf: Buffer, contentType: string): { ext: string; mime: string } {
+  if (buf.length >= 8 && buf.readUInt32BE(0) === 0x89504e47) return { ext: 'png', mime: 'image/png' }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xd8) return { ext: 'jpg', mime: 'image/jpeg' }
+  // magic 认不出来时退回响应头
+  return contentType.includes('png')
+    ? { ext: 'png', mime: 'image/png' }
+    : { ext: 'jpg', mime: 'image/jpeg' }
+}
+
+async function requestQrCode(
+  accessToken: string,
+  scene: string
+): Promise<{ buf: Buffer; contentType: string } | WxErrorBody> {
   const envVersion = getEnvVersion()
   const resp = await fetch(
     `https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=${encodeURIComponent(accessToken)}`,
@@ -48,7 +61,9 @@ async function requestQrCode(accessToken: string, scene: string): Promise<Buffer
         page: 'pages/product/detail',
         width: QR_WIDTH,
         // 不用透明底：码要打印在包装/海报上，白底最稳妥，
-        // 透明底一旦贴到深色背景上黑色码点就看不见了
+        // 透明底一旦贴到深色背景上黑色码点就看不见了。
+        // 代价是微信此时返回的是 JPEG 而非 PNG——扩展名与 Content-Type
+        // 必须按实际内容判定，写死 .png 会存出一个自称 PNG 的 JPEG。
         is_hyaline: false,
         env_version: envVersion,
         // check_path 会校验 page 是否存在于**已发布**版本里。
@@ -64,7 +79,7 @@ async function requestQrCode(accessToken: string, scene: string): Promise<Buffer
   if (contentType.includes('application/json') || contentType.includes('text/plain')) {
     return (await resp.json().catch(() => ({}))) as WxErrorBody
   }
-  return Buffer.from(await resp.arrayBuffer())
+  return { buf: Buffer.from(await resp.arrayBuffer()), contentType }
 }
 
 /** 把微信的 errcode 翻译成店家看得懂的话 */
@@ -82,6 +97,10 @@ function describeWxError(body: WxErrorBody): string {
     default:
       return `微信接口返回错误 ${errcode ?? '未知'}：${errmsg ?? ''}`.trim()
   }
+}
+
+function isImage(r: { buf: Buffer; contentType: string } | WxErrorBody): r is { buf: Buffer; contentType: string } {
+  return Buffer.isBuffer((r as { buf?: Buffer }).buf)
 }
 
 export async function generateProductQrCode(
@@ -102,20 +121,21 @@ export async function generateProductQrCode(
   let result = await requestQrCode(token, scene)
 
   // token 失效：刷新后重试一次。只重试一次，避免凭据真的错了时打死循环。
-  if (!Buffer.isBuffer(result) && TOKEN_INVALID_CODES.has(result.errcode ?? -1)) {
+  if (!isImage(result) && TOKEN_INVALID_CODES.has(result.errcode ?? -1)) {
     invalidateAccessToken()
     token = await getAccessToken()
     result = await requestQrCode(token, scene)
   }
 
-  if (!Buffer.isBuffer(result)) {
+  if (!isImage(result)) {
     throw new Error(describeWxError(result))
   }
   // 微信偶发返回 0 字节 200：当作失败，别把空文件存进去
-  if (result.length === 0) {
+  if (result.buf.length === 0) {
     throw new Error('微信返回了空图片，请稍后重试。')
   }
 
-  const qrCodeUrl = await putObject(`qrcodes/${scene}.png`, result, 'image/png')
+  const { ext, mime } = sniffImageType(result.buf, result.contentType)
+  const qrCodeUrl = await putObject(`qrcodes/${scene}.${ext}`, result.buf, mime)
   return { scene, qrCodeUrl }
 }
