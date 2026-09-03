@@ -97,6 +97,14 @@
   color: var(--text-2);
   margin-top: 6rpx;
 }
+/* 次要按钮：白底描边，区别于「进入管理后台」的渐变主按钮 */
+.btn-secondary {
+  background: #fff;
+  color: var(--brand);
+  border: 2rpx solid var(--brand);
+  box-sizing: border-box;
+  border-radius: var(--radius-md);
+}
 .logout-btn {
   margin-top: 40rpx;
   text-align: center;

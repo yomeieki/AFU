@@ -7,6 +7,7 @@ Page({
     refundingCount: 0,
     afterSaleCount: 0,
     opening: false,
+    locating: false,
   },
 
   onShow() {
@@ -94,6 +95,63 @@ Page({
       },
       complete() {
         self.setData({ opening: false })
+      },
+    })
+  },
+
+  // 设置门店坐标：用 wx.chooseLocation 打开地图选点（而非 wx.getLocation 自动定位）——
+  // 店主能亲眼看到图钉是否落在自家店门口再确认，比盲取 GPS 更可靠，也是当前唯一已
+  // 申请到接口权限的方式（getLocation 未申请，见 docs/miniapp-release-checklist.md）。
+  // 取消（cancel）静默返回；拒绝授权才引导去设置，两者 errMsg 不同，不能混着处理。
+  onSetStoreLocation() {
+    var token = this._token()
+    if (!token) { this._backToLogin(); return }
+    if (this.data.locating) return
+    var self = this
+    this.setData({ locating: true })
+    wx.chooseLocation({
+      success(loc) {
+        var label = loc.name || loc.address || (loc.latitude + ',' + loc.longitude)
+        wx.showModal({
+          title: '确认门店位置',
+          content: '将保存为门店坐标：\n' + label + '\n\n请确认地图上的图钉落在本店门口。',
+          success(m) {
+            if (!m.confirm) { self.setData({ locating: false }); return }
+            wx.request({
+              url: baseURL + '/admin/settings/local-delivery/store-location',
+              method: 'PATCH',
+              header: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              data: { latE6: Math.round(loc.latitude * 1e6), lngE6: Math.round(loc.longitude * 1e6) },
+              success(res) {
+                var body = res.data
+                if (body && body.code === 0) {
+                  wx.showToast({ title: '门店坐标已保存', icon: 'success' })
+                } else if (res.statusCode === 401 || (body && (body.code === 40101 || body.code === 40102))) {
+                  self._backToLogin()
+                } else {
+                  wx.showToast({ title: (body && body.message) || '保存失败', icon: 'none' })
+                }
+              },
+              fail() { wx.showToast({ title: '网络错误，请重试', icon: 'none' }) },
+              complete() { self.setData({ locating: false }) },
+            })
+          },
+        })
+      },
+      fail(err) {
+        self.setData({ locating: false })
+        var msg = (err && err.errMsg) || ''
+        if (msg.indexOf('cancel') !== -1) return
+        if (msg.indexOf('auth deny') !== -1 || msg.indexOf('auth denied') !== -1 || msg.indexOf('authorize') !== -1) {
+          wx.showModal({
+            title: '需要位置权限',
+            content: '设置门店位置需要使用地图，请在设置中允许「位置信息」后重试',
+            confirmText: '去设置',
+            success(r) { if (r.confirm) wx.openSetting() },
+          })
+          return
+        }
+        wx.showToast({ title: '地图打开失败，请稍后重试', icon: 'none' })
       },
     })
   },

@@ -114,7 +114,7 @@ export default function LocalSettings() {
         <h3 className="font-medium text-gray-800 flex items-center gap-1"><MapPin className="w-4 h-4" />门店</h3>
         <div className="rounded-md bg-brand-50 border border-brand-100 p-3 text-xs text-gray-700 space-y-1">
           <p className="font-medium">推荐：在店里用小程序设置坐标（3 步）</p>
-          <p>① 打开小程序 →「我的」→「商家管理」登录 → ② 点「用当前位置设为门店坐标」→ ③ 回到本页刷新确认。</p>
+          <p>① 打开小程序 →「我的」→「商家管理」登录 → ② 点「在地图上设置门店位置」，在地图上确认图钉落在店门口 → ③ 回到本页刷新确认。</p>
           <p className="text-gray-500">手填经纬度是高级选项：需用腾讯地图坐标拾取器取「纬度,经度」（GCJ-02），填错会导致所有订单距离与运费算错。</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
