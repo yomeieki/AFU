@@ -1835,7 +1835,10 @@ export async function remindCallTimeout(min?: number): Promise<number> {
 export async function autoCallRiders(delayMin?: number): Promise<number> {
   const s = await getLocalSettings()
   const delay = delayMin ?? s.autoCallDelayMin
-  if (delay <= 0) return 0                       // 0 = 手动模式（店主默认，D6 拍板）
+  // 0 = 手动模式（店主默认，D6 拍板：接单与呼叫分开）。这道门必须留在函数自身，
+  // 不能挪到「调用方是不是生产」那种外部条件上——否则将来任何一个新调用点都可能悄悄绕过它。
+  // e2e 要验「立刻命中」时传 0.01 分钟（600ms），不要为了测试把这里的语义改成有条件的。
+  if (delay <= 0) return 0
   if (!s.enabled || !isOpenNow(s)) return 0
   if (isCircuitTripped()) return 0
   const orders = await prisma.order.findMany({

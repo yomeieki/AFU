@@ -127,12 +127,11 @@ export async function remindCancelRequestPending(min = 5): Promise<number> {
 
 export async function autoCallRiders(delayMin?: number): Promise<number> {
   const s = await getLocalSettings()
-  // 0 = 手动模式（店主默认，D6 拍板）——但这只是「未显式传阈值」时对 settings.autoCallDelayMin 的解读。
-  // 生产环境定时器从不传 override（overrides.autoCallDelayMin 恒为 undefined），手动模式在那里就是真正不跑；
-  // 管理端/e2e 显式传入的阈值（哪怕是 0）是调用方明确要求的立即执行，语义与其余任务的 `xxxMin:0`
-  // 「捕获刚发生的」一致，不受手动模式开关影响。
-  if (delayMin === undefined && s.autoCallDelayMin <= 0) return 0
   const delay = delayMin ?? s.autoCallDelayMin
+  // 0 = 手动模式（店主默认，D6 拍板：接单与呼叫分开）。这道门必须留在函数自身，
+  // 不能挪到「调用方是不是生产」那种外部条件上——否则将来任何一个新调用点都可能悄悄绕过它。
+  // e2e 要验「立刻命中」时传 0.01 分钟（600ms），不要为了测试把这里的语义改成有条件的。
+  if (delay <= 0) return 0
   if (!s.enabled || !isOpenNow(s)) return 0
   if (isCircuitTripped()) return 0
   const orders = await prisma.order.findMany({
@@ -175,7 +174,7 @@ export async function autoCompleteLocalDelivered(days?: number): Promise<number>
     const moved = await prisma.order.updateMany({ where: { id: o.id, status: 'SHIPPED' }, data: { status: 'COMPLETED', completedAt: new Date() } })
     if (moved.count === 0) continue
     if (dlv.activeOrderId !== null) {
-      await prisma.delivery.updateMany({ where: { id: dlv.id }, data: { status: 'DELIVERED', deliveredAt: new Date(), activeOrderId: null } })
+      await prisma.delivery.updateMany({ where: { id: dlv.id }, data: { status: 'DELIVERED', statusRank: 100, deliveredAt: new Date(), activeOrderId: null } })
     }
     n++
   }

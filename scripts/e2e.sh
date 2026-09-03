@@ -728,11 +728,14 @@ SCH1=$(mk_local_paid); req POST "/api/admin/local/orders/$SCH1/accept" "$AT" >/d
 # 备餐超时未呼叫（每单一次）
 R=$(sched '{"localUncalledMin":0}'); [[ "$(jq -r .data.localUncalled <<<"$R")" -ge 1 ]] && ok "localUncalled ≥1" || fail "localUncalled" "$R"
 R=$(sched '{"localUncalledMin":0}'); assert_eq "localUncalled 第二跑归零（每单一次）" "$(jq -r .data.localUncalled <<<"$R")" "0"
-# 自动呼叫（override 开启；settings 默认 0=手动）
-R=$(sched '{"autoCallDelayMin":0}')
+# 自动呼叫（override 开启；settings 默认 0=手动。用 0.01 分钟=600ms 而非 0，
+# 因为 autoCallRiders 现在无条件以 delay<=0 作为手动模式的门槛——见下方手动模式断言。
+# 实测 accept 到这里的自然间隔仅约 60ms，远不够 600ms 阈值，故显式 sleep 1s 垫够间隔）
+sleep 1
+R=$(sched '{"autoCallDelayMin":0.01}')
 [[ "$(jq -r .data.localAutoCall <<<"$R")" -ge 1 ]] && ok "autoCall ≥1" || fail "autoCall" "$R"
 assert_eq "SCH1 被自动呼叫 → CALLING" "$(dstat $SCH1)" "CALLING"
-R=$(sched '{"autoCallDelayMin":0}'); assert_eq "已有在途单不重呼" "$(jq -r .data.localAutoCall <<<"$R")" "0"
+R=$(sched '{"autoCallDelayMin":0.01}'); assert_eq "已有在途单不重呼" "$(jq -r .data.localAutoCall <<<"$R")" "0"
 # 待抢单超时（每单一次）
 R=$(sched '{"callTimeoutMin":0}'); [[ "$(jq -r .data.localCallTimeout <<<"$R")" -ge 1 ]] && ok "callTimeout ≥1" || fail "callTimeout" "$R"
 R=$(sched '{"callTimeoutMin":0}'); assert_eq "callTimeout 第二跑归零" "$(jq -r .data.localCallTimeout <<<"$R")" "0"
@@ -760,6 +763,9 @@ R=$(sched '{"cancelRequestPendingMin":0}'); [[ "$(jq -r .data.localCancelReq <<<
 R=$(sched '{"cancelRequestPendingMin":0}'); assert_eq "cancelReq 第二跑归零" "$(jq -r .data.localCancelReq <<<"$R")" "0"
 # housekeeping 存在且不炸
 R=$(sched '{}'); [[ "$(jq -r '.data | has("localHousekeeping")' <<<"$R")" == "true" ]] && ok "housekeeping 已注册" || fail "housekeeping" "$R"
+# 手动模式（不传 override）不自动呼叫：settings.autoCallDelayMin 全程未被改写，默认即 0；
+# 此刻 SCH2 是 PREPARING 且无在途单的合格候选，若手动模式的门被绕过这条会变红
+assert_eq "手动模式（不传 override）不自动呼叫" "$(jq -r .data.localAutoCall <<<"$R")" "0"
 
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
