@@ -51,6 +51,7 @@ export default function LocalSettings() {
     if (Object.values(fen).some((v) => v === null)) { toast.error('金额格式不正确（最多两位小数）'); return }
     let latE6: number | null = null, lngE6: number | null = null
     if (coord.lat.trim() || coord.lng.trim()) {
+      if (!coord.lat.trim() || !coord.lng.trim()) { toast.error('请同时填写纬度和经度'); return }
       const lat = Number(coord.lat), lng = Number(coord.lng)
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) { toast.error('坐标格式不正确'); return }
       latE6 = Math.round(lat * 1e6); lngE6 = Math.round(lng * 1e6)

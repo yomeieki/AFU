@@ -298,11 +298,12 @@ export default function Products() {
   const handleBatchStatus = async (status: 'ON_SHELF' | 'OFF_SHELF') => {
     const catId = filterCategoryId ? Number(filterCategoryId) : undefined
     const catName = catId ? categories.find((c) => c.id === catId)?.name : undefined
-    const scope = `${CHANNEL_LABEL[channel]}${catName ? `·分类「${catName}」下的` : '全部'}`
+    const channelLabel = CHANNEL_LABEL[channel]
+    const scope = catName ? `「${channelLabel}」分类「${catName}」下` : `「${channelLabel}」下`
     const action = status === 'ON_SHELF' ? '上架（开档）' : '下架（收档）'
     const ok = await confirmDialog({
       title: `批量${action}`,
-      content: `将${scope}所有商品${action}，确认继续？`,
+      content: `将${scope}的所有商品${action}，此操作不可撤销，确认继续？`,
       danger: status === 'OFF_SHELF',
     })
     if (!ok) return
