@@ -680,6 +680,47 @@ R=$(req POST /api/admin/settings/local-delivery/probe "$AT" '{"latE6":29350000,"
 assert_eq "探测 code 0" "$(code "$R")" "0"
 assert_eq "mock 报价 500" "$(jq -r .data.feeFen <<<"$R")" "500"
 
+echo "== 29. 拒单 =="
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+# —— 参数校验
+RJ1=$(mk_local_paid); req POST "/api/admin/local/orders/$RJ1/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/orders/$RJ1/reject" "$AT" '{"reason":"OTHER"}'); assert_eq "其他原因不填说明 40001" "$(code "$R")" "40001"
+R=$(req POST "/api/admin/orders/$RJ1/reject" "$AT" '{"reason":"SOLD_OUT"}'); assert_eq "售罄不勾菜 40001" "$(code "$R")" "40001"
+R=$(req POST "/api/admin/orders/$RJ1/reject" "$AT" "{\"reason\":\"SOLD_OUT\",\"soldOutProductIds\":[999999]}")
+assert_eq "勾选非本单商品 40001" "$(code "$R")" "40001"
+# —— 42221：在途配送单先拦
+req POST "/api/admin/local/orders/$RJ1/call" "$AT" >/dev/null
+R=$(req POST "/api/admin/orders/$RJ1/reject" "$AT" '{"reason":"OUT_OF_RANGE"}'); assert_eq "在途配送单挡拒单 42221" "$(code "$R")" "42221"
+req POST "/api/admin/local/orders/$RJ1/delivery/cancel" "$AT" >/dev/null
+# —— 售罄拒单：REFUNDED + 顾客可见文案 + 联动下架
+R=$(req POST "/api/admin/orders/$RJ1/reject" "$AT" "{\"reason\":\"SOLD_OUT\",\"soldOutProductIds\":[$LPID]}")
+assert_eq "售罄拒单 code 0" "$(code "$R")" "0"
+assert_eq "联动下架 1 件" "$(jq -r .data.offShelfCount <<<"$R")" "1"
+assert_eq "订单 → REFUNDED（N4）" "$(req GET "/api/admin/orders/$RJ1" "$AT" | jq -r .data.status)" "REFUNDED"
+R=$(req GET "/api/orders/$RJ1" "$UT")
+[[ "$(jq -r .data.cancelReason <<<"$R")" == 商家拒单：菜品售罄* ]] && ok "顾客可见拒单原因" || fail "cancelReason" "$R"
+assert_eq "商品已下架" "$(req GET "/api/products/$LPID" "$UT" | jq -r .data.status)" "OFF_SHELF"
+req PUT "/api/admin/products/$LPID" "$AT" '{"status":"ON_SHELF"}' >/dev/null   # 恢复上架供后续段使用
+R=$(req POST "/api/admin/orders/$RJ1/reject" "$AT" '{"reason":"OUT_OF_RANGE"}'); assert_eq "重复拒单被挡（已终态）" "$(code "$R")" "42204"
+# —— 邮寄单也能拒（N3）：造一笔 EXPRESS 已支付单
+R=$(req POST /api/cart "$UT" "{\"productId\":$PID,\"quantity\":1}"); RJC=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$RJC],\"addressId\":$ADDR,\"deliveryType\":\"EXPRESS\"}")
+RJ2=$(jq -r '.data.orderId // empty' <<<"$R"); req POST "/api/orders/$RJ2/pay" "$UT" >/dev/null
+R=$(req POST "/api/admin/orders/$RJ2/reject" "$AT" '{"reason":"OTHER","note":"e2e 邮寄拒单"}')
+assert_eq "邮寄单拒单 code 0" "$(code "$R")" "0"
+assert_eq "邮寄单 → REFUNDED" "$(req GET "/api/admin/orders/$RJ2" "$AT" | jq -r .data.status)" "REFUNDED"
+[[ "$(jq -r .data.cancelReason <<<"$R")" == *其他原因（e2e\ 邮寄拒单）* ]] && ok "OTHER 拼入说明" || fail "OTHER 文案" "$R"
+# —— 待付款单拒单：走取消不走退款，库存回滚
+R=$(req POST /api/cart "$UT" "{\"productId\":$PID,\"quantity\":1}"); RJC3=$(jq -r '.data.id // empty' <<<"$R")
+ST0=$(req GET "/api/products/$PID" "$UT" | jq -r .data.stock)
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$RJC3],\"addressId\":$ADDR,\"deliveryType\":\"EXPRESS\"}")
+RJ3=$(jq -r '.data.orderId // empty' <<<"$R")
+R=$(req POST "/api/admin/orders/$RJ3/reject" "$AT" '{"reason":"PAST_ACCEPT_TIME"}')
+assert_eq "待付款拒单 code 0" "$(code "$R")" "0"
+assert_eq "待付款 → CANCELLED（不退款）" "$(req GET "/api/admin/orders/$RJ3" "$AT" | jq -r .data.status)" "CANCELLED"
+assert_eq "退款对象为 null" "$(jq -r .data.refund <<<"$R")" "null"
+assert_eq "库存回滚" "$(req GET "/api/products/$PID" "$UT" | jq -r .data.stock)" "$ST0"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

@@ -6,6 +6,7 @@ import { AppError } from '../../middlewares/error'
 import { rollbackOrderStock } from '../../utils/order-stock'
 import { ACTIVE_REFUND_STATUSES, finalizeRefundSuccess, initiateRefund, remainingRefundable } from '../../services/refund'
 import { sendShipSubscribeMessage } from '../../services/subscribe-message'
+import { notifySystemAlert } from '../../services/notify'
 import { LOW_STOCK_THRESHOLD } from '../../utils/constants'
 
 const router = Router()
@@ -275,6 +276,60 @@ router.post('/:id/refund', async (req: Request, res: Response, next: NextFunctio
   } catch (e) {
     next(e)
   }
+})
+
+// POST /api/admin/orders/:id/reject — 拒单（两渠道通用，决策 N3/N4）
+// 已付款：全额退走 initiateRefund（其内含 42221 在途配送单拦截），终态 REFUNDED；
+// 待付款：直接取消 + 回滚库存。拒单原因写 cancelReason，顾客原样可见。
+const REJECT_REASONS: Record<string, string> = {
+  SOLD_OUT: '菜品售罄', OUT_OF_RANGE: '超出配送范围', PAST_ACCEPT_TIME: '已过接单时间',
+  CUSTOMER_CANCEL: '顾客电话要求取消', OTHER: '其他原因',
+}
+const rejectSchema = z.object({
+  reason: z.enum(['SOLD_OUT', 'OUT_OF_RANGE', 'PAST_ACCEPT_TIME', 'CUSTOMER_CANCEL', 'OTHER']),
+  note: z.string().trim().max(40).optional(),
+  soldOutProductIds: z.array(z.number().int().positive()).max(50).optional(),
+})
+router.post('/:id/reject', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const body = rejectSchema.parse(req.body ?? {})
+    if (body.reason === 'OTHER' && !body.note) throw new AppError(40001, '选「其他原因」时必须填写说明')
+    const cancelReason = `商家拒单：${REJECT_REASONS[body.reason]}${body.note ? `（${body.note}）` : ''}`
+    const order = await prisma.order.findUnique({ where: { id }, include: { items: true } })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+    if (!['PENDING_PAYMENT', 'PAID', 'PREPARING'].includes(order.status)) {
+      throw new AppError(42204, `订单状态为 ${order.status}，已出餐/在途订单请走退款或售后`)
+    }
+    // 勾选必须是本单里的菜——防手滑把无关商品下架
+    const inOrder = new Set(order.items.map((it) => it.productId))
+    const soldOutIds = [...new Set(body.soldOutProductIds ?? [])]
+    if (soldOutIds.some((pid) => !inOrder.has(pid))) throw new AppError(40001, '勾选了不属于本订单的商品')
+    if (body.reason === 'SOLD_OUT' && soldOutIds.length === 0) throw new AppError(40001, '选「菜品售罄」时请勾选售罄的菜品')
+
+    let refund: Awaited<ReturnType<typeof initiateRefund>> | null = null
+    if (order.status === 'PENDING_PAYMENT') {
+      await prisma.$transaction(async (tx) => {
+        const moved = await tx.order.updateMany({ where: { id, status: 'PENDING_PAYMENT' }, data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason } })
+        if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
+        await rollbackOrderStock(tx, order.items)
+      })
+    } else {
+      refund = await initiateRefund({ orderId: id, amount: remainingRefundable(order), reason: cancelReason, operator: req.adminUsername ?? 'admin' })
+      await prisma.order.update({ where: { id }, data: { cancelReason } })
+    }
+    // 售罄联动下架：独立小事务。退款已是既成事实，这里失败只告警不回滚——
+    // 不下架的话下一位顾客照样点得到，同样的单会再来一遍（UI 规格 §7）。
+    let offShelfCount = 0
+    if (soldOutIds.length > 0) {
+      try {
+        offShelfCount = (await prisma.product.updateMany({ where: { id: { in: soldOutIds }, status: 'ON_SHELF' }, data: { status: 'OFF_SHELF' } })).count
+      } catch (e) {
+        notifySystemAlert('拒单联动下架失败', [`订单 ${order.orderNo}`, (e as Error).message, `商品：${soldOutIds.join(',')}`], { key: `reject-offshelf:${id}` })
+      }
+    }
+    success(res, { orderId: id, refund, offShelfCount, cancelReason })
+  } catch (e) { next(e) }
 })
 
 // POST /api/admin/orders/:id/refund-complete — 人工兜底：确认已在商户平台退款成功但系统未收到回调时标记
