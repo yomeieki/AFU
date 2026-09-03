@@ -100,7 +100,21 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
       })
     }
 
-    const address = await prisma.address.update({ where: { id }, data: { ...data, fullAddress } })
+    // 改了文字地址却没重新选点 → 连同坐标一起清空。
+    // 顾客把「丹桂 3 栋」改成「城南某小区 8 栋」时，旧坐标仍指向丹桂：M1 只是运费算错，
+    // M2 接入运力后就是骑手被派到错误地点。清空后顾客下次同城下单会拿到 42223
+    // 「该地址缺少定位，请编辑地址并在地图上选点」——失败方向是安全的。
+    const textChanged = (['province', 'city', 'district', 'detail'] as const).some(
+      (k) => data[k] !== undefined && data[k] !== exists[k]
+    )
+    const coordProvided = 'latE6' in data || 'lngE6' in data
+    const staleCoordPatch =
+      textChanged && !coordProvided ? { latE6: null, lngE6: null, poiName: null } : {}
+
+    const address = await prisma.address.update({
+      where: { id },
+      data: { ...data, ...staleCoordPatch, fullAddress },
+    })
     success(res, address)
   } catch (e) {
     next(e)

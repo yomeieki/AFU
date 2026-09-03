@@ -44,7 +44,7 @@
       <text class="section-title">门店位置</text>
       <text class="section-desc">用于计算同城配送距离与运费，坐标错一位小数全店订单都会算错，请务必核对地图上的图钉是否落在本店门口。</text>
       <view class="open-btn btn-secondary {{locating ? 'btn-disabled' : ''}}" bindtap="onSetStoreLocation">
-        <text>{{locating ? '定位中...' : '在地图上设置门店位置'}}</text>
+        <text>{{locating ? '选点中...' : '在地图上设置门店位置'}}</text>
       </view>
     </view>
 

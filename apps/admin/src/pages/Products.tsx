@@ -303,7 +303,12 @@ export default function Products() {
     const action = status === 'ON_SHELF' ? '上架（开档）' : '下架（收档）'
     const ok = await confirmDialog({
       title: `批量${action}`,
-      content: `将${scope}的所有商品${action}，此操作不可撤销，确认继续？`,
+      // 开档完全可逆（收档即回滚）且是每天的高频操作，不该用「不可撤销」吓人；
+      // 收档才需要把真实后果说清楚。
+      content:
+        status === 'OFF_SHELF'
+          ? `将${scope}的所有商品${action}，顾客将立即看不到这些商品，确认继续？`
+          : `将${scope}的所有商品${action}，确认继续？`,
       danger: status === 'OFF_SHELF',
     })
     if (!ok) return

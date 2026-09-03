@@ -39,7 +39,15 @@ export default function LocalSettings() {
     })
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
   }
-  useEffect(() => { getLocalSettings().then(hydrate) }, [])
+  const [loadFailed, setLoadFailed] = useState(false)
+  // 没有 catch 的话接口一挂，页面就永远停在「加载中...」，店主只会以为后台坏了。
+  useEffect(() => {
+    getLocalSettings()
+      .then(hydrate)
+      .catch(() => { setLoadFailed(true); toast.error('同城设置加载失败，请刷新重试') })
+  }, [])
+
+  if (loadFailed) return <div className="text-red-600">同城设置加载失败，请刷新页面重试。</div>
 
   if (!s) return <div className="text-gray-500">加载中...</div>
 
@@ -78,13 +86,25 @@ export default function LocalSettings() {
     }
   }
 
+  // 与 handleSave 保持一致：失败要让店主看见，不能静默吞掉
   const handlePause = async () => {
     const reason = window.prompt('暂停原因（顾客可见）', '临时暂停接单') ?? ''
     if (!reason.trim()) return
-    hydrate(await pauseLocal(reason.trim()))
-    toast.success('已暂停同城接单')
+    try {
+      hydrate(await pauseLocal(reason.trim()))
+      toast.success('已暂停同城接单')
+    } catch (e) {
+      toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '暂停失败，请重试')
+    }
   }
-  const handleResume = async () => { hydrate(await resumeLocal()); toast.success('已恢复接单') }
+  const handleResume = async () => {
+    try {
+      hydrate(await resumeLocal())
+      toast.success('已恢复接单')
+    } catch (e) {
+      toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '恢复失败，请重试')
+    }
+  }
 
   // 按距离档试算
   const sample = (km: number) => {

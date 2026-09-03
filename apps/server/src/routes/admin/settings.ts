@@ -10,7 +10,7 @@ import { getShippingSettings, setShippingSettings } from '../../services/setting
 import { AppError } from '../../middlewares/error'
 import {
   getLocalSettings, setLocalSettings, patchLocalSettings, sanitizeLocalSettings,
-  validateLocalSettings, validateForEnable,
+  validateLocalSettings, validateForEnable, validateRawLocalSettings,
 } from '../../services/local-settings'
 
 const router = Router()
@@ -51,8 +51,11 @@ router.get('/local-delivery', async (_req, res, next) => {
 // 全量保存：先 sanitize 再业务校验；开启总开关时额外做完整性校验
 router.put('/local-delivery', async (req, res, next) => {
   try {
+    // 顺序要紧：先拿**原始请求体**查一遍，再 sanitize。
+    // sanitize 会把不合法的营业时段整条丢掉，之后就再也看不出「丢了几条」了。
+    const rawErrs = validateRawLocalSettings(req.body)
     const next_ = sanitizeLocalSettings(req.body)
-    const errs = next_.enabled ? validateForEnable(next_) : validateLocalSettings(next_)
+    const errs = [...rawErrs, ...(next_.enabled ? validateForEnable(next_) : validateLocalSettings(next_))]
     if (errs.length) throw new AppError(40001, errs.join('；'))
     res.json({ code: 0, message: 'ok', data: await setLocalSettings(next_) })
   } catch (e) {

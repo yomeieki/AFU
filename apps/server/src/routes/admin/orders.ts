@@ -112,7 +112,9 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       // 待处理 = 待接单(PAID) + 备餐中(PREPARING)（邮寄铃铛只数邮寄）
       prisma.order.count({ where: { status: { in: ['PAID', 'PREPARING'] }, deliveryType: 'EXPRESS' } }),
       prisma.order.findFirst({
-        where: { status: 'PAID' },
+        // 与上面的 count 同口径：邮寄铃铛的「最近一单」不能取到同城单，
+        // 否则会出现「0 笔待处理」却带着一个同城单时间戳的矛盾显示。
+        where: { status: 'PAID', deliveryType: 'EXPRESS' },
         orderBy: { paidAt: 'desc' },
         select: { paidAt: true, createdAt: true },
       }),

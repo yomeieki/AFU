@@ -113,6 +113,10 @@ t('quoteToken 往返、篡改失败、过期失败', () => {
   assert.deepStrictEqual(verifyQuote(tok, NOON), { fee: 500, distanceM: 4200, addressId: 7, version: 3 })
   assert.strictEqual(verifyQuote(tok.slice(0, -1) + (tok.endsWith('a') ? 'b' : 'a'), NOON), null)
   assert.strictEqual(verifyQuote(tok, new Date(NOON.getTime() + 6 * 60 * 1000)), null)
+  // 修复项1：sig 段换成 32 个多字节字符（字符数=32，但 Buffer 字节数=96）时应返回 null 而不是抛异常
+  // （sig.length===32 曾经把「字符数」误当「字节数」校验，timingSafeEqual 两个不等长 Buffer 会抛 RangeError）
+  const body = tok.split('.')[0]
+  assert.strictEqual(verifyQuote(`${body}.${'汉'.repeat(32)}`, NOON), null)
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

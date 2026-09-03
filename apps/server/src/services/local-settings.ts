@@ -169,6 +169,35 @@ export function validateLocalSettings(s: LocalDeliverySettings): string[] {
   return errs
 }
 
+/**
+ * 针对**原始请求体**的校验，必须在 sanitize 之前跑。
+ *
+ * sanitize 对营业时段的策略是「逐条丢掉不合法的项」，而管理端那一栏是自由文本
+ * （每行 `HH:mm-HH:mm`）。于是店主把 `09:00` 打成中文冒号 `09：00` 或少写一位 `9:00`，
+ * 这一行会被**静默丢掉**、接口照样返回 code:0、页面提示「已保存」。若他有两段营业时间
+ * 只错了一段，`validateForEnable` 的「至少一个时段」也拦不住——结果是营业时段被悄悄收窄，
+ * 非营业时段的同城单直接被 42222 拒单，而店主完全不知道为什么。
+ *
+ * sanitize 之后的对象已经看不出「丢了几条」，所以这个比对只能在这里做。
+ */
+export function validateRawLocalSettings(raw: unknown): string[] {
+  const o = asObj(raw)
+  const errs: string[] = []
+  if (Array.isArray(o.businessHours)) {
+    o.businessHours.forEach((h, i) => {
+      const item = asObj(h)
+      const start = typeof item.start === 'string' ? item.start.trim() : ''
+      const end = typeof item.end === 'string' ? item.end.trim() : ''
+      if (!HHMM.test(start) || !HHMM.test(end)) {
+        errs.push(
+          `营业时段第 ${i + 1} 行「${start || '(空)'}-${end || '(空)'}」格式不正确，应形如 09:00-20:00（半角冒号、小时两位）`
+        )
+      }
+    })
+  }
+  return errs
+}
+
 /** 开启总开关前的完整性校验 */
 export function validateForEnable(s: LocalDeliverySettings): string[] {
   const errs = validateLocalSettings(s)
@@ -305,9 +334,18 @@ export function signQuote(p: QuotePayload, now: Date = new Date()): string {
 
 export function verifyQuote(token: string, now: Date = new Date()): QuotePayload | null {
   const [body, sig] = token.split('.')
-  if (!body || !sig || sig.length !== 32) return null
+  // sig 恒为 32 位小写 hex：用字符集校验而非 sig.length===32（字符数），
+  // 否则多字节字符（如中文）字符数也可能凑到 32，但 Buffer.byteLength 会远大于 32，
+  // 传给 timingSafeEqual 两个长度不等的 Buffer 会直接抛 RangeError，
+  // 冒泡到全局错误处理会当作 500 触发店主告警（构造 token 即可远程刷告警）。
+  if (!body || !sig || !/^[0-9a-f]{32}$/.test(sig)) return null
   const expect = hmac(body)
-  if (!crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(sig))) return null
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(sig))) return null
+  } catch {
+    // 防御未来改动导致长度校验被绕过：timingSafeEqual 抛异常时按校验失败处理，不冒泡成 500
+    return null
+  }
   try {
     const o = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
     if (typeof o.e !== 'number' || o.e < now.getTime()) return null

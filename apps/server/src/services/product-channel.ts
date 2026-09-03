@@ -21,8 +21,30 @@ export async function channelOfCategory(db: Db, categoryId: number): Promise<Cha
 }
 
 /**
- * 分类改渠道：同事务级联更新旗下商品 channel + 删除这些商品的购物车行。
- * 存在含该分类商品的待付款订单时拒绝（付款后会按旧渠道履约，状态机会错乱）。
+ * 商品跨渠道迁移前的两条防线，供「分类改渠道」（changeCategoryChannel）与
+ * 「单商品换分类到跨渠道分类」（admin/products PUT /:id）共用：
+ *  ①存在含这些商品的待付款订单则拒绝 42231（付款后会按旧渠道履约，状态机会错乱）；
+ *  ②级联删除这些商品的购物车行（防止购物车里静默出现跨渠道商品，顾客刷新时商品无声消失
+ *    好过继续显示一个已经不在当前渠道购物车逻辑里的商品）。
+ * 调用方只应在「新渠道 !== 旧渠道」时调用本函数——同渠道换分类不受影响，不必跑这两条防线。
+ */
+export async function assertNoUnpaidAndPurgeCarts(
+  tx: Db,
+  productIds: number[]
+): Promise<{ cartsDeleted: number }> {
+  if (productIds.length === 0) return { cartsDeleted: 0 }
+  const unpaid = await tx.order.count({
+    where: { status: 'PENDING_PAYMENT', items: { some: { productId: { in: productIds } } } },
+  })
+  if (unpaid > 0) {
+    throw new AppError(42231, `有 ${unpaid} 笔待付款订单包含这些商品，请等其支付或超时取消后再改渠道`)
+  }
+  const carts = await tx.cart.deleteMany({ where: { productId: { in: productIds } } })
+  return { cartsDeleted: carts.count }
+}
+
+/**
+ * 分类改渠道：同事务级联更新旗下商品 channel + 走上面两条防线。
  */
 export async function changeCategoryChannel(
   categoryId: number,
@@ -39,22 +61,12 @@ export async function changeCategoryChannel(
     })
     const productIds = products.map((p) => p.id)
 
-    if (productIds.length > 0) {
-      const unpaid = await tx.order.count({
-        where: { status: 'PENDING_PAYMENT', items: { some: { productId: { in: productIds } } } },
-      })
-      if (unpaid > 0) {
-        throw new AppError(42231, `该分类下有 ${unpaid} 笔待付款订单，请等其支付或超时取消后再改渠道`)
-      }
-    }
+    const { cartsDeleted } = await assertNoUnpaidAndPurgeCarts(tx, productIds)
 
     await tx.category.update({ where: { id: categoryId }, data: { channel } })
     const updated = productIds.length
       ? await tx.product.updateMany({ where: { id: { in: productIds } }, data: { channel } })
       : { count: 0 }
-    const carts = productIds.length
-      ? await tx.cart.deleteMany({ where: { productId: { in: productIds } } })
-      : { count: 0 }
-    return { productsUpdated: updated.count, cartsDeleted: carts.count }
+    return { productsUpdated: updated.count, cartsDeleted }
   })
 }

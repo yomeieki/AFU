@@ -6,7 +6,8 @@ import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { generateProductQrCode } from '../../services/qrcode'
 import { channelSchema, parseChannelQuery } from '../../utils/channel'
-import { channelOfCategory } from '../../services/product-channel'
+import { channelOfCategory, assertNoUnpaidAndPurgeCarts } from '../../services/product-channel'
+import { Channel } from '../../utils/channel'
 
 const router = Router()
 
@@ -312,8 +313,16 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
         }
       }
 
-      const channelPatch =
-        rest.categoryId !== undefined ? { channel: await channelOfCategory(tx, rest.categoryId) } : {}
+      // 换分类时渠道跟随新分类。若跨了渠道，必须走与「分类改渠道」同一套防线：
+      // 否则这个入口能绕过待付款订单校验，并让顾客购物车里的行静默换渠道（刷新后商品无声消失）。
+      let channelPatch: { channel?: Channel } = {}
+      if (rest.categoryId !== undefined) {
+        const nextChannel = await channelOfCategory(tx, rest.categoryId)
+        if (nextChannel !== exists.channel) {
+          await assertNoUnpaidAndPurgeCarts(tx, [id])
+        }
+        channelPatch = { channel: nextChannel }
+      }
       return tx.product.update({
         where: { id },
         data: { ...rest, ...channelPatch, ...specData },

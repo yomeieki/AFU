@@ -115,6 +115,8 @@ Page({
         wx.showModal({
           title: '确认门店位置',
           content: '将保存为门店坐标：\n' + label + '\n\n请确认地图上的图钉落在本店门口。',
+          // 缺 fail 的话，弹窗调起失败时 locating 会永远停在 true，按钮此后一直禁用
+          fail() { self.setData({ locating: false }) },
           success(m) {
             if (!m.confirm) { self.setData({ locating: false }); return }
             wx.request({

@@ -351,6 +351,64 @@ R=$(req GET "/api/admin/orders?pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] |
 R=$(req GET "/api/admin/orders?deliveryType=LOCAL&pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "1" ]] && ok "deliveryType=LOCAL 可查到" || fail "LOCAL 筛选" "$R"
 R=$(req GET /api/admin/orders/pending-count "$AT"); [[ "$(jq -r .data.localPendingCount <<<"$R")" -ge 1 ]] && ok "localPendingCount≥1" || fail "localPendingCount" "$R"
 
+# —— quoteToken 与 LOCAL 下单拒绝路径（下单端点自己判一遍，/local/quote 判过不算）——
+# 只断言「运费=报价 fee」是恒真的：重算值本来就等于报价值，token 被完整校验或被完全忽略都会通过。
+# 下面几条才真的能区分。
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); QC1=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E另一地址","receiverPhone":"13800000004","province":"四川省","city":"自贡市","district":"高新区","detail":"另一处 1 号","latE6":29352000,"lngE6":104792000}')
+ADDR2=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC1],\"addressId\":$ADDR2,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QTOKEN\"}")
+LO3=$(jq -r '.data.orderId // empty' <<<"$R")
+QR2=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR2,\"subtotal\":2400}")
+assert_eq "token 与 addressId 不符时按重算值收费" "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.shippingFee)" "$(jq -r .data.fee <<<"$QR2")"
+
+# 调高基础运费后用旧 token 下单 → 重算更贵，必须 42227
+LSNAP=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c '.data')
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.fee.baseFee=99900' <<<"$LSNAP")" >/dev/null
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); QC2=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QTOKEN\"}")
+assert_eq "重算贵于 token → 42227" "$(code "$R")" "42227"
+req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
+
+# 超出配送半径 → 42220（注意不是 /local/quote 的 inRange，而是下单端点自己拒）
+R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E远地址","receiverPhone":"13800000005","province":"四川省","city":"自贡市","district":"高新区","detail":"很远的地方","latE6":29600000,"lngE6":105100000}')
+FADDR=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC2],\"addressId\":$FADDR,\"deliveryType\":\"LOCAL\"}")
+assert_eq "超出配送范围下单 42220" "$(code "$R")" "42220"
+
+# 非营业时间 → 42222
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.businessHours=[{start:"03:00",end:"03:01"}]' <<<"$LSNAP")" >/dev/null
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\"}")
+assert_eq "非营业时间下单 42222" "$(code "$R")" "42222"
+# 顺带：非法营业时段（中文冒号）必须被拒，不能被 sanitize 静默吞掉后返回成功
+R=$(req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.businessHours=[{start:"09：00",end:"20:00"}]' <<<"$LSNAP")")
+assert_eq "非法营业时段被拒 40001" "$(code "$R")" "40001"
+[[ "$(jq -r .message <<<"$R")" == *"格式不正确"* ]] && ok "非法时段错误信息指出格式问题" || fail "非法时段错误信息不明确" "$R"
+req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
+assert_eq "营业时段已恢复" "$(req GET /api/local/meta "" | jq -r .data.isOpen)" "true"
+
+# 改了文字地址却没重新选点 → 坐标一并清空（防止 M2 骑手被派到旧地址）
+R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"detail":"改成了完全不同的门牌 9 栋"}')
+assert_eq "只改文字地址 code 0" "$(code "$R")" "0"
+R=$(req GET /api/addresses "$UT")
+assert_eq "改文字后 latE6 被清空" "$(jq -r "[.data[] | select(.id==$LADDR)][0].latE6" <<<"$R")" "null"
+assert_eq "改文字后 lngE6 被清空" "$(jq -r "[.data[] | select(.id==$LADDR)][0].lngE6" <<<"$R")" "null"
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR}"); assert_eq "坐标清空后报价 42223" "$(code "$R")" "42223"
+
+# 商品换分类跨渠道，同样要走待付款订单守卫（不能只在「分类改渠道」入口把关）
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); QC3=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC3],\"addressId\":$ADDR2,\"deliveryType\":\"LOCAL\"}")
+LO4=$(jq -r '.data.orderId // empty' <<<"$R")
+R=$(req PUT "/api/admin/products/$LPID" "$AT" "{\"categoryId\":$ECAT}")
+assert_eq "商品跨渠道换分类被待付款订单挡住 42231" "$(code "$R")" "42231"
+# 把该用户所有待付款单一并取消——本段之前的若干断言也会留下含 $LPID 的待付款单，
+# 逐个列举容易漏（漏一个这条断言就会莫名其妙地失败）。
+for o in $(req GET "/api/orders?status=PENDING_PAYMENT&pageSize=50" "$UT" | jq -r '.data.list[].id'); do
+  req PUT "/api/orders/$o/cancel" "$UT" >/dev/null
+done
+R=$(req PUT "/api/admin/products/$LPID" "$AT" "{\"categoryId\":$ECAT}"); assert_eq "取消待付款后可换渠道 code 0" "$(code "$R")" "0"
+req PUT "/api/admin/products/$LPID" "$AT" "{\"categoryId\":$LCAT}" >/dev/null
+
 echo "== 23. 部分更新不重置未传字段（zod .partial() 不剥离 .default() 回归）=="
 CATID=$(req GET /api/admin/categories "$AT" | jq -r '.data[0].id // empty')
 [[ -n "$CATID" ]] && ok "取得分类 #$CATID" || { fail "取分类"; }
@@ -405,6 +463,7 @@ assert_eq "isDefault 仍 1（未被清零）" "$(jq -r .data.isDefault <<<"$R")"
 [[ -n "$ADDR2" ]] && req DELETE "/api/addresses/$ADDR2" "$UT" >/dev/null
 
 echo "== 11. 清理 =="
+for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
 [[ -n "${LADDR:-}" ]] && req DELETE "/api/addresses/$LADDR" "$UT" >/dev/null
 [[ -n "${NADDR:-}" ]] && req DELETE "/api/addresses/$NADDR" "$UT" >/dev/null
