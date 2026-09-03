@@ -45,6 +45,16 @@ t('sanitize 填默认值且丢弃非法', () => {
   assert.strictEqual(s.fee.baseFee, DEFAULT_LOCAL_SETTINGS.fee.baseFee)
   assert.strictEqual(s.enabled, false)
 })
+t('sanitize 畸形 businessHours/kd100.providers/paused 不抛错且逐字段回落', () => {
+  const s = sanitizeLocalSettings({
+    businessHours: [{ start: '25:00', end: '20:00' }, { start: '09:00', end: '18:00' }],
+    kd100: { providers: 'not-an-array' },
+    paused: { until: 12345, reason: { foo: 'bar' } },
+  })
+  assert.deepStrictEqual(s.businessHours, [{ start: '09:00', end: '18:00' }])
+  assert.deepStrictEqual(s.kd100.providers, DEFAULT_LOCAL_SETTINGS.kd100.providers)
+  assert.deepStrictEqual(s.paused, { until: null, reason: '' })
+})
 t('shanghaiMinutes 12:00 → 720', () => assert.strictEqual(shanghaiMinutes(NOON), 720))
 t('营业时段内 isOpenNow=true', () => assert.strictEqual(isOpenNow(base, NOON), true))
 t('时段外 isOpenNow=false，nextOpenText=明天', () => {

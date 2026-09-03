@@ -210,6 +210,13 @@ export async function setLocalSettings(next: LocalDeliverySettings): Promise<Loc
   return value
 }
 
+// 这里的「patch」只对顶层字段生效：patch.fee/kd100/limits/tip 等嵌套对象一旦传入就会整体替换当前值，
+// 不会跟 current 做字段级合并。这不是漏洞——Partial<LocalDeliverySettings> 只把顶层字段变成可选，
+// 嵌套对象本身仍是完整类型，`npx tsc --noEmit` 会在编译期拒绝任何只传嵌套对象部分字段的调用
+// （例如 patchLocalSettings({ fee: { minOrderAmount: 3000 } }) 会报 TS2739 缺 baseFee/baseKm/perKmFee/freeThreshold）。
+// 所以调用方要改嵌套对象里的某一个字段时，正确写法是先 getLocalSettings() 取当前值、展开后再覆盖那个字段
+// （Task 5 的门店坐标接口就是这么写的）。下面 store 这一处的展开合并是冗余的防御代码——类型系统已经保证
+// 不会有调用方能绕过完整嵌套对象的要求触发它——保留不动只是为了不改动已通过复查的运行时行为。
 export async function patchLocalSettings(patch: Partial<LocalDeliverySettings>): Promise<LocalDeliverySettings> {
   const current = await getLocalSettings()
   return setLocalSettings({ ...current, ...patch, store: { ...current.store, ...(patch.store ?? {}) } })
