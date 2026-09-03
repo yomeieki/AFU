@@ -22,6 +22,8 @@ const envSchema = z.object({
   WECHAT_PAY_MOCK: z.string().optional(),
   WECHAT_LOGIN_MOCK: z.string().optional(),
   WECHAT_QRCODE_MOCK: z.string().optional(),
+  // release（默认）| trial | develop —— 见 services/qrcode.ts
+  WECHAT_QRCODE_ENV_VERSION: z.string().optional(),
 
   // 微信小程序 / 支付（懒校验：下单/退款时 validatePayConfig 再查缺项；这里只登记以便集中管理）
   WECHAT_APP_ID: z.string().optional(),
