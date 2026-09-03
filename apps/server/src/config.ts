@@ -65,6 +65,14 @@ const envSchema = z.object({
   COS_BUCKET: z.string().optional(),
   COS_REGION: z.string().optional(),
   COS_BASE_URL: z.string().optional(),
+
+  // 快递100 同城急送（懒校验：呼叫骑手前 validateKd100Config 再查缺项）
+  KD100_KEY: z.string().optional(),
+  KD100_SECRET: z.string().optional(),
+  // 30005 运力异常的重试延迟（毫秒，逗号分隔）；e2e 配 "0,0" 免 sleep
+  KD100_RETRY_DELAYS_MS: z.string().optional(),
+  // 同城运力 mock（生产开启拒绝启动）
+  LOCAL_DELIVERY_PROVIDER_MOCK: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)
@@ -78,6 +86,7 @@ if (!parsed.success) {
 
 const env = parsed.data
 const isProduction = env.NODE_ENV === 'production'
+const publicBaseUrl = env.PUBLIC_BASE_URL ?? `http://localhost:${env.PORT}`
 
 const isSet = (v: string | undefined): v is string => !!v && v.trim() !== ''
 const cosEnabled =
@@ -90,6 +99,7 @@ if (isProduction) {
       ['WECHAT_PAY_MOCK', env.WECHAT_PAY_MOCK],
       ['WECHAT_LOGIN_MOCK', env.WECHAT_LOGIN_MOCK],
       ['WECHAT_QRCODE_MOCK', env.WECHAT_QRCODE_MOCK],
+      ['LOCAL_DELIVERY_PROVIDER_MOCK', env.LOCAL_DELIVERY_PROVIDER_MOCK],
     ] as const
   ).filter(([, v]) => v === 'true')
   if (enabledMocks.length > 0) {
@@ -109,6 +119,14 @@ if (isProduction) {
   if (env.WECHAT_PAY_MOCK !== 'true' && !isSet(env.WECHAT_PAY_PUBLIC_KEY_PATH) && !isSet(env.WECHAT_PAY_PLATFORM_CERT_PATH)) {
     console.warn('[config] 未配置 WECHAT_PAY_PUBLIC_KEY_PATH 或 WECHAT_PAY_PLATFORM_CERT_PATH，微信支付/退款回调将被拒绝')
   }
+
+  // 快递100 对 callbackUrl 限长 50。最坏单号 D999999-99；当前生产 URL 恰 49，余量 1 字符。
+  // 换更长域名前必须先缩短路径前缀（如 /api/k/），否则这里会拦住启动——这是故意的。
+  const worstKdCallbackUrl = `${publicBaseUrl}/api/kd/D999999-99`
+  if (worstKdCallbackUrl.length > 50) {
+    console.error(`[config] 快递100 回调 URL 超长（${worstKdCallbackUrl.length} > 50）：${worstKdCallbackUrl}，服务拒绝启动`)
+    process.exit(1)
+  }
 }
 
 export const config = {
@@ -121,7 +139,7 @@ export const config = {
     adminSecret: env.ADMIN_JWT_SECRET,
     adminExpiresIn: env.ADMIN_JWT_EXPIRES_IN,
   },
-  publicBaseUrl: env.PUBLIC_BASE_URL ?? `http://localhost:${env.PORT}`,
+  publicBaseUrl,
   corsOrigins: env.CORS_ORIGINS
     ? env.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
     : null,
@@ -129,6 +147,7 @@ export const config = {
     pay: env.WECHAT_PAY_MOCK === 'true',
     login: env.WECHAT_LOGIN_MOCK === 'true',
     qrcode: env.WECHAT_QRCODE_MOCK === 'true',
+    delivery: env.LOCAL_DELIVERY_PROVIDER_MOCK === 'true',
   },
   order: {
     payTimeoutMin: env.PAY_TIMEOUT_MIN,
@@ -151,4 +170,18 @@ export const config = {
     region: env.COS_REGION ?? '',
     baseUrl: (env.COS_BASE_URL ?? '').replace(/\/+$/, ''),
   },
+  kd100: {
+    key: env.KD100_KEY ?? '',
+    secret: env.KD100_SECRET ?? '',
+    retryDelaysMs: (env.KD100_RETRY_DELAYS_MS ?? '1000,3000')
+      .split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n >= 0),
+  },
+}
+
+/** 呼叫骑手前的懒校验：mock 模式不需要真密钥 */
+export function validateKd100Config(): void {
+  if (config.mock.delivery) return
+  if (!config.kd100.key || !config.kd100.secret) {
+    throw new Error('Missing required env var: KD100_KEY / KD100_SECRET')
+  }
 }

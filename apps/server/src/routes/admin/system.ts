@@ -75,6 +75,13 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         shipTemplateSet: !!config.subscribe.shipTemplateId && !!config.subscribe.shipFields,
         refundTemplateSet: !!config.subscribe.refundTemplateId && !!config.subscribe.refundFields,
       },
+      kd100: {
+        keySet: !!config.kd100.key,
+        secretSet: !!config.kd100.secret,
+        mock: config.mock.delivery,
+        callbackUrlSample: `${config.publicBaseUrl}/api/kd/D999999-99`,
+        callbackUrlOk: `${config.publicBaseUrl}/api/kd/D999999-99`.length <= 50,
+      },
       publicBaseUrl: config.publicBaseUrl,
     })
   } catch (e) {

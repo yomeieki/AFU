@@ -258,6 +258,9 @@ model Order {
   // 未接单重复播报（M2b）
   announceCount       Int       @default(0) @map("announce_count")
   lastAnnouncedAt     DateTime? @map("last_announced_at")
+  // M2 定时任务「每单只提醒一次」标记（备餐超时未呼叫 / 顾客取消申请未处理）
+  localUncalledRemindedAt  DateTime? @map("local_uncalled_reminded_at")
+  cancelRequestRemindedAt  DateTime? @map("cancel_request_reminded_at")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
@@ -513,6 +516,7 @@ model Delivery {
   callTimeoutRemindedAt   DateTime? @map("call_timeout_reminded_at")
   acceptedStuckRemindedAt DateTime? @map("accepted_stuck_reminded_at")
   deliveringRemindedAt    DateTime? @map("delivering_reminded_at")
+  unknownRemindedAt       DateTime? @map("unknown_reminded_at")
   operator          String?   @db.VarChar(64)
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
