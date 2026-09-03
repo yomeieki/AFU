@@ -267,10 +267,6 @@ R=$(req GET "/api/categories?channel=LOCAL" "$UT"); [[ "$(jq -r "[.data[] | sele
 R=$(req GET "/api/products?pageSize=50" "$UT"); [[ "$(jq -r "[.data.list[] | select(.id==$LPID)] | length" <<<"$R")" == "0" ]] && ok "公开商品默认不含同城商品" || fail "公开商品泄漏同城商品"
 R=$(req GET "/api/products?channel=LOCAL&pageSize=50" "$UT"); [[ "$(jq -r "[.data.list[] | select(.id==$LPID)] | length" <<<"$R")" == "1" ]] && ok "公开商品 channel=LOCAL 含同城商品" || fail "公开商品 LOCAL 过滤" "$R"
 assert_eq "商品详情返回 channel" "$(req GET "/api/products/$LPID" "$UT" | jq -r .data.channel)" "LOCAL"
-# 第 19 段的 PUT .../products/$LPID（仅带 categoryId）会因 zod .partial() 对带 .default() 字段的已知行为
-# 把未携带的 stock 静默重置为 0（与本段渠道过滤/购物车无关的既有缺陷，不在本任务改动范围内，见任务报告）；
-# 这里显式补回库存，避免下面的加购断言被这个既有缺陷阻塞。
-req PUT "/api/admin/products/$LPID" "$AT" '{"stock":50}' >/dev/null
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); LCID=$(jq -r '.data.id // empty' <<<"$R")
 [[ -n "$LCID" ]] && ok "同城商品加购 #$LCID" || fail "同城加购" "$R"
 assert_eq "加购返回 channel=LOCAL" "$(jq -r .data.channel <<<"$R")" "LOCAL"
@@ -317,7 +313,6 @@ R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000}'); assert_eq "地�
 R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E无坐标","receiverPhone":"13800000003","province":"四川省","city":"自贡市","district":"高新区","detail":"z"}')
 NADDR=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$NADDR" ]] && ok "创建无坐标地址 #$NADDR" || fail "创建无坐标地址" "$R"
 R=$(req PUT "/api/addresses/$NADDR" "$UT" '{"latE6":29350000}'); assert_eq "无坐标地址仅传纬度 40001" "$(code "$R")" "40001"
-
 echo "== 22. 同城下单 =="
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); LCID2=$(jq -r '.data.id // empty' <<<"$R")
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$LADDR,\"deliveryType\":\"EXPRESS\"}"); assert_eq "同城商品走邮寄被拒 42224" "$(code "$R")" "42224"
@@ -351,6 +346,59 @@ R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{}'); assert_eq "超窗口
 R=$(req GET "/api/admin/orders?pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "0" ]] && ok "后台订单列表默认不含同城单" || fail "后台列表混入同城单"
 R=$(req GET "/api/admin/orders?deliveryType=LOCAL&pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "1" ]] && ok "deliveryType=LOCAL 可查到" || fail "LOCAL 筛选" "$R"
 R=$(req GET /api/admin/orders/pending-count "$AT"); [[ "$(jq -r .data.localPendingCount <<<"$R")" -ge 1 ]] && ok "localPendingCount≥1" || fail "localPendingCount" "$R"
+
+echo "== 23. 部分更新不重置未传字段（zod .partial() 不剥离 .default() 回归）=="
+CATID=$(req GET /api/admin/categories "$AT" | jq -r '.data[0].id // empty')
+[[ -n "$CATID" ]] && ok "取得分类 #$CATID" || { fail "取分类"; }
+# 23a. 商品：创建时显式指定非默认值，随后只 PUT stock
+R=$(req POST /api/admin/products "$AT" "{\"categoryId\":$CATID,\"name\":\"E2E部分更新回归\",\"price\":100,\"stock\":50,\"unit\":\"盒\",\"status\":\"OFF_SHELF\",\"isRecommended\":1}")
+NPID=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$NPID" ]] && ok "创建商品 #$NPID" || fail "创建商品" "$R"
+assert_eq "创建后 status=OFF_SHELF" "$(jq -r .data.status <<<"$R")" "OFF_SHELF"
+R=$(req PUT "/api/admin/products/$NPID" "$AT" '{"stock":30}')
+assert_eq "只传 stock 的 PUT code 0" "$(code "$R")" "0"
+assert_eq "stock → 30" "$(jq -r .data.stock <<<"$R")" "30"
+assert_eq "status 仍 OFF_SHELF（未被重置为 ON_SHELF）" "$(jq -r .data.status <<<"$R")" "OFF_SHELF"
+assert_eq "isRecommended 仍 1（未被清零）" "$(jq -r .data.isRecommended <<<"$R")" "1"
+assert_eq "unit 仍 盒（未被重置为 份）" "$(jq -r .data.unit <<<"$R")" "盒"
+# 再从列表读回，确认是落库结果而非响应体假象
+R=$(req GET "/api/admin/products?categoryId=$CATID&pageSize=50" "$AT")
+P=$(jq -c ".data.list[] | select(.id==$NPID)" <<<"$R")
+assert_eq "落库 status=OFF_SHELF" "$(jq -r .status <<<"$P")" "OFF_SHELF"
+assert_eq "落库 isRecommended=1" "$(jq -r .isRecommended <<<"$P")" "1"
+assert_eq "落库 unit=盒" "$(jq -r .unit <<<"$P")" "盒"
+assert_eq "落库 stock=30" "$(jq -r .stock <<<"$P")" "30"
+# 23b. 创建路径的默认值必须保留
+R=$(req POST /api/admin/products "$AT" "{\"categoryId\":$CATID,\"name\":\"E2E默认值商品\",\"price\":100}")
+DPID=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$DPID" ]] && ok "创建缺省商品 #$DPID" || fail "创建缺省商品" "$R"
+assert_eq "默认 stock=0" "$(jq -r .data.stock <<<"$R")" "0"
+assert_eq "默认 unit=份" "$(jq -r .data.unit <<<"$R")" "份"
+assert_eq "默认 status=ON_SHELF" "$(jq -r .data.status <<<"$R")" "ON_SHELF"
+assert_eq "默认 isRecommended=0" "$(jq -r .data.isRecommended <<<"$R")" "0"
+# 23c. 分类：只 PUT name，sortOrder/status 不能被重置
+R=$(req POST /api/admin/categories "$AT" '{"name":"E2E回归分类","sortOrder":77,"status":0}')
+NCID=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$NCID" ]] && ok "创建分类 #$NCID" || fail "创建分类" "$R"
+R=$(req PUT "/api/admin/categories/$NCID" "$AT" '{"name":"E2E回归分类改名"}')
+assert_eq "只传 name 的 PUT code 0" "$(code "$R")" "0"
+assert_eq "name 已更新" "$(jq -r .data.name <<<"$R")" "E2E回归分类改名"
+assert_eq "sortOrder 仍 77（未被重置为 0）" "$(jq -r .data.sortOrder <<<"$R")" "77"
+assert_eq "status 仍 0（未被重置为 1）" "$(jq -r .data.status <<<"$R")" "0"
+R=$(req POST /api/admin/categories "$AT" '{"name":"E2E默认值分类"}')
+DCID=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$DCID" ]] && ok "创建缺省分类 #$DCID" || fail "创建缺省分类" "$R"
+assert_eq "默认 sortOrder=0" "$(jq -r .data.sortOrder <<<"$R")" "0"
+assert_eq "默认 status=1" "$(jq -r .data.status <<<"$R")" "1"
+# 23d. 地址：只改详细地址，isDefault 不能被清零
+R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E默认地址","receiverPhone":"13800000001","province":"四川省","city":"成都市","district":"武侯区","detail":"回归路1号","isDefault":1}')
+ADDR2=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$ADDR2" ]] && ok "创建默认地址 #$ADDR2" || fail "创建默认地址" "$R"
+R=$(req PUT "/api/addresses/$ADDR2" "$UT" '{"detail":"回归路2号"}')
+assert_eq "只传 detail 的 PUT code 0" "$(code "$R")" "0"
+assert_eq "detail 已更新" "$(jq -r .data.detail <<<"$R")" "回归路2号"
+assert_eq "isDefault 仍 1（未被清零）" "$(jq -r .data.isDefault <<<"$R")" "1"
+# 23 清理
+[[ -n "$NPID" ]] && req DELETE "/api/admin/products/$NPID" "$AT" >/dev/null
+[[ -n "$DPID" ]] && req DELETE "/api/admin/products/$DPID" "$AT" >/dev/null
+[[ -n "$NCID" ]] && req DELETE "/api/admin/categories/$NCID" "$AT" >/dev/null
+[[ -n "$DCID" ]] && req DELETE "/api/admin/categories/$DCID" "$AT" >/dev/null
+[[ -n "$ADDR2" ]] && req DELETE "/api/addresses/$ADDR2" "$UT" >/dev/null
 
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

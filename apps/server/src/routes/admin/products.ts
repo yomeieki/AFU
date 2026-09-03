@@ -25,31 +25,47 @@ const skuSchema = z.object({
   sortOrder: z.number().int().min(0).default(0),
 })
 
-const productSchema = z.object({
+// 商品字段基线：一律不带 .default()。
+// zod 的 .partial() 只把字段变成 optional，不会剥离 .default()——带默认值的字段
+// 在部分更新时仍会被填成默认值，把请求里没带的 status/isRecommended 等静默重置。
+// 所以默认值只叠加在创建路径（productCreateSchema）上，更新走 productUpdateSchema。
+const productBaseSchema = z.object({
   categoryId: z.number().int().positive('分类不能为空'),
   name: z.string().min(1, '商品名称不能为空').max(128),
   subtitle: z.string().max(255).nullable().optional(),
   coverImage: z.string().max(500).nullable().optional(),
   price: z.number().int().positive('价格必须大于 0'),
   originalPrice: z.number().int().positive().nullable().optional(),
-  stock: z.number().int().min(0).default(0),
-  unit: z.string().max(16).default('份'),
+  stock: z.number().int().min(0),
+  unit: z.string().max(16),
   weight: z.string().max(32).nullable().optional(),
   shelfLife: z.string().max(64).nullable().optional(),
   storageMethod: z.string().max(128).nullable().optional(),
   deliveryInfo: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
-  status: z.enum(['ON_SHELF', 'OFF_SHELF']).default('ON_SHELF'),
+  status: z.enum(['ON_SHELF', 'OFF_SHELF']),
   // @deprecated 兼容旧后台仍可能传入；服务端忽略，渠道以分类为准
   deliveryType: z.string().max(64).optional(),
   netWeightG: z.number().int().min(1).max(50_000).nullable().optional(),
-  isRecommended: z.number().int().min(0).max(1).default(0),
+  isRecommended: z.number().int().min(0).max(1),
   // 商品多图（详情轮播），按数组顺序作为 sortOrder 同步到 ProductImage
   imageUrls: z.array(z.string().max(500)).max(9).optional(),
   // 规格维度 + SKU 组合；specDimensions 为 null/[] 且 skus 为空 = 无规格商品
   specDimensions: z.array(specDimensionSchema).max(3).nullable().optional(),
   skus: z.array(skuSchema).max(60).optional(),
 })
+
+// 创建：缺省字段补默认值
+const productCreateSchema = productBaseSchema.extend({
+  stock: productBaseSchema.shape.stock.default(0),
+  unit: productBaseSchema.shape.unit.default('份'),
+  status: productBaseSchema.shape.status.default('ON_SHELF'),
+  // deliveryType 在本分支已废弃（渠道以分类为准），本就无默认值，不再叠加
+  isRecommended: productBaseSchema.shape.isRecommended.default(0),
+})
+
+// 更新：只写请求里显式带的字段，没带的一律不动
+const productUpdateSchema = productBaseSchema.partial()
 
 /** 校验维度与 SKU 组合一致性；返回规范化后的 dimensions（null=无规格） */
 function validateSpecs(
@@ -145,7 +161,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 // POST /api/admin/products
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { imageUrls, specDimensions, skus, ...data } = productSchema.parse(req.body)
+    const { imageUrls, specDimensions, skus, ...data } = productCreateSchema.parse(req.body)
     const { deliveryType: _ignored, ...rest } = data
     const channel = await channelOfCategory(prisma, rest.categoryId)
 
@@ -244,7 +260,7 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const exists = await prisma.product.findFirst({ where: { id, deletedAt: null } })
     if (!exists) throw new AppError(40401, '商品不存在', 404)
 
-    const { imageUrls, specDimensions, skus, ...data } = productSchema.partial().parse(req.body)
+    const { imageUrls, specDimensions, skus, ...data } = productUpdateSchema.parse(req.body)
     const { deliveryType: _ignored, ...rest } = data
     // 换分类时渠道跟随分类（同事务内取，防止读到并发改渠道前的旧值）
 

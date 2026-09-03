@@ -6,6 +6,8 @@ import { AppError } from '../middlewares/error'
 
 const router = Router()
 
+// 同 products.ts：.partial() 不会剥离 .default()。若默认值留在基线上，
+// 只改「详细地址」这类部分更新会把 isDefault 静默重置成 0，默认地址被悄悄取消。
 const addressBase = z.object({
   receiverName: z.string().min(1, '请填写收货人').max(64),
   receiverPhone: z.string().regex(/^1[3-9]\d{9}$/, '手机号格式不正确'),
@@ -13,7 +15,7 @@ const addressBase = z.object({
   city: z.string().min(1, '请填写城市').max(32),
   district: z.string().min(1, '请填写区县').max(32),
   detail: z.string().min(1, '请填写详细地址').max(255),
-  isDefault: z.number().int().min(0).max(1).default(0),
+  isDefault: z.number().int().min(0).max(1),
   // 同城配送用：GCJ-02 微度坐标 + 地图选点名称（成对出现）
   latE6: z.number().int().min(-90_000_000).max(90_000_000).nullable().optional(),
   lngE6: z.number().int().min(-180_000_000).max(180_000_000).nullable().optional(),
@@ -24,9 +26,13 @@ const COORD_PAIR_MESSAGE = '经纬度必须同时提供'
 const isCoordPairValid = (lat: number | null | undefined, lng: number | null | undefined) =>
   (lat == null) === (lng == null)
 
-const addressSchema = addressBase.refine((v) => isCoordPairValid(v.latE6, v.lngE6), {
-  message: COORD_PAIR_MESSAGE,
-})
+// 创建：补 isDefault 默认值 + 坐标成对校验
+const addressCreateSchema = addressBase
+  .extend({ isDefault: addressBase.shape.isDefault.default(0) })
+  .refine((v) => isCoordPairValid(v.latE6, v.lngE6), { message: COORD_PAIR_MESSAGE })
+
+// 更新：只写请求里显式带的字段；坐标成对性在 PUT 内与库内既有值合并后再判断
+const addressUpdateSchema = addressBase.partial()
 
 // GET /api/addresses
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -46,7 +52,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const data = addressSchema.parse(req.body)
+    const data = addressCreateSchema.parse(req.body)
     const fullAddress = `${data.province}${data.city}${data.district}${data.detail}`
 
     if (data.isDefault) {
@@ -69,7 +75,7 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const exists = await prisma.address.findFirst({ where: { id, userId, deletedAt: null } })
     if (!exists) throw new AppError(40401, '地址不存在', 404)
 
-    const data = addressBase.partial().parse(req.body)
+    const data = addressUpdateSchema.parse(req.body)
 
     // 坐标是否成对，要按「请求体带了该键就用请求体的值，没带就沿用库内值」合并后判断——
     // 不能只看请求体自身，否则 {latE6: null} 不带 lngE6 会被误判为「都没有」而放行，

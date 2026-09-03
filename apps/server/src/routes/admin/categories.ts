@@ -8,13 +8,23 @@ import { changeCategoryChannel } from '../../services/product-channel'
 
 const router = Router()
 
-const categorySchema = z.object({
+// 同 products.ts：.partial() 不会剥离 .default()，默认值只能加在创建路径上，
+// 否则部分更新会把请求里没带的 sortOrder/status 静默重置。
+const categoryBaseSchema = z.object({
   name: z.string().min(1, '分类名称不能为空').max(64),
   iconUrl: z.string().max(500).nullable().optional(),
-  sortOrder: z.number().int().default(0),
-  status: z.number().int().min(0).max(1).default(1),
-  channel: channelSchema.default('EXPRESS'),
+  sortOrder: z.number().int(),
+  status: z.number().int().min(0).max(1),
+  channel: channelSchema,
 })
+
+const categoryCreateSchema = categoryBaseSchema.extend({
+  sortOrder: categoryBaseSchema.shape.sortOrder.default(0),
+  status: categoryBaseSchema.shape.status.default(1),
+  channel: categoryBaseSchema.shape.channel.default('EXPRESS'),
+})
+
+const categoryUpdateSchema = categoryBaseSchema.partial()
 
 // GET /api/admin/categories
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -34,7 +44,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 // POST /api/admin/categories
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = categorySchema.parse(req.body)
+    const data = categoryCreateSchema.parse(req.body)
     const category = await prisma.category.create({ data })
     success(res, category)
   } catch (e) {
@@ -49,7 +59,7 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const exists = await prisma.category.findUnique({ where: { id } })
     if (!exists) throw new AppError(40401, '分类不存在', 404)
 
-    const { channel, ...data } = categorySchema.partial().parse(req.body)
+    const { channel, ...data } = categoryUpdateSchema.parse(req.body)
     if (channel && channel !== exists.channel) {
       await changeCategoryChannel(id, channel)
     }
