@@ -127,7 +127,11 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       prisma.order.count({
         where: {
           deliveryType: 'LOCAL',
-          OR: [{ status: { in: ['PAID', 'PREPARING'] } }, { cancelRequestedAt: { not: null } }],
+          OR: [
+            { status: { in: ['PAID', 'PREPARING'] } },
+            // 取消申请徽标只数还没走完流程的单：终态单的 cancelRequestedAt 是历史痕迹，不该永久占一个红点
+            { cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } },
+          ],
         },
       }),
     ])

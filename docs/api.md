@@ -974,7 +974,7 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 | 42204 | 400 | 同城订单请在同城看板操作 | 邮寄端点 `admin/orders/:id/{accept,ship,complete}` 命中 LOCAL 订单（沿用既有「订单状态错误」码，非新增码值，此处为新用法） |
 | 42210 | 400 | 同城配送未达起送金额 | `POST /api/orders`（LOCAL 分支）/ `POST /api/local/quote`（沿用既有「未达起送门槛」码，LOCAL 走独立门槛 `minOrderAmount`） |
 | 42220 | 400 | 超出配送范围 | `POST /api/orders`（LOCAL）、`POST /api/local/quote` 隐含在 `inRange=false` |
-| 42221 | — | 请先取消配送单 | 属于 M2（依赖尚未实现的 `Delivery` 配送单模型），M1 代码不会抛出，仅在设计中预留码值 |
+| 42221 | 400 | 请先取消配送单 | M1 阶段仅预留码值不会抛出；**M2 起已实现**（`services/refund.ts`），见附录 C |
 | 42222 | 400 | 当前非营业时间 | `POST /api/orders`（LOCAL 分支下单时校验；`/local/quote` 只提示不拦截） |
 | 42223 | 400 | 地址缺少定位（未在地图上选点） | `POST /api/local/quote`、`POST /api/orders`（LOCAL） |
 | 42224 | 400 | 商品渠道与下单渠道不符 | `POST /api/orders` 逐行校验 `product.channel === channelOfDeliveryType(deliveryType)` |
@@ -984,4 +984,138 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 | 42230 | 400 | 超出单次配送件数/重量上限 | `POST /api/orders`（LOCAL） |
 | 42231 | 400 | 该分类下有待付款订单，暂不可切换渠道 | `PUT /api/admin/categories/:id`（改 `channel` 时，`services/product-channel.ts`） |
 
-> 上述 12 个码值均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出（`42221` 已在设计中预留，但业务逻辑属于 M2，见上表「出现位置」列，M1 代码不会抛出）；`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）两个码值不在该清单中，同样已在设计中预留但属于 M2，M1 代码不会抛出。
+> 上述 12 个码值均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出（`42221` 在 M1 阶段仅预留码值，M2 起已实现，见附录 C）；`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）两个码值不在该清单中，同样在 M1 阶段仅预留，**M2 起已实现，用法见附录 C**。
+
+---
+
+## 附录 C：同城配送 API（M2）
+
+M2 在 M1「渠道基础设施」之上补齐「配送服务」：骑手呼叫、配送单状态机（对接快递100）、店内自送、拒单（两渠道通用）、顾客端骑手位置、同城定时任务。设计依据 `docs/superpowers/specs/2026-09-03-local-delivery-design.md` §5。
+
+### 管理端：同城配送单操作 `/api/admin/local/orders/:id/*`
+
+除标注外均要求订单 `deliveryType=LOCAL`；订单不存在 → `40401`。
+
+| 接口 | 说明 |
+|---|---|
+| `POST /:id/accept` | 接单，`PAID → PREPARING`（只标记开始备餐，不呼叫骑手）。非 `PAID` → `42204` |
+| `POST /:id/accept-and-call` | 接单 + 立即呼叫骑手的组合端点。接单成功但呼叫失败时**接单结果保留**（不回滚），错误信息前缀「已接单，」；响应 `{ accepted: true, ...call响应 }` |
+| `POST /:id/call` | 呼叫骑手：落一条 `Delivery(PENDING→CALLING)` 占位（`activeOrderId` 唯一索引防并发重呼，撞了 → `42228`）→ 事务外调用快递100 `batchOrder`。仅 `PREPARING` 且无顾客取消申请、有收货坐标可呼叫，否则 `42204`/`42223`。响应 `{ deliveryId, deliveryNo, status: 'CALLING'\|'UNKNOWN', quotedFeeFen }`：`CALLING` = 下单成功；`UNKNOWN` = 下单响应超时，占位保留等回调认领。明确失败（配置错误/余额不足/运力异常重试耗尽）→ `42225`；熔断中 → `42232` |
+| `GET /:id/delivery` | 该订单当前有效配送单（无则取最近一张历史单）+ 事件时间线。响应 `{ delivery, events[] }`；`delivery` 为 `null` 表示从未呼叫过 |
+| `POST /:id/delivery/precancel` | 预估取消费（只读，不真取消，用于取消前给店员看一眼要扣多少钱）。响应 `{ cancelFeeFen }`。无在途单 → `42233`；尚未成单（无 `providerTaskId`）→ `42234` |
+| `POST /:id/delivery/cancel` | 取消在途配送单（真取消，调用快递100 `cancel`）。Body `{ reason? }`（≤255 字）。响应 `{ cancelFeeFen }`；取消费与小费一律店铺承担，记入 `Delivery` 对账。取消请求超时（状态未变化）→ `42238`；无在途单 → `42233`；状态已变化（并发）→ `42237` |
+| `POST /:id/delivery/tip` | 加小费（仅 `CALLING` 待抢单阶段可加，超过设置里的单次/单笔累计上限 → `42235`）。Body `{ amount }`（整数分，1-100000）。响应 `{ tipFeeFen }`（累计小费）。运力拒绝/请求超时 → `42236` |
+| `POST /:id/self-deliver` | 店内自送：新建 `Delivery(provider='SELF', status='DELIVERING')`，订单 `PREPARING → SHIPPED`。Body `{ name, phone }`。响应 `{ deliveryId, deliveryNo }`。已有在途配送单 → `42228`（若是「状态未确认」单则提示先作废 → `42234`） |
+| `POST /:id/delivered` | 标记已送达：配送单 → `DELIVERED`，订单 → `COMPLETED`。无在途单 → `42233`；并发状态已变化 → `42237` |
+| `POST /:id/delivery/void` | 作废「状态未确认」（`UNKNOWN`）配送单——人工核实快递100 后台确认无单后使用。仅 `UNKNOWN` 状态可作废，否则 → `42234` |
+
+### 拒单 `POST /admin/orders/:id/reject`
+
+**两渠道通用**（EXPRESS 与 LOCAL 均可调用，挂在共享的 `admin/orders.ts` 而非同城专属路由）——店家在邮寄场景同样可能需要因缺货/超范围/顾客口头取消而拒单，没必要为同一动作维护两套端点。
+
+允许状态：`PENDING_PAYMENT` / `PAID` / `PREPARING`；`SHIPPED` 及以后（已出餐/在途）→ `42204`，须改走退款或售后。
+
+Body：
+```json
+{ "reason": "SOLD_OUT", "note": "只剩最后一份被点走了", "soldOutProductIds": [12, 15] }
+```
+- `reason`：`SOLD_OUT`(菜品售罄) / `OUT_OF_RANGE`(超出配送范围) / `PAST_ACCEPT_TIME`(已过接单时间) / `CUSTOMER_CANCEL`(顾客电话要求取消) / `OTHER`(其他原因)
+- `reason='OTHER'` 时 `note`（≤40 字）必填，否则 `40001`
+- `reason='SOLD_OUT'` 时 `soldOutProductIds` 必须非空；且所有 id 必须属于本订单商品，否则 `40001`
+- **终态**：待付款订单直接 `CANCELLED` + 库存回滚；**已付款订单终态是 `REFUNDED`（不是 `CANCELLED`）**——走标准 `initiateRefund` 全额退款，而非绕开退款子系统直接改状态，从而保住退款幂等（不会有两条并行退款记录）、对账（`Refund` 表记录）与 42221 前置校验（有在途配送单先拦，见附录中「配送单操作」表的 `delivery/cancel`）
+- 拒单原因原样拼进 `Order.cancelReason`（顾客可见）：`商家拒单：<原因中文>（<note>）`
+- **售罄联动下架**：勾选的商品在同一次请求里从 `ON_SHELF` 改 `OFF_SHELF`（独立小事务，失败只告警不回滚——退款已是既成事实，不下架的话同样的单还会再来一遍）
+
+响应：
+```json
+{ "code": 0, "data": { "orderId": 88, "refund": { "outRefundNo": "refund_88_...", "status": "PROCESSING" }, "offShelfCount": 2, "cancelReason": "商家拒单：菜品售罄（只剩最后一份被点走了）" } }
+```
+`refund` 在待付款分支为 `null`。
+
+### 回调 `POST /api/kd/:deliveryNo`
+
+快递100 配送单状态回调，公开路由（安全性来自逐单随机 `callbackSalt` 验签，不用 JWT），`x-www-form-urlencoded`。挂在 `/api/kd` 前缀下（不在 `/api/admin` 或 `/api/local` 家族里），路径里的 `deliveryNo` 是查单的第一优先键（下单前就已写死进 `callbackUrl`，比事后猜测可靠）。
+
+**验签**：请求体含 `param`（JSON 字符串）与 `sign`；`sign = MD5(param + salt).toUpperCase()`（`salt` 是建单时随机生成、按配送单存储的 16 字符串，不是全局密钥）；服务端用该配送单的 `callbackSalt` 重算并 `timingSafeEqual` 比对（先按字节长度短路，避免变长输入直接进 `timingSafeEqual` 抛异常）。
+
+**应答契约（与微信支付回调相反，务必记住）**：微信支付回调失败可以返非 200 促使微信重推，因为随时能反查订单状态；快递100 **没有等价的查单接口**，回调是唯一事实来源，对它返回非 200 会让快递100 停止重推、这次状态转移永久丢失。因此：
+- **仅「数据库入库异常」返 `500`**（例如 `UNKNOWN` 认领时 `providerTaskId` 撞了另一条配送单的唯一索引）——这是唯一会让快递100 重推的情形。
+- **其余一律 `200`**：查不到配送单、验签失败、并呼场景下未中标运力推来的假撤单、`dedupeKey` 命中的重复回调、乱序/迟到的旧状态包、`PROVIDER_STATUS_MAP` 未收录的未知状态码——统统留痕/告警后原地应答 200，不依赖重推。
+
+响应体：
+```json
+{ "result": true, "returnCode": "200", "message": "成功" }
+```
+入库失败时 HTTP 500，`result: false`。`result` 字段仅供人工核对回调日志，快递100 是否重推只看 HTTP 状态码。
+
+状态机细节（rank 单调推进、旁路态、N8 特例、720 回退）见 spec §5.3；回调幂等键 `dedupeKey = CB:<deliveryNo>:<providerStatus>:<updateTime ?? md5(rawBody)>`（`services/delivery/events.ts`）。
+
+### 顾客端骑手位置 `GET /api/orders/:id/courier`
+
+`findFirst({id, userId})` 校验订单归属（非本人订单 → `40401`）。仅当该订单有在途配送单且状态 ∈ `ACCEPTED/ARRIVING/ARRIVED/DELIVERING`（已上路）才真的查询；否则直接返回 `{ location: null }`，不外呼。
+
+响应：
+```json
+{ "code": 0, "data": { "location": { "latE6": 29350000, "lngE6": 104790000 } } }
+```
+- **20 秒进程内缓存**（按 `delivery.id` 键控）：避免顾客端轮询把 `queryCourier` 打爆
+- **运力方查询故障时也负缓存**（`location: null` 并写入缓存）：否则每次轮询都会真打一次外部 API，把故障放大成订单页反复报错
+
+### 探测接口 `POST /admin/settings/local-delivery/probe`
+
+用当前门店坐标 + 一个探测点试算运力报价（`batchPrice`，**不落库、不下单**），用于开店前核实某个方向/距离是否有运力覆盖，及大致费用。
+
+Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `42226`。
+
+响应：
+```json
+{ "code": 0, "data": { "feeFen": 500, "distanceM": 3200 } }
+```
+
+### Mock 控制面 `/api/admin/system/kd100-mock/*`
+
+**仅 mock 模式挂载**（`config.mock.delivery=true` 时才 `router.use`；生产环境这组路由完全不存在，不是靠鉴权/环境判断拒绝，是压根没注册）。供本地开发与 e2e 注入异常场景（超时、30004/30005 等错误码、precancel/addTip/queryCourier 的自定义返回）而不必真的接快递100。
+
+| 接口 | 说明 |
+|---|---|
+| `POST /reset` | 重置 mock 状态（清空已排队的指令与调用记录） |
+| `POST /queue` | 排队下一次某个操作（`createOrder`/`cancelOrder`/`precancelOrder`/`addTip`/`queryCourier`/`price`）的返回结果或异常。Body `{ op, directive }` |
+| `GET /calls` | 已记录的调用列表（供断言「呼叫了几次」「重试了几次」） |
+| `GET /salt/:deliveryNo` | 取某配送单的 `callbackSalt`（e2e 用它在测试里现算正确的回调签名，无需读数据库） |
+
+### `POST /admin/system/kd100-circuit/reset` —— 手动恢复余额熔断
+
+快递100 返回 30004（余额不足）时，服务端会把「呼叫骑手」整体熔断（进程内存态，拒绝一切新呼叫直到手动恢复），避免同一天里反复余额不足反复告警。此接口无环境限制（管理员登录即可），是店主充值后点击「恢复」用的**生产可用**功能，与仅供联调用的 mock 控制面不是一回事。响应为当前熔断状态：
+```json
+{ "code": 0, "data": { "tripped": false, "trippedAt": null, "reason": null, "operator": "admin" } }
+```
+
+### `run-scheduler` 新增 override 键
+
+`POST /admin/system/run-scheduler`（仅非生产，`config.isProduction` 时 `40301`）在 M1 既有的 `payTimeoutMin`/`autoCompleteDays`/`remindAfterMin` 之外，本里程碑新增 7 个同城定时任务的阈值覆盖键（供联调/e2e 精确控制触发时机，不必真等几分钟）：
+
+| 键 | 对应任务 |
+|---|---|
+| `callTimeoutMin` | 待抢单（`CALLING`）超时提醒 |
+| `acceptedStuckMin` | 骑手已接单但卡在 `ACCEPTED/ARRIVING/ARRIVED` 提醒 |
+| `deliveringTimeoutMin` | 配送中（`DELIVERING`）超时提醒（老板告警） |
+| `unknownStuckMin` | `CALLING`/`UNKNOWN` 且无 `taskId`（幽灵单）超时提醒 |
+| `localUncalledMin` | 已接单但迟迟未呼叫骑手提醒 |
+| `cancelRequestPendingMin` | 顾客申请取消超时未处理提醒 |
+| `autoCallDelayMin` | 接单后自动呼叫骑手的延迟（每单最多触发一次；有取消申请或历史呼叫记录则不触发） |
+
+### 新错误码（7 个，`42232`-`42238`）
+
+`42221`/`42225`/`42228` 三个码值早在 M1 阶段就已列入设计（见附录 B「新错误码」表），彼时业务逻辑未实现；M2 起已在下列位置真正抛出：`42221`→`services/refund.ts`（有在途配送单先拦退款/拒单）、`42225`/`42228`→`services/delivery/orchestrator.ts`（呼叫/取消失败、已有在途配送单）。以下是本里程碑新增的码值，均在 `services/delivery/orchestrator.ts` 抛出：
+
+| code | HTTP | 含义 | 出现位置 |
+|---|---|---|---|
+| 42232 | 400 | 快递100 余额不足已暂停呼叫，请充值后在系统状态页点「恢复」 | `POST /:id/call`（`isCircuitTripped()` 为真时直接拒绝，不再外呼） |
+| 42233 | 400 | 无在途配送单 | `POST /:id/delivered`、`delivery/precancel`、`delivery/cancel`、`delivery/void` 等要求存在有效 `Delivery` 的操作 |
+| 42234 | 400 | 配送单状态不允许该操作（尚未成单 / 状态未确认需先等回调认领或作废 / 仅「状态未确认」可作废） | `delivery/void`（非 `UNKNOWN` 状态）、`delivery/precancel`/`delivery/tip`（无 `providerTaskId`）、`self-deliver`（存在 `UNKNOWN` 单需先作废）、其余要求「非 `UNKNOWN`」的操作 |
+| 42235 | 400 | 加小费超限或状态不允许（仅 `CALLING` 可加、超单次上限、超单笔累计上限、状态已变化） | `delivery/tip` |
+| 42236 | 400 | 加小费被运力方拒绝，或请求超时 | `delivery/tip`（调用快递100 `addfee` 失败/超时） |
+| 42237 | 400 | 配送单状态已变化，请刷新（并发保护：`updateMany` 命中 0 行） | `delivery/void`、`delivery/cancel`、`delivered` |
+| 42238 | 400 | 取消请求超时，请稍后重试（状态未变化） | `delivery/cancel`（调用快递100 `cancel` 超时；本地状态保证未被误改） |
+
+> 上述 7 个码值出现在 `docs/superpowers/plans/2026-09-03-local-delivery-m2-engine.md` 的 Global Constraints 表。HTTP 状态码全部是 400——`AppError` 的 `httpStatus` 默认值即 400，`services/delivery/orchestrator.ts` 里这些抛出均未传第三个参数覆盖默认值（与项目里绝大多数业务错误码的约定一致，业务语义全靠 `code` 区分，HTTP 状态码本身不承载语义）。

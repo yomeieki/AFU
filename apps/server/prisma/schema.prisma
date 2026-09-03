@@ -533,7 +533,7 @@ model Delivery {
 model DeliveryEvent {
   id                 Int      @id @default(autoincrement())
   deliveryId         Int      @map("delivery_id")
-  // sha1(deliveryId|providerStatus|updateTime ?? sha1(rawBody))；ADMIN/SCHEDULER 事件用 uuid
+  // `CB:${deliveryNo}:${providerStatus}:${updateTime ?? md5(rawBody)}`（截 64 位）；ADMIN/SCHEDULER 事件用 uuid（见 services/delivery/events.ts）
   dedupeKey          String   @unique @map("dedupe_key") @db.VarChar(64)
   // CALLBACK | API | ADMIN | SCHEDULER
   source             String   @db.VarChar(16)

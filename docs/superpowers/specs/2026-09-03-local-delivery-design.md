@@ -303,6 +303,8 @@ interface LocalDeliverySettings {
 Delivery 状态 rank：`PENDING 0 < CALLING 10 < ACCEPTED 20 < ARRIVING 30 < ARRIVED 40 < DELIVERING 50 < DELIVERED 100`；`REASSIGNING / ABNORMAL / CANCELLED / FAILED / UNKNOWN` 为旁路态。终态集合 `TERMINAL = {DELIVERED, CANCELLED, FAILED}`。
 - 正向推进一律 `updateMany({ where: { id, statusRank: { lt: newRank }, status: { notIn: TERMINAL } }, data: { status, statusRank: newRank, ... } })`，终态粘住，迟到的 310 不能复活已取消/已完成的单。
 - 旁路态写入只更新 `status / providerStatus / statusDesc / 时间戳`，**不写 `statusRank`**；因此 UNKNOWN 被认领后 rank 仍停在 CALLING(10)，后续 100 回调可正常推进。
+- **N8 特例（REASSIGNING 回拨 ACCEPTED）**：`515`（改派中）是旁路态，不写 rank；改派成功后运力方会再推一条 `100`（新骑手接单）。这条 `100` 按 rank 单调规则的常规匹配（`statusRank:{lt:20}`）会落空——Delivery 早已离开 rank 序列，停在旁路态。因此专开一条二次匹配兜底：常规更新 `moved===0` 且 `providerStatus==='100'` 时，再尝试 `updateMany({ where: { id, status: 'REASSIGNING' }, data: { status: 'ACCEPTED', statusRank: 20, acceptedAt: now, ... } })`，把 rank 从旁路态显式「拨回」20（实现见 `callback.ts` rank 分支）。
+- **唯二回拨**：全系统只有两处允许状态往回走——① 上一条 N8（Delivery.status 从 REASSIGNING 回拨 ACCEPTED，rank 数值本身唯一的回落路径）；② 下表 720 行（Order.status 从 SHIPPED 回退 PREPARING）。除此之外一律单调推进；其余「想回退」的诉求（例如骑手已到店后要求退回呼叫中）一律走「取消旧单 + 重新呼叫」而不是状态倒转。
 - **总则**：Delivery 进入 TERMINAL 的任何路径（520、720、商家取消、作废、标记送达），同一条 update 内一并 `activeOrderId = null`。
 
 Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 白名单}}})` 判 count，命中 0 只记事件 + 告警：
@@ -310,7 +312,7 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 |---|---|---|
 | 310 配送中 | `PREPARING` | `SHIPPED`（不写 Shipment；订阅消息用内存伪 shipment） |
 | 520 已完成 | `SHIPPED`, `PREPARING`(漏 310) | `COMPLETED` + `completedAt`；释放 `activeOrderId` |
-| 720 运力取消 | `SHIPPED` 且 无在途 Refund、无 PENDING/APPROVED AfterSale、`completedAt` 为空 | Delivery=CANCELLED 并释放 `activeOrderId`；Order → `PREPARING`（**唯一回退例外**）+ 推送店员；清空该订单 uncalled 提醒标记；**不再自动呼叫，转人工** |
+| 720 运力取消 | `SHIPPED` 且 无在途 Refund、无 PENDING/APPROVED AfterSale、`completedAt` 为空 | Delivery=CANCELLED 并释放 `activeOrderId`；Order → `PREPARING`（**唯二回拨之二**，另一处见上文 N8）+ 推送店员；清空该订单 uncalled 提醒标记；**不再自动呼叫，转人工** |
 | 720 其他情况（PREPARING 阶段被取消、或 SHIPPED 但有在途退款/售后/已完成） | — | Delivery=CANCELLED 并释放 `activeOrderId`；PREPARING 阶段推送店员待人工重呼；其余告警人工 |
 | 店内自送 | `PREPARING` | `SHIPPED` |
 | 标记已送达 | `SHIPPED` | `COMPLETED`；释放 `activeOrderId` |
@@ -344,12 +346,18 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
   | `…/api/kd/D9999999-999` | 51 ✗ |
   推论与约束：当前域名 `api.yuegui-hotel.online` 占 23 字符，**域名上限是 24 字符**——换任何更长的 API 域名都会顶破，启动断言会拦住但也会拦住整个服务，所以换域名时必须同步缩短路径前缀（例如 `/api/k/`）。同理，`orderId` 到七位（百万单）或 `seq` 到三位（同一单重呼 100 次）也会溢出；前者对单店是几十年后的事，后者不可能发生，但都由那条启动断言与 `deliveryNo` 生成处的长度校验兜住。
 
+**应答语义（N5，终版；与微信支付回调相反）**
+微信支付回调失败可以返非 200 促使微信重推，因为商户随时能反查订单状态——重推不重推，`GET /api/orders/:id` 永远能对齐真相。快递100 **没有等价的查单接口**（`queryCourier` 只查骑手坐标，不查配送单状态），回调是唯一事实来源；对它返回非 200 会让快递100 停止重推，一旦这次回调被我方吞掉，这个状态转移就**永久丢失**，没有第二次机会补救。所以应答规则反过来：
+- **仅「数据库入库异常」返 `500`**（`prisma.$transaction` 内部抛出，捕获到 `handleKdCallback` 顶层 catch）——这是让快递100 重推的唯一诉求，出现的场景只可能是 `UNKNOWN` 认领时 `providerTaskId` 撞了另一条配送单的唯一索引之类的真实数据异常（事件表自身的 `dedupeKey` 重复早被 `recordDeliveryEvent` 内部的 P2002 吞掉，不会抛到这层）。
+- **其余一切情形一律 `200`**（`{result:true/false, returnCode, message}`，`result` 字段仅供人工核对，不影响快递100 是否重推）：查不到配送单（可能是占位落库失败的孤儿单，告警走人工核对而非等重推）、验签失败（重推同一份坏签名毫无意义）、并呼假撤单（未中标运力的 720）、事件已存在的重复回调、状态回退的乱序迟到包、`PROVIDER_STATUS_MAP` 未收录的未知状态码——统统落痕/告警后原地 200，绝不让快递100 因为我方一次可重试的失误而对同一次状态转移无限重推。
+- 三级查找、验签、状态推进的具体顺序见下方「实现要点」；任何一步的失败结果都汇入上面两条规则之一，不单独定义第三种应答。
+
 **实现要点**
 - 路由自带 `express.urlencoded({ extended:false, limit:'64kb' })`（全局中间件不动），放在公开区；IP 限流（复用 `rate-limit.ts` 写法）。
-- 三级查找：① **URL path 里的 `deliveryNo`**（最可靠，下单前就已确定，白名单 `^D\d{1,10}-\d{1,3}$`）→ ② `taskId`（白名单 `^[A-Za-z0-9_-]{1,64}$`）→ ③ `param.orderId == providerOrderId`。三者皆未命中 → `result:false` + 限频告警，不落 rawPayload。
+- 三级查找：① **URL path 里的 `deliveryNo`**（最可靠，下单前就已确定，白名单 `^D\d{1,10}-\d{1,3}$`）→ ② `taskId`（白名单 `^[A-Za-z0-9_-]{1,64}$`）→ ③ `param.orderId == providerOrderId`。三者皆未命中 → 200 + 限频告警，不落 rawPayload。
   （原设计里「按 salt 逐个试签认领最近 2 小时的 CALLING/UNKNOWN 记录」这一兜底**已删除**：`deliveryNo` 进 URL 后不再需要靠猜。）
-- 验签 `MD5(param + salt)` 大小写归一 + `timingSafeEqual`；失败同上。
-- 顺序：先 `findUnique(dedupeKey)`（存在 → 直接 200）→ insert event（P2002 吞掉）→ try { 推进 Delivery/Order 状态机 } catch { 告警 } → **无论如何**返回规定 JSON 200。
+- 验签 `MD5(param + salt)` 大小写归一 + `timingSafeEqual`；失败 200，不落状态、只留一条验签失败事件 + 限频告警。
+- 顺序：先 `findUnique(deliveryNo)` 查单 → 验签 → 并呼假撤单过滤（未中标运力的 720）→ 单事务 [insert event（`dedupeKey` 冲突 = 重复，P2002 吞掉直接短路返 200）→ 推进 Delivery/Order 状态机] → 事务后才发通知（放事务里发，遇回滚会误报）。事务整体失败（入库异常）→ 唯一的 500；事务内部「推进」这一步命中 0 行（乱序/迟到/未知状态）不算失败，只是不动状态，仍是 200。
 - 字符串截断到列宽；`latencyMs = now − updateTime`。
 
 ### 5.6 退款与配送单（D6）
@@ -369,13 +377,27 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 设置保存校验：`autoCallDelayMin === 0 || acceptGraceMin <= autoCallDelayMin <= 15`（自动呼叫不得早于顾客免费取消窗口结束，否则窗口承诺自带取消费成本）。
 
 ### 5.9 接口清单
-- 公开：`GET /local/meta`（设置公开子集 + `isOpen/nextOpenText/paused` + 门店坐标；独立于需登录的 `/orders/meta`，因菜单页需未登录可浏览）、`POST /local/quote`、`POST /kd/cb`。
+- 公开：`GET /local/meta`（设置公开子集 + `isOpen/nextOpenText/paused` + 门店坐标；独立于需登录的 `/orders/meta`，因菜单页需未登录可浏览）、`POST /local/quote`、`POST /api/kd/:deliveryNo`（回调，挂在 `/api/kd` 前缀下，路径见 §5.5；不是 `/api/local/*` 家族）。
 - 用户态：`POST /orders`（LOCAL 分支）、`GET /orders/:id`（含 delivery 白名单）、`GET /orders/:id/courier`、`POST /orders/:id/cancel-request`（D6 ②）、`PUT /orders/:id/cancel`（加 42221 前置）。
 - 管理：`GET /admin/local/orders?tab=&keyword=`（单层 Tab：待接单 / 待呼叫 / 呼叫中 / 骑手已接 / 已到店 / 配送中 / 异常 / 已完成 / 已取消退款）、`POST /:id/accept`、`POST /:id/accept-and-call`、`POST /:id/call`、`POST /:id/cancel-auto-call`、`POST /:id/tip`、`POST /:id/delivery/precancel`、`POST /:id/delivery/cancel`、`POST /:id/delivery/claim|void`、`POST /:id/self-deliver {name, phone}`、`POST /:id/delivered`、`GET /:id/delivery/events`、`POST /admin/local/circuit/reset`；`GET/PUT /admin/settings/local-delivery`、`PATCH .../store-location`（商家端一键定位）、`POST .../probe`（batchPrice 探测）、`POST .../pause`；`GET /admin/orders?deliveryType=`（默认 EXPRESS）；`pending-count` 加 `localPendingCount`。
 - 非生产：`POST /admin/system/delivery-mock {orderId, scenario}`，场景由服务端用真实 salt 构造：`advance:<status>`、`out_of_order`、`replay_last_callback`、`callback_without_update_time`、`callback_bad_sign`、`oversized_status_desc`、`create_timeout_then_callback`（下单响应超时后回调仍按 deliveryNo 命中）、`error:30004`、`error:30005`、`cancel_after_delivering`（720 在 310 后）。
 
 ### 5.10 错误码
-`42220` 超出配送范围 · `42221` 请先取消配送单 · `42222` 非营业时间 · `42223` 地址缺少定位 · `42224` 商品渠道不符 · `42225` 呼叫骑手失败(附原文) · `42226` 同城暂未开通/暂停 · `42227` 配送费已更新 · `42228` 已有进行中的配送单 · `42229` 已超过可取消时间 · `42230` 超出单次配送上限。
+`42220` 超出配送范围 · `42221` 请先取消配送单 · `42222` 非营业时间 · `42223` 地址缺少定位 · `42224` 商品渠道不符 · `42225` 呼叫/取消配送单失败(附运力方原文) · `42226` 同城暂未开通/暂停 · `42227` 配送费已更新 · `42228` 已有进行中的配送单 · `42229` 已超过可取消时间 · `42230` 超出单次配送上限 · `42232` 快递100 余额不足已熔断（充值后系统状态页点「恢复」）· `42233` 无在途配送单 · `42234` 配送单状态不允许该操作（未成单/状态未确认/仅「状态未确认」可作废）· `42235` 小费超上限或非待抢单状态 · `42236` 加小费被运力拒绝/请求超时 · `42237` 配送单状态已变化请刷新（并发保护）· `42238` 取消请求超时、状态未变化。`42232`-`42238` 均在 `services/delivery/orchestrator.ts` 抛出，详见 `docs/api.md` 附录错误码表。
+
+### 5.11 拒单（`POST /admin/orders/:id/reject`，实现于 M2，本节为原设计遗漏的补记）
+
+原设计未单列拒单流程；实现落地时确认了两条与直觉不同的决策，此处补全，序号沿用整份计划的 Global Constraints 编号：
+
+- **N3：两渠道通用**。拒单不是同城专属功能——`POST /admin/orders/:id/reject` 同时接受 EXPRESS 与 LOCAL 订单（唯一网关是订单状态，见下），挂在共享的 `routes/admin/orders.ts` 而非 `admin/local/orders.ts`。理由：店家在邮寄场景下同样会遇到「这道菜临时没了」「超出实际配送能力」等需要拒单的情况，没有必要为同一个业务动作维护两套端点。
+- **N4：终态改为 `REFUNDED`，不是 `CANCELLED`**。已付款订单拒单时，走**全额** `initiateRefund`（而非直接把订单打成 `CANCELLED`），退款成功后订单终态是 `REFUNDED`。这样做是为了不破坏退款子系统的不变式——`initiateRefund` 自带幂等（同一订单不会有两条并行退款记录）、对账（`Refund` 表记录 `outRefundNo`/金额/操作人）、以及与微信退款回调的状态联动，都是围绕「退款」这个语义建的；如果拒单绕开它直接改 `status='CANCELLED'`，退了钱却没有 `Refund` 记录，对账和「一键退款」按钮的可见性判断都会对不上。`initiateRefund` 内部命中 §5.6 的 42221 前置（有在途配送单先拦），拒单因此天然复用了「先处理配送单再退款」这条护栏。
+  待付款（`PENDING_PAYMENT`）订单没有钱可退，走原有的直接置 `CANCELLED` + 库存回滚路径，不牵扯退款子系统。
+- **接口契约**：
+  - 允许状态：`PENDING_PAYMENT` / `PAID` / `PREPARING`；`SHIPPED` 及以后（已出餐/在途）一律拒绝（42204），改走退款或售后。
+  - Body：`{ reason: 'SOLD_OUT'|'OUT_OF_RANGE'|'PAST_ACCEPT_TIME'|'CUSTOMER_CANCEL'|'OTHER', note?, soldOutProductIds?: number[] }`；`reason='OTHER'` 时 `note` 必填；`reason='SOLD_OUT'` 时 `soldOutProductIds` 必须非空且都属于本订单商品。
+  - 拒单原因原样拼进 `Order.cancelReason`（顾客可见）：`商家拒单：<原因中文><（note）>`。
+  - **售罄联动下架**：勾选的商品在同一次请求里 `status: ON_SHELF → OFF_SHELF`；这是独立小事务，退款已是既成事实，下架失败只告警不回滚（不下架的话下一位顾客照样点得到，同样的拒单流程会再走一遍）。
+  - 响应：`{ orderId, refund: <退款记录或 null>, offShelfCount, cancelReason }`。
 
 ---
 
@@ -405,7 +427,10 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 
 目标：店员不用翻 Tab 就知道「此刻该做什么」，同城单按时效驱动，邮寄单不打扰。
 
-**桌面布局（≥ md）**：
+> **界面细则以 `docs/design/workbench-ui-spec.md`（v1，店主 2026-09-03 定稿）为准**，本节以下内容是早期架构草案，与 v1 定稿在列数/归类上有出入（例如 v1 是五列「待接单/备餐中/等待配送员/配送中/已完成」、同城邮寄混排同一套列而非「四列同城 + 侧栏邮寄」）——冲突时以 UI 规格文档为准，此处仅保留仍然成立的架构性决策（`snapshot` 接口、轮询节奏、与现有页面的关系）。
+> **决策 N2**：「等待配送员」列 v1 **只放同城单**——同城 = `PREPARING` 且存在在途配送单（`Delivery.status ∈ {CALLING,ACCEPTED,ARRIVING,ARRIVED,REASSIGNING,ABNORMAL,UNKNOWN}`，异常留在本列变红而不单开列）；邮寄没有等价的「已打包待揽收」状态字段可区分于「备餐中」（`Order.status` 只有 `PREPARING` 一档，不像同城有 `Delivery` 子状态可用），因此邮寄单从「备餐中」录入运单号后直接跳「配送中」，不经过这一列。
+
+**桌面布局（≥ md，早期草案，细节以 workbench-ui-spec.md 为准）**：
 - 顶栏：营业状态/暂停开关、打印机状态灯（在线/离线/缺纸）、余额熔断红条、声音开关（首次需点击授权 AudioContext）、「新单 N」脉冲徽标。
 - 主区四列（同城）：**新订单(待接单)** → **备餐中**（子状态胶囊：待呼叫 / 呼叫中 / 骑手已接 / 已到店，各带计时）→ **配送中** → **异常/待处理**（无人接单、720、UNKNOWN、顾客申请取消、余额不足、打印失败）。每张卡：等待时长大字倒计时（>5 分钟黄、>10 分钟红）、地址 + 距离、商品摘要、备注高亮、骑手信息、**一个主按钮**（该状态下的推荐动作：接单 / 呼叫骑手 / 联系骑手 / 加小费重呼 / 处理取消）+ 「更多」菜单（其余动作、重打小票、详情）。
 - 右侧栏（邮寄）：待接单 / 待发货 / 售后待处理 三段计数 + 最近 5 单，点击跳 `/orders`。
@@ -484,7 +509,7 @@ model PrintJob {
 | 同城新订单 / 顾客申请取消（超 3 分钟未处理再推一次）/ 待抢单超时 / 运力取消 / 改派 / 备餐 20 分钟未呼叫 / 骑手接单后卡住 | 店员 | PushPlus topic + 企微 |
 | 呼叫失败(30005 重试后) | 店员 | 同上 |
 | 余额不足 30004 / 配置类错误 / 510 异常 / 配送中超时 / 下单响应超时未认领 / 回调验签失败(限频) / 定时任务失败 | 老板 | 系统告警 |
-| 配送中 | 顾客 | 订阅消息（一条） |
+| 配送中（回调 `310`，骑手取货出发） | 顾客 | 订阅消息「配送通知」单模板（**定稿**：只在 `310` 发一条；`100` 骑手接单、`520` 已送达**均不发**——省下有限的顾客授权配额，「骑手已接单」「已送达」的进度顾客走订单详情页时间线自行查看，不占用一次性订阅消息的珍贵额度） |
 | 付款成功（两渠道）/ 未接单重复播报 / 取消退款提醒 | 店内 | **云打印机出票 + 语音播报（主通道）** + 工作台响铃 + 商家端铃声 |
 | 打印失败(重试耗尽) / 打印机离线或缺纸 ≥5 分钟 / 重复播报耗尽仍未接单 | 老板 | 系统告警；打印失败时新单回退强化推送 |
 
@@ -501,7 +526,43 @@ model PrintJob {
 
 ## 10. 验证
 
-- e2e（mock provider，`LOCAL_DELIVERY_PROVIDER_MOCK=true`）场景：happy path 0→100→230→310→520；终态后迟到 310 不复活；720 后 activeOrderId 已释放且可重呼；自动呼叫每单只触发一次、有 cancelRequest 时不触发；cancel-request 快照为 CALLING 而店员处理时已 DELIVERING 仍预填全额；quoteToken 下单实收取 min；邮寄端点 ship/complete 对 LOCAL 单返回 42204；乱序（310 先于 210 不回退）；重复回调（同 updateTime 去重、缺 updateTime 用 rawBody 去重）；缺字段/超长 statusDesc 仍 200；验签失败 200 不改状态；下单响应超时后回调按 URL 里的 deliveryNo 认领并回填 taskId；回调 URL 长度上限的启动断言；30004 熔断 → 后续呼叫被拒 → reset 恢复；30005 重试后失败；720 在 310 之后：无退款/售后 → 回 PREPARING，有在途退款 → 仅告警；有有效配送单时 admin 退款 / 用户 cancel / 售后 approve 均 42221；取消配送后退款成功且 cancelFee 入账；顾客 5 分钟窗口内 cancel-request 成功、窗口外 42229；自送全流程；标记送达释放 activeOrderId；小费超上限被拒；courier 接口越权 403、非活跃态 null；`autoComplete` 不碰 LOCAL；顾客端响应不含敏感字段（断言 key 集合）。
+- e2e（mock provider，`LOCAL_DELIVERY_PROVIDER_MOCK=true`）场景。本里程碑（M2 引擎，T0-T9）已落地为 `scripts/e2e.sh` 第 **25-30 段**，**358/0** 全绿、可零间隔连跑两轮验证幂等；下表逐条勾掉已覆盖项，未覆盖项保留给后续里程碑或标注原因：
+
+  | 场景 | 状态 | e2e 段 |
+  |---|---|---|
+  | happy path 0→100→230→310→520 | ✅ | §27 |
+  | 终态后迟到 310 不复活（rank 单调，迟到 210 不回退） | ✅ | §27 |
+  | 720 后 activeOrderId 已释放且可重呼 | ✅ | §27/§28 |
+  | 自动呼叫每单只触发一次、有 cancelRequest 时不触发 | ✅ | §30 |
+  | cancel-request 快照为 CALLING 而店员处理时已 DELIVERING 仍预填全额 | ⬜ 未覆盖 | — 属 `RefundDialog` 前端预填逻辑，非服务端可断言范围，留给后台浏览器验证（见下） |
+  | quoteToken 下单实收取 min | ✅（M1 起已覆盖） | §22 |
+  | 邮寄端点 ship/complete 对 LOCAL 单返回 42204 | ✅（M1 起已覆盖） | §22 |
+  | 乱序（310 先于 210 不回退） | ✅ | §27 |
+  | 重复回调（同 updateTime 去重、缺 updateTime 用 rawBody 去重） | ✅ | §27 |
+  | 缺字段/超长 statusDesc 仍 200 | ✅（`selftest-kd100.ts` 覆盖截断；e2e 覆盖缺字段场景） | §27 + selftest |
+  | 验签失败 200 不改状态 | ✅ | §27 |
+  | 下单响应超时后回调按 URL 里的 deliveryNo 认领并回填 taskId | ✅ | §27 |
+  | 回调 URL 长度上限的启动断言 | ⬜ 未覆盖 | — 是 `config.ts` 启动期 `process.exit(1)` 断言，不在 e2e（e2e 跑在服务已启动之后）覆盖范围内；靠部署时换域名会立刻炸的方式兜底，§5.5 已写明 |
+  | 30004 熔断 → 后续呼叫被拒 → reset 恢复 | ✅ | §26 |
+  | 30005 重试后失败（ADMIN 来源不重试，直接 42225） | ✅ | §26 |
+  | 720 在 310 之后：无退款/售后 → 回 PREPARING，有在途退款 → 仅告警 | ✅（回 PREPARING 分支） | §27 |
+  | 有有效配送单时 admin 退款 / 拒单均 42221 | ✅（admin 退款、拒单两条路径） | §28/§29 |
+  | 有有效配送单时用户自助 cancel / 售后 approve 是否拦 42221 | ⬜ 未覆盖 | — 顾客侧取消走「申请取消」而非直接 `cancel`，售后 approve 路径未在本次 e2e 新增断言，留待后续补充或确认是否仍适用 |
+  | 取消配送后退款成功且 cancelFee 入账 | ✅ | §28 |
+  | 顾客 5 分钟窗口内 cancel-request 成功、窗口外 42229 | ✅（M1 起已覆盖） | §22 |
+  | 自送全流程（selfDeliver → SHIPPED → delivered → COMPLETED） | ✅ | §28 |
+  | 标记送达释放 activeOrderId | ✅ | §28 |
+  | 小费超上限被拒、运力拒绝加小费 42236 | ✅ | §28 |
+  | courier 接口非活跃态返回 `location:null` | ✅ | §28 |
+  | courier 接口越权（查他人订单）403/404 | ⬜ 未覆盖 | — 现有断言只测了本人订单的正常路径，越权路径未新增用例 |
+  | `autoComplete` 不碰 LOCAL | ✅（沿用 M1 起既有断言，LOCAL 无 Shipment 天然不受影响） | §16 |
+  | 顾客端响应不含敏感字段（`callbackSalt`/`quotedFee` 等 key 集合断言） | ✅ | §28 |
+  | 拒单：售罄联动下架 + REFUNDED 终态 | ✅（新增，原设计未列） | §29 |
+  | 拒单：两渠道通用（EXPRESS 单也能拒） | ✅（新增，原设计未列） | §29 |
+  | 拒单：待付款单走取消不走退款，库存回滚 | ✅（新增，原设计未列） | §29 |
+  | 同城 9 项兜底定时任务（呼叫超时/接单卡住/配送中超时/幽灵单/未呼叫/取消申请超时/自动呼叫/housekeeping） | ✅（新增，原设计未列） | §30 |
+  | 探测接口 `POST .../probe` | ✅（新增，原设计未列） | §28 |
+
 - `selftest-kd100.ts`：签名向量、form 编码、回调验签、错误码映射；`--integration` 只读 `batchPrice`。
 - 后台浏览器（桌面 + 375px）：工作台四列归类/主按钮/响铃（一次点击授权后触发）/打印机状态灯/手机单列；同城列表页全部按钮路径、取消并退款引导、设置页校验/试算/探测/暂停、打印机绑定/测试页/重打、分类商品渠道 Tab、邮寄订单页行为不变。
 - 打印实物联调（用户）：绑定真机 → 测试页 → 一分钱下单出票 + 语音播报 → 拔网线 5 分钟收到离线告警 → 恢复自动补打 → 不接单 2 分钟重复播报。

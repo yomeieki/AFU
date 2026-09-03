@@ -339,8 +339,7 @@ req POST "/api/orders/$LO1/pay" "$UT" >/dev/null
 R=$(req POST "/api/admin/orders/$LO1/ship" "$AT" '{"expressCompany":"顺丰","expressNo":"X"}'); assert_eq "LOCAL 单不可走邮寄发货 42204" "$(code "$R")" "42204"
 R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{"note":"不要了"}'); assert_eq "未接单不能申请取消(应走秒退) 42229" "$(code "$R")" "42229"
 R=$(req POST "/api/admin/orders/$LO1/accept" "$AT"); assert_eq "邮寄接单端点拒绝 LOCAL 42204" "$(code "$R")" "42204"
-# M1 暂借用 SQL 把订单置 PREPARING（M2 提供同城接单接口后改为调用接口）
-docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set status='PREPARING', accepted_at=NOW(3) where id=$LO1;" 2>/dev/null
+req POST "/api/admin/local/orders/$LO1/accept" "$AT" >/dev/null
 R=$(req GET "/api/orders/$LO1" "$UT"); assert_eq "窗口内 canRequestCancel=true" "$(jq -r .data.canRequestCancel <<<"$R")" "true"
 R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{"note":"不要了"}'); assert_eq "申请取消 code 0" "$(code "$R")" "0"
 R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{}'); assert_eq "重复申请 42229" "$(code "$R")" "42229"
