@@ -3,6 +3,8 @@ import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
+import { channelSchema, parseChannelQuery } from '../../utils/channel'
+import { changeCategoryChannel } from '../../services/product-channel'
 
 const router = Router()
 
@@ -11,13 +13,16 @@ const categorySchema = z.object({
   iconUrl: z.string().max(500).nullable().optional(),
   sortOrder: z.number().int().default(0),
   status: z.number().int().min(0).max(1).default(1),
+  channel: channelSchema.default('EXPRESS'),
 })
 
 // GET /api/admin/categories
-router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const channel = req.query.channel ? parseChannelQuery(req.query.channel) : undefined
     const categories = await prisma.category.findMany({
-      orderBy: { sortOrder: 'asc' },
+      where: channel ? { channel } : {},
+      orderBy: [{ channel: 'asc' }, { sortOrder: 'asc' }],
       include: { _count: { select: { products: { where: { deletedAt: null } } } } },
     })
     success(res, categories)
@@ -44,7 +49,10 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const exists = await prisma.category.findUnique({ where: { id } })
     if (!exists) throw new AppError(40401, '分类不存在', 404)
 
-    const data = categorySchema.partial().parse(req.body)
+    const { channel, ...data } = categorySchema.partial().parse(req.body)
+    if (channel && channel !== exists.channel) {
+      await changeCategoryChannel(id, channel)
+    }
     const category = await prisma.category.update({ where: { id }, data })
     success(res, category)
   } catch (e) {

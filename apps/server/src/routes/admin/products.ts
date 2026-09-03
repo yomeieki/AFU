@@ -5,6 +5,8 @@ import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { generateProductQrCode } from '../../services/qrcode'
+import { channelSchema, parseChannelQuery } from '../../utils/channel'
+import { channelOfCategory } from '../../services/product-channel'
 
 const router = Router()
 
@@ -38,7 +40,9 @@ const productSchema = z.object({
   deliveryInfo: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   status: z.enum(['ON_SHELF', 'OFF_SHELF']).default('ON_SHELF'),
-  deliveryType: z.string().max(64).default('EXPRESS'),
+  // @deprecated 兼容旧后台仍可能传入；服务端忽略，渠道以分类为准
+  deliveryType: z.string().max(64).optional(),
+  netWeightG: z.number().int().min(1).max(50_000).nullable().optional(),
   isRecommended: z.number().int().min(0).max(1).default(0),
   // 商品多图（详情轮播），按数组顺序作为 sortOrder 同步到 ProductImage
   imageUrls: z.array(z.string().max(500)).max(9).optional(),
@@ -107,9 +111,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const categoryId = req.query.categoryId ? Number(req.query.categoryId) : undefined
     const keyword = req.query.keyword as string | undefined
     const status = req.query.status as string | undefined
+    const channel = req.query.channel ? parseChannelQuery(req.query.channel) : undefined
 
     const where = {
       deletedAt: null,
+      ...(channel ? { channel } : {}),
       ...(categoryId ? { categoryId } : {}),
       ...(status ? { status } : {}),
       ...(keyword ? { name: { contains: keyword } } : {}),
@@ -140,14 +146,15 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { imageUrls, specDimensions, skus, ...data } = productSchema.parse(req.body)
-    const cat = await prisma.category.findUnique({ where: { id: data.categoryId } })
-    if (!cat) throw new AppError(40401, '分类不存在', 404)
+    const { deliveryType: _ignored, ...rest } = data
+    const channel = await channelOfCategory(prisma, rest.categoryId)
 
     const { dims, skuList } = validateSpecs(specDimensions, skus)
 
     const product = await prisma.product.create({
       data: {
-        ...data,
+        ...rest,
+        channel,
         ...(dims ? aggregateFromSkus(skuList) : {}),
         specDimensions: dims ?? Prisma.DbNull,
         ...(imageUrls?.length
@@ -182,13 +189,14 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 const batchStatusSchema = z.object({
   status: z.enum(['ON_SHELF', 'OFF_SHELF']),
   categoryId: z.number().int().positive().optional(),
+  channel: channelSchema.optional(),
 })
 
 router.post('/batch-status', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { status, categoryId } = batchStatusSchema.parse(req.body ?? {})
+    const { status, categoryId, channel } = batchStatusSchema.parse(req.body ?? {})
     const result = await prisma.product.updateMany({
-      where: { deletedAt: null, ...(categoryId ? { categoryId } : {}) },
+      where: { deletedAt: null, ...(channel ? { channel } : {}), ...(categoryId ? { categoryId } : {}) },
       data: { status },
     })
     success(res, { updated: result.count })
@@ -237,6 +245,8 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     if (!exists) throw new AppError(40401, '商品不存在', 404)
 
     const { imageUrls, specDimensions, skus, ...data } = productSchema.partial().parse(req.body)
+    const { deliveryType: _ignored, ...rest } = data
+    // 换分类时渠道跟随分类（同事务内取，防止读到并发改渠道前的旧值）
 
     // 只有请求显式携带规格字段时才动规格（partial 更新语义与 imageUrls 一致）
     const touchSpecs = specDimensions !== undefined || skus !== undefined
@@ -286,9 +296,11 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
         }
       }
 
+      const channelPatch =
+        rest.categoryId !== undefined ? { channel: await channelOfCategory(tx, rest.categoryId) } : {}
       return tx.product.update({
         where: { id },
-        data: { ...data, ...specData },
+        data: { ...rest, ...channelPatch, ...specData },
         include: skuInclude,
       })
     })

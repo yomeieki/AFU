@@ -208,9 +208,41 @@ echo "== 18. 顾客上传 =="
 R=$(curl -s -X POST "$BASE/api/upload" -H "Authorization: Bearer $UT" -F "file=@$PNG;type=image/png")
 [[ -n "$(jq -r '.data.url // empty' <<<"$R")" ]] && ok "顾客上传返回 URL" || fail "顾客上传" "$R"
 
+echo "== 19. 渠道：分类/商品 =="
+R=$(req POST /api/admin/categories "$AT" '{"name":"E2E同城分类","channel":"LOCAL","sortOrder":99}')
+LCAT=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$LCAT" ]] && ok "创建 LOCAL 分类 #$LCAT" || fail "创建 LOCAL 分类" "$R"
+assert_eq "分类 channel=LOCAL" "$(jq -r .data.channel <<<"$R")" "LOCAL"
+R=$(req POST /api/admin/categories "$AT" '{"name":"E2E邮寄分类","sortOrder":98}')
+ECAT=$(jq -r '.data.id // empty' <<<"$R"); assert_eq "默认 channel=EXPRESS" "$(jq -r .data.channel <<<"$R")" "EXPRESS"
+R=$(req POST /api/admin/products "$AT" "{\"categoryId\":$LCAT,\"name\":\"E2E凉拌黄瓜\",\"price\":1200,\"stock\":50,\"netWeightG\":300}")
+LPID=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$LPID" ]] && ok "创建同城商品 #$LPID" || fail "创建同城商品" "$R"
+assert_eq "商品 channel 随分类=LOCAL" "$(jq -r .data.channel <<<"$R")" "LOCAL"
+assert_eq "netWeightG=300" "$(jq -r .data.netWeightG <<<"$R")" "300"
+R=$(req PUT "/api/admin/products/$LPID" "$AT" "{\"categoryId\":$ECAT}")
+assert_eq "换分类后 channel 跟随=EXPRESS" "$(jq -r .data.channel <<<"$R")" "EXPRESS"
+req PUT "/api/admin/products/$LPID" "$AT" "{\"categoryId\":$LCAT}" >/dev/null
+R=$(req GET "/api/admin/products?channel=LOCAL&pageSize=50" "$AT")
+[[ "$(jq -r "[.data.list[] | select(.id==$LPID)] | length" <<<"$R")" == "1" ]] && ok "admin 列表按 channel=LOCAL 过滤含该商品" || fail "admin 列表 channel 过滤" "$R"
+R=$(req GET "/api/admin/products?channel=EXPRESS&pageSize=50" "$AT")
+[[ "$(jq -r "[.data.list[] | select(.id==$LPID)] | length" <<<"$R")" == "0" ]] && ok "EXPRESS 列表不含同城商品" || fail "EXPRESS 列表泄漏同城商品"
+R=$(req GET "/api/admin/categories?channel=LOCAL" "$AT")
+[[ "$(jq -r "[.data[] | select(.id==$LCAT)] | length" <<<"$R")" == "1" ]] && ok "admin 分类按 channel 过滤" || fail "admin 分类 channel 过滤" "$R"
+R=$(req PUT "/api/admin/categories/$LCAT" "$AT" '{"channel":"EXPRESS"}')
+assert_eq "分类改渠道级联 code 0" "$(code "$R")" "0"
+assert_eq "级联后商品 channel=EXPRESS" "$(req GET "/api/admin/products?keyword=E2E" "$AT" | jq -r '.data.list[0].channel')" "EXPRESS"
+req PUT "/api/admin/categories/$LCAT" "$AT" '{"channel":"LOCAL"}' >/dev/null
+R=$(req POST /api/admin/products/batch-status "$AT" '{"status":"OFF_SHELF","channel":"LOCAL"}')
+assert_eq "按渠道批量下架 code 0" "$(code "$R")" "0"
+assert_eq "同城商品已下架" "$(req GET "/api/admin/products?keyword=E2E" "$AT" | jq -r '.data.list[0].status')" "OFF_SHELF"
+assert_eq "邮寄商品未受影响" "$(req GET "/api/products/$PID" "$UT" | jq -r .data.status)" "ON_SHELF"
+req POST /api/admin/products/batch-status "$AT" '{"status":"ON_SHELF","channel":"LOCAL"}' >/dev/null
+
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
 rm -f "$PNG" "$R1" "$R2"
+[[ -n "${LPID:-}" ]] && req DELETE "/api/admin/products/$LPID" "$AT" >/dev/null
+[[ -n "${LCAT:-}" ]] && req DELETE "/api/admin/categories/$LCAT" "$AT" >/dev/null
+[[ -n "${ECAT:-}" ]] && req DELETE "/api/admin/categories/$ECAT" "$AT" >/dev/null
 
 echo ""
 echo "================ 通过 $PASS / 失败 $FAIL ================"
