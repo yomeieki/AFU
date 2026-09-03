@@ -416,6 +416,9 @@ rm -f "$PNG" "$R1" "$R2"
 [[ -n "${LCID:-}" ]] && req DELETE "/api/cart/$LCID" "$UT" >/dev/null
 for o in ${LO1:-} ${LO2:-}; do docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set status='CANCELLED' where id=$o and status in ('PENDING_PAYMENT','PAID','PREPARING');" 2>/dev/null; done
 
+echo "== 24. 渠道一致性 =="
+node scripts/check-channel-consistency.mjs && ok "product.channel = category.channel" || fail "渠道不一致"
+
 echo ""
 echo "================ 通过 $PASS / 失败 $FAIL ================"
 [[ $FAIL -eq 0 ]]

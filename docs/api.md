@@ -933,3 +933,54 @@
 | 42208 | 已有售后申请处理中 |
 | 42209 | 订单已超时，请重新下单 |
 | 40103 | web-view 登录凭证失效 |
+
+---
+
+## 附录 B：同城配送 API（M1）
+
+M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店报价、LOCAL 下单、顾客取消申请。骑手呼叫、配送单状态机、快递100 对接、同城看板留给 M2（见 `docs/superpowers/specs/2026-09-03-local-delivery-design.md`）。
+
+### channel 参数约定
+
+`GET /api/categories`、`GET /api/products`、`GET /api/cart` 均支持 `?channel=EXPRESS|LOCAL` 查询参数：**缺省或非法值一律按 `EXPRESS`**（`utils/channel.ts` 的 `parseChannelQuery`），保证现有小程序页面不传该参数时行为完全不变。一个分类只属于一个渠道，商品的 `channel` 冗余自所属分类（唯一写入点 `services/product-channel.ts`），不会出现商品与分类渠道不一致——`scripts/check-channel-consistency.mjs` 专门校验这一点。
+
+`POST /api/orders` 用 `deliveryType: 'EXPRESS' | 'LOCAL'`（复用订单已有列，默认 `EXPRESS`）判定渠道，下单商品的 `channel` 必须与之匹配，否则 42224。
+
+### 小程序端
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/local/meta` | 公开，无需登录。同城配送店头信息：`{ enabled, isOpen, paused, nextOpenText, businessHours, store{name,phone,province,city,district,address,latE6,lngE6}, radiusKm, radiusStraightKm, fee, prepMinutes, acceptGraceMin, limits }` |
+| `POST /api/local/quote` | 地址/坐标报价。`optionalUserAuth`：传 `addressId` 需登录（校验地址归属）；传 `latE6,lngE6` 可匿名（如未登录预览页）。Body `{ addressId?, latE6?, lngE6?, subtotal?=0 }`（金额分，`addressId` 与坐标二选一）。返回 `{ enabled, isOpen, paused, nextOpenText, inRange, distanceM, straightDistanceM, fee, minOrderAmount, belowMin, estimatedMinutes, quoteToken }`；`quoteToken` 仅在 `inRange=true` 时签发，TTL 5 分钟，下单时可携带以锁定报价（见下） |
+| `POST /api/orders`（LOCAL 分支） | `deliveryType: 'LOCAL'` 时走独立计费（`services/local-settings.ts`，**不调用**全局运费 `getShippingSettings/calcShippingFee`）：校验营业时段/暂停/门店坐标/地址坐标/配送范围/起送门槛/单次件数与重量上限。可选传 `quoteToken`（`/local/quote` 返回的令牌）：实收运费取 `min(token.fee, 重算 fee)`，仅当重算更贵时才报 42227，让顾客在浏览到下单之间的正常延迟不必重新报价 |
+| `POST /api/orders/:id/cancel-request` | 同城订单被接单（`PREPARING`）后 `acceptGraceMin` 分钟宽限期内，顾客可申请取消（订单状态**不变**，交由店员在后台确认后全额退款；不是自助取消）。Body `{ note? }` → `{ cancelRequestedAt }`。窗口外或已申请过 → 42229。M1 无配送单，`cancelRequestDeliveryStatus` 快照字段恒为 `NONE`（M2 起改为快照当时有效配送单状态） |
+
+### 管理端
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/admin/settings/local-delivery` | 读取完整同城配送设置（门店坐标/营业时段/运费阶梯/起送门槛/配送半径/接单宽限期/单次上限等），结构见 `LocalDeliverySettings`（`services/local-settings.ts`） |
+| `PUT /api/admin/settings/local-delivery` | 全量保存。服务端先 `sanitizeLocalSettings` 再校验；`enabled=true`（开启同城配送总开关）时走更严格的 `validateForEnable`（例如必须已设置门店坐标） |
+| `PATCH /api/admin/settings/local-delivery/store-location` | 单独更新门店坐标 `{ latE6, lngE6 }`（商家端「一键定位」用，不必先拉全量设置再整份 PUT） |
+| `POST /api/admin/settings/local-delivery/pause` | 临时暂停接单 `{ reason, until? }`（ISO datetime，缺省不限时） |
+| `DELETE /api/admin/settings/local-delivery/pause` | 取消暂停 |
+
+共享的邮寄端点 `POST /api/admin/orders/:id/accept|ship|complete` 命中 `deliveryType='LOCAL'` 的订单一律返回 42204「同城订单请在同城看板操作」（M1 尚无同城看板，这条防线先挡住误操作；避免给 LOCAL 订单写出 `Shipment` 记录）。
+
+### 新错误码（11 个）
+
+| code | HTTP | 含义 | 出现位置 |
+|---|---|---|---|
+| 42204 | 400 | 同城订单请在同城看板操作 | 邮寄端点 `admin/orders/:id/{accept,ship,complete}` 命中 LOCAL 订单（沿用既有「订单状态错误」码，非新增码值，此处为新用法） |
+| 42210 | 400 | 同城配送未达起送金额 | `POST /api/orders`（LOCAL 分支）/ `POST /api/local/quote`（沿用既有「未达起送门槛」码，LOCAL 走独立门槛 `minOrderAmount`） |
+| 42220 | 400 | 超出配送范围 | `POST /api/orders`（LOCAL）、`POST /api/local/quote` 隐含在 `inRange=false` |
+| 42222 | 400 | 当前非营业时间 | `POST /api/orders`（LOCAL 分支下单时校验；`/local/quote` 只提示不拦截） |
+| 42223 | 400 | 地址缺少定位（未在地图上选点） | `POST /api/local/quote`、`POST /api/orders`（LOCAL） |
+| 42224 | 400 | 商品渠道与下单渠道不符 | `POST /api/orders` 逐行校验 `product.channel === channelOfDeliveryType(deliveryType)` |
+| 42226 | 400 | 同城配送未开通 / 已暂停 / 门店未设坐标 | `POST /api/local/quote`、`POST /api/orders`（LOCAL） |
+| 42227 | 400 | 配送费已更新，请刷新后重新提交 | `POST /api/orders`（LOCAL，携带 `quoteToken` 且重算运费更贵时） |
+| 42229 | 400 | 已超过可取消时间 / 已提交过取消申请 | `POST /api/orders/:id/cancel-request` |
+| 42230 | 400 | 超出单次配送件数/重量上限 | `POST /api/orders`（LOCAL） |
+| 42231 | 400 | 该分类下有待付款订单，暂不可切换渠道 | `PUT /api/admin/categories/:id`（改 `channel` 时，`services/product-channel.ts`） |
+
+> 上述 11 个码值均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出；`42221`（请先取消配送单）、`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）三个码值已在设计中预留，但业务逻辑属于 M2（依赖尚未实现的 `Delivery` 配送单模型），M1 代码不会抛出。

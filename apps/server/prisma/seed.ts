@@ -49,9 +49,11 @@ async function main() {
         { name: '预包装食品', sortOrder: 3 },
         { name: '卤味', sortOrder: 4 },
         { name: '素食', sortOrder: 5 },
+        { name: '同城·凉菜', sortOrder: 10, channel: 'LOCAL' },
+        { name: '同城·卤味', sortOrder: 11, channel: 'LOCAL' },
       ],
     })
-    console.log('✅ 创建商品分类：熟食 / 礼盒 / 预包装食品 / 卤味 / 素食')
+    console.log('✅ 创建商品分类：熟食 / 礼盒 / 预包装食品 / 卤味 / 素食 / 同城·凉菜 / 同城·卤味')
   } else {
     console.log('ℹ️  商品分类已存在，跳过')
   }
@@ -82,7 +84,7 @@ async function main() {
             deliveryInfo: '支持顺丰快递，次日达',
             description: '选用优质猪头，秘制卤制，口感鲜嫩，回味无穷。',
             status: 'ON_SHELF',
-            deliveryType: 'EXPRESS,LOCAL',
+            deliveryType: 'EXPRESS',
             isRecommended: 1,
             salesCount: 256,
           },
@@ -117,7 +119,7 @@ async function main() {
             deliveryInfo: '顺丰冷链发货',
             description: '精选五花肉，蜜汁腌制，炭火烤制，色泽红亮。',
             status: 'ON_SHELF',
-            deliveryType: 'EXPRESS,LOCAL',
+            deliveryType: 'EXPRESS',
             isRecommended: 0,
             salesCount: 89,
           },
@@ -177,6 +179,17 @@ async function main() {
         ],
       })
       console.log('✅ 创建示例商品 6 个')
+    }
+
+    const catLocal = await prisma.category.findFirst({ where: { name: '同城·凉菜' } })
+    if (catLocal) {
+      await prisma.product.createMany({
+        data: [
+          { categoryId: catLocal.id, channel: 'LOCAL', name: '凉拌黄瓜', price: 1200, stock: 50, unit: '份', netWeightG: 300, status: 'ON_SHELF', description: '现拌现送' },
+          { categoryId: catLocal.id, channel: 'LOCAL', name: '夫妻肺片', price: 2800, stock: 30, unit: '份', netWeightG: 350, status: 'ON_SHELF', isRecommended: 1 },
+        ],
+      })
+      console.log('✅ 创建同城演示商品 2 个：凉拌黄瓜 / 夫妻肺片')
     }
   } else {
     console.log('ℹ️  商品已存在，跳过')
