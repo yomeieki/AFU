@@ -611,6 +611,75 @@ assert_eq "迟到回调认领 http 200" "$(kd_cb "$CBD3" "$LATET" 0 '并呼抢�
 assert_eq "UNKNOWN→CALLING（认领成功）" "$(dstat $CBO3)" "CALLING"
 assert_eq "认领写入 taskId" "$(req GET "/api/admin/local/orders/$CBO3/delivery" "$AT" | jq -r .data.delivery.providerTaskId)" "$LATET"
 
+echo "== 28. 配送单操作与资金联动 =="
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+OPO1=$(mk_local_paid); req POST "/api/admin/local/orders/$OPO1/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$OPO1/call" "$AT"); OPD1=$(jq -r .data.deliveryNo <<<"$R")
+OPT1=$(req GET "/api/admin/local/orders/$OPO1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+# —— 加小费（CALLING 才能加；上限来自设置 tip.maxPerCall=2000/maxPerOrder=5000）
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":500}'); assert_eq "加小费 code 0" "$(code "$R")" "0"
+assert_eq "tipFee 累加 500" "$(jq -r .data.tipFeeFen <<<"$R")" "500"
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":2100}'); assert_eq "超单次上限 42235" "$(code "$R")" "42235"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"addTip","directive":{"kind":"error","code":"50000"}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":500}'); assert_eq "运力拒绝加小费 42236" "$(code "$R")" "42236"
+# —— 42221：有在途配送单不准退款（admin 退款入口 amount 必填，取整单金额）
+OPAMT=$(req GET "/api/admin/orders/$OPO1" "$AT" | jq -r .data.actualAmount)
+R=$(req POST "/api/admin/orders/$OPO1/refund" "$AT" "{\"amount\":$OPAMT,\"reason\":\"e2e 测 42221\"}")
+assert_eq "在途配送单挡退款 42221" "$(code "$R")" "42221"
+# —— 预估取消费 + 取消：CALLING 阶段取消，订单留在 PREPARING 可重呼
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/precancel" "$AT"); assert_eq "precancel code 0" "$(code "$R")" "0"
+assert_eq "预估取消费 200" "$(jq -r .data.cancelFeeFen <<<"$R")" "200"
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/cancel" "$AT" '{"reason":"e2e 取消"}'); assert_eq "取消 code 0" "$(code "$R")" "0"
+assert_eq "取消后 CANCELLED" "$(dstat $OPO1)" "CANCELLED"
+assert_eq "订单留在 PREPARING" "$(req GET "/api/admin/orders/$OPO1" "$AT" | jq -r .data.status)" "PREPARING"
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/cancel" "$AT"); assert_eq "无在途单再取消 42233" "$(code "$R")" "42233"
+# 取消后退款可通过（资金联动闭环）
+R=$(req POST "/api/admin/orders/$OPO1/refund" "$AT" "{\"amount\":$OPAMT,\"reason\":\"e2e 拒后退款\"}"); assert_eq "取消配送后退款 code 0" "$(code "$R")" "0"
+assert_eq "订单 → REFUNDED" "$(req GET "/api/admin/orders/$OPO1" "$AT" | jq -r .data.status)" "REFUNDED"
+# —— 取消超时（42238）：状态必须原地不动
+OPO2=$(mk_local_paid); req POST "/api/admin/local/orders/$OPO2/accept" "$AT" >/dev/null
+req POST "/api/admin/local/orders/$OPO2/call" "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"timeout"}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$OPO2/delivery/cancel" "$AT"); assert_eq "取消超时 42238" "$(code "$R")" "42238"
+assert_eq "超时后仍 CALLING（未误终态化）" "$(dstat $OPO2)" "CALLING"
+req POST "/api/admin/local/orders/$OPO2/delivery/cancel" "$AT" >/dev/null   # 清场：真取消
+# —— 自己送 + 标记送达
+OPO3=$(mk_local_paid); req POST "/api/admin/local/orders/$OPO3/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$OPO3/self-deliver" "$AT" '{"name":"阿福","phone":"15309003232"}')
+assert_eq "自己送 code 0" "$(code "$R")" "0"
+assert_eq "订单 →SHIPPED" "$(req GET "/api/admin/orders/$OPO3" "$AT" | jq -r .data.status)" "SHIPPED"
+R=$(req GET "/api/admin/local/orders/$OPO3/delivery" "$AT")
+assert_eq "SELF 配送单 DELIVERING" "$(jq -r .data.delivery.status <<<"$R")" "DELIVERING"
+assert_eq "provider=SELF" "$(jq -r .data.delivery.provider <<<"$R")" "SELF"
+R=$(req POST "/api/admin/local/orders/$OPO3/delivered" "$AT"); assert_eq "标记送达 code 0" "$(code "$R")" "0"
+assert_eq "订单 →COMPLETED" "$(req GET "/api/admin/orders/$OPO3" "$AT" | jq -r .data.status)" "COMPLETED"
+assert_eq "配送单 →DELIVERED" "$(dstat $OPO3)" "DELIVERED"
+R=$(req POST "/api/admin/local/orders/$OPO3/delivered" "$AT"); assert_eq "重复标记送达 42233" "$(code "$R")" "42233"
+# 有在途单时不准自己送（复用 OPO2：清场取消后订单仍是已接单 PREPARING，重新呼叫即可；
+# 省一笔 /pay——本段已有 3 笔同城下单，整条 e2e 的 /pay 调用总数须压在 payLimiter 20/分钟以内）
+OPO4=$OPO2
+req POST "/api/admin/local/orders/$OPO4/call" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$OPO4/self-deliver" "$AT" '{"name":"阿福","phone":"15309003232"}')
+assert_eq "在途单挡自己送 42228" "$(code "$R")" "42228"
+# —— 顾客端可见性：白名单字段 + 位置接口 + 取消申请快照
+OPT4=$(req GET "/api/admin/local/orders/$OPO4/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+OPD4=$(req GET "/api/admin/local/orders/$OPO4/delivery" "$AT" | jq -r .data.delivery.deliveryNo)
+kd_cb "$OPD4" "$OPT4" 100 '骑手已接单' '2026-09-04 13:00:00' '赵骑手' '13933334444' >/dev/null
+R=$(req GET "/api/orders/$OPO4" "$UT")
+assert_eq "顾客可见骑手姓名" "$(jq -r .data.delivery.courierName <<<"$R")" "赵骑手"
+assert_eq "顾客可见状态标签" "$(jq -r .data.delivery.statusLabel <<<"$R")" "骑手已接单"
+assert_eq "salt 不外泄" "$(jq -r '.data.delivery | has("callbackSalt")' <<<"$R")" "false"
+assert_eq "费用不外泄" "$(jq -r '.data.delivery | has("quotedFee")' <<<"$R")" "false"
+R=$(req GET "/api/orders/$OPO4/courier" "$UT"); assert_eq "位置接口 code 0" "$(code "$R")" "0"
+assert_eq "mock 无位置 → null" "$(jq -r .data.location <<<"$R")" "null"
+R=$(req POST "/api/orders/$OPO4/cancel-request" "$UT" '{"note":"e2e 快照"}'); assert_eq "取消申请 code 0" "$(code "$R")" "0"
+assert_eq "快照真实配送状态" "$(req GET "/api/admin/orders/$OPO4" "$AT" | jq -r .data.cancelRequestDeliveryStatus)" "ACCEPTED"
+req POST "/api/admin/local/orders/$OPO4/delivery/cancel" "$AT" >/dev/null   # 清场
+# —— 探测接口（门店坐标已在第 21 段设置）
+R=$(req POST /api/admin/settings/local-delivery/probe "$AT" '{"latE6":29350000,"lngE6":104790000}')
+assert_eq "探测 code 0" "$(code "$R")" "0"
+assert_eq "mock 报价 500" "$(jq -r .data.feeFen <<<"$R")" "500"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

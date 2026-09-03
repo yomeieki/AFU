@@ -12,6 +12,7 @@ import {
   getLocalSettings, setLocalSettings, patchLocalSettings, sanitizeLocalSettings,
   validateLocalSettings, validateForEnable, validateRawLocalSettings,
 } from '../../services/local-settings'
+import { getDeliveryProvider } from '../../services/delivery/provider'
 
 const router = Router()
 
@@ -95,6 +96,20 @@ router.delete('/local-delivery/pause', async (_req, res, next) => {
   } catch (e) {
     next(e)
   }
+})
+
+// POST /local-delivery/probe — 用当前门店坐标 + 一个探测点试算运力报价（不落库、不下单）
+router.post('/local-delivery/probe', async (req, res, next) => {
+  try {
+    const { latE6, lngE6 } = locationSchema.parse(req.body)
+    const s = await getLocalSettings()
+    if (s.store.latE6 === null || s.store.lngE6 === null) throw new AppError(42226, '门店尚未设置坐标')
+    const r = await getDeliveryProvider().price({
+      sender: { name: s.store.name, mobile: s.store.phone, province: s.store.province, city: s.store.city, district: s.store.district, address: s.store.address, latE6: s.store.latE6, lngE6: s.store.lngE6 },
+      receiver: { name: '探测', mobile: '13800000000', province: s.store.province, city: s.store.city, district: s.store.district, address: '探测点', latE6, lngE6 },
+    })
+    res.json({ code: 0, message: 'ok', data: { feeFen: r.feeFen, distanceM: r.distanceM } })
+  } catch (e) { next(e) }
 })
 
 export default router

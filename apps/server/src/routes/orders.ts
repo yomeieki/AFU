@@ -17,6 +17,8 @@ import { channelOfDeliveryType } from '../utils/channel'
 import {
   getLocalSettings, isOpenNow, isPaused, nextOpenText, billableDistanceM, calcLocalFee, estimateMinutes, verifyQuote,
 } from '../services/local-settings'
+import { DELIVERY_STATUS_LABEL } from '../services/delivery/state'
+import { getDeliveryProvider } from '../services/delivery/provider'
 
 const router = Router()
 
@@ -336,6 +338,55 @@ router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => 
   }
 })
 
+/**
+ * 顾客端配送单可见字段白名单——绝不含 callbackSalt / quotedFee / actualFee / providerTaskId
+ * 等运营/结算敏感字段。新增字段前先想一遍是不是也该进白名单，而不是直接展开整行。
+ */
+function customerDeliveryView(d: { status: string; courierName: string | null; courierMobile: string | null; courierCompany: string | null; pickedUpAt: Date | null; deliveredAt: Date | null }) {
+  return {
+    status: d.status,
+    statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status,
+    courierName: d.courierName,
+    courierMobile: d.courierMobile,
+    courierCompany: d.courierCompany,
+    pickedUpAt: d.pickedUpAt,
+    deliveredAt: d.deliveredAt,
+  }
+}
+
+// 骑手位置 20 秒进程内缓存：避免顾客端轮询把 queryCourier 打爆
+const courierCache = new Map<number, { at: number; loc: { latE6: number; lngE6: number } | null }>()
+const COURIER_CACHE_TTL_MS = 20 * 1000
+const COURIER_LIVE_STATUSES = ['ACCEPTED', 'ARRIVING', 'ARRIVED', 'DELIVERING']
+
+// GET /api/orders/:id/courier — 骑手位置（本人订单；仅在途单且已上路才查）
+// 注册在 GET /:id 之前防吞：虽然 /:id 只匹配单段路径本不会吞掉 /:id/courier，
+// 但两个路由都以 /:id 开头，放在前面更直观，也避免未来改动引入吞噬风险。
+router.get('/:id/courier', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const userId = req.userId!
+    const order = await prisma.order.findFirst({ where: { id, userId }, select: { id: true } })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+
+    const delivery = await prisma.delivery.findFirst({ where: { activeOrderId: id }, select: { id: true, status: true, providerTaskId: true } })
+    if (!delivery || !delivery.providerTaskId || !COURIER_LIVE_STATUSES.includes(delivery.status)) {
+      success(res, { location: null })
+      return
+    }
+    const cached = courierCache.get(delivery.id)
+    if (cached && Date.now() - cached.at < COURIER_CACHE_TTL_MS) {
+      success(res, { location: cached.loc })
+      return
+    }
+    const loc = await getDeliveryProvider().queryCourier({ taskId: delivery.providerTaskId })
+    courierCache.set(delivery.id, { at: Date.now(), loc })
+    success(res, { location: loc })
+  } catch (e) {
+    next(e)
+  }
+})
+
 // GET /api/orders/:id
 router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -363,6 +414,11 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const { afterSales, ...rest } = order
     const remaining = remainingRefundable(order)
     const activeAfterSale = afterSales[0] && ['PENDING', 'APPROVED'].includes(afterSales[0].status) ? afterSales[0] : null
+    let delivery: ReturnType<typeof customerDeliveryView> | null = null
+    if (order.deliveryType === 'LOCAL') {
+      const d = await prisma.delivery.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' } })
+      delivery = d ? customerDeliveryView(d) : null
+    }
     success(res, {
       ...withPayExpire(rest),
       ...(await cancelWindowOf(order)),
@@ -370,6 +426,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       // 可申请售后：已发货/已完成、还有可退余额、当前无处理中的售后单
       canApplyAfterSale: ['SHIPPED', 'COMPLETED'].includes(order.status) && remaining > 0 && !activeAfterSale,
       subscribeTemplateIds: getSubscribeTemplateIds(),
+      delivery,
     })
   } catch (e) {
     next(e)
@@ -394,11 +451,13 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     if (!win.canRequestCancel) {
       throw new AppError(42229, order.status === 'PAID' ? '商家尚未接单，请直接申请退款' : '已超过可取消时间，如有问题请联系商家')
     }
-    // M2 接入配送单后此处改为快照有效 Delivery 的状态；M1 无配送单一律 NONE
+    // 快照有效 Delivery 的当前状态（无在途配送单则 NONE）：店员处理取消申请时据此判断
+    // 骑手是否已在路上，而不是等到点开配送详情才发现——申请那一刻的状态才是决策依据。
     const cancelRequestedAt = new Date()
+    const snapshotStatus = (await prisma.delivery.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE'
     const moved = await prisma.order.updateMany({
       where: { id, status: 'PREPARING', cancelRequestedAt: null },
-      data: { cancelRequestedAt, cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: 'NONE' },
+      data: { cancelRequestedAt, cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: snapshotStatus },
     })
     // 真并发兜底：两个请求同时读到 cancelRequestedAt=null，只有一个能写入
     if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')

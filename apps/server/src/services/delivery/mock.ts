@@ -9,7 +9,7 @@ import { _mapReturnCode, kd100Provider } from './kd100'
 
 export type MockDirective =
   | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number }
-  | { kind: 'error'; code: '30001' | '30002' | '30003' | '30004' | '30005' | '30006' }
+  | { kind: 'error'; code: '30001' | '30002' | '30003' | '30004' | '30005' | '30006' | '50000' }
   | { kind: 'timeout' }
 
 const queues = new Map<string, MockDirective[]>()

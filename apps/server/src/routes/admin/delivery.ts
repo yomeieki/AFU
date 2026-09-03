@@ -1,8 +1,11 @@
 import { Router, Request, Response, NextFunction } from 'express'
+import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
-import { callRider, voidUnknownDelivery } from '../../services/delivery/orchestrator'
+import {
+  callRider, voidUnknownDelivery, precancelDelivery, cancelDelivery, addTip, selfDeliver, markDelivered,
+} from '../../services/delivery/orchestrator'
 
 const router = Router()
 
@@ -66,6 +69,56 @@ router.get('/:id/delivery', async (req: Request, res: Response, next: NextFuncti
       include: { events: { orderBy: { id: 'asc' } } },
     })
     success(res, { delivery: delivery ?? null, events: delivery?.events ?? [] })
+  } catch (e) { next(e) }
+})
+
+// POST /api/admin/local/orders/:id/delivery/precancel — 预估取消费（不真取消）
+router.post('/:id/delivery/precancel', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    success(res, await precancelDelivery(id))
+  } catch (e) { next(e) }
+})
+
+const cancelSchema = z.object({ reason: z.string().trim().max(255).optional() })
+// POST /api/admin/local/orders/:id/delivery/cancel — 取消在途配送单
+router.post('/:id/delivery/cancel', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const { reason } = cancelSchema.parse(req.body ?? {})
+    success(res, await cancelDelivery({ orderId: id, operator: req.adminUsername ?? 'admin', reason }))
+  } catch (e) { next(e) }
+})
+
+const tipSchema = z.object({ amount: z.number().int().min(1).max(100000) })
+// POST /api/admin/local/orders/:id/delivery/tip — 加小费
+router.post('/:id/delivery/tip', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const { amount } = tipSchema.parse(req.body ?? {})
+    success(res, await addTip({ orderId: id, amountFen: amount, operator: req.adminUsername ?? 'admin' }))
+  } catch (e) { next(e) }
+})
+
+const selfDeliverSchema = z.object({
+  name: z.string().trim().min(1).max(32),
+  phone: z.string().trim().min(5).max(20),
+})
+// POST /api/admin/local/orders/:id/self-deliver — 店内自送
+router.post('/:id/self-deliver', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const { name, phone } = selfDeliverSchema.parse(req.body ?? {})
+    success(res, await selfDeliver({ orderId: id, name, phone, operator: req.adminUsername ?? 'admin' }))
+  } catch (e) { next(e) }
+})
+
+// POST /api/admin/local/orders/:id/delivered — 标记已送达
+router.post('/:id/delivered', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    await markDelivered({ orderId: id, operator: req.adminUsername ?? 'admin' })
+    success(res, {})
   } catch (e) { next(e) }
 })
 

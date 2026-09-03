@@ -16,6 +16,7 @@ import { createRefund, getRefundNotifyUrl, validatePayConfig, WechatRefundError 
 import { notifyRefundResult } from './order-notify'
 import { notifySystemAlert } from './notify'
 import { sendRefundSubscribeMessage } from './subscribe-message'
+import { DELIVERY_STATUS_LABEL } from './delivery/state'
 
 /** 在途态：占用 activeOrderId，阻止同一订单并发发起 */
 export const ACTIVE_REFUND_STATUSES = ['PENDING', 'PROCESSING', 'ABNORMAL'] as const
@@ -75,6 +76,14 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   }
   if (order.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))) {
     throw new AppError(42205, '该订单已有退款处理中')
+  }
+  // 42221：同城单有在途配送单先取消配送再退款（骑手在路上把钱退了 = 白送一单）。
+  // 一处拦截覆盖全部 4 个 initiateRefund 调用点（admin 退款/顾客取消/售后同意/拒单）。
+  if (order.deliveryType === 'LOCAL' && !['COMPLETED', 'REFUNDED'].includes(order.status)) {
+    const activeDelivery = await prisma.delivery.findFirst({ where: { activeOrderId: orderId }, select: { status: true } })
+    if (activeDelivery) {
+      throw new AppError(42221, `该订单有在途配送单（${DELIVERY_STATUS_LABEL[activeDelivery.status] ?? activeDelivery.status}），请先取消配送再退款`)
+    }
   }
   if (!order.payment || order.payment.status !== 'SUCCESS') {
     throw new AppError(42207, '订单无成功支付记录，无法退款')

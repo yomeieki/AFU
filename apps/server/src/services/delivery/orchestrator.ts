@@ -16,6 +16,8 @@ import { isCircuitTripped, tripCircuit } from './circuit'
 import { recordDeliveryEvent, adminEventKey, trunc } from './events'
 import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert } from '../order-notify'
+import { TERMINAL } from './state'
+import { ACTIVE_REFUND_STATUSES } from '../refund'
 
 export async function getActiveDelivery(orderId: number) {
   return prisma.delivery.findFirst({ where: { activeOrderId: orderId } })
@@ -144,4 +146,113 @@ export async function voidUnknownDelivery(input: { orderId: number; operator: st
   } })
   if (moved.count === 0) throw new AppError(42237, '配送单状态已变化，请刷新')
   await recordDeliveryEvent(prisma, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: '人工作废（快递100 后台确认无单）', operator: input.operator })
+}
+
+async function requireActive(orderId: number) {
+  const d = await getActiveDelivery(orderId)
+  if (!d) throw new AppError(42233, '无在途配送单')
+  if (d.status === 'UNKNOWN') throw new AppError(42234, '配送单状态未确认：请等回调认领，或确认快递100 后台无单后作废')
+  return d
+}
+/** 720/主动取消 共用：骑手已取货后取消 → SHIPPED 回退 PREPARING（三重护栏） */
+async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number) {
+  const o = await tx.order.findUnique({ where: { id: orderId }, include: { refunds: { select: { status: true } }, afterSales: { where: { status: { in: ['PENDING', 'APPROVED'] } }, select: { id: true } } } })
+  if (!o || o.completedAt) return
+  if (o.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))) return
+  if (o.afterSales.length > 0) return
+  await tx.order.updateMany({ where: { id: orderId, deliveryType: 'LOCAL', status: 'SHIPPED' }, data: { status: 'PREPARING' } })
+}
+
+export async function precancelDelivery(orderId: number): Promise<{ cancelFeeFen: number | null }> {
+  const d = await requireActive(orderId)
+  if (!d.providerTaskId) throw new AppError(42234, '配送单尚未成单，无法预估取消费')
+  return { cancelFeeFen: (await getDeliveryProvider().precancelOrder({ taskId: d.providerTaskId })).cancelFeeFen }
+}
+
+export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string }): Promise<{ cancelFeeFen: number | null }> {
+  const d = await requireActive(input.orderId)
+  let cancelFeeFen: number | null = 0
+  if (d.provider !== 'SELF' && d.providerTaskId) {
+    try {
+      cancelFeeFen = (await getDeliveryProvider().cancelOrder({ taskId: d.providerTaskId, reason: input.reason ?? '商家取消' })).cancelFeeFen
+    } catch (e) {
+      if (e instanceof ProviderError && e.kind === 'TIMEOUT') throw new AppError(42238, '取消请求超时，请稍后重试（状态未变化）')
+      if (e instanceof ProviderError) throw new AppError(42225, `取消配送单失败：${e.message}`)
+      throw e
+    }
+  }
+  await prisma.$transaction(async (tx) => {
+    const moved = await tx.delivery.updateMany({ where: { id: d.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(input.reason, 255) ?? '商家取消', cancelFee: cancelFeeFen ?? 0 } })
+    if (moved.count === 0) throw new AppError(42237, '配送单状态已变化，请刷新')
+    await rollbackOrderAfterCancel(tx, input.orderId)
+    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）`, operator: input.operator })
+  })
+  return { cancelFeeFen }
+}
+
+export async function addTip(input: { orderId: number; amountFen: number; operator: string }): Promise<{ tipFeeFen: number }> {
+  const d = await requireActive(input.orderId)
+  if (d.status !== 'CALLING') throw new AppError(42235, '仅待抢单状态可加小费')
+  const s = await getLocalSettings()
+  if (input.amountFen > s.tip.maxPerCall) throw new AppError(42235, `单次小费上限 ¥${(s.tip.maxPerCall / 100).toFixed(0)}`)
+  if (d.tipFee + input.amountFen > s.tip.maxPerOrder) throw new AppError(42235, `本单小费累计上限 ¥${(s.tip.maxPerOrder / 100).toFixed(0)}，已加 ¥${(d.tipFee / 100).toFixed(2)}`)
+  if (!d.providerTaskId) throw new AppError(42234, '配送单尚未成单')
+  try {
+    await getDeliveryProvider().addTip({ taskId: d.providerTaskId, amountFen: input.amountFen })
+  } catch (e) {
+    if (e instanceof ProviderError && e.kind === 'TIMEOUT') throw new AppError(42236, '加小费请求超时，请稍后在配送明细里核对是否生效')
+    if (e instanceof ProviderError) throw new AppError(42236, `加小费被运力拒绝：${e.message}`)
+    throw e
+  }
+  const updated = await prisma.$transaction(async (tx) => {
+    const r = await tx.delivery.update({ where: { id: d.id }, data: { tipFee: { increment: input.amountFen } }, select: { tipFee: true } })
+    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `加小费 ¥${(input.amountFen / 100).toFixed(2)}（累计 ¥${(r.tipFee / 100).toFixed(2)}）`, operator: input.operator })
+    return r
+  })
+  return { tipFeeFen: updated.tipFee }
+}
+
+export async function selfDeliver(input: { orderId: number; name: string; phone: string; operator: string }): Promise<{ deliveryId: number; deliveryNo: string }> {
+  const order = await prisma.order.findUnique({ where: { id: input.orderId } })
+  if (!order) throw new AppError(40401, '订单不存在', 404)
+  if (order.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单')
+  if (order.status !== 'PREPARING') throw new AppError(42204, `订单状态为 ${order.status}，仅备餐中订单可自己送`)
+  const existing = await getActiveDelivery(input.orderId)
+  if (existing) {
+    if (existing.status === 'UNKNOWN') throw new AppError(42234, '有状态未确认的配送单，请先作废')
+    throw new AppError(42228, '已有在途配送单，请先取消再改自己送')
+  }
+  const seq = (await prisma.delivery.count({ where: { orderId: input.orderId } })) + 1
+  const deliveryNo = `D${input.orderId}-${seq}`
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const now = new Date()
+      const d = await tx.delivery.create({ data: {
+        orderId: input.orderId, orderNo: order.orderNo, deliveryNo, activeOrderId: input.orderId,
+        provider: 'SELF', status: 'DELIVERING', statusRank: 50,
+        callbackSalt: crypto.randomBytes(8).toString('hex'),
+        courierName: trunc(input.name, 64), courierMobile: trunc(input.phone, 20),
+        calledAt: now, acceptedAt: now, pickedUpAt: now, operator: trunc(input.operator, 64),
+      } })
+      // 注意：Order 没有 shippedAt 列（发货时间只存在于 Shipment，而 LOCAL 单永不写 Shipment）。
+      // 同城单的「出发时间」以 Delivery.pickedUpAt 为准。
+      const moved = await tx.order.updateMany({ where: { id: input.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED' } })
+      if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
+      await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `店内自送：${input.name} ${input.phone}`, operator: input.operator })
+      return { deliveryId: d.id, deliveryNo }
+    })
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw new AppError(42228, '已有在途配送单')
+    throw e
+  }
+}
+
+export async function markDelivered(input: { orderId: number; operator: string }): Promise<void> {
+  const d = await requireActive(input.orderId)
+  await prisma.$transaction(async (tx) => {
+    const moved = await tx.delivery.updateMany({ where: { id: d.id, status: { notIn: [...TERMINAL] } }, data: { status: 'DELIVERED', statusRank: 100, activeOrderId: null, deliveredAt: new Date() } })
+    if (moved.count === 0) throw new AppError(42237, '配送单状态已变化，请刷新')
+    await tx.order.updateMany({ where: { id: input.orderId, deliveryType: 'LOCAL', status: { in: ['PREPARING', 'SHIPPED'] } }, data: { status: 'COMPLETED', completedAt: new Date() } })
+    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: '店员标记已送达', operator: input.operator })
+  })
 }
