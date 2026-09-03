@@ -217,7 +217,17 @@ export async function addTip(input: { orderId: number; amountFen: number; operat
       where: { id: d.id, status: 'CALLING', tipFee: { lte: s.tip.maxPerOrder - input.amountFen } },
       data: { tipFee: { increment: input.amountFen } },
     })
-    if (moved.count === 0) throw new AppError(42235, '小费已达上限或配送单状态已变化，请刷新后再试')
+    if (moved.count === 0) {
+      // 钱已经真的加到运力方了，本地却没记上。照 callRider 落库失败的先例发告警：
+      // 不告警的话这笔支出既不在配送单上、也不在事件流里，对账时无从查起，
+      // 而操作员看到的只是「请刷新重试」，很可能再加一次 = 再花一次钱。
+      notifySystemAlert('加小费已扣费但未记账', [
+        `配送单 ${d.deliveryNo}（订单 ${d.orderNo}）`,
+        `本次 ¥${(input.amountFen / 100).toFixed(2)} 已提交运力方，但本地写入未命中（已达累计上限或配送单已离开待抢单状态）`,
+        '请到快递100 后台核对实际扣费，勿直接重试',
+      ], { key: `dlv-tip-lost:${d.id}` })
+      throw new AppError(42235, '小费已达上限或配送单状态已变化。本次加价可能已在运力方生效，请先刷新核对再决定是否重试')
+    }
     const r = await tx.delivery.findUniqueOrThrow({ where: { id: d.id }, select: { tipFee: true } })
     await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `加小费 ¥${(input.amountFen / 100).toFixed(2)}（累计 ¥${(r.tipFee / 100).toFixed(2)}）`, operator: input.operator })
     return r
