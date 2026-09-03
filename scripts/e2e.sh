@@ -301,9 +301,16 @@ R=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR}"); assert_eq "旧地�
 R=$(req POST /api/admin/settings/local-delivery/pause "$AT" '{"reason":"暴雨暂停"}'); assert_eq "暂停 code 0" "$(code "$R")" "0"
 assert_eq "meta 暂停后 isOpen=false" "$(req GET /api/local/meta "" | jq -r .data.isOpen)" "false"
 R=$(req DELETE /api/admin/settings/local-delivery/pause "$AT"); assert_eq "恢复后 isOpen=true" "$(req GET /api/local/meta "" | jq -r .data.isOpen)" "true"
+R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E同城","receiverPhone":"13800000001","province":"四川省","city":"自贡市","district":"高新区","detail":"丹桂大街1号 3栋2单元","latE6":29350000,"lngE6":104790000,"poiName":"丹桂小区"}')
+LADDR=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$LADDR" ]] && ok "创建带坐标地址 #$LADDR" || fail "创建带坐标地址" "$R"
+assert_eq "poiName 落库" "$(jq -r .data.poiName <<<"$R")" "丹桂小区"
+R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E半坐标","receiverPhone":"13800000002","province":"四川省","city":"自贡市","district":"高新区","detail":"x","latE6":29350000}'); assert_eq "坐标不成对 40001" "$(code "$R")" "40001"
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":3000}"); assert_eq "按地址报价 code 0" "$(code "$R")" "0"
+QTOKEN=$(jq -r .data.quoteToken <<<"$R"); QFEE=$(jq -r .data.fee <<<"$R")
 
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
+[[ -n "${LADDR:-}" ]] && req DELETE "/api/addresses/$LADDR" "$UT" >/dev/null
 rm -f "$PNG" "$R1" "$R2"
 [[ -n "${LPID:-}" ]] && req DELETE "/api/admin/products/$LPID" "$AT" >/dev/null
 [[ -n "${EPID:-}" ]] && req DELETE "/api/admin/products/$EPID" "$AT" >/dev/null
