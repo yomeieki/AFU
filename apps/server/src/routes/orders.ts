@@ -6,13 +6,17 @@ import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { validatePayConfig, createJsapiOrder, generatePayParams, closeOrder } from '../services/wechat-pay'
 import { config } from '../config'
-import { notifyOrderPaid, notifyRefundRequest, notifyAfterSaleRequest } from '../services/order-notify'
+import { notifyOrderPaid, notifyRefundRequest, notifyAfterSaleRequest, notifyCancelRequest } from '../services/order-notify'
 import { rollbackOrderStock } from '../utils/order-stock'
 import { payLimiter } from '../middlewares/rate-limit'
 import { AFTER_SALE_REASONS, AFTER_SALE_REASON_LABEL, AfterSaleReason, payExpireAtOf } from '../utils/constants'
 import { initiateRefund, remainingRefundable } from '../services/refund'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/subscribe-message'
 import { getShippingSettings, calcShippingFee } from '../services/settings'
+import { channelOfDeliveryType } from '../utils/channel'
+import {
+  getLocalSettings, isOpenNow, isPaused, nextOpenText, billableDistanceM, calcLocalFee, estimateMinutes, verifyQuote,
+} from '../services/local-settings'
 
 const router = Router()
 
@@ -35,6 +39,16 @@ function isPayExpired(order: { createdAt: Date }): boolean {
   return Date.now() >= payExpireAtOf(order.createdAt, config.order.payTimeoutMin).getTime()
 }
 
+/** D6 ②：同城订单接单后 acceptGraceMin 分钟内可申请取消 */
+async function cancelWindowOf(order: { deliveryType: string; status: string; acceptedAt: Date | null; cancelRequestedAt: Date | null }) {
+  if (order.deliveryType !== 'LOCAL' || order.status !== 'PREPARING' || !order.acceptedAt) {
+    return { canRequestCancel: false, cancelRequestDeadline: null as Date | null }
+  }
+  const s = await getLocalSettings()
+  const deadline = new Date(order.acceptedAt.getTime() + s.acceptGraceMin * 60 * 1000)
+  return { canRequestCancel: !order.cancelRequestedAt && Date.now() < deadline.getTime(), cancelRequestDeadline: deadline }
+}
+
 // ─────────────────────────────────────────────────────────
 // POST /api/orders — 下单（购物车结算 或 立即购买二选一）
 // ─────────────────────────────────────────────────────────
@@ -48,7 +62,8 @@ const createOrderSchema = z
     cartItemIds: z.array(z.number().int().positive()).min(1, '请选择商品').optional(),
     directItem: directItemSchema.optional(),
     addressId: z.number().int().positive('请选择收货地址'),
-    deliveryType: z.enum(['EXPRESS', 'LOCAL', 'PICKUP']).default('EXPRESS'),
+    deliveryType: z.enum(['EXPRESS', 'LOCAL']).default('EXPRESS'),
+    quoteToken: z.string().max(512).optional(),
     remark: z.string().max(255).optional(),
   })
   .refine((v) => !!v.cartItemIds !== !!v.directItem, { message: '请选择商品' })
@@ -64,7 +79,7 @@ interface OrderLine {
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const { cartItemIds, directItem, addressId, deliveryType, remark } = createOrderSchema.parse(req.body)
+    const { cartItemIds, directItem, addressId, deliveryType, quoteToken, remark } = createOrderSchema.parse(req.body)
 
     // 1. 组装下单行：购物车项 或 立即购买单品（不经购物车，避免与已加购数量合并）
     let lines: OrderLine[]
@@ -95,9 +110,13 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     // 2. 逐个验证商品（有 SKU 的行按 SKU 库存校验）
+    const channel = channelOfDeliveryType(deliveryType)
     for (const line of lines) {
       const p = line.product
       if (!p || p.deletedAt) throw new AppError(40401, '商品不存在')
+      if (p.channel !== channel) {
+        throw new AppError(42224, channel === 'LOCAL' ? `${p.name} 不是同城配送商品` : `${p.name} 是同城配送商品，请到同城页面下单`)
+      }
       if (p.status !== 'ON_SHELF') throw new AppError(42202, `${p.name} 已下架`)
       if (line.skuId && !line.sku) throw new AppError(40401, `${p.name} 所选规格已失效`)
       const stock = line.sku?.stock ?? p.stock
@@ -128,15 +147,55 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         subtotal,
       }
     })
-    // 运费与起送门槛都按**商品小计**判断（不含运费，见 services/settings.ts）
-    const shipping = await getShippingSettings()
-    if (shipping.minOrderAmount > 0 && totalAmount < shipping.minOrderAmount) {
-      throw new AppError(
-        42210,
-        `订单满 ¥${(shipping.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`
-      )
+    // 两套计费互不叠加：EXPRESS 走 services/settings.ts；LOCAL 走 services/local-settings.ts
+    let shippingFee = 0
+    let localSnapshot: {
+      receiverLatE6?: number; receiverLngE6?: number; receiverPoiName?: string | null
+      distanceM?: number; estimatedDeliveryAt?: Date
+    } = {}
+    if (deliveryType === 'LOCAL') {
+      const s = await getLocalSettings()
+      if (!s.enabled) throw new AppError(42226, '同城配送暂未开通')
+      if (isPaused(s)) throw new AppError(42226, `同城配送暂停接单${s.paused?.reason ? `：${s.paused.reason}` : ''}`)
+      if (!isOpenNow(s)) throw new AppError(42222, `当前非营业时间，${nextOpenText(s)}`)
+      if (address.latE6 === null || address.lngE6 === null) throw new AppError(42223, '该地址缺少定位，请编辑地址并在地图上选点')
+      const distanceM = billableDistanceM(s, address.latE6, address.lngE6)
+      if (distanceM === null) throw new AppError(42226, '门店尚未设置坐标，暂不能配送')
+      const q = calcLocalFee(s, distanceM, totalAmount)
+      if (!q.inRange) throw new AppError(42220, `超出配送范围（约 ${(distanceM / 1000).toFixed(1)} km，最远 ${s.radiusKm} km）`)
+      if (q.belowMin) throw new AppError(42210, `同城配送满 ¥${(s.fee.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`)
+      const totalItems = lines.reduce((n, l) => n + l.quantity, 0)
+      const totalWeightKg = lines.reduce((w, l) => w + ((l.product.netWeightG ?? s.kd100.defaultItemWeightG) * l.quantity) / 1000, 0)
+      if (totalItems > s.limits.maxItems || totalWeightKg > s.limits.maxWeightKg) {
+        throw new AppError(42230, `单次配送最多 ${s.limits.maxItems} 件 / ${s.limits.maxWeightKg} kg，请分单或电话联系商家`)
+      }
+      let fee = q.fee
+      if (quoteToken) {
+        const p = verifyQuote(quoteToken)
+        if (p && p.addressId === address.id) {
+          if (fee > p.fee) throw new AppError(42227, '配送费已更新，请刷新后重新提交')
+          fee = Math.min(fee, p.fee)
+        }
+      }
+      shippingFee = fee
+      localSnapshot = {
+        receiverLatE6: address.latE6,
+        receiverLngE6: address.lngE6,
+        receiverPoiName: address.poiName,
+        distanceM,
+        estimatedDeliveryAt: new Date(Date.now() + estimateMinutes(s, distanceM) * 60 * 1000),
+      }
+    } else {
+      // 运费与起送门槛都按**商品小计**判断（不含运费，见 services/settings.ts）
+      const shipping = await getShippingSettings()
+      if (shipping.minOrderAmount > 0 && totalAmount < shipping.minOrderAmount) {
+        throw new AppError(
+          42210,
+          `订单满 ¥${(shipping.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`
+        )
+      }
+      shippingFee = calcShippingFee(totalAmount, shipping)
     }
-    const shippingFee = calcShippingFee(totalAmount, shipping)
     const actualAmount = totalAmount + shippingFee
 
     // 5. 事务：创建订单 + 减库存 + 增销量 + 清购物车
@@ -165,6 +224,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           receiverDistrict: address.district,
           receiverDetail: address.detail,
           receiverFullAddress: address.fullAddress,
+          ...localSnapshot,
           items: { create: orderItemsData },
         },
       })
@@ -305,11 +365,38 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const activeAfterSale = afterSales[0] && ['PENDING', 'APPROVED'].includes(afterSales[0].status) ? afterSales[0] : null
     success(res, {
       ...withPayExpire(rest),
+      ...(await cancelWindowOf(order)),
       afterSale: afterSales[0] ?? null,
       // 可申请售后：已发货/已完成、还有可退余额、当前无处理中的售后单
       canApplyAfterSale: ['SHIPPED', 'COMPLETED'].includes(order.status) && remaining > 0 && !activeAfterSale,
       subscribeTemplateIds: getSubscribeTemplateIds(),
     })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/orders/:id/cancel-request — 同城订单接单后宽限期内申请取消（订单状态不变，店员确认后全额退）
+const cancelRequestSchema = z.object({ note: z.string().trim().max(255).optional() })
+router.post('/:id/cancel-request', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const userId = req.userId!
+    const { note } = cancelRequestSchema.parse(req.body ?? {})
+    const order = await prisma.order.findFirst({ where: { id, userId } })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+    const win = await cancelWindowOf(order)
+    if (!win.canRequestCancel) {
+      throw new AppError(42229, order.status === 'PAID' ? '商家尚未接单，请直接申请退款' : '已超过可取消时间，如有问题请联系商家')
+    }
+    // M2 接入配送单后此处改为快照有效 Delivery 的状态；M1 无配送单一律 NONE
+    const moved = await prisma.order.updateMany({
+      where: { id, status: 'PREPARING', cancelRequestedAt: null },
+      data: { cancelRequestedAt: new Date(), cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: 'NONE' },
+    })
+    if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')
+    notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note })
+    success(res, { cancelRequestedAt: new Date() })
   } catch (e) {
     next(e)
   }

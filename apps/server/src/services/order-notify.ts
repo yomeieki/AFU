@@ -68,6 +68,29 @@ export function notifyRefundRequest(order: {
   }
 }
 
+/** 顾客在接单后宽限期内申请取消同城订单，需店员到工作台确认并退款。 */
+export function notifyCancelRequest(order: {
+  orderNo: string
+  actualAmount: number
+  receiverName: string
+  receiverPhone: string
+  note?: string | null
+}): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const content = [
+    `**🛵 同城订单：顾客申请取消（接单后 5 分钟内，需确认全额退款）**`,
+    `订单号：${order.orderNo}`,
+    `金额：**¥${fmtYuan(order.actualAmount)}**`,
+    `顾客：${order.receiverName} ${order.receiverPhone}`,
+    ...(order.note ? [`原因：${order.note}`] : []),
+    `请到后台「同城订单」处理`,
+  ].join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, '同城订单申请取消', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
 /** 退款结果通知（微信回调或同步返回）。status: SUCCESS / ABNORMAL / CLOSED */
 export function notifyRefundResult(
   order: { orderNo: string; receiverName: string; receiverPhone: string },

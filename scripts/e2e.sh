@@ -67,7 +67,7 @@ make_paid_order() { # 返回 orderId；下单 + mock 支付
   local r cid oid
   r=$(req POST /api/cart "$UT" "{\"productId\":$PID,\"quantity\":1}")
   cid=$(jq -r '.data.id // empty' <<<"$r"); [[ -n "$cid" ]] || { echo "" ; return; }
-  r=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$cid],\"addressId\":$ADDR,\"deliveryType\":\"LOCAL\"}")
+  r=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$cid],\"addressId\":$ADDR,\"deliveryType\":\"EXPRESS\"}")
   oid=$(jq -r '.data.orderId // .data.id // empty' <<<"$r"); [[ -n "$oid" ]] || { echo ""; return; }
   r=$(req POST "/api/orders/$oid/pay" "$UT")
   [[ "$(jq -r .data.mode <<<"$r")" == "mock" ]] || { echo ""; return; }
@@ -318,6 +318,40 @@ R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E无坐标","receiverPhone
 NADDR=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$NADDR" ]] && ok "创建无坐标地址 #$NADDR" || fail "创建无坐标地址" "$R"
 R=$(req PUT "/api/addresses/$NADDR" "$UT" '{"latE6":29350000}'); assert_eq "无坐标地址仅传纬度 40001" "$(code "$R")" "40001"
 
+echo "== 22. 同城下单 =="
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); LCID2=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$LADDR,\"deliveryType\":\"EXPRESS\"}"); assert_eq "同城商品走邮寄被拒 42224" "$(code "$R")" "42224"
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$ADDR,\"deliveryType\":\"LOCAL\"}"); assert_eq "无坐标地址下同城单 42223" "$(code "$R")" "42223"
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QTOKEN\"}")
+LO1=$(jq -r '.data.orderId // empty' <<<"$R"); [[ -n "$LO1" ]] && ok "同城下单 #$LO1" || fail "同城下单" "$R"
+assert_eq "运费=报价 fee" "$(jq -r .data.shippingFee <<<"$R")" "$QFEE"
+R=$(req GET "/api/orders/$LO1" "$UT")
+assert_eq "订单 deliveryType=LOCAL" "$(jq -r .data.deliveryType <<<"$R")" "LOCAL"
+[[ "$(jq -r .data.distanceM <<<"$R")" -gt 0 ]] && ok "distanceM 已快照" || fail "distanceM" "$R"
+[[ "$(jq -r .data.estimatedDeliveryAt <<<"$R")" != "null" ]] && ok "estimatedDeliveryAt 已写" || fail "estimatedDeliveryAt"
+assert_eq "shipment 为空（LOCAL 不写 Shipment）" "$(jq -r .data.shipment <<<"$R")" "null"
+# 全局邮寄运费被设成 9999 也不影响同城运费
+req PUT /api/admin/settings/shipping "$AT" '{"fee":999900,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); LCID3=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID3],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\"}")
+LO2=$(jq -r '.data.orderId // empty' <<<"$R"); [[ "$(jq -r .data.shippingFee <<<"$R")" -lt 999900 ]] && ok "LOCAL 运费与全局邮寄运费无关" || fail "LOCAL 叠加了全局运费" "$R"
+req PUT /api/admin/settings/shipping "$AT" '{"fee":0,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
+# 支付 → 邮寄端点守卫 → 取消申请窗口
+req POST "/api/orders/$LO1/pay" "$UT" >/dev/null
+R=$(req POST "/api/admin/orders/$LO1/ship" "$AT" '{"expressCompany":"顺丰","expressNo":"X"}'); assert_eq "LOCAL 单不可走邮寄发货 42204" "$(code "$R")" "42204"
+R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{"note":"不要了"}'); assert_eq "未接单不能申请取消(应走秒退) 42229" "$(code "$R")" "42229"
+R=$(req POST "/api/admin/orders/$LO1/accept" "$AT"); assert_eq "邮寄接单端点拒绝 LOCAL 42204" "$(code "$R")" "42204"
+# M1 暂借用 SQL 把订单置 PREPARING（M2 提供同城接单接口后改为调用接口）
+docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set status='PREPARING', accepted_at=NOW(3) where id=$LO1;" 2>/dev/null
+R=$(req GET "/api/orders/$LO1" "$UT"); assert_eq "窗口内 canRequestCancel=true" "$(jq -r .data.canRequestCancel <<<"$R")" "true"
+R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{"note":"不要了"}'); assert_eq "申请取消 code 0" "$(code "$R")" "0"
+R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{}'); assert_eq "重复申请 42229" "$(code "$R")" "42229"
+docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set cancel_requested_at=NULL, accepted_at=DATE_SUB(NOW(3), INTERVAL 10 MINUTE) where id=$LO1;" 2>/dev/null
+R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{}'); assert_eq "超窗口 42229" "$(code "$R")" "42229"
+R=$(req GET "/api/admin/orders?pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "0" ]] && ok "后台订单列表默认不含同城单" || fail "后台列表混入同城单"
+R=$(req GET "/api/admin/orders?deliveryType=LOCAL&pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "1" ]] && ok "deliveryType=LOCAL 可查到" || fail "LOCAL 筛选" "$R"
+R=$(req GET /api/admin/orders/pending-count "$AT"); [[ "$(jq -r .data.localPendingCount <<<"$R")" -ge 1 ]] && ok "localPendingCount≥1" || fail "localPendingCount" "$R"
+
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
 [[ -n "${LADDR:-}" ]] && req DELETE "/api/addresses/$LADDR" "$UT" >/dev/null
@@ -328,6 +362,7 @@ rm -f "$PNG" "$R1" "$R2"
 [[ -n "${LCAT:-}" ]] && req DELETE "/api/admin/categories/$LCAT" "$AT" >/dev/null
 [[ -n "${ECAT:-}" ]] && req DELETE "/api/admin/categories/$ECAT" "$AT" >/dev/null
 [[ -n "${LCID:-}" ]] && req DELETE "/api/cart/$LCID" "$UT" >/dev/null
+for o in ${LO1:-} ${LO2:-}; do docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set status='CANCELLED' where id=$o and status in ('PENDING_PAYMENT','PAID','PREPARING');" 2>/dev/null; done
 
 echo ""
 echo "================ 通过 $PASS / 失败 $FAIL ================"

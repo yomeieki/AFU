@@ -28,6 +28,9 @@ const orderListSelect = {
   completedAt: true,
   cancelReason: true,
   createdAt: true,
+  distanceM: true,
+  cancelRequestedAt: true,
+  estimatedDeliveryAt: true,
   items: {
     select: { productName: true, productImage: true, specText: true, quantity: true, productPrice: true, subtotal: true },
   },
@@ -56,9 +59,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const status = statuses.length === 1 ? statuses[0] : undefined
     // keyword 新参数；orderNo 旧参数兼容
     const keyword = ((req.query.keyword as string | undefined) ?? (req.query.orderNo as string | undefined))?.trim()
+    // 邮寄订单页默认只看 EXPRESS；同城看板传 LOCAL；ALL 不过滤
+    const dt = (req.query.deliveryType as string | undefined) ?? 'EXPRESS'
 
     const where = {
       ...(status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}),
+      ...(dt === 'ALL' ? {} : { deliveryType: dt === 'LOCAL' ? 'LOCAL' : 'EXPRESS' }),
       ...(keyword
         ? {
             OR: [
@@ -102,9 +108,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 // 注意：必须注册在 GET /:id 之前，否则会被 :id 匹配吞掉
 router.get('/pending-count', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const [count, latest, refundingCount, lowStockCount, afterSaleCount] = await Promise.all([
-      // 待处理 = 待接单(PAID) + 备餐中(PREPARING)
-      prisma.order.count({ where: { status: { in: ['PAID', 'PREPARING'] } } }),
+    const [count, latest, refundingCount, lowStockCount, afterSaleCount, localPendingCount] = await Promise.all([
+      // 待处理 = 待接单(PAID) + 备餐中(PREPARING)（邮寄铃铛只数邮寄）
+      prisma.order.count({ where: { status: { in: ['PAID', 'PREPARING'] }, deliveryType: 'EXPRESS' } }),
       prisma.order.findFirst({
         where: { status: 'PAID' },
         orderBy: { paidAt: 'desc' },
@@ -115,6 +121,12 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
         where: { deletedAt: null, status: 'ON_SHELF', stock: { lte: LOW_STOCK_THRESHOLD } },
       }),
       prisma.afterSale.count({ where: { status: 'PENDING' } }),
+      prisma.order.count({
+        where: {
+          deliveryType: 'LOCAL',
+          OR: [{ status: { in: ['PAID', 'PREPARING'] } }, { cancelRequestedAt: { not: null } }],
+        },
+      }),
     ])
     success(res, {
       count,
@@ -123,6 +135,7 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       lowStockCount,
       lowStockThreshold: LOW_STOCK_THRESHOLD,
       afterSaleCount,
+      localPendingCount,
     })
   } catch (e) {
     next(e)
@@ -155,6 +168,9 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
 router.post('/:id/accept', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
+    const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true } })
+    if (!target) throw new AppError(40401, '订单不存在', 404)
+    if (target.deliveryType === 'LOCAL') throw new AppError(42204, '同城订单请在同城看板操作')
     const moved = await prisma.order.updateMany({
       where: { id, status: 'PAID' },
       data: { status: 'PREPARING', acceptedAt: new Date() },
@@ -187,6 +203,7 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
       include: { user: { select: { openid: true } }, items: { select: { productName: true }, take: 1 } },
     })
     if (!order) throw new AppError(40401, '订单不存在', 404)
+    if (order.deliveryType === 'LOCAL') throw new AppError(42204, '同城订单请在同城看板操作')
     if (!['PAID', 'PREPARING'].includes(order.status)) {
       throw new AppError(42204, `订单状态为 ${order.status}，仅待接单/备餐中订单可发货`)
     }
@@ -222,6 +239,9 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
 router.post('/:id/complete', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
+    const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true } })
+    if (!target) throw new AppError(40401, '订单不存在', 404)
+    if (target.deliveryType === 'LOCAL') throw new AppError(42204, '同城订单请在同城看板操作')
     const moved = await prisma.order.updateMany({
       where: { id, status: 'SHIPPED' },
       data: { status: 'COMPLETED', completedAt: new Date() },
