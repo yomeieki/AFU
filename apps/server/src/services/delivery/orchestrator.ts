@@ -154,13 +154,18 @@ async function requireActive(orderId: number) {
   if (d.status === 'UNKNOWN') throw new AppError(42234, '配送单状态未确认：请等回调认领，或确认快递100 后台无单后作废')
   return d
 }
-/** 720/主动取消 共用：骑手已取货后取消 → SHIPPED 回退 PREPARING（三重护栏） */
-async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number) {
-  const o = await tx.order.findUnique({ where: { id: orderId }, include: { refunds: { select: { status: true } }, afterSales: { where: { status: { in: ['PENDING', 'APPROVED'] } }, select: { id: true } } } })
-  if (!o || o.completedAt) return
-  if (o.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))) return
-  if (o.afterSales.length > 0) return
-  await tx.order.updateMany({ where: { id: orderId, deliveryType: 'LOCAL', status: 'SHIPPED' }, data: { status: 'PREPARING' } })
+/**
+ * 骑手已取货后取消 → SHIPPED 回退 PREPARING。**720 回调与主动取消共用这一个实现**
+ * （callback.ts 里 720 分支直接调它，不许各写一份——两份护栏迟早会drift）。
+ * 三重护栏全部写进 where：先读后写会在读与写之间放进一笔部分退款（部分退款不改订单状态，
+ * 因此 status 白名单挡不住它），那正是护栏要防的事。
+ */
+export async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number) {
+  await tx.order.updateMany({ where: {
+    id: orderId, deliveryType: 'LOCAL', status: 'SHIPPED', completedAt: null,
+    refunds: { none: { status: { in: [...ACTIVE_REFUND_STATUSES] } } },
+    afterSales: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
+  }, data: { status: 'PREPARING' } })
 }
 
 export async function precancelDelivery(orderId: number): Promise<{ cancelFeeFen: number | null }> {
@@ -195,6 +200,7 @@ export async function addTip(input: { orderId: number; amountFen: number; operat
   if (d.status !== 'CALLING') throw new AppError(42235, '仅待抢单状态可加小费')
   const s = await getLocalSettings()
   if (input.amountFen > s.tip.maxPerCall) throw new AppError(42235, `单次小费上限 ¥${(s.tip.maxPerCall / 100).toFixed(0)}`)
+  // 这里只是给操作员一个即时的说法；真正的封顶靠下面写入时的原子条件（读到的 tipFee 可能已过期）
   if (d.tipFee + input.amountFen > s.tip.maxPerOrder) throw new AppError(42235, `本单小费累计上限 ¥${(s.tip.maxPerOrder / 100).toFixed(0)}，已加 ¥${(d.tipFee / 100).toFixed(2)}`)
   if (!d.providerTaskId) throw new AppError(42234, '配送单尚未成单')
   try {
@@ -205,7 +211,14 @@ export async function addTip(input: { orderId: number; amountFen: number; operat
     throw e
   }
   const updated = await prisma.$transaction(async (tx) => {
-    const r = await tx.delivery.update({ where: { id: d.id }, data: { tipFee: { increment: input.amountFen } }, select: { tipFee: true } })
+    // 原子封顶：并发两笔小费各自读到旧 tipFee 都会通过上面的预检，只有条件写能真的拦住越顶；
+    // 同时把 status 一并作为条件——外呼期间配送单可能已经不在 CALLING 了。
+    const moved = await tx.delivery.updateMany({
+      where: { id: d.id, status: 'CALLING', tipFee: { lte: s.tip.maxPerOrder - input.amountFen } },
+      data: { tipFee: { increment: input.amountFen } },
+    })
+    if (moved.count === 0) throw new AppError(42235, '小费已达上限或配送单状态已变化，请刷新后再试')
+    const r = await tx.delivery.findUniqueOrThrow({ where: { id: d.id }, select: { tipFee: true } })
     await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `加小费 ¥${(input.amountFen / 100).toFixed(2)}（累计 ¥${(r.tipFee / 100).toFixed(2)}）`, operator: input.operator })
     return r
   })

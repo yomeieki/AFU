@@ -11,7 +11,7 @@ import { recordDeliveryEvent, makeCallbackDedupeKey, trunc } from './events'
 import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert } from '../order-notify'
 import { sendDeliverSubscribeMessage } from '../subscribe-message'
-import { ACTIVE_REFUND_STATUSES } from '../refund'
+import { rollbackOrderAfterCancel } from './orchestrator'
 
 export async function handleKdCallback(deliveryNo: string, body: Record<string, string>): Promise<{ http: 200 | 500 }> {
   const rawBody = JSON.stringify(body)
@@ -20,8 +20,6 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
     include: { order: { include: {
       user: { select: { openid: true } },
       items: { select: { productName: true }, take: 1 },
-      refunds: { select: { status: true } },
-      afterSales: { where: { status: { in: ['PENDING', 'APPROVED'] } }, select: { id: true } },
     } } },
   })
   if (!delivery) {
@@ -100,16 +98,9 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       } else if (p.providerStatus === '520') {
         await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: { in: ['PREPARING', 'SHIPPED'] } }, data: { status: 'COMPLETED', completedAt: new Date() } })
       } else if (p.providerStatus === '720') {
-        // 取货后被取消：SHIPPED 回退 PREPARING。三重护栏直接写进 where，避免用事务外快照判定
-        // （部分退款不改订单状态，存在窄 TOCTOU）
-        const o = delivery.order
-        if (!o.completedAt) {
-          await tx.order.updateMany({ where: {
-            id: delivery.orderId, deliveryType: 'LOCAL', status: 'SHIPPED', completedAt: null,
-            refunds: { none: { status: { in: [...ACTIVE_REFUND_STATUSES] } } },
-            afterSales: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
-          }, data: { status: 'PREPARING' } })
-        }
+        // 取货后被取消：SHIPPED 回退 PREPARING。
+        // 与主动取消共用同一个实现（orchestrator.rollbackOrderAfterCancel），护栏只写一处
+        await rollbackOrderAfterCancel(tx, delivery.orderId)
         after.push(() => notifyLocalDeliveryAlert('配送单被取消', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '运力方取消', '请重新呼叫骑手或改自己送']))
       }
       if (p.providerStatus === '510') after.push(() => notifyLocalDeliveryAlert('配送异常', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '', '请联系骑手/顾客确认']))

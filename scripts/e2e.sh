@@ -656,7 +656,7 @@ assert_eq "订单 →COMPLETED" "$(req GET "/api/admin/orders/$OPO3" "$AT" | jq 
 assert_eq "配送单 →DELIVERED" "$(dstat $OPO3)" "DELIVERED"
 R=$(req POST "/api/admin/local/orders/$OPO3/delivered" "$AT"); assert_eq "重复标记送达 42233" "$(code "$R")" "42233"
 # 有在途单时不准自己送（复用 OPO2：清场取消后订单仍是已接单 PREPARING，重新呼叫即可；
-# 省一笔 /pay——本段已有 3 笔同城下单，整条 e2e 的 /pay 调用总数须压在 payLimiter 20/分钟以内）
+# 复用即够用，无需再新建一单——非生产环境限流已放宽（payLimiter 500/分钟），不再受它约束）
 OPO4=$OPO2
 req POST "/api/admin/local/orders/$OPO4/call" "$AT" >/dev/null
 R=$(req POST "/api/admin/local/orders/$OPO4/self-deliver" "$AT" '{"name":"阿福","phone":"15309003232"}')

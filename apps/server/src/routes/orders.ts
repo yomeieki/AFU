@@ -374,12 +374,23 @@ router.get('/:id/courier', async (req: Request, res: Response, next: NextFunctio
       success(res, { location: null })
       return
     }
+    // 顺手清理过期项，避免 Map 随进程寿命无限增长（本店量级无害，但没有回收逻辑总不太好）
+    for (const [key, v] of courierCache) {
+      if (Date.now() - v.at >= COURIER_CACHE_TTL_MS) courierCache.delete(key)
+    }
     const cached = courierCache.get(delivery.id)
     if (cached && Date.now() - cached.at < COURIER_CACHE_TTL_MS) {
       success(res, { location: cached.loc })
       return
     }
-    const loc = await getDeliveryProvider().queryCourier({ taskId: delivery.providerTaskId })
+    let loc: { latE6: number; lngE6: number } | null
+    try {
+      loc = await getDeliveryProvider().queryCourier({ taskId: delivery.providerTaskId })
+    } catch (e) {
+      // 运力方故障时也要负缓存：否则顾客端每次轮询都会真打一次外部 API，把故障放大成订单页报错
+      console.warn('[courier] 查询骑手位置失败:', (e as Error).message)
+      loc = null
+    }
     courierCache.set(delivery.id, { at: Date.now(), loc })
     success(res, { location: loc })
   } catch (e) {
