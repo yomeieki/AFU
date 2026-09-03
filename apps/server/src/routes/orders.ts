@@ -12,6 +12,7 @@ import { payLimiter } from '../middlewares/rate-limit'
 import { AFTER_SALE_REASONS, AFTER_SALE_REASON_LABEL, AfterSaleReason, payExpireAtOf } from '../utils/constants'
 import { initiateRefund, remainingRefundable } from '../services/refund'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/subscribe-message'
+import { getShippingSettings, calcShippingFee } from '../services/settings'
 
 const router = Router()
 
@@ -127,7 +128,15 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         subtotal,
       }
     })
-    const shippingFee = 0
+    // 运费与起送门槛都按**商品小计**判断（不含运费，见 services/settings.ts）
+    const shipping = await getShippingSettings()
+    if (shipping.minOrderAmount > 0 && totalAmount < shipping.minOrderAmount) {
+      throw new AppError(
+        42210,
+        `订单满 ¥${(shipping.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`
+      )
+    }
+    const shippingFee = calcShippingFee(totalAmount, shipping)
     const actualAmount = totalAmount + shippingFee
 
     // 5. 事务：创建订单 + 减库存 + 增销量 + 清购物车
@@ -253,8 +262,18 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 })
 
 // GET /api/orders/meta — 下单页需要的公共参数（订阅消息模板、支付超时），必须注册在 /:id 之前
-router.get('/meta', (_req: Request, res: Response) => {
-  success(res, { subscribeTemplateIds: getSubscribeTemplateIds(), payTimeoutMin: config.order.payTimeoutMin })
+router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    // 运费规则一并下发，省下单页一次请求。
+    // 前端拿它只为「提交前把运费显示给顾客」，实际收费以下单时服务端重算为准。
+    success(res, {
+      subscribeTemplateIds: getSubscribeTemplateIds(),
+      payTimeoutMin: config.order.payTimeoutMin,
+      shipping: await getShippingSettings(),
+    })
+  } catch (e) {
+    next(e)
+  }
 })
 
 // GET /api/orders/:id

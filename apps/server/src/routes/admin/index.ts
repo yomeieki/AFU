@@ -10,6 +10,7 @@ import bannersAdminRouter from './banners'
 import systemRouter from './system'
 import usersRouter from './users'
 import uploadRouter from './upload'
+import settingsRouter from './settings'
 import { verifyAdminToken } from '../../middlewares/auth'
 
 const router = Router()
@@ -30,5 +31,6 @@ router.use('/banners', bannersAdminRouter)
 router.use('/system', systemRouter)
 router.use('/users', usersRouter)
 router.use('/upload', uploadRouter)
+router.use('/settings', settingsRouter)
 
 export default router

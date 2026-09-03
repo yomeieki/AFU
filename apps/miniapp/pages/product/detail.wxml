@@ -36,7 +36,7 @@
       <view class="meta-tag stock-tag {{product.stock <= 0 ? 'stock-tag-out' : (product.stock <= 10 ? 'stock-tag-low' : '')}}">
         <text>{{product.stockLabel}}</text>
       </view>
-      <text class="sales-text">已售 {{product.salesCount}}</text>
+      <text wx:if="{{product.salesCount > 0}}" class="sales-text">已售 {{product.salesCount}}</text>
     </view>
   </view>
 

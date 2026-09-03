@@ -17,6 +17,7 @@ import type {
   Banner,
   RefundSummary,
   AfterSale,
+  ShippingSettings,
 } from '../types'
 
 // Auth
@@ -194,3 +195,10 @@ export const batchGenerateQrCodes = (ids?: number[]) =>
     '/admin/products/qrcode/batch',
     ids ? { ids } : {}
   )
+
+// 店铺设置
+export const getShippingSettings = () =>
+  client.get<ApiResponse<ShippingSettings>>('/admin/settings/shipping').then((r) => r.data.data)
+
+export const updateShippingSettings = (payload: ShippingSettings) =>
+  client.put<ApiResponse<ShippingSettings>>('/admin/settings/shipping', payload).then((r) => r.data.data)

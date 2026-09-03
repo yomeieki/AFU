@@ -66,14 +66,15 @@
     </view>
     <view class="row">
       <text class="row-label">运费</text>
-      <text class="row-value free">免运费</text>
+      <text wx:if="{{shippingFee > 0}}" class="row-value">¥{{pricefmt.fen(shippingFee)}}</text>
+      <text wx:else class="row-value free">免运费</text>
     </view>
     <view class="row total-row">
       <text class="row-label">合计</text>
       <view class="total-price-wrap">
         <text class="price-symbol">¥</text>
-        <text class="price-int total-price-int">{{pricefmt.int(pricefmt.fen(totalAmount))}}</text>
-        <text class="price-dec">{{pricefmt.dec(pricefmt.fen(totalAmount))}}</text>
+        <text class="price-int total-price-int">{{pricefmt.int(pricefmt.fen(payAmount))}}</text>
+        <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
       </view>
     </view>
   </view>
@@ -89,15 +90,16 @@
     <text>和</text>
     <text class="agree-link" bindtap="goLegal" data-type="privacy">《隐私政策》</text>
   </view>
+  <view wx:if="{{belowMinOrder}}" class="min-order-tip">{{minOrderTip}}</view>
   <view class="bottom-main">
     <view class="bottom-total-wrap">
       <text class="bottom-total-label">合计</text>
       <text class="price-symbol">¥</text>
-      <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(totalAmount))}}</text>
-      <text class="price-dec">{{pricefmt.dec(pricefmt.fen(totalAmount))}}</text>
+      <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(payAmount))}}</text>
+      <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
     </view>
     <view
-      class="submit-btn btn-primary {{submitting ? 'btn-disabled' : ''}}"
+      class="submit-btn btn-primary {{submitting || belowMinOrder ? 'btn-disabled' : ''}}"
       bindtap="onSubmit"
     >
       <text>{{submitting ? '提交中...' : '提交订单'}}</text>

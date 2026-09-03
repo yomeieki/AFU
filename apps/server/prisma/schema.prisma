@@ -431,3 +431,15 @@ model Banner {
   @@index([status, sortOrder])
   @@map("banners")
 }
+
+// 店铺设置（键值对，值统一存 JSON 字符串）
+//
+// 用键值对而不是给每项配置开一列：配置项会随经营需要不断增加
+// （运费、公告、营业时间开关…），每次加列都要迁移一次表，不划算。
+model Setting {
+  key       String   @id @map("setting_key") @db.VarChar(64)
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
