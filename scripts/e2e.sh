@@ -261,6 +261,23 @@ assert_eq "同渠道短路 code 0" "$(code "$R")" "0"
 R=$(req GET "/api/admin/products?keyword=E2E&pageSize=50" "$AT")
 assert_eq "同渠道短路后商品 channel 未变=LOCAL" "$(jq -r "[.data.list[] | select(.id==$LPID)][0].channel" <<<"$R")" "LOCAL"
 
+echo "== 20. 渠道：公开接口/购物车 =="
+R=$(req GET "/api/categories" "$UT"); [[ "$(jq -r "[.data[] | select(.id==$LCAT)] | length" <<<"$R")" == "0" ]] && ok "公开分类默认不含 LOCAL" || fail "公开分类泄漏 LOCAL" "$R"
+R=$(req GET "/api/categories?channel=LOCAL" "$UT"); [[ "$(jq -r "[.data[] | select(.id==$LCAT)] | length" <<<"$R")" == "1" ]] && ok "公开分类 channel=LOCAL 含同城分类" || fail "公开分类 LOCAL 过滤" "$R"
+R=$(req GET "/api/products?pageSize=50" "$UT"); [[ "$(jq -r "[.data.list[] | select(.id==$LPID)] | length" <<<"$R")" == "0" ]] && ok "公开商品默认不含同城商品" || fail "公开商品泄漏同城商品"
+R=$(req GET "/api/products?channel=LOCAL&pageSize=50" "$UT"); [[ "$(jq -r "[.data.list[] | select(.id==$LPID)] | length" <<<"$R")" == "1" ]] && ok "公开商品 channel=LOCAL 含同城商品" || fail "公开商品 LOCAL 过滤" "$R"
+assert_eq "商品详情返回 channel" "$(req GET "/api/products/$LPID" "$UT" | jq -r .data.channel)" "LOCAL"
+# 第 19 段的 PUT .../products/$LPID（仅带 categoryId）会因 zod .partial() 对带 .default() 字段的已知行为
+# 把未携带的 stock 静默重置为 0（与本段渠道过滤/购物车无关的既有缺陷，不在本任务改动范围内，见任务报告）；
+# 这里显式补回库存，避免下面的加购断言被这个既有缺陷阻塞。
+req PUT "/api/admin/products/$LPID" "$AT" '{"stock":50}' >/dev/null
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); LCID=$(jq -r '.data.id // empty' <<<"$R")
+[[ -n "$LCID" ]] && ok "同城商品加购 #$LCID" || fail "同城加购" "$R"
+assert_eq "加购返回 channel=LOCAL" "$(jq -r .data.channel <<<"$R")" "LOCAL"
+R=$(req GET /api/cart "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] | length" <<<"$R")" == "0" ]] && ok "默认购物车不含同城行" || fail "默认购物车混入同城行" "$R"
+R=$(req GET "/api/cart?channel=LOCAL" "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] | length" <<<"$R")" == "1" ]] && ok "同城购物车含该行" || fail "同城购物车" "$R"
+assert_eq "同城购物车小计=2400" "$(jq -r .data.totalAmount <<<"$R")" "2400"
+
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
 rm -f "$PNG" "$R1" "$R2"
@@ -268,6 +285,7 @@ rm -f "$PNG" "$R1" "$R2"
 [[ -n "${EPID:-}" ]] && req DELETE "/api/admin/products/$EPID" "$AT" >/dev/null
 [[ -n "${LCAT:-}" ]] && req DELETE "/api/admin/categories/$LCAT" "$AT" >/dev/null
 [[ -n "${ECAT:-}" ]] && req DELETE "/api/admin/categories/$ECAT" "$AT" >/dev/null
+[[ -n "${LCID:-}" ]] && req DELETE "/api/cart/$LCID" "$UT" >/dev/null
 
 echo ""
 echo "================ 通过 $PASS / 失败 $FAIL ================"

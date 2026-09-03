@@ -3,6 +3,7 @@ import { z } from 'zod'
 import prisma from '../utils/prisma'
 import { success } from '../utils/response'
 import { AppError } from '../middlewares/error'
+import { parseChannelQuery } from '../utils/channel'
 
 const router = Router()
 
@@ -10,8 +11,9 @@ const router = Router()
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
+    const channel = parseChannelQuery(req.query.channel)
     const items = await prisma.cart.findMany({
-      where: { userId },
+      where: { userId, product: { channel } },
       include: {
         product: {
           select: {
@@ -22,6 +24,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
             stock: true,
             status: true,
             unit: true,
+            channel: true,
           },
         },
         sku: {
@@ -54,7 +57,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const selectedItems = cartItems.filter((i) => i.isSelected === 1)
     const totalAmount = selectedItems.reduce((sum, i) => sum + i.subtotal, 0)
 
-    success(res, { items: cartItems, totalAmount, selectedCount: selectedItems.length })
+    success(res, { channel, items: cartItems, totalAmount, selectedCount: selectedItems.length })
   } catch (e) {
     next(e)
   }
@@ -106,7 +109,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       })
     }
 
-    success(res, { id: cart.id })
+    success(res, { id: cart.id, channel: product.channel })
   } catch (e) {
     next(e)
   }

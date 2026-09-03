@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import prisma from '../utils/prisma'
 import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
+import { parseChannelQuery } from '../utils/channel'
 
 const router = Router()
 
@@ -12,10 +13,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 20))
     const categoryId = req.query.categoryId ? Number(req.query.categoryId) : undefined
     const keyword = req.query.keyword as string | undefined
+    const channel = parseChannelQuery(req.query.channel)
 
     const where = {
       status: 'ON_SHELF' as const,
       deletedAt: null,
+      channel,
       ...(categoryId ? { categoryId } : {}),
       ...(keyword ? { name: { contains: keyword } } : {}),
     }
@@ -34,6 +37,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
           salesCount: true,
           stock: true,
           status: true,
+          channel: true,
           _count: { select: { skus: true } },
         },
         orderBy: [{ isRecommended: 'desc' }, { createdAt: 'desc' }],
