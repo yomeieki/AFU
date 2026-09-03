@@ -17,6 +17,6 @@ module.exports = {
   foodLicenseNo: 'CSJ01303000130051',
   contactEmail: '835804187@qq.com',
   // 协议/隐私政策更新日期
-  legalUpdatedAt: '2026-09-02',
+  legalUpdatedAt: '2026-09-03',
   version: '1.0.0',
 }

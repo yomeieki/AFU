@@ -1,0 +1,148 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/address-edit-local.generated.css">
+<style>
+  html{--rpx:.5px}
+  body{margin:0;width:375px;background:#f5f6f7}
+  /* 预览台专用：同一页面的两个状态并列，方便对比。真机上只会看到其中一个 */
+  .state-label{
+    margin:0;padding:10px 12px 6px;font:600 12px/1.4 -apple-system,'PingFang SC',sans-serif;
+    color:#9ca3af;letter-spacing:.04em;background:#f5f6f7;
+  }
+  .state-label span{color:#e5441e}
+</style>
+</head>
+<body>
+
+<p class="state-label">状态 A · <span>刚进页面，未选点</span></p>
+<div class="mp-page">
+  <div class="page">
+    <div class="form">
+
+      <div class="locate-card">
+        <div class="locate-icon icon icon-pin"></div>
+        <div class="locate-body">
+          <div class="locate-title-row"><span class="locate-title">在地图上选择收货位置</span><span class="locate-required">必填</span></div>
+          <span class="locate-sub">同城配送按实际距离计费，需要定位到楼栋</span>
+        </div>
+        <span class="locate-action">去选点</span>
+      </div>
+
+      <div class="import-btn">
+        <div class="import-icon icon icon-pin"></div>
+        <span class="import-text">导入微信收货地址</span>
+        <div class="import-arrow icon icon-arrow"></div>
+      </div>
+
+      <div class="field-group">
+        <div class="field"><span class="label">收货人</span><span class="input input-placeholder">请输入收货人姓名</span></div>
+        <div class="field"><span class="label">手机号</span><span class="input input-placeholder">请输入手机号</span></div>
+      </div>
+
+      <div class="field-group">
+        <div class="field picker-field">
+          <span class="label">所在地区</span>
+          <span class="picker-value input-placeholder">请选择省市区</span>
+          <div class="picker-arrow icon icon-arrow"></div>
+        </div>
+        <div class="field">
+          <span class="label">详细地址</span>
+          <span class="input input-placeholder">补充楼栋单元门牌，如 3栋2单元501</span>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field switch-field">
+          <span class="label">设为默认地址</span>
+          <div class="switch"><div class="switch-thumb"></div></div>
+        </div>
+      </div>
+
+    </div>
+    <div class="save-btn btn-primary"><span>保存地址</span></div>
+  </div>
+</div>
+
+<p class="state-label">状态 B · <span>已选点，服务端返回距离与配送费</span></p>
+<div class="mp-page">
+  <div class="page">
+    <div class="form">
+
+      <div class="locate-card locate-card-done">
+        <div class="locate-icon icon icon-pin"></div>
+        <div class="locate-body">
+          <div class="locate-title-row"><span class="locate-title">丹桂小区</span></div>
+          <span class="locate-sub">四川省自贡市高新区丹桂大街1号</span>
+        </div>
+        <span class="locate-action">重选</span>
+      </div>
+
+      <div class="quote-strip">
+        <span class="quote-text">距门店约 1.8 km · 配送费 ¥3.00 · 约 32 分钟送达</span>
+      </div>
+
+      <div class="import-btn">
+        <div class="import-icon icon icon-pin"></div>
+        <span class="import-text">导入微信收货地址</span>
+        <div class="import-arrow icon icon-arrow"></div>
+      </div>
+
+      <div class="field-group">
+        <div class="field"><span class="label">收货人</span><input class="input" value="张三"></div>
+        <div class="field"><span class="label">手机号</span><input class="input" value="13800138000"></div>
+      </div>
+
+      <div class="field-group">
+        <div class="field picker-field">
+          <span class="label">所在地区</span>
+          <span class="picker-value">四川省 / 自贡市 / 高新区</span>
+          <div class="picker-arrow icon icon-arrow"></div>
+        </div>
+        <div class="field"><span class="label">详细地址</span><input class="input" value="丹桂大街1号 3栋2单元501"></div>
+      </div>
+
+      <div class="field-group">
+        <div class="field switch-field">
+          <span class="label">设为默认地址</span>
+          <div class="switch on"><div class="switch-thumb"></div></div>
+        </div>
+      </div>
+
+    </div>
+    <div class="save-btn btn-primary"><span>保存地址</span></div>
+  </div>
+</div>
+
+<p class="state-label">状态 C · <span>超出配送范围</span></p>
+<div class="mp-page">
+  <div class="page">
+    <div class="form">
+
+      <div class="locate-card locate-card-done">
+        <div class="locate-icon icon icon-pin"></div>
+        <div class="locate-body">
+          <div class="locate-title-row"><span class="locate-title">贡井区政府</span></div>
+          <span class="locate-sub">四川省自贡市贡井区筱溪街</span>
+        </div>
+        <span class="locate-action">重选</span>
+      </div>
+
+      <div class="quote-strip quote-strip-warn">
+        <span class="quote-text">超出配送范围（约 8.6 km），可换个地址，或改用全国邮寄</span>
+      </div>
+
+      <div class="field-group">
+        <div class="field"><span class="label">收货人</span><input class="input" value="张三"></div>
+        <div class="field"><span class="label">手机号</span><input class="input" value="13800138000"></div>
+      </div>
+
+    </div>
+    <div class="save-btn btn-primary"><span>保存地址</span></div>
+  </div>
+</div>
+
+</body>
+</html>

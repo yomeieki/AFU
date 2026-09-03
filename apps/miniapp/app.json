@@ -48,6 +48,12 @@
       }
     ]
   },
+  "requiredPrivateInfos": ["chooseLocation"],
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于在地图上选择收货位置，计算同城配送距离与配送费"
+    }
+  },
   "window": {
     "backgroundTextStyle": "dark",
     "navigationBarBackgroundColor": "#ffffff",

@@ -1,6 +1,29 @@
 <view class="page">
   <view class="form">
 
+    <!-- 同城配送：地图选点（必填，配送费按实际距离算） -->
+    <block wx:if="{{channel === 'LOCAL'}}">
+      <view
+        class="locate-card {{poiName ? 'locate-card-done' : ''}}"
+        hover-class="locate-card-hover"
+        bindtap="onPickLocation"
+      >
+        <view class="locate-icon icon icon-pin"></view>
+        <view class="locate-body">
+          <view class="locate-title-row">
+            <text class="locate-title">{{poiName || '在地图上选择收货位置'}}</text>
+            <text wx:if="{{!poiName}}" class="locate-required">必填</text>
+          </view>
+          <text class="locate-sub">{{poiName ? pickedAddress : '同城配送按实际距离计费，需要定位到楼栋'}}</text>
+        </view>
+        <text class="locate-action">{{locating ? '打开中' : (poiName ? '重选' : '去选点')}}</text>
+      </view>
+
+      <view wx:if="{{quoteText}}" class="quote-strip {{quoteOk ? '' : 'quote-strip-warn'}}">
+        <text class="quote-text">{{quoteText}}</text>
+      </view>
+    </block>
+
     <!-- 导入微信收货地址 -->
     <view class="import-btn" hover-class="import-btn-hover" bindtap="onImportWechatAddress">
       <view class="import-icon icon icon-pin"></view>
@@ -48,7 +71,7 @@
         <input
           class="input"
           placeholder-class="input-placeholder"
-          placeholder="街道、小区、门牌号（如：丹桂大街 xx 号）"
+          placeholder="{{channel === 'LOCAL' ? '补充楼栋单元门牌，如 3栋2单元501' : '街道、小区、门牌号（如：丹桂大街 xx 号）'}}"
           value="{{form.detail}}"
           data-field="detail"
           bindinput="onInput"

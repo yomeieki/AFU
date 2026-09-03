@@ -127,3 +127,102 @@
   margin-top: 48rpx;
   height: 88rpx;
 }
+
+/* ============================================================
+   同城配送：地图选点卡片 + 报价条
+   未选点时是醒目的行动召唤（浅品牌底），选完转成白底卡片，
+   把「地点名」让给主角位置——顾客此时要确认的是"选对了没"。
+   ============================================================ */
+.locate-card {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  padding: 28rpx 30rpx;
+  background-color: var(--brand-bg);
+  border: 2rpx solid var(--brand-light);
+  border-radius: var(--radius-lg);
+}
+.locate-card-hover {
+  background-color: var(--brand-bg-deep);
+}
+.locate-icon {
+  width: 44rpx;
+  height: 44rpx;
+  flex-shrink: 0;
+}
+.locate-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  min-width: 0;
+}
+.locate-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  min-width: 0;
+}
+.locate-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--brand);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* 未选点时的「必填」标：防止顾客只点了「导入微信地址」就以为填完了 */
+.locate-required {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  line-height: 1;
+  padding: 6rpx 10rpx;
+  border-radius: 6rpx;
+  background-color: var(--brand);
+  color: #fff;
+}
+.locate-sub {
+  font-size: 24rpx;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.locate-action {
+  font-size: 26rpx;
+  color: var(--brand);
+  flex-shrink: 0;
+}
+
+/* 已选点 */
+.locate-card-done {
+  background-color: var(--card);
+  border: 1rpx solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+.locate-card-done .locate-title {
+  color: var(--text-1);
+}
+.locate-card-done .locate-sub {
+  color: var(--text-3);
+}
+
+/* 报价条：绿=可送并给出运费，橙=超范围并给出路 */
+.quote-strip {
+  margin-top: -8rpx;
+  padding: 20rpx 30rpx;
+  background-color: var(--success-bg);
+  border-radius: var(--radius-lg);
+}
+.quote-text {
+  font-size: 26rpx;
+  color: var(--success);
+  line-height: 1.5;
+}
+.quote-strip-warn {
+  background-color: var(--warning-bg);
+}
+.quote-strip-warn .quote-text {
+  color: var(--warning);
+}
