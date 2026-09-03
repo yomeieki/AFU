@@ -103,6 +103,13 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         payTimeoutMin: num(body.payTimeoutMin),
         autoCompleteDays: num(body.autoCompleteDays),
         remindAfterMin: num(body.remindAfterMin),
+        callTimeoutMin: num(body.callTimeoutMin),
+        acceptedStuckMin: num(body.acceptedStuckMin),
+        deliveringTimeoutMin: num(body.deliveringTimeoutMin),
+        unknownStuckMin: num(body.unknownStuckMin),
+        localUncalledMin: num(body.localUncalledMin),
+        cancelRequestPendingMin: num(body.cancelRequestPendingMin),
+        autoCallDelayMin: num(body.autoCallDelayMin),
       })
     )
   } catch (e) {

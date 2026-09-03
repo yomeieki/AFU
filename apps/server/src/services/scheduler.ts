@@ -13,6 +13,11 @@ import { closeOrder } from './wechat-pay'
 import { notifySystemAlert } from './notify'
 import { notifyAcceptReminder, notifyLowStock } from './order-notify'
 import { LOW_STOCK_THRESHOLD } from '../utils/constants'
+import {
+  remindCallTimeout, remindAcceptedStuck, remindDeliveringTimeout, remindUnknownGhost,
+  remindLocalUncalled, remindCancelRequestPending, autoCallRiders, autoCompleteLocalDelivered,
+  housekeepingDelivery,
+} from './delivery/tasks'
 
 const TICK_MS = 60 * 1000
 const LOW_STOCK_PUSH_INTERVAL_MS = 12 * 60 * 60 * 1000
@@ -37,6 +42,13 @@ export interface SchedulerOverrides {
   payTimeoutMin?: number
   autoCompleteDays?: number
   remindAfterMin?: number
+  callTimeoutMin?: number
+  acceptedStuckMin?: number
+  deliveringTimeoutMin?: number
+  unknownStuckMin?: number
+  localUncalledMin?: number
+  cancelRequestPendingMin?: number
+  autoCallDelayMin?: number
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -49,6 +61,15 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['autoComplete', () => autoCompleteShippedOrders(overrides.autoCompleteDays)],
     ['remindUnaccepted', () => remindUnacceptedOrders(overrides.remindAfterMin)],
     ['lowStock', pushLowStock],
+    ['localCallTimeout', () => remindCallTimeout(overrides.callTimeoutMin)],
+    ['localAcceptedStuck', () => remindAcceptedStuck(overrides.acceptedStuckMin)],
+    ['localDelivering', () => remindDeliveringTimeout(overrides.deliveringTimeoutMin)],
+    ['localUnknown', () => remindUnknownGhost(overrides.unknownStuckMin)],
+    ['localUncalled', () => remindLocalUncalled(overrides.localUncalledMin)],
+    ['localCancelReq', () => remindCancelRequestPending(overrides.cancelRequestPendingMin)],
+    ['localAutoCall', () => autoCallRiders(overrides.autoCallDelayMin)],
+    ['localAutoComplete', () => autoCompleteLocalDelivered(overrides.autoCompleteDays)],
+    ['localHousekeeping', housekeepingDelivery],
   ]
   try {
     for (const [name, fn] of tasks) {

@@ -721,6 +721,46 @@ assert_eq "待付款 → CANCELLED（不退款）" "$(req GET "/api/admin/orders
 assert_eq "退款对象为 null" "$(jq -r .data.refund <<<"$R")" "null"
 assert_eq "库存回滚" "$(req GET "/api/products/$PID" "$UT" | jq -r .data.stock)" "$ST0"
 
+echo "== 30. 同城定时任务 =="
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+sched() { req POST /api/admin/system/run-scheduler "$AT" "$1"; }
+SCH1=$(mk_local_paid); req POST "/api/admin/local/orders/$SCH1/accept" "$AT" >/dev/null
+# 备餐超时未呼叫（每单一次）
+R=$(sched '{"localUncalledMin":0}'); [[ "$(jq -r .data.localUncalled <<<"$R")" -ge 1 ]] && ok "localUncalled ≥1" || fail "localUncalled" "$R"
+R=$(sched '{"localUncalledMin":0}'); assert_eq "localUncalled 第二跑归零（每单一次）" "$(jq -r .data.localUncalled <<<"$R")" "0"
+# 自动呼叫（override 开启；settings 默认 0=手动）
+R=$(sched '{"autoCallDelayMin":0}')
+[[ "$(jq -r .data.localAutoCall <<<"$R")" -ge 1 ]] && ok "autoCall ≥1" || fail "autoCall" "$R"
+assert_eq "SCH1 被自动呼叫 → CALLING" "$(dstat $SCH1)" "CALLING"
+R=$(sched '{"autoCallDelayMin":0}'); assert_eq "已有在途单不重呼" "$(jq -r .data.localAutoCall <<<"$R")" "0"
+# 待抢单超时（每单一次）
+R=$(sched '{"callTimeoutMin":0}'); [[ "$(jq -r .data.localCallTimeout <<<"$R")" -ge 1 ]] && ok "callTimeout ≥1" || fail "callTimeout" "$R"
+R=$(sched '{"callTimeoutMin":0}'); assert_eq "callTimeout 第二跑归零" "$(jq -r .data.localCallTimeout <<<"$R")" "0"
+# 接单后卡住 → 配送中超时
+SCT1=$(req GET "/api/admin/local/orders/$SCH1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+SCD1=$(req GET "/api/admin/local/orders/$SCH1/delivery" "$AT" | jq -r .data.delivery.deliveryNo)
+kd_cb "$SCD1" "$SCT1" 100 '骑手已接单' '2026-09-04 14:00:00' >/dev/null
+R=$(sched '{"acceptedStuckMin":0}'); [[ "$(jq -r .data.localAcceptedStuck <<<"$R")" -ge 1 ]] && ok "acceptedStuck ≥1" || fail "acceptedStuck" "$R"
+R=$(sched '{"acceptedStuckMin":0}'); assert_eq "acceptedStuck 第二跑归零" "$(jq -r .data.localAcceptedStuck <<<"$R")" "0"
+kd_cb "$SCD1" "$SCT1" 310 '骑手已取货' '2026-09-04 14:05:00' >/dev/null
+R=$(sched '{"deliveringTimeoutMin":0}'); [[ "$(jq -r .data.localDelivering <<<"$R")" -ge 1 ]] && ok "delivering ≥1" || fail "delivering" "$R"
+R=$(sched '{"deliveringTimeoutMin":0}'); assert_eq "delivering 第二跑归零" "$(jq -r .data.localDelivering <<<"$R")" "0"
+kd_cb "$SCD1" "$SCT1" 520 '已送达' '2026-09-04 14:30:00' >/dev/null   # 收尾到终态
+# UNKNOWN 幽灵单提醒
+SCH2=$(mk_local_paid); req POST "/api/admin/local/orders/$SCH2/accept" "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"timeout"}}' >/dev/null
+req POST "/api/admin/local/orders/$SCH2/call" "$AT" >/dev/null
+R=$(sched '{"unknownStuckMin":0}'); [[ "$(jq -r .data.localUnknown <<<"$R")" -ge 1 ]] && ok "unknown ≥1" || fail "unknown" "$R"
+R=$(sched '{"unknownStuckMin":0}'); assert_eq "unknown 第二跑归零" "$(jq -r .data.localUnknown <<<"$R")" "0"
+req POST "/api/admin/local/orders/$SCH2/delivery/void" "$AT" >/dev/null
+# 取消申请挂起提醒
+SCH3=$(mk_local_paid); req POST "/api/admin/local/orders/$SCH3/accept" "$AT" >/dev/null
+req POST "/api/orders/$SCH3/cancel-request" "$UT" '{"note":"e2e 挂起"}' >/dev/null
+R=$(sched '{"cancelRequestPendingMin":0}'); [[ "$(jq -r .data.localCancelReq <<<"$R")" -ge 1 ]] && ok "cancelReq ≥1" || fail "cancelReq" "$R"
+R=$(sched '{"cancelRequestPendingMin":0}'); assert_eq "cancelReq 第二跑归零" "$(jq -r .data.localCancelReq <<<"$R")" "0"
+# housekeeping 存在且不炸
+R=$(sched '{}'); [[ "$(jq -r '.data | has("localHousekeeping")' <<<"$R")" == "true" ]] && ok "housekeeping 已注册" || fail "housekeeping" "$R"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
