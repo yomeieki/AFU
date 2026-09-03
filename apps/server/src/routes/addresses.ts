@@ -19,8 +19,13 @@ const addressBase = z.object({
   lngE6: z.number().int().min(-180_000_000).max(180_000_000).nullable().optional(),
   poiName: z.string().max(128).nullable().optional(),
 })
-const addressSchema = addressBase.refine((v) => (v.latE6 == null) === (v.lngE6 == null), {
-  message: '经纬度必须同时提供',
+// 坐标必须成对出现（要么都有，要么都没有）——同城配送靠它算距离
+const COORD_PAIR_MESSAGE = '经纬度必须同时提供'
+const isCoordPairValid = (lat: number | null | undefined, lng: number | null | undefined) =>
+  (lat == null) === (lng == null)
+
+const addressSchema = addressBase.refine((v) => isCoordPairValid(v.latE6, v.lngE6), {
+  message: COORD_PAIR_MESSAGE,
 })
 
 // GET /api/addresses
@@ -64,10 +69,17 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const exists = await prisma.address.findFirst({ where: { id, userId, deletedAt: null } })
     if (!exists) throw new AppError(40401, '地址不存在', 404)
 
-    const data = addressBase
-      .partial()
-      .refine((v) => (v.latE6 == null) === (v.lngE6 == null), { message: '经纬度必须同时提供' })
-      .parse(req.body)
+    const data = addressBase.partial().parse(req.body)
+
+    // 坐标是否成对，要按「请求体带了该键就用请求体的值，没带就沿用库内值」合并后判断——
+    // 不能只看请求体自身，否则 {latE6: null} 不带 lngE6 会被误判为「都没有」而放行，
+    // 导致库内坐标被拆成单条腿（只剩一个非 null）。
+    const mergedLatE6 = 'latE6' in data ? data.latE6 : exists.latE6
+    const mergedLngE6 = 'lngE6' in data ? data.lngE6 : exists.lngE6
+    if (!isCoordPairValid(mergedLatE6, mergedLngE6)) {
+      throw new AppError(40001, COORD_PAIR_MESSAGE)
+    }
+
     const fullAddress = [
       data.province ?? exists.province,
       data.city ?? exists.city,

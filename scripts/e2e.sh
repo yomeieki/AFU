@@ -307,10 +307,21 @@ assert_eq "poiName 落库" "$(jq -r .data.poiName <<<"$R")" "丹桂小区"
 R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E半坐标","receiverPhone":"13800000002","province":"四川省","city":"自贡市","district":"高新区","detail":"x","latE6":29350000}'); assert_eq "坐标不成对 40001" "$(code "$R")" "40001"
 R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":3000}"); assert_eq "按地址报价 code 0" "$(code "$R")" "0"
 QTOKEN=$(jq -r .data.quoteToken <<<"$R"); QFEE=$(jq -r .data.fee <<<"$R")
+# 坐标必须成对（合并态校验）：PUT 只带一个键时要与库内已有值合并后判断，而不是只看请求体自身
+R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":null}'); assert_eq "已有坐标地址仅清纬度 40001" "$(code "$R")" "40001"
+R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29360000}'); assert_eq "已有坐标地址合法更新纬度 code 0" "$(code "$R")" "0"
+R=$(req GET /api/addresses "$UT")
+assert_eq "更新后 latE6 生效" "$(jq -r "[.data[] | select(.id==$LADDR)][0].latE6" <<<"$R")" "29360000"
+assert_eq "更新后 lngE6 保持不变（未被误伤）" "$(jq -r "[.data[] | select(.id==$LADDR)][0].lngE6" <<<"$R")" "104790000"
+R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000}'); assert_eq "地址坐标改回原值 code 0" "$(code "$R")" "0"
+R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E无坐标","receiverPhone":"13800000003","province":"四川省","city":"自贡市","district":"高新区","detail":"z"}')
+NADDR=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$NADDR" ]] && ok "创建无坐标地址 #$NADDR" || fail "创建无坐标地址" "$R"
+R=$(req PUT "/api/addresses/$NADDR" "$UT" '{"latE6":29350000}'); assert_eq "无坐标地址仅传纬度 40001" "$(code "$R")" "40001"
 
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
 [[ -n "${LADDR:-}" ]] && req DELETE "/api/addresses/$LADDR" "$UT" >/dev/null
+[[ -n "${NADDR:-}" ]] && req DELETE "/api/addresses/$NADDR" "$UT" >/dev/null
 rm -f "$PNG" "$R1" "$R2"
 [[ -n "${LPID:-}" ]] && req DELETE "/api/admin/products/$LPID" "$AT" >/dev/null
 [[ -n "${EPID:-}" ]] && req DELETE "/api/admin/products/$EPID" "$AT" >/dev/null
