@@ -22,7 +22,9 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     ] = await prisma.$transaction([
       prisma.order.count(),
       prisma.order.count({ where: { createdAt: { gte: today, lt: tomorrow } } }),
-      prisma.product.count({ where: { deletedAt: null } }),
+      // 前端标签是「在售商品数」，必须只数上架的：
+      // 全部下架时若仍显示总数，店家会以为商城正常，实际顾客看到的是空货架
+      prisma.product.count({ where: { deletedAt: null, status: 'ON_SHELF' } }),
       prisma.category.count({ where: { status: 1 } }),
       prisma.order.aggregate({
         where: {
