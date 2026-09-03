@@ -16,6 +16,12 @@ Page({
     address: null,
     remark: '',
     totalAmount: 0,
+    // 运费规则来自 /orders/meta；这里算出来只为展示，实际收费以服务端下单时重算为准
+    shipping: { fee: 0, freeThreshold: 0, minOrderAmount: 0 },
+    shippingFee: 0,
+    payAmount: 0,
+    belowMinOrder: false,
+    minOrderTip: '',
     submitting: false,
     loadFailed: false,
     subscribeTemplateIds: [],
@@ -43,7 +49,9 @@ Page({
         self.setData({
           subscribeTemplateIds: (meta && meta.subscribeTemplateIds) || [],
           payTimeoutMin: (meta && meta.payTimeoutMin) || 15,
+          shipping: (meta && meta.shipping) || { fee: 0, freeThreshold: 0, minOrderAmount: 0 },
         })
+        self.applyShipping()
       })
       .catch(function() {})
   },
@@ -54,6 +62,27 @@ Page({
       this.setData({ address: app.globalData.selectedAddress })
       app.globalData.selectedAddress = null
     }
+  },
+
+  // 运费与起送门槛都按**商品小计**判断，与服务端 services/settings.ts 口径一致。
+  // 两边算法必须一样，否则顾客看到的合计和实际扣款对不上。
+  applyShipping() {
+    var s = this.data.shipping || {}
+    var subtotal = this.data.totalAmount
+    var fee = Number(s.fee) || 0
+    var threshold = Number(s.freeThreshold) || 0
+    var min = Number(s.minOrderAmount) || 0
+
+    var shippingFee = 0
+    if (fee > 0 && !(threshold > 0 && subtotal >= threshold)) shippingFee = fee
+
+    var below = min > 0 && subtotal > 0 && subtotal < min
+    this.setData({
+      shippingFee: shippingFee,
+      payAmount: subtotal + shippingFee,
+      belowMinOrder: below,
+      minOrderTip: below ? '还差 ¥' + formatPrice(min - subtotal) + ' 起送' : '',
+    })
   },
 
   loadData() {
@@ -67,10 +96,11 @@ Page({
         var totalAmount = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
         var address = addresses.find(function(a) { return a.isDefault }) || addresses[0] || null
         self.setData({ items: items, totalAmount: totalAmount, address: address })
+        self.applyShipping()
       })
       .catch(function() {
         // request 已 toast；标记失败禁止提交，避免空单/¥0 也能点提交
-        self.setData({ items: [], totalAmount: 0, loadFailed: true })
+        self.setData({ items: [], totalAmount: 0, shippingFee: 0, payAmount: 0, loadFailed: true })
       })
   },
 
@@ -130,6 +160,10 @@ Page({
     }
     if (this.data.items.length === 0) {
       wx.showToast({ title: '请先选择商品', icon: 'none' })
+      return
+    }
+    if (this.data.belowMinOrder) {
+      wx.showToast({ title: this.data.minOrderTip, icon: 'none' })
       return
     }
     if (this.data.submitting) return

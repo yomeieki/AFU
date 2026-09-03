@@ -156,7 +156,8 @@
 }
 
 .spacer {
-  height: 190rpx;
+  /* 底栏最高时为：协议行 + 起送提示 + 合计行，占位要盖住最高的情况 */
+  height: 230rpx;
 }
 
 /* Bottom bar */
@@ -183,6 +184,13 @@
 }
 .agree-link {
   color: var(--brand);
+}
+/* 未达起送金额时的提示条：与协议行同宽，压在合计上方 */
+.min-order-tip {
+  font-size: 24rpx;
+  color: var(--brand);
+  text-align: center;
+  line-height: 1.4;
 }
 .bottom-main {
   display: flex;

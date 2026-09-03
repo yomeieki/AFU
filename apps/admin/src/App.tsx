@@ -11,6 +11,7 @@ import Users from './pages/Users'
 import ScanStats from './pages/ScanStats'
 import Banners from './pages/Banners'
 import SystemStatus from './pages/SystemStatus'
+import ShopSettings from './pages/ShopSettings'
 import { ToastHost } from './components/ui/Toast'
 import { ConfirmDialogHost } from './components/ui/ConfirmDialog'
 
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="users" element={<Users />} />
           <Route path="scan-stats" element={<ScanStats />} />
           <Route path="banners" element={<Banners />} />
+          <Route path="shop-settings" element={<ShopSettings />} />
           <Route path="system" element={<SystemStatus />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -9,6 +9,7 @@ import {
   ScanLine,
   Image,
   Settings,
+  Store,
   LogOut,
   UtensilsCrossed,
   Bell,
@@ -26,6 +27,7 @@ const navItems: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/users', label: '用户管理', icon: Users },
   { to: '/scan-stats', label: '扫码统计', icon: ScanLine },
   { to: '/banners', label: '轮播管理', icon: Image },
+  { to: '/shop-settings', label: '店铺设置', icon: Store },
   { to: '/system', label: '系统状态', icon: Settings },
 ]
 
