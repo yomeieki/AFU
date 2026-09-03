@@ -338,20 +338,19 @@ pm2 conf pm2-logrotate
 
 ### 13.1 外部拨测（UptimeRobot，免费版 50 个监控 / 5 分钟）
 
-1. 注册 [uptimerobot.com](https://uptimerobot.com)
-2. **Add New Monitor** 三个：
+已配置（账号即注册邮箱，2026-09-03 建）：
 
-| 类型 | URL | Keyword（Alert when keyword **not exists**） | 说明 |
+| 类型 | URL | 判定 | 说明 |
 |---|---|---|---|
-| HTTP(s) – Keyword | `https://api.yuegui-hotel.online/health` | `"status":"ok"` | 后端进程 + MySQL 探活（DB 挂了返回 503 `degraded`） |
-| HTTP(s) – Keyword | `https://admin.yuegui-hotel.online/` | `阿福` | 后台静态站 + HTTPS 证书 |
-| HTTP(s) | `https://api.yuegui-hotel.online/api/categories` | — | 业务接口可用 |
+| HTTP(s) | `https://api.yuegui-hotel.online/health` | Up 状态码仅 2xx/3xx | 后端进程 + MySQL 探活。DB 挂时该接口返回 **503 degraded**，直接判 Down，不需要额外的关键词 |
+| Keyword | `https://admin.yuegui-hotel.online/` | `阿福凉菜` **不存在**即告警 | 后台静态站 + HTTPS 证书。用关键词而非纯 HTTP：构建产物坏掉时页面照样返 200 |
+| Keyword | `https://api.yuegui-hotel.online/api/categories` | `"code":0` **不存在**即告警 | 业务接口。该接口出错时也返 200 但 `code` 非 0，只看状态码发现不了 |
 
-3. **Alert Contacts**：邮件（免费）+ Webhook 推企微群：
-   - Type = Webhook，URL 填企微机器人地址，POST Value (JSON)：
-     `{"msgtype":"text","text":{"content":"【UptimeRobot】*monitorFriendlyName* *alertTypeFriendlyName*\n*monitorURL*\n*alertDetails*"}}`
-   - 勾 "Send as JSON"
-4. **演练**：服务器执行 `pm2 stop food-shop-server`，10 分钟内应收到 Down 告警；`pm2 start food-shop-server` 后收到 Up。
+关键词匹配的是**响应 HTML/JSON 源码**，不是渲染后的 DOM——单页应用要挑打包进 `index.html` 的静态文字（这里是 `<title>`）。
+
+**告警渠道：邮件**。Webhook 已改为付费功能，所以无法把拨测告警转推到 PushPlus；免费的手机推送需装 UptimeRobot 的 iOS/Android App 并在 Integrations → Push notifications 里启用。
+
+**演练**：`pm2 stop food-shop-server`，10 分钟内应收到 Down 邮件，`pm2 start` 后收到 Up。不停机的替代验证是监控详情页的 **Test Notification**（只验投递链路，不验探测逻辑）。
 
 ### 13.2 服务内告警
 
@@ -394,10 +393,16 @@ node /www/food-shop/apps/server/scripts/check-notify.mjs
 | 桶 | 访问 | app | env | usage | 说明 |
 |---|---|---|---|---|---|
 | `afu-images-1342627167` | 公有读私有写 | afu-liangcai | prod | images | 本项目商品/Banner 图片，单 AZ，默认流量告警已开 |
-| `yuegui-booking-backup-1342627167` | 私有 | yuegui-hotel | prod | backup | 酒店预订备份（另有原标签「预定信息=1」）|
+| `yuegui-booking-backup-1342627167` | 私有 | yuegui-hotel | prod | backup | 酒店预订备份（另有原标签「预定信息=1」）。本项目备份落在 `food-shop/` 前缀下，见下方生命周期规则 |
 | `yuegui-room-service-sandbox-1342627167` | 公有读 | yuegui-hotel | sandbox | sandbox | 客房配送沙箱（另有原标签「客房配送=2」）|
 
 图片桶的成本护栏：控制台「默认告警」已开（1 分钟外网下行 >5000MB 触发）。如需进一步防盗刷，可在桶的「安全管理 → 防盗链」配 Referer 白名单——**注意小程序请求不带 Referer，必须勾选「允许空 Referer」，否则图片全裂**。
+
+备份桶的生命周期规则 **food-shop-backup-90d**（2026-09-03 建）：范围限定前缀 `food-shop/`，当前版本文件修改 90 天后删除，碎片创建 30 天后删除。
+
+只作用于 `food-shop/` 是刻意的——同一个桶里 `production/`、`backups/`、`sandbox/` 属于酒店项目，不能被这条规则波及。保留 90 天而非 30 天：每日数据库备份只有 ~20KB，90 天累计不到 2MB，多留回旋余地几乎不花钱。
+
+备份密钥（CAM 子用户）**没有 DeleteObject 权限**，所以过期清理只能靠桶的生命周期规则，不能靠脚本删——这也是故意的，防止密钥泄露后备份被一并抹掉。
 
 ### 13.4 日志与磁盘
 
