@@ -1,3 +1,6 @@
+export type Channel = 'EXPRESS' | 'LOCAL'
+export const CHANNEL_LABEL: Record<Channel, string> = { EXPRESS: '全国邮寄', LOCAL: '同城配送' }
+
 export interface ApiResponse<T = unknown> {
   code: number
   message: string
@@ -17,6 +20,7 @@ export interface Category {
   iconUrl: string | null
   sortOrder: number
   status: number
+  channel: Channel
   createdAt: string
   _count?: { products: number }
 }
@@ -53,6 +57,8 @@ export interface Product {
   description: string | null
   status: 'ON_SHELF' | 'OFF_SHELF'
   deliveryType: string
+  channel: Channel
+  netWeightG: number | null
   isRecommended: number
   salesCount: number
   qrScene: string | null
@@ -277,4 +283,27 @@ export interface ShippingSettings {
   freeThreshold: number
   /** 起送金额（分），按商品小计判断。0 = 无门槛 */
   minOrderAmount: number
+}
+
+/** 同城配送设置（与服务端 services/local-settings.ts 同构；金额分、坐标微度） */
+export interface LocalDeliverySettings {
+  version: number
+  enabled: boolean
+  paused: { until: string | null; reason: string } | null
+  store: { name: string; phone: string; province: string; city: string; district: string; address: string; latE6: number | null; lngE6: number | null }
+  radiusKm: number
+  detourFactor: number
+  fee: { baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number }
+  businessHours: { start: string; end: string }[]
+  prepMinutes: number
+  riderSpeedKmh: number
+  acceptGraceMin: number
+  autoCallDelayMin: number
+  defaultProvider: 'KD100' | 'SELF'
+  kd100: { providers: string[]; goodsType: string; defaultItemWeightG: number; insurance: boolean; autoDowngradeToSelfOnNoBalance: boolean }
+  limits: { maxItems: number; maxWeightKg: number }
+  callTimeoutMin: number
+  acceptedStuckMin: number
+  deliveringTimeoutMin: number
+  tip: { maxPerCall: number; maxPerOrder: number }
 }

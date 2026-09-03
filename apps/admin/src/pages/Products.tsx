@@ -7,16 +7,11 @@ import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
-import type { Product, Category, SpecDimension } from '../types'
+import ChannelTabs from '../components/ui/ChannelTabs'
+import { CHANNEL_LABEL, type Product, type Category, type SpecDimension, type Channel } from '../types'
 import { toast } from '../components/ui/Toast'
 import QRCodeLib from 'qrcode'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
-
-const DELIVERY_TYPE_LABEL: Record<string, string> = {
-  EXPRESS: '快递配送',
-  LOCAL: '同城配送',
-  PICKUP: '到店自提',
-}
 
 const emptyForm = {
   categoryId: 0,
@@ -33,17 +28,19 @@ const emptyForm = {
   storageMethod: '',
   deliveryInfo: '',
   description: '',
-  deliveryType: 'EXPRESS',
+  netWeightG: '',
   status: 'ON_SHELF' as 'ON_SHELF' | 'OFF_SHELF',
   isRecommended: 0,
 }
 
 export default function Products() {
+  const [channel, setChannel] = useState<Channel>('EXPRESS')
   const [list, setList] = useState<Product[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [categories, setCategories] = useState<Category[]>([])
+  const channelCategories = categories.filter((c) => c.channel === channel)
   const [filterCategoryId, setFilterCategoryId] = useState('')
   const [filterKeyword, setFilterKeyword] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
@@ -67,6 +64,7 @@ export default function Products() {
       categoryId: filterCategoryId ? Number(filterCategoryId) : undefined,
       keyword: filterKeyword || undefined,
       status: filterStatus || undefined,
+      channel,
     })
       .then((res) => {
         setList(res.data.data.list)
@@ -80,6 +78,7 @@ export default function Products() {
   }, [])
 
   useEffect(() => { load() }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setFilterCategoryId(''); setPage(1); load(1) }, [channel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
     setPage(1)
@@ -112,7 +111,7 @@ export default function Products() {
       storageMethod: p.storageMethod ?? '',
       deliveryInfo: p.deliveryInfo ?? '',
       description: p.description ?? '',
-      deliveryType: p.deliveryType || 'EXPRESS',
+      netWeightG: p.netWeightG?.toString() ?? '',
       status: p.status,
       isRecommended: p.isRecommended,
     })
@@ -174,7 +173,7 @@ export default function Products() {
         storageMethod: form.storageMethod || null,
         deliveryInfo: form.deliveryInfo || null,
         description: form.description || null,
-        deliveryType: form.deliveryType,
+        netWeightG: form.netWeightG ? Number(form.netWeightG) : null,
         status: form.status,
         isRecommended: form.isRecommended,
         specDimensions: specDims.length > 0 ? specDims : null,
@@ -299,7 +298,7 @@ export default function Products() {
   const handleBatchStatus = async (status: 'ON_SHELF' | 'OFF_SHELF') => {
     const catId = filterCategoryId ? Number(filterCategoryId) : undefined
     const catName = catId ? categories.find((c) => c.id === catId)?.name : undefined
-    const scope = catName ? `分类「${catName}」下的` : '全部'
+    const scope = `${CHANNEL_LABEL[channel]}${catName ? `·分类「${catName}」下的` : '全部'}`
     const action = status === 'ON_SHELF' ? '上架（开档）' : '下架（收档）'
     const ok = await confirmDialog({
       title: `批量${action}`,
@@ -308,7 +307,7 @@ export default function Products() {
     })
     if (!ok) return
     try {
-      const res = await batchProductStatus(status, catId)
+      const res = await batchProductStatus(status, catId, channel)
       toast.success(`已${action} ${res.data.data.updated} 个商品`)
       load()
     } catch {
@@ -346,6 +345,8 @@ export default function Products() {
         </Button>
       </div>
 
+      <ChannelTabs value={channel} onChange={setChannel} />
+
       <div className="bg-white rounded-lg shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <div>
           <label className="block text-xs text-gray-500 mb-1">分类</label>
@@ -355,7 +356,7 @@ export default function Products() {
             className="border border-gray-300 rounded-md px-3 py-1.5 text-sm"
           >
             <option value="">全部</option>
-            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {channelCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
         <div>
@@ -586,7 +587,7 @@ export default function Products() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   >
                     <option value={0}>请选择</option>
-                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {channelCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -596,6 +597,13 @@ export default function Products() {
                     onChange={(e) => setForm({ ...form, unit: e.target.value })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">净重（克）</label>
+                  <input type="number" min={1} value={form.netWeightG}
+                    onChange={(e) => setForm({ ...form, netWeightG: e.target.value })}
+                    placeholder="同城配送按重量呼叫骑手，空=用默认值"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
                 </div>
               </div>
               <div>
@@ -718,16 +726,10 @@ export default function Products() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">配送方式</label>
-                  <select
-                    value={form.deliveryType}
-                    onChange={(e) => setForm({ ...form, deliveryType: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                  >
-                    {Object.entries(DELIVERY_TYPE_LABEL).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">所属渠道</label>
+                  <div className="px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-md text-gray-600">
+                    {CHANNEL_LABEL[categories.find((c) => c.id === form.categoryId)?.channel ?? channel]}（随分类）
+                  </div>
                 </div>
               </div>
               <div>

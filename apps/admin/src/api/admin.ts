@@ -18,6 +18,8 @@ import type {
   RefundSummary,
   AfterSale,
   ShippingSettings,
+  Channel,
+  LocalDeliverySettings,
 } from '../types'
 
 // Auth
@@ -33,8 +35,8 @@ export const login = (username: string, password: string) =>
 export const getStats = () => client.get<ApiResponse<Stats>>('/admin/stats')
 
 // Categories
-export const getCategories = () =>
-  client.get<ApiResponse<Category[]>>('/admin/categories')
+export const getCategories = (channel?: Channel) =>
+  client.get<ApiResponse<Category[]>>('/admin/categories', { params: channel ? { channel } : undefined })
 
 export const createCategory = (data: Partial<Category>) =>
   client.post<ApiResponse<Category>>('/admin/categories', data)
@@ -52,6 +54,7 @@ export const getProducts = (params?: {
   categoryId?: number
   keyword?: string
   status?: string
+  channel?: Channel
 }) => client.get<ApiResponse<PaginatedData<Product>>>('/admin/products', { params })
 
 type ProductPayload = Partial<Omit<Product, 'images'>> & { imageUrls?: string[] }
@@ -75,6 +78,7 @@ export const getOrders = (params?: {
   status?: string
   /** 订单号 / 收货人 / 手机号 模糊 */
   keyword?: string
+  deliveryType?: 'EXPRESS' | 'LOCAL' | 'ALL'
 }) => client.get<ApiResponse<PaginatedData<Order>>>('/admin/orders', { params })
 
 export const getOrder = (id: number) =>
@@ -149,6 +153,7 @@ export const getPendingOrderCount = () =>
       lowStockCount: number
       lowStockThreshold: number
       afterSaleCount: number
+      localPendingCount: number
     }>
   >('/admin/orders/pending-count')
 
@@ -183,10 +188,11 @@ export const deleteBanner = (id: number) =>
   client.delete<ApiResponse<null>>(`/admin/banners/${id}`)
 
 // 批量上/下架（开档/收档；categoryId 缺省 = 全部）
-export const batchProductStatus = (status: 'ON_SHELF' | 'OFF_SHELF', categoryId?: number) =>
+export const batchProductStatus = (status: 'ON_SHELF' | 'OFF_SHELF', categoryId?: number, channel?: Channel) =>
   client.post<ApiResponse<{ updated: number }>>('/admin/products/batch-status', {
     status,
     ...(categoryId ? { categoryId } : {}),
+    ...(channel ? { channel } : {}),
   })
 
 // 批量生成二维码（缺省 = 所有无码上架商品）
@@ -202,3 +208,15 @@ export const getShippingSettings = () =>
 
 export const updateShippingSettings = (payload: ShippingSettings) =>
   client.put<ApiResponse<ShippingSettings>>('/admin/settings/shipping', payload).then((r) => r.data.data)
+
+// 同城设置
+export const getLocalSettings = () =>
+  client.get<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery').then((r) => r.data.data)
+export const updateLocalSettings = (payload: LocalDeliverySettings) =>
+  client.put<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery', payload).then((r) => r.data.data)
+export const patchStoreLocation = (latE6: number, lngE6: number) =>
+  client.patch<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery/store-location', { latE6, lngE6 }).then((r) => r.data.data)
+export const pauseLocal = (reason: string, until?: string) =>
+  client.post<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery/pause', { reason, until }).then((r) => r.data.data)
+export const resumeLocal = () =>
+  client.delete<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery/pause').then((r) => r.data.data)

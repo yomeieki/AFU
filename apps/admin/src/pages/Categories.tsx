@@ -5,13 +5,15 @@ import ImageUploader from '../components/ImageUploader'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
-import type { Category } from '../types'
+import ChannelTabs from '../components/ui/ChannelTabs'
+import type { Category, Channel } from '../types'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 
-const emptyForm = { name: '', iconUrl: '', sortOrder: 0, status: 1 }
+const emptyForm = { name: '', iconUrl: '', sortOrder: 0, status: 1, channel: 'EXPRESS' as Channel }
 
 export default function Categories() {
+  const [channel, setChannel] = useState<Channel>('EXPRESS')
   const [list, setList] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -22,23 +24,23 @@ export default function Categories() {
 
   const load = () => {
     setLoading(true)
-    getCategories()
+    getCategories(channel)
       .then((res) => setList(res.data.data))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [channel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCreate = () => {
     setEditing(null)
-    setForm(emptyForm)
+    setForm({ ...emptyForm, channel })
     setError('')
     setShowModal(true)
   }
 
   const openEdit = (cat: Category) => {
     setEditing(cat)
-    setForm({ name: cat.name, iconUrl: cat.iconUrl ?? '', sortOrder: cat.sortOrder, status: cat.status })
+    setForm({ name: cat.name, iconUrl: cat.iconUrl ?? '', sortOrder: cat.sortOrder, status: cat.status, channel: cat.channel })
     setError('')
     setShowModal(true)
   }
@@ -48,12 +50,14 @@ export default function Categories() {
     setError('')
     try {
       const payload = { ...form, iconUrl: form.iconUrl || null }
+      const channelChanged = !!editing && editing.channel !== form.channel
       if (editing) {
         await updateCategory(editing.id, payload)
       } else {
         await createCategory(payload)
       }
       setShowModal(false)
+      if (channelChanged) toast.success('已迁移渠道')
       load()
     } catch (err: unknown) {
       setError(
@@ -86,6 +90,8 @@ export default function Categories() {
           新增分类
         </Button>
       </div>
+
+      <ChannelTabs value={channel} onChange={setChannel} />
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden overflow-x-auto">
         <Table
@@ -176,6 +182,17 @@ export default function Categories() {
                     <option value={1}>启用</option>
                     <option value={0}>禁用</option>
                   </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">渠道</label>
+                  <select value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value as Channel })}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                    <option value="EXPRESS">全国邮寄</option>
+                    <option value="LOCAL">同城配送</option>
+                  </select>
+                  {editing && (editing._count?.products ?? 0) > 0 && editing.channel !== form.channel && (
+                    <p className="mt-1 text-xs text-amber-600">改渠道会把该分类下 {editing._count?.products} 个商品一起迁到新渠道，并清空顾客购物车里的这些商品</p>
+                  )}
                 </div>
               </div>
           </div>

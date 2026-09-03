@@ -81,6 +81,7 @@ export default function Orders() {
       pageSize,
       status: filterStatus || undefined,
       keyword: keyword.trim() || undefined,
+      deliveryType: 'EXPRESS',
     })
       .then((res) => {
         setList(res.data.data.list)
@@ -287,7 +288,7 @@ export default function Orders() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-gray-800">订单管理</h2>
+      <h2 className="text-xl font-semibold text-gray-800">邮寄订单</h2>
 
       {/* 状态 Tab */}
       <div className="bg-white rounded-lg shadow-card px-2 overflow-x-auto">
