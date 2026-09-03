@@ -21,7 +21,7 @@
 - 错误码（已与既有 42201-42231 去冲突，禁止另造）：`42221` 退款前先取消配送单 · `42225` 呼叫骑手失败（附运力原文）· `42228` 已有在途配送单 · `42232` 余额不足已熔断 · `42233` 无在途配送单 · `42234` 状态未确认（UNKNOWN）不能直接操作 · `42235` 仅待抢单状态可加小费 · `42236` 加小费被运力拒绝 · `42237` 配送单状态已变化，请刷新 · `42238` 取消请求超时，请稍后重试。
 - 拒单（决策 N3/N4）：`POST /admin/orders/:id/reject`，两渠道通用；终态 REFUNDED（全额走 `initiateRefund`，`cancelReason='拒单：'+文案` 顾客可见）；PENDING_PAYMENT 单走取消不走退款。
 - 环境：本 worktree 独立库 `food_shop_sc`，后端 :3100 常驻热重载（不要另起/不要 kill）；e2e 连跑两次之间等 60s（loginLimiter）。e2e 后端启动需带 `LOCAL_DELIVERY_PROVIDER_MOCK=true`。
-- 提交信息中文 `type(scope): 摘要`，结尾 `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`。
+- 提交信息中文 `type(scope): 摘要`，结尾 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`。
 
 ## 文件结构
 
@@ -169,7 +169,7 @@ Expected: `{ keySet:false, secretSet:false, mock:true, callbackUrlOk:true, ... }
 git add apps/server/prisma apps/server/src/config.ts apps/server/src/routes/admin/system.ts .env.example
 git commit -m "feat(config): M2 基座——提醒标记列、KD100 配置与懒校验、回调 URL 生产限长断言
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -371,7 +371,7 @@ Expected: `全部通过 10`；tsc 零错误。
 git add apps/server/src/services/delivery apps/server/scripts/selftest-delivery-core.ts
 git commit -m "feat(delivery): 引擎纯逻辑层——状态机常量/熔断/事件幂等 + 自测
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -631,7 +631,7 @@ Run: `cd apps/server && npx ts-node --transpile-only scripts/selftest-kd100.ts &
 git add apps/server/src/services/delivery/kd100.ts apps/server/scripts/selftest-kd100.ts
 git commit -m "feat(delivery): 快递100 协议实现——签名/8s 超时/错误映射/回调验签 + 离线自测
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -735,7 +735,7 @@ Run: `cd apps/server && npx tsc --noEmit && cd ../.. && bash scripts/e2e.sh 2>&1
 git add apps/server/src/services/delivery/{mock,provider}.ts apps/server/src/routes/admin/kd100-mock.ts apps/server/src/routes/admin/index.ts scripts/e2e.sh
 git commit -m "feat(delivery): mock 运力（指令队列/调用记录/真验签复用）+ 控制路由
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1008,7 +1008,7 @@ router.post('/kd100-circuit/reset', async (req, res, next) => {
 git add apps/server/src/services/delivery/orchestrator.ts apps/server/src/routes/admin/{delivery.ts,index.ts,system.ts} apps/server/src/services/order-notify.ts scripts/e2e.sh
 git commit -m "feat(delivery): callRider 三分支（成功/超时占位/失败熔断）+ 同城接单呼叫路由
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1215,7 +1215,7 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       if (moved === 0) return   // 乱序迟到包：事件已留痕，不动状态、不联动订单
       // —— Order 联动（一律 LOCAL + 白名单 updateMany）——
       if (p.providerStatus === '310') {
-        await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED', shippedAt: new Date() } })
+        await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED' } })
         const o = delivery.order
         after.push(() => sendDeliverSubscribeMessage(o.user.openid, { id: o.id, orderNo: o.orderNo }, { courierName: p.courierName ?? delivery.courierName, courierMobile: p.courierMobile ?? delivery.courierMobile }, o.items[0]?.productName))
       } else if (p.providerStatus === '520') {
@@ -1223,9 +1223,13 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       } else if (p.providerStatus === '720') {
         // 取货后被取消：SHIPPED 回退 PREPARING。三重护栏：无在途退款、无待处理售后、未完成
         const o = delivery.order
-        const hasActiveRefund = o.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))
-        if (!hasActiveRefund && o.afterSales.length === 0 && !o.completedAt) {
-          await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: 'SHIPPED' }, data: { status: 'PREPARING', shippedAt: null } })
+        // 三重护栏直接写进 where，避免用事务外快照判定（部分退款不改订单状态，存在窄 TOCTOU）
+        if (!o.completedAt) {
+          await tx.order.updateMany({ where: {
+            id: delivery.orderId, deliveryType: 'LOCAL', status: 'SHIPPED', completedAt: null,
+            refunds: { none: { status: { in: [...ACTIVE_REFUND_STATUSES] } } },
+            afterSales: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
+          }, data: { status: 'PREPARING' } })
         }
         after.push(() => notifyLocalDeliveryAlert('配送单被取消', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '运力方取消', '请重新呼叫骑手或改自己送']))
       }
@@ -1233,8 +1237,12 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       if (p.providerStatus === '515') after.push(() => notifyLocalDeliveryAlert('骑手改派中', [`订单 ${delivery.orderNo}`, '平台正在重新分配骑手']))
     })
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') return { http: 200 }
+    // 这里**不能**再对 P2002 返 200：dedupeKey 的重复已由 recordDeliveryEvent 自己吃掉并返回
+    // {duplicate:true}，永远不会抛到这层。能抛到这层的 P2002 只可能是 UNKNOWN 认领时
+    // providerTaskId 撞了另一条配送单的唯一索引——那正是最需要人知道的情形，
+    // 返 200 会让事实永久丢失（无查单接口，回调是唯一事实来源）。
     console.error('[kd-callback] 入库失败:', e)
+    notifySystemAlert('快递100 回调入库失败', [`deliveryNo=${deliveryNo} status=${p.providerStatus}`, (e as Error).message, '已返回 500 请求重推；若持续失败请人工核对配送单'], { key: `kd-cb-persist:${deliveryNo}` })
     return { http: 500 }   // N5：唯一返 500 的情形——让快递100 重推，这是无查单接口下仅有的补偿
   }
   for (const fn of after) { try { fn() } catch (e) { console.warn('[kd-callback] 通知失败:', (e as Error).message) } }
@@ -1300,7 +1308,7 @@ export function sendDeliverSubscribeMessage(
 git add apps/server/src/services/delivery/callback.ts apps/server/src/routes/kd-callback.ts apps/server/src/app.ts apps/server/src/config.ts apps/server/src/services/subscribe-message.ts scripts/e2e.sh
 git commit -m "feat(delivery): 快递100 回调状态机——幂等/乱序/假撤单/UNKNOWN 认领/订单联动 + 配送订阅消息
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1423,7 +1431,7 @@ async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: n
   if (!o || o.completedAt) return
   if (o.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))) return
   if (o.afterSales.length > 0) return
-  await tx.order.updateMany({ where: { id: orderId, deliveryType: 'LOCAL', status: 'SHIPPED' }, data: { status: 'PREPARING', shippedAt: null } })
+  await tx.order.updateMany({ where: { id: orderId, deliveryType: 'LOCAL', status: 'SHIPPED' }, data: { status: 'PREPARING' } })
 }
 
 export async function precancelDelivery(orderId: number): Promise<{ cancelFeeFen: number | null }> {
@@ -1497,7 +1505,9 @@ export async function selfDeliver(input: { orderId: number; name: string; phone:
         courierName: trunc(input.name, 64), courierMobile: trunc(input.phone, 20),
         calledAt: now, acceptedAt: now, pickedUpAt: now, operator: trunc(input.operator, 64),
       } })
-      const moved = await tx.order.updateMany({ where: { id: input.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED', shippedAt: now } })
+      // 注意：Order 没有 shippedAt 列（发货时间只存在于 Shipment，而 LOCAL 单永不写 Shipment）。
+      // 同城单的「出发时间」以 Delivery.pickedUpAt 为准。
+      const moved = await tx.order.updateMany({ where: { id: input.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED' } })
       if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
       await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `店内自送：${input.name} ${input.phone}`, operator: input.operator })
       return { deliveryId: d.id, deliveryNo }
@@ -1563,7 +1573,7 @@ router.post('/local-delivery/probe', async (req, res, next) => {
 git add apps/server/src/services/delivery apps/server/src/routes/admin/{delivery,settings}.ts apps/server/src/services/refund.ts apps/server/src/routes/orders.ts scripts/e2e.sh
 git commit -m "feat(delivery): 取消/加小费/自己送/标记送达 + 退款42221联动 + 顾客端白名单与骑手位置
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1692,7 +1702,7 @@ router.post('/:id/reject', async (req: Request, res: Response, next: NextFunctio
 git add apps/server/src/routes/admin/orders.ts scripts/e2e.sh
 git commit -m "feat(admin): 拒单——两渠道通用，全额退款终态 REFUNDED + 售罄联动下架
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1715,8 +1725,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `remindLocalUncalled(min?)` — Order LOCAL PREPARING 且 `acceptedAt < now-X`（默认 10）且 `localUncalledRemindedAt:null` 且 `cancelRequestedAt:null` 且无在途配送单（`deliveries: { none: { activeOrderId: { not: null } } }` 用 relation filter；等价写法：先查 activeOrderId 集合排除）
   - `remindCancelRequestPending(min?)` — Order LOCAL `cancelRequestedAt < now-X`（默认 5）且 status∉{COMPLETED,CANCELLED,REFUNDED} 且 `cancelRequestRemindedAt:null`
   - `autoCallRiders(delayMin?)` — 前置 6 条件：`delay>0`（0=手动模式直接返 0；默认 settings.autoCallDelayMin）、设置 enabled 且 `isOpenNow`、熔断未触发、订单 PREPARING+LOCAL+`acceptedAt < now-delay`、无取消申请、无在途配送单 → 逐单 `callRider({source:'SCHEDULER'})`，单个失败 catch 后继续（AppError 不告警——callRider 内部已告警），返成功数
+  - `autoCompleteLocalDelivered(days?)` — **LOCAL 单的自动确认收货兜底**：既有 `autoCompleteShippedOrders` 走 `shipment.shippedAt`，而 LOCAL 单永不写 Shipment 行，所以它永远命中不了同城单；若 520 回调丢失，同城单会永久停在 SHIPPED。本任务补一条：Order `deliveryType:'LOCAL'` + `status:'SHIPPED'`，其在途配送单（或最近一张）的 `pickedUpAt < now - config.order.autoCompleteDays 天` → `updateMany` 置 COMPLETED + completedAt（同时把仍占位的配送单置 DELIVERED + 释放）。返处理行数。
   - `housekeepingDelivery()` — ①终态单 `activeOrderId != null` → 释放 + notifySystemAlert（数据不一致）②**陈旧 PENDING 清扫**：`status:'PENDING'` 且 `createdAt < now-10min` → 置 FAILED + 释放 + `errorCode:'STALE'` + 告警（callRider 的恢复写在 DB 不可达时会失败，占位就此泄漏且无人能救——这是最后一道防线）③`DeliveryEvent.rawPayload` 90 天前 → `updateMany({data:{rawPayload: Prisma.DbNull}})`；返处理行数
-- scheduler 注册（追加到 tasks 数组，名字即 e2e 断言键）：`localCallTimeout/localAcceptedStuck/localDelivering/localUnknown/localUncalled/localCancelReq/localAutoCall/localHousekeeping`；`SchedulerOverrides` 增 `callTimeoutMin/acceptedStuckMin/deliveringTimeoutMin/unknownStuckMin/localUncalledMin/cancelRequestPendingMin/autoCallDelayMin`；run-scheduler 路由 body 同名透传。
+- scheduler 注册（追加到 tasks 数组，名字即 e2e 断言键）：`localCallTimeout/localAcceptedStuck/localDelivering/localUnknown/localUncalled/localCancelReq/localAutoCall/localAutoComplete/localHousekeeping`；`SchedulerOverrides` 增 `callTimeoutMin/acceptedStuckMin/deliveringTimeoutMin/unknownStuckMin/localUncalledMin/cancelRequestPendingMin/autoCallDelayMin`；run-scheduler 路由 body 同名透传。
 
 - [ ] **Step 1: e2e（RED）**
 
@@ -1860,7 +1871,7 @@ export async function housekeepingDelivery(): Promise<number> {
 git add apps/server/src/services/delivery/tasks.ts apps/server/src/services/scheduler.ts apps/server/src/routes/admin/system.ts scripts/e2e.sh
 git commit -m "feat(scheduler): 同城 7 兜底任务 + 自动呼叫（每单一次、打标先行）
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1919,5 +1930,5 @@ Expected: 两轮全绿、条数一致。
 git add scripts/e2e.sh apps/server/src/routes/admin/orders.ts docs/api.md docs/superpowers/specs/2026-09-03-local-delivery-design.md
 git commit -m "chore(delivery): M2-A 收尾——e2e 去 SQL、徽标口径收窄、api.md 与 spec 同步
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```

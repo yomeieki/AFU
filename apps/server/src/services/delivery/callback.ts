@@ -4,7 +4,6 @@
  * 查不到单/验签失败/重复/乱序/未知状态一律 200 停止重推，问题走告警人工兜底。
  * 处理顺序（勿调换）：查单 → 验签 → 并呼假撤单过滤 → 单事务[事件+推进+订单联动] → 事务后通知。
  */
-import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { getDeliveryProvider } from './provider'
 import { PROVIDER_STATUS_MAP, TERMINAL } from './state'
@@ -101,11 +100,15 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       } else if (p.providerStatus === '520') {
         await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: { in: ['PREPARING', 'SHIPPED'] } }, data: { status: 'COMPLETED', completedAt: new Date() } })
       } else if (p.providerStatus === '720') {
-        // 取货后被取消：SHIPPED 回退 PREPARING。三重护栏：无在途退款、无待处理售后、未完成
+        // 取货后被取消：SHIPPED 回退 PREPARING。三重护栏直接写进 where，避免用事务外快照判定
+        // （部分退款不改订单状态，存在窄 TOCTOU）
         const o = delivery.order
-        const hasActiveRefund = o.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))
-        if (!hasActiveRefund && o.afterSales.length === 0 && !o.completedAt) {
-          await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: 'SHIPPED' }, data: { status: 'PREPARING' } })
+        if (!o.completedAt) {
+          await tx.order.updateMany({ where: {
+            id: delivery.orderId, deliveryType: 'LOCAL', status: 'SHIPPED', completedAt: null,
+            refunds: { none: { status: { in: [...ACTIVE_REFUND_STATUSES] } } },
+            afterSales: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
+          }, data: { status: 'PREPARING' } })
         }
         after.push(() => notifyLocalDeliveryAlert('配送单被取消', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '运力方取消', '请重新呼叫骑手或改自己送']))
       }
@@ -113,8 +116,12 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       if (p.providerStatus === '515') after.push(() => notifyLocalDeliveryAlert('骑手改派中', [`订单 ${delivery.orderNo}`, '平台正在重新分配骑手']))
     })
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') return { http: 200 }
+    // 这里**不能**再对 P2002 返 200：dedupeKey 的重复已由 recordDeliveryEvent 自己吃掉并返回
+    // {duplicate:true}，永远不会抛到这层。能抛到这层的 P2002 只可能是 UNKNOWN 认领时
+    // providerTaskId 撞了另一条配送单的唯一索引——那正是最需要人知道的情形，
+    // 返 200 会让事实永久丢失（无查单接口，回调是唯一事实来源）。
     console.error('[kd-callback] 入库失败:', e)
+    notifySystemAlert('快递100 回调入库失败', [`deliveryNo=${deliveryNo} status=${p.providerStatus}`, (e as Error).message, '已返回 500 请求重推；若持续失败请人工核对配送单'], { key: `kd-cb-persist:${deliveryNo}` })
     return { http: 500 }   // N5：唯一返 500 的情形——让快递100 重推，这是无查单接口下仅有的补偿
   }
   for (const fn of after) { try { fn() } catch (e) { console.warn('[kd-callback] 通知失败:', (e as Error).message) } }
