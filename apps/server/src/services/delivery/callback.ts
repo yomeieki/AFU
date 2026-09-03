@@ -1,0 +1,122 @@
+/**
+ * 快递100 状态回调处理。应答语义与微信支付相反（决策 N5）：
+ * 快递100 没有查单接口，回调是唯一事实来源——仅「数据库入库异常」返 500 让对方重推；
+ * 查不到单/验签失败/重复/乱序/未知状态一律 200 停止重推，问题走告警人工兜底。
+ * 处理顺序（勿调换）：查单 → 验签 → 并呼假撤单过滤 → 单事务[事件+推进+订单联动] → 事务后通知。
+ */
+import { Prisma } from '@prisma/client'
+import prisma from '../../utils/prisma'
+import { getDeliveryProvider } from './provider'
+import { PROVIDER_STATUS_MAP, TERMINAL } from './state'
+import { recordDeliveryEvent, makeCallbackDedupeKey, trunc } from './events'
+import { notifySystemAlert } from '../notify'
+import { notifyLocalDeliveryAlert } from '../order-notify'
+import { sendDeliverSubscribeMessage } from '../subscribe-message'
+import { ACTIVE_REFUND_STATUSES } from '../refund'
+
+export async function handleKdCallback(deliveryNo: string, body: Record<string, string>): Promise<{ http: 200 | 500 }> {
+  const rawBody = JSON.stringify(body)
+  const delivery = await prisma.delivery.findUnique({
+    where: { deliveryNo },
+    include: { order: { include: {
+      user: { select: { openid: true } },
+      items: { select: { productName: true }, take: 1 },
+      refunds: { select: { status: true } },
+      afterSales: { where: { status: { in: ['PENDING', 'APPROVED'] } }, select: { id: true } },
+    } } },
+  })
+  if (!delivery) {
+    notifySystemAlert('快递100 回调查不到配送单', [`deliveryNo=${deliveryNo}`, '若此前有下单超时，可能是占位落库失败的孤儿单，请到快递100 后台核对'], { key: `kd-cb-miss:${deliveryNo}` })
+    return { http: 200 }
+  }
+  const parsed = getDeliveryProvider().verifyAndParseCallback(body, delivery.callbackSalt)
+  if (!parsed.ok) {
+    try {
+      await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, 'BAD', null, rawBody), source: 'CALLBACK', statusDesc: parsed.reason === 'SIGN_MISMATCH' ? '回调验签失败' : '回调格式异常', rawPayload: body })
+    } catch { /* 留痕失败不升级：这不是业务事件丢失 */ }
+    notifySystemAlert('快递100 回调验签失败', [`deliveryNo=${deliveryNo}`], { key: `kd-cb-sign:${deliveryNo}` })
+    return { http: 200 }
+  }
+  const p = parsed.payload
+  // 并呼假撤单过滤：多运力并呼时未中标运力也推 720；已锁定 taskId 且不匹配 → 不得终态化
+  if (p.providerStatus === '720' && delivery.providerTaskId && p.taskId && p.taskId !== delivery.providerTaskId) {
+    try {
+      await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, `720@${p.taskId}`, null, rawBody), source: 'CALLBACK', providerStatus: 720, statusDesc: `未中标运力撤单（taskId=${p.taskId}），忽略`, rawPayload: body })
+    } catch { /* 同上 */ }
+    if (delivery.statusRank < 20) notifySystemAlert('快递100 呼叫阶段收到 taskId 不匹配的 720', [`deliveryNo=${deliveryNo}`, `锁定=${delivery.providerTaskId} 回调=${p.taskId}`, '真实联调时请核实并呼语义（spec §5.4）'], { key: `kd-cb-720x:${deliveryNo}` })
+    return { http: 200 }
+  }
+  const mapped = PROVIDER_STATUS_MAP[p.providerStatus]
+  const updateTimeIso = p.providerUpdateTime ? p.providerUpdateTime.toISOString() : null
+  const dedupeKey = makeCallbackDedupeKey(deliveryNo, p.providerStatus, updateTimeIso, rawBody)
+  const n = Number(p.providerStatus)
+  const providerStatusNum = Number.isFinite(n) ? n : null
+  const after: (() => void)[] = []   // 事务后才发的通知（事务里发会在回滚时误报）
+  try {
+    await prisma.$transaction(async (tx) => {
+      const ev = await recordDeliveryEvent(tx, { deliveryId: delivery.id, dedupeKey, source: 'CALLBACK', providerStatus: providerStatusNum, statusDesc: p.statusDesc, courierName: p.courierName, courierMobile: p.courierMobile, providerUpdateTime: updateTimeIso, rawPayload: body })
+      if (ev.duplicate) return
+      await tx.delivery.updateMany({ where: { id: delivery.id }, data: { lastCallbackAt: new Date() } })
+      // UNKNOWN 认领：下单超时的占位单，第一个到达的回调即认领 taskId（ghost 消解，spec §5.4）
+      if (delivery.status === 'UNKNOWN' && !delivery.providerTaskId && p.taskId) {
+        await tx.delivery.updateMany({ where: { id: delivery.id, providerTaskId: null }, data: { providerTaskId: p.taskId } })
+      }
+      if (!mapped) {
+        after.push(() => notifySystemAlert('快递100 未知回调状态', [`deliveryNo=${deliveryNo} status=${p.providerStatus}`, p.statusDesc ?? ''], { key: `kd-cb-unknown:${p.providerStatus}` }))
+        return
+      }
+      const courierData = {
+        ...(p.courierCompany ? { courierCompany: p.courierCompany } : {}),
+        ...(p.courierName ? { courierName: p.courierName } : {}),
+        ...(p.courierMobile ? { courierMobile: p.courierMobile } : {}),
+        ...(p.statusDesc ? { statusDesc: p.statusDesc } : {}),
+        ...(providerStatusNum !== null ? { providerStatus: providerStatusNum } : {}),
+      }
+      let moved = 0
+      if (mapped.type === 'rank') {
+        const r = await tx.delivery.updateMany({
+          where: { id: delivery.id, statusRank: { lt: mapped.rank }, status: { notIn: [...TERMINAL] } },
+          data: { status: mapped.status, statusRank: mapped.rank, ...(mapped.rank === 100 ? { activeOrderId: null } : {}), ...(mapped.stamp ? { [mapped.stamp]: new Date() } : {}), ...courierData },
+        })
+        moved = r.count
+        // N8：改派中收到 100 允许 rank 回拨到 ACCEPTED（新骑手接单）。720 回退之外唯一的第二个回拨。
+        if (moved === 0 && p.providerStatus === '100') {
+          const r2 = await tx.delivery.updateMany({ where: { id: delivery.id, status: 'REASSIGNING' }, data: { status: 'ACCEPTED', statusRank: 20, acceptedAt: new Date(), ...courierData } })
+          moved = r2.count
+        }
+      } else if (mapped.status === 'CANCELLED') {
+        const r = await tx.delivery.updateMany({ where: { id: delivery.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(p.statusDesc, 255) ?? '运力方取消', ...courierData } })
+        moved = r.count
+      } else {   // REASSIGNING / ABNORMAL：旁路态不写 rank、不释放
+        const r = await tx.delivery.updateMany({ where: { id: delivery.id, status: { notIn: [...TERMINAL] } }, data: { status: mapped.status, ...courierData } })
+        moved = r.count
+      }
+      if (moved === 0) return   // 乱序迟到包：事件已留痕，不动状态、不联动订单
+      // —— Order 联动（一律 LOCAL + 白名单 updateMany）——
+      // 注：Order 无 shippedAt 列（LOCAL 单不写 Shipment 行），SHIPPED/回退 PREPARING 仅切换 status
+      if (p.providerStatus === '310') {
+        await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED' } })
+        const o = delivery.order
+        after.push(() => sendDeliverSubscribeMessage(o.user.openid, { id: o.id, orderNo: o.orderNo }, { courierName: p.courierName ?? delivery.courierName, courierMobile: p.courierMobile ?? delivery.courierMobile }, o.items[0]?.productName))
+      } else if (p.providerStatus === '520') {
+        await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: { in: ['PREPARING', 'SHIPPED'] } }, data: { status: 'COMPLETED', completedAt: new Date() } })
+      } else if (p.providerStatus === '720') {
+        // 取货后被取消：SHIPPED 回退 PREPARING。三重护栏：无在途退款、无待处理售后、未完成
+        const o = delivery.order
+        const hasActiveRefund = o.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))
+        if (!hasActiveRefund && o.afterSales.length === 0 && !o.completedAt) {
+          await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: 'SHIPPED' }, data: { status: 'PREPARING' } })
+        }
+        after.push(() => notifyLocalDeliveryAlert('配送单被取消', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '运力方取消', '请重新呼叫骑手或改自己送']))
+      }
+      if (p.providerStatus === '510') after.push(() => notifyLocalDeliveryAlert('配送异常', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '', '请联系骑手/顾客确认']))
+      if (p.providerStatus === '515') after.push(() => notifyLocalDeliveryAlert('骑手改派中', [`订单 ${delivery.orderNo}`, '平台正在重新分配骑手']))
+    })
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') return { http: 200 }
+    console.error('[kd-callback] 入库失败:', e)
+    return { http: 500 }   // N5：唯一返 500 的情形——让快递100 重推，这是无查单接口下仅有的补偿
+  }
+  for (const fn of after) { try { fn() } catch (e) { console.warn('[kd-callback] 通知失败:', (e as Error).message) } }
+  return { http: 200 }
+}

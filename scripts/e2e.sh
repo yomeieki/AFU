@@ -530,6 +530,85 @@ assert_eq "落库失败后置 FAILED" "$(jq -r .data.delivery.status <<<"$R")" "
 assert_eq "落库失败后释放占位" "$(jq -r .data.delivery.activeOrderId <<<"$R")" "null"
 R=$(req POST "/api/admin/local/orders/$DLO4/call" "$AT"); assert_eq "释放后可重呼 code 0" "$(code "$R")" "0"
 
+echo "== 27. 回调状态机 =="
+req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000,"lngE6":104790000}' >/dev/null   # 恢复第22段清掉的坐标
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+md5hex() { if command -v md5sum >/dev/null 2>&1; then printf '%s' "$1" | md5sum | cut -d' ' -f1; else printf '%s' "$1" | md5 -q; fi; }
+KDCB_BODY=/tmp/e2e-kdcb.json
+kd_cb() { # deliveryNo taskId status desc updateTime [courierName] [courierMobile] → echo HTTP 状态码，响应体在 $KDCB_BODY
+  local dno="$1" task="$2" st="$3" desc="$4" ut="$5" cn="${6:-王骑手}" cm="${7:-13900001111}"
+  local salt param sign
+  salt=$(req GET "/api/admin/system/kd100-mock/salt/$dno" "$AT" | jq -r '.data.salt // empty')
+  param=$(jq -cn --arg t "$task" --arg s "$st" --arg d "$desc" --arg u "$ut" --arg cn "$cn" --arg cm "$cm" \
+    '{taskId:$t,status:$s,statusDesc:$d,updateTime:$u,courierName:$cn,courierMobile:$cm,kuaidicom:"shansongtongcheng"}')
+  sign=$(md5hex "${param}${salt}" | tr 'a-f' 'A-F')
+  curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$dno" \
+    --data-urlencode "param=$param" --data-urlencode "sign=$sign" --data-urlencode "taskId=$task"
+}
+dstat() { req GET "/api/admin/local/orders/$1/delivery" "$AT" | jq -r .data.delivery.status; }
+# —— 正向剧本：0→100→310→520，Order 联动 PREPARING→SHIPPED→COMPLETED
+CBO1=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO1/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$CBO1/call" "$AT"); CBD1=$(jq -r .data.deliveryNo <<<"$R")
+CBT1=$(req GET "/api/admin/local/orders/$CBO1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+assert_eq "cb 100 http 200" "$(kd_cb "$CBD1" "$CBT1" 100 '骑手已接单' '2026-09-04 12:00:00')" "200"
+assert_eq "cb 100 应答 result=true" "$(jq -r .result "$KDCB_BODY")" "true"
+assert_eq "100→ACCEPTED" "$(dstat $CBO1)" "ACCEPTED"
+R=$(req GET "/api/admin/local/orders/$CBO1/delivery" "$AT")
+assert_eq "骑手姓名已写" "$(jq -r .data.delivery.courierName <<<"$R")" "王骑手"
+assert_eq "订单仍 PREPARING（100 不动订单）" "$(req GET "/api/admin/orders/$CBO1" "$AT" | jq -r .data.status)" "PREPARING"
+EVN1=$(jq -r '.data.events | length' <<<"$R")
+assert_eq "重复 100（同 updateTime）http 200" "$(kd_cb "$CBD1" "$CBT1" 100 '骑手已接单' '2026-09-04 12:00:00')" "200"
+assert_eq "重复回调不新增事件" "$(req GET "/api/admin/local/orders/$CBO1/delivery" "$AT" | jq -r '.data.events | length')" "$EVN1"
+assert_eq "cb 310 http 200" "$(kd_cb "$CBD1" "$CBT1" 310 '骑手已取货' '2026-09-04 12:05:00')" "200"
+assert_eq "310→DELIVERING" "$(dstat $CBO1)" "DELIVERING"
+assert_eq "订单 →SHIPPED" "$(req GET "/api/admin/orders/$CBO1" "$AT" | jq -r .data.status)" "SHIPPED"
+assert_eq "迟到乱序 210 http 200" "$(kd_cb "$CBD1" "$CBT1" 210 '迟到的赶来取货' '2026-09-04 12:03:00')" "200"
+assert_eq "rank 单调：迟到包不回退" "$(dstat $CBO1)" "DELIVERING"
+assert_eq "cb 520 http 200" "$(kd_cb "$CBD1" "$CBT1" 520 '已送达' '2026-09-04 12:20:00')" "200"
+assert_eq "520→DELIVERED" "$(dstat $CBO1)" "DELIVERED"
+assert_eq "订单 →COMPLETED" "$(req GET "/api/admin/orders/$CBO1" "$AT" | jq -r .data.status)" "COMPLETED"
+assert_eq "终态释放占位（activeOrderId=null）" "$(req GET "/api/admin/local/orders/$CBO1/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
+# —— 防线：验签失败 / 查不到单 / 未知状态，一律 200 且不动状态
+CBO2=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO2/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$CBO2/call" "$AT"); CBD2=$(jq -r .data.deliveryNo <<<"$R")
+CBT2=$(req GET "/api/admin/local/orders/$CBO2/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+P=$(jq -cn --arg t "$CBT2" '{taskId:$t,status:"100",statusDesc:"x",updateTime:"2026-09-04 12:00:00"}')
+HTTPC=$(curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$CBD2" --data-urlencode "param=$P" --data-urlencode "sign=DEADBEEF" --data-urlencode "taskId=$CBT2")
+assert_eq "错签名 http 200" "$HTTPC" "200"
+assert_eq "错签名不动状态" "$(dstat $CBO2)" "CALLING"
+assert_eq "查不到单 http 200" "$(kd_cb "D999999-9" "T-NONE" 100 x '2026-09-04 12:00:00' 2>/dev/null || echo 200)" "200"
+assert_eq "未知状态 999 http 200" "$(kd_cb "$CBD2" "$CBT2" 999 '外星状态' '2026-09-04 12:01:00')" "200"
+assert_eq "未知状态不动状态机" "$(dstat $CBO2)" "CALLING"
+# —— 入库失败返 500（N5）：providerStatus 超出 Int 列范围 → 事件落库抛错 → 500 让快递100 重推
+assert_eq "入库失败 http 500" "$(kd_cb "$CBD2" "$CBT2" 99999999999999999999 '溢出' '2026-09-04 12:02:00')" "500"
+assert_eq "500 应答 result=false" "$(jq -r .result "$KDCB_BODY")" "false"
+# —— 并呼假撤单：taskId 不匹配的 720 不得终态化；随后真 100 正常推进
+assert_eq "陌生 taskId 的 720 http 200" "$(kd_cb "$CBD2" "OTHER-TASK" 720 '未中标运力撤单' '2026-09-04 12:03:00')" "200"
+assert_eq "假撤单不终态化" "$(dstat $CBO2)" "CALLING"
+assert_eq "真 100 http 200" "$(kd_cb "$CBD2" "$CBT2" 100 '骑手已接单' '2026-09-04 12:04:00')" "200"
+assert_eq "推进 ACCEPTED" "$(dstat $CBO2)" "ACCEPTED"
+# —— N8：515 改派后收到 100，允许 rank 回拨、换新骑手
+assert_eq "cb 515 http 200" "$(kd_cb "$CBD2" "$CBT2" 515 '骑手改派中' '2026-09-04 12:05:00')" "200"
+assert_eq "515→REASSIGNING" "$(dstat $CBO2)" "REASSIGNING"
+assert_eq "改派后新 100 http 200" "$(kd_cb "$CBD2" "$CBT2" 100 '新骑手接单' '2026-09-04 12:06:00' '李骑手' '13922223333')" "200"
+assert_eq "REASSIGNING→ACCEPTED（rank 回拨特例）" "$(dstat $CBO2)" "ACCEPTED"
+assert_eq "换成新骑手" "$(req GET "/api/admin/local/orders/$CBO2/delivery" "$AT" | jq -r .data.delivery.courierName)" "李骑手"
+# —— 720 匹配 taskId：终态化 + SHIPPED 回退 PREPARING（三重护栏都通过时）
+assert_eq "cb 310 http 200" "$(kd_cb "$CBD2" "$CBT2" 310 '骑手已取货' '2026-09-04 12:07:00')" "200"
+assert_eq "订单 →SHIPPED" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "SHIPPED"
+assert_eq "匹配 taskId 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '骑手取消订单' '2026-09-04 12:08:00')" "200"
+assert_eq "720→CANCELLED" "$(dstat $CBO2)" "CANCELLED"
+assert_eq "订单回退 PREPARING" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "PREPARING"
+assert_eq "720 释放占位" "$(req GET "/api/admin/local/orders/$CBO2/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
+# —— UNKNOWN 认领：超时占位单收到回调即认领 taskId 并推进
+CBO3=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO3/accept" "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"timeout"}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$CBO3/call" "$AT"); CBD3=$(jq -r .data.deliveryNo <<<"$R")
+assert_eq "占位 UNKNOWN" "$(dstat $CBO3)" "UNKNOWN"
+assert_eq "迟到回调认领 http 200" "$(kd_cb "$CBD3" "LATE-TASK-1" 0 '并呼抢单中' '2026-09-04 12:10:00')" "200"
+assert_eq "UNKNOWN→CALLING（认领成功）" "$(dstat $CBO3)" "CALLING"
+assert_eq "认领写入 taskId" "$(req GET "/api/admin/local/orders/$CBO3/delivery" "$AT" | jq -r .data.delivery.providerTaskId)" "LATE-TASK-1"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

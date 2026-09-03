@@ -162,7 +162,31 @@ export function sendRefundSubscribeMessage(
   void send(openid, refundTemplateId, `pages/order/detail?id=${order.id}`, data, '退款通知')
 }
 
+/** 配送通知（快递100 回调 310：骑手已取货出发）。模板字段见 .env WECHAT_TMPL_DELIVER_FIELDS */
+export function sendDeliverSubscribeMessage(
+  openid: string,
+  order: { id: number; orderNo: string },
+  courier: { courierName?: string | null; courierMobile?: string | null },
+  productName?: string
+): void {
+  const { deliverTemplateId, deliverFields } = config.subscribe
+  if (!deliverTemplateId || !deliverFields) return
+  const data = buildData(
+    {
+      orderNo: order.orderNo,
+      productName: productName ?? '',
+      courierName: courier.courierName || '配送员',
+      courierMobile: courier.courierMobile ?? '',
+      // 骑手出发后的粗略预估；真实 ETA 运力方不给，宁可写宽不写窄
+      estimatedTime: fmtTime(new Date(Date.now() + 30 * 60 * 1000)),
+    },
+    parseFieldMap(deliverFields)
+  )
+  if (!data) return
+  void send(openid, deliverTemplateId, `pages/order/detail?id=${order.id}`, data, '配送通知')
+}
+
 /** 供小程序读取：当前配置的模板 ID（顾客端 wx.requestSubscribeMessage 用） */
 export function getSubscribeTemplateIds(): string[] {
-  return [config.subscribe.paidTemplateId, config.subscribe.shipTemplateId, config.subscribe.refundTemplateId].filter(Boolean)
+  return [config.subscribe.paidTemplateId, config.subscribe.shipTemplateId, config.subscribe.refundTemplateId, config.subscribe.deliverTemplateId].filter(Boolean)
 }

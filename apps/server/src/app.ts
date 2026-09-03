@@ -6,6 +6,7 @@ import path from 'path'
 import { router } from './routes'
 import { errorHandler } from './middlewares/error'
 import { wechatPayNotifyHandler, wechatRefundNotifyHandler } from './routes/wechat-notify'
+import kdCallbackRouter from './routes/kd-callback'
 import prisma from './utils/prisma'
 import { notifySystemAlert } from './services/notify'
 import { startScheduler } from './services/scheduler'
@@ -37,6 +38,8 @@ app.use(
 // Mount before express.json() so wechat-pay notify receives raw body for signature verification
 app.post('/api/wechat/pay/notify', express.text({ type: '*/*' }), wechatPayNotifyHandler)
 app.post('/api/wechat/pay/refund-notify', express.text({ type: '*/*' }), wechatRefundNotifyHandler)
+// 快递100 状态回调：无鉴权（安全性来自 per-单 salt 验签），自带 urlencoded 中间件
+app.use('/api/kd', kdCallbackRouter)
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
