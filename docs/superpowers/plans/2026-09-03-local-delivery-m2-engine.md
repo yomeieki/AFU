@@ -1715,7 +1715,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `remindLocalUncalled(min?)` — Order LOCAL PREPARING 且 `acceptedAt < now-X`（默认 10）且 `localUncalledRemindedAt:null` 且 `cancelRequestedAt:null` 且无在途配送单（`deliveries: { none: { activeOrderId: { not: null } } }` 用 relation filter；等价写法：先查 activeOrderId 集合排除）
   - `remindCancelRequestPending(min?)` — Order LOCAL `cancelRequestedAt < now-X`（默认 5）且 status∉{COMPLETED,CANCELLED,REFUNDED} 且 `cancelRequestRemindedAt:null`
   - `autoCallRiders(delayMin?)` — 前置 6 条件：`delay>0`（0=手动模式直接返 0；默认 settings.autoCallDelayMin）、设置 enabled 且 `isOpenNow`、熔断未触发、订单 PREPARING+LOCAL+`acceptedAt < now-delay`、无取消申请、无在途配送单 → 逐单 `callRider({source:'SCHEDULER'})`，单个失败 catch 后继续（AppError 不告警——callRider 内部已告警），返成功数
-  - `housekeepingDelivery()` — ①终态单 `activeOrderId != null` → 释放 + notifySystemAlert（数据不一致）②`DeliveryEvent.rawPayload` 90 天前 → `updateMany({data:{rawPayload: Prisma.DbNull}})`；返处理行数
+  - `housekeepingDelivery()` — ①终态单 `activeOrderId != null` → 释放 + notifySystemAlert（数据不一致）②**陈旧 PENDING 清扫**：`status:'PENDING'` 且 `createdAt < now-10min` → 置 FAILED + 释放 + `errorCode:'STALE'` + 告警（callRider 的恢复写在 DB 不可达时会失败，占位就此泄漏且无人能救——这是最后一道防线）③`DeliveryEvent.rawPayload` 90 天前 → `updateMany({data:{rawPayload: Prisma.DbNull}})`；返处理行数
 - scheduler 注册（追加到 tasks 数组，名字即 e2e 断言键）：`localCallTimeout/localAcceptedStuck/localDelivering/localUnknown/localUncalled/localCancelReq/localAutoCall/localHousekeeping`；`SchedulerOverrides` 增 `callTimeoutMin/acceptedStuckMin/deliveringTimeoutMin/unknownStuckMin/localUncalledMin/cancelRequestPendingMin/autoCallDelayMin`；run-scheduler 路由 body 同名透传。
 
 - [ ] **Step 1: e2e（RED）**
@@ -1832,6 +1832,15 @@ export async function housekeepingDelivery(): Promise<number> {
   for (const d of stuck) {
     await prisma.delivery.updateMany({ where: { id: d.id }, data: { activeOrderId: null } })
     notifySystemAlert('配送单数据不一致已自愈', [`${d.deliveryNo} 终态 ${DELIVERY_STATUS_LABEL[d.status] ?? d.status} 但仍占位，已释放`], { key: `dlv-housekeeping:${d.id}` })
+    n++
+  }
+  // 陈旧 PENDING：占位行只应存在于一次外呼期间（最长 8 秒超时 + 落库）。超过 10 分钟还是 PENDING，
+  // 说明进程在外呼后崩了、或 callRider 的恢复写本身失败（DB 曾不可达）。不扫的话该订单永久不可再呼。
+  const stalePending = await prisma.delivery.findMany({ where: { status: 'PENDING', createdAt: { lt: ago(10) } }, take: BATCH, select: { id: true, deliveryNo: true, orderNo: true } })
+  for (const d of stalePending) {
+    const moved = await prisma.delivery.updateMany({ where: { id: d.id, status: 'PENDING' }, data: { status: 'FAILED', activeOrderId: null, errorCode: 'STALE', failReason: '呼叫未落库（进程中断或数据库异常），已自动释放' } })
+    if (moved.count === 0) continue
+    notifySystemAlert('配送单占位超时未落库已释放', [`订单 ${d.orderNo}（${d.deliveryNo}）`, '若运力方已产生真实单，请到快递100 后台核对'], { key: `dlv-stale:${d.id}` })
     n++
   }
   n += (await prisma.deliveryEvent.updateMany({
