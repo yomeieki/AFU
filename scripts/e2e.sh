@@ -237,10 +237,35 @@ assert_eq "同城商品已下架" "$(req GET "/api/admin/products?keyword=E2E" "
 assert_eq "邮寄商品未受影响" "$(req GET "/api/products/$PID" "$UT" | jq -r .data.status)" "ON_SHELF"
 req POST /api/admin/products/batch-status "$AT" '{"status":"ON_SHELF","channel":"LOCAL"}' >/dev/null
 
+R=$(req POST /api/admin/products "$AT" "{\"categoryId\":$ECAT,\"name\":\"E2E邮寄商品\",\"price\":1200,\"stock\":50}")
+EPID=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$EPID" ]] && ok "创建邮寄商品 #$EPID" || fail "创建邮寄商品" "$R"
+assert_eq "邮寄商品 channel=EXPRESS" "$(jq -r .data.channel <<<"$R")" "EXPRESS"
+
+R=$(req POST /api/cart "$UT" "{\"productId\":$EPID,\"quantity\":1}")
+ECID=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$ECID" ]] && ok "邮寄商品加购" || fail "邮寄商品加购" "$R"
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$ECID],\"addressId\":$ADDR}")
+EOID=$(jq -r '.data.orderId // .data.id // empty' <<<"$R"); [[ -n "$EOID" ]] && ok "创建待付款邮寄订单 #$EOID" || fail "创建待付款邮寄订单" "$R"
+assert_eq "待付款订单 status=PENDING_PAYMENT" "$(jq -r .data.status <<<"$R")" "PENDING_PAYMENT"
+R=$(req GET "/api/orders/$EOID" "$UT")
+assert_eq "待付款订单 deliveryType 默认=EXPRESS" "$(jq -r .data.deliveryType <<<"$R")" "EXPRESS"
+
+R=$(req PUT "/api/admin/categories/$ECAT" "$AT" '{"channel":"LOCAL"}')
+assert_eq "分类下有待付款订单不可改渠道 42231" "$(code "$R")" "42231"
+R=$(req GET /api/admin/categories "$AT")
+assert_eq "42231 后分类 channel 未变=EXPRESS" "$(jq -r ".data[] | select(.id==$ECAT) | .channel" <<<"$R")" "EXPRESS"
+
+req PUT "/api/orders/$EOID/cancel" "$UT" >/dev/null
+
+R=$(req PUT "/api/admin/categories/$LCAT" "$AT" '{"channel":"LOCAL"}')
+assert_eq "同渠道短路 code 0" "$(code "$R")" "0"
+R=$(req GET "/api/admin/products?keyword=E2E&pageSize=50" "$AT")
+assert_eq "同渠道短路后商品 channel 未变=LOCAL" "$(jq -r "[.data.list[] | select(.id==$LPID)][0].channel" <<<"$R")" "LOCAL"
+
 echo "== 11. 清理 =="
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
 rm -f "$PNG" "$R1" "$R2"
 [[ -n "${LPID:-}" ]] && req DELETE "/api/admin/products/$LPID" "$AT" >/dev/null
+[[ -n "${EPID:-}" ]] && req DELETE "/api/admin/products/$EPID" "$AT" >/dev/null
 [[ -n "${LCAT:-}" ]] && req DELETE "/api/admin/categories/$LCAT" "$AT" >/dev/null
 [[ -n "${ECAT:-}" ]] && req DELETE "/api/admin/categories/$ECAT" "$AT" >/dev/null
 
