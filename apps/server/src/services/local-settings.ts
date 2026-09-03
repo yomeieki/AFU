@@ -66,7 +66,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   riderSpeedKmh: 15,
   acceptGraceMin: 5,
   autoCallDelayMin: 0,
-  defaultProvider: 'SELF',
+  // 日常主力是第三方骑手；店内自送是常规备选（高峰无人接单、近距离单自己走两步就到、
+  // 余额用尽、骑手取消或改派失败），店员在看板上一键可切，不是降级兜底。
+  defaultProvider: 'KD100',
   kd100: {
     providers: [...KD100_PROVIDERS], goodsType: '食品', defaultItemWeightG: 300,
     insurance: false, autoDowngradeToSelfOnNoBalance: false,
@@ -135,7 +137,7 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
     riderSpeedKmh: num(o.riderSpeedKmh, D.riderSpeedKmh, 5, 60),
     acceptGraceMin: int(o.acceptGraceMin, D.acceptGraceMin, 0, 30),
     autoCallDelayMin: int(o.autoCallDelayMin, D.autoCallDelayMin, 0, 60),
-    defaultProvider: o.defaultProvider === 'KD100' ? 'KD100' : 'SELF',
+    defaultProvider: o.defaultProvider === 'SELF' ? 'SELF' : D.defaultProvider,
     kd100: {
       providers, goodsType: str(kd.goodsType, D.kd100.goodsType, 16),
       defaultItemWeightG: int(kd.defaultItemWeightG, D.kd100.defaultItemWeightG, 50, 20_000),

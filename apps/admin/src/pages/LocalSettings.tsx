@@ -202,9 +202,9 @@ export default function LocalSettings() {
       <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="font-medium text-gray-800">运力（快递100 接入后生效）</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="默认运力">
+          <Field label="默认运力" hint="日常走快递100 叫骑手；选「店内自送」则每单默认自己送（看板上仍可逐单切换）">
             <select className={inputCls} value={s.defaultProvider} onChange={(e) => patch({ defaultProvider: e.target.value as 'KD100' | 'SELF' })}>
-              <option value="SELF">店内自送</option><option value="KD100">快递100 同城急送</option>
+              <option value="KD100">快递100 同城急送</option><option value="SELF">店内自送</option>
             </select>
           </Field>
           <Field label="商品默认净重（克）" hint="商品未填净重时用"><input className={inputCls} type="number" min={50} value={s.kd100.defaultItemWeightG} onChange={(e) => patch({ kd100: { ...s.kd100, defaultItemWeightG: Number(e.target.value) } })} /></Field>
