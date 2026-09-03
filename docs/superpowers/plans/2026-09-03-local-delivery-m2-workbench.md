@@ -24,7 +24,7 @@
 - 「等待配送员」列 v1 **只放同城单**（决策 N2）；邮寄从备餐中填单号直接跳配送中。
 - 服务端约定沿用 M2-A Global Constraints（错误码 42221-42238、金额分、时间 ISO）。
 - 环境：worktree 独立库 `food_shop_sc`、后端 :3100 热重载常驻、admin dev 用 `.claude/launch.json` 的预览（勿用 Bash 起服务器）；e2e 连跑间隔 60s。
-- 提交信息中文 `type(scope): 摘要`，结尾 `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`。
+- 提交信息中文 `type(scope): 摘要`，结尾 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`。
 
 ## 文件结构
 
@@ -52,7 +52,8 @@
 ```ts
 interface WorkbenchCard {
   orderId: number; orderNo: string; channel: 'LOCAL' | 'EXPRESS'; status: string
-  waitSince: string                      // 本列计时锚点 ISO：pending=paidAt / preparing=acceptedAt / waitingCourier=delivery.calledAt / delivering=shippedAt / done=completedAt
+  waitSince: string                      // 本列计时锚点 ISO：pending=paidAt / preparing=acceptedAt / waitingCourier=delivery.calledAt /
+                                         // delivering=同城 delivery.pickedUpAt、邮寄 shipment.shippedAt（Order 没有 shippedAt 列）/ done=completedAt
   amountFen: number
   items: { first: string[]; kinds: number; units: number }   // first=前两个菜名（含 ×n）
   note: string | null
@@ -154,14 +155,14 @@ async function loadOrders() {
     },
     include: {
       items: { select: { productName: true, quantity: true } },
-      shipment: { select: { expressCompany: true, expressNo: true } },
+      shipment: { select: { expressCompany: true, expressNo: true, shippedAt: true } },
     },
     orderBy: { id: 'desc' },
     take: 300,
   })
 }
 
-function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null } | null): Record<string, unknown> {
+function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null): Record<string, unknown> {
   const units = o.items.reduce((n, it) => n + it.quantity, 0)
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
@@ -207,7 +208,8 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       else if (o.status === 'PREPARING') {
         if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d))
         else cols.preparing.push(toCard(o, o.acceptedAt, d))
-      } else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, o.shippedAt, d))
+      // Order 没有 shippedAt 列——同城取配送单的取货时间，邮寄取运单的发货时间，都缺则退回接单时间
+      else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, d?.pickedUpAt ?? o.shipment?.shippedAt ?? o.acceptedAt, d))
       else if (o.status === 'COMPLETED') cols.done.push(toCard(o, o.completedAt, d))
     }
     for (const k of ['pending', 'preparing', 'waitingCourier', 'delivering'] as const) sortColumn(cols[k] as never)
@@ -253,7 +255,7 @@ export default router
 git add apps/server/src/routes/admin/workbench.ts apps/server/src/routes/admin/index.ts scripts/e2e.sh
 git commit -m "feat(admin): 工作台快照端点——五列归类/同城恒上排序/统计/3s缓存
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -319,7 +321,7 @@ Expected: 零错误（Workbench 页尚未存在，路由不加——U4 才接线
 git add apps/admin/src/types.ts apps/admin/src/api/admin.ts apps/admin/src/components/ui/StatusBadge.tsx apps/admin/src/hooks/usePendingOrders.ts apps/admin/src/components/Layout.tsx
 git commit -m "feat(admin): 工作台前端地基——类型/api/配送状态徽标/同城徽标计数
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -451,7 +453,7 @@ cd apps/admin && npx tsc --noEmit && npm run build
 git add apps/admin/src/pages/Workbench.tsx apps/admin/src/pages/Workbench.css apps/admin/src/components/CancelAndRefundModal.tsx apps/admin/src/App.tsx
 git commit -m "feat(admin): 接单工作台页面——五列看板/抽屉/分级确认/拒单/顶栏（UI 规格 v1 全量）
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -486,7 +488,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 git add apps/admin/src apps/server/src/routes/admin/orders.ts docs/api.md
 git commit -m "feat(admin): 同城订单历史页 + 工作台设为默认落地页 + 退款弹窗配送费参考行
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -520,5 +522,5 @@ Expected: 打出自贡门店→探测点的真实报价数组（只读不扣费�
 git add docs/research apps/server docs/superpowers/specs
 git commit -m "docs(delivery): 快递100 真实联调笔记与实现修正
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
