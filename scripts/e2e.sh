@@ -605,9 +605,11 @@ CBO3=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO3/accept" "$AT" >/d
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"timeout"}}' >/dev/null
 R=$(req POST "/api/admin/local/orders/$CBO3/call" "$AT"); CBD3=$(jq -r .data.deliveryNo <<<"$R")
 assert_eq "占位 UNKNOWN" "$(dstat $CBO3)" "UNKNOWN"
-assert_eq "迟到回调认领 http 200" "$(kd_cb "$CBD3" "LATE-TASK-1" 0 '并呼抢单中' '2026-09-04 12:10:00')" "200"
+# taskId 必须每轮唯一：providerTaskId 是唯一索引，写死字面量会让第二轮 e2e 撞 P2002（连跑不幂等）
+LATET="LATE-TASK-$CBO3"
+assert_eq "迟到回调认领 http 200" "$(kd_cb "$CBD3" "$LATET" 0 '并呼抢单中' '2026-09-04 12:10:00')" "200"
 assert_eq "UNKNOWN→CALLING（认领成功）" "$(dstat $CBO3)" "CALLING"
-assert_eq "认领写入 taskId" "$(req GET "/api/admin/local/orders/$CBO3/delivery" "$AT" | jq -r .data.delivery.providerTaskId)" "LATE-TASK-1"
+assert_eq "认领写入 taskId" "$(req GET "/api/admin/local/orders/$CBO3/delivery" "$AT" | jq -r .data.delivery.providerTaskId)" "$LATET"
 
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
