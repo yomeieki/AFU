@@ -48,8 +48,11 @@ t('回调验签：正确通过、篡改失败、多字节 sign 不抛异常、�
   assert.deepStrictEqual(r2, { ok: false, reason: 'SIGN_MISMATCH' })
   const r3 = kd100Provider.verifyAndParseCallback({ ...good, sign: '汉'.repeat(32) }, salt)
   assert.deepStrictEqual(r3, { ok: false, reason: 'SIGN_MISMATCH' })
-  const r4 = kd100Provider.verifyAndParseCallback({ taskId:'T1', sign:'X', param: 'not-json' } as never, salt)
-  assert.strictEqual(r4.ok, false)
+  // 签名必须算对，否则会在字节长度短路处返回 SIGN_MISMATCH，永远踏不到 BAD_PARAM 分支
+  const r4 = kd100Provider.verifyAndParseCallback({ taskId:'T1', param: 'not-json', sign: md5U('not-json' + salt) }, salt)
+  assert.deepStrictEqual(r4, { ok: false, reason: 'BAD_PARAM' })
+  const r5 = kd100Provider.verifyAndParseCallback({ taskId:'T1', sign: md5U('x' + salt) } as never, salt)
+  assert.deepStrictEqual(r5, { ok: false, reason: 'BAD_PARAM' })   // param 缺失
 })
 t('回调字段截断（statusDesc 500 字 → 255）', () => {
   const salt = 's'

@@ -440,8 +440,11 @@ t('回调验签：正确通过、篡改失败、多字节 sign 不抛异常、�
   assert.deepStrictEqual(r2, { ok: false, reason: 'SIGN_MISMATCH' })
   const r3 = kd100Provider.verifyAndParseCallback({ ...good, sign: '汉'.repeat(32) }, salt)
   assert.deepStrictEqual(r3, { ok: false, reason: 'SIGN_MISMATCH' })
-  const r4 = kd100Provider.verifyAndParseCallback({ taskId:'T1', sign:'X', param: 'not-json' } as never, salt)
-  assert.strictEqual(r4.ok, false)
+  // 签名必须算对，否则会在字节长度短路处返回 SIGN_MISMATCH，永远踏不到 BAD_PARAM 分支
+  const r4 = kd100Provider.verifyAndParseCallback({ taskId:'T1', param: 'not-json', sign: md5U('not-json' + salt) }, salt)
+  assert.deepStrictEqual(r4, { ok: false, reason: 'BAD_PARAM' })
+  const r5 = kd100Provider.verifyAndParseCallback({ taskId:'T1', sign: md5U('x' + salt) } as never, salt)
+  assert.deepStrictEqual(r5, { ok: false, reason: 'BAD_PARAM' })   // param 缺失
 })
 t('回调字段截断（statusDesc 500 字 → 255）', () => {
   const salt = 's'
@@ -566,13 +569,14 @@ export const kd100Provider: DeliveryProvider = {
     const param = _buildOrderParam(input, settings.kd100.providers, settings.kd100.goodsType)
     const data = await post('batchOrder', param)
     const d = data.data ?? {}
-    const fees = (d.fee as { discountFee?: unknown }[] | undefined) ?? []
+    // 距离在 fee[] 每项里（研究文档 §3.5），不在 data 顶层——顶层只作兜底
+    const fees = (d.fee as { discountFee?: unknown; deliveryDistance?: unknown }[] | undefined) ?? []
     const feesFen = fees.map((f) => yuanToFen(f.discountFee)).filter((n): n is number => n !== null)
     return {
       taskId: typeof d.taskId === 'string' ? d.taskId : null,
       providerOrderId: typeof d.orderId === 'string' || typeof d.orderId === 'number' ? String(d.orderId) : null,
       quotedFeeFen: feesFen.length ? Math.min(...feesFen) : yuanToFen(d.discountFee),
-      distanceM: toInt(d.deliveryDistance), raw: data,
+      distanceM: toInt(fees[0]?.deliveryDistance ?? d.deliveryDistance), raw: data,
     }
   },
   async precancelOrder({ taskId }) {

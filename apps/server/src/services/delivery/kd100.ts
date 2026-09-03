@@ -95,13 +95,14 @@ export const kd100Provider: DeliveryProvider = {
     const param = _buildOrderParam(input, settings.kd100.providers, settings.kd100.goodsType)
     const data = await post('batchOrder', param)
     const d = data.data ?? {}
-    const fees = (d.fee as { discountFee?: unknown }[] | undefined) ?? []
+    const fees = (d.fee as { discountFee?: unknown; deliveryDistance?: unknown }[] | undefined) ?? []
     const feesFen = fees.map((f) => yuanToFen(f.discountFee)).filter((n): n is number => n !== null)
+    // 距离在 fee[] 每一项里，顶层 deliveryDistance 仅作兜底
     return {
       taskId: typeof d.taskId === 'string' ? d.taskId : null,
       providerOrderId: typeof d.orderId === 'string' || typeof d.orderId === 'number' ? String(d.orderId) : null,
       quotedFeeFen: feesFen.length ? Math.min(...feesFen) : yuanToFen(d.discountFee),
-      distanceM: toInt(d.deliveryDistance), raw: data,
+      distanceM: toInt(fees[0]?.deliveryDistance ?? d.deliveryDistance), raw: data,
     }
   },
   async precancelOrder({ taskId }) {
