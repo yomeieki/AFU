@@ -241,7 +241,7 @@
   margin-left: 4rpx;
 }
 
-/* 返回封面（首页专用；tabBar 页拿不到原生返回箭头，只能放内容区顶部） */
+/* 回首页=封面（本页专用；tabBar 页拿不到原生返回箭头，只能放内容区顶部） */
 .back-cover {
   display: inline-flex;
   align-items: center;

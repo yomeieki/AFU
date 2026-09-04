@@ -85,7 +85,7 @@ Page({
   },
 
   goLocal() {
-    // 与首页/购物车/商品详情的同城入口同一套契约：先过位置许可再进
+    // 与封面/购物车/商品详情的同城入口同一套契约：先过位置许可再进
     getApp().ensurePrivacyAuthorize()
       .then(function() {
         wx.navigateTo({ url: '/pages/local/index' })

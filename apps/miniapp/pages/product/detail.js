@@ -142,7 +142,7 @@ Page({
   },
 
   goLocalCheckout: function() {
-    // 与首页/购物车/封面的同城入口保持一致：先过位置许可，避免进到地图选点才被拦
+    // 与封面/购物车/「我的」的同城入口保持一致：先过位置许可，避免进到地图选点才被拦
     getApp().ensurePrivacyAuthorize()
       .then(function() {
         wx.navigateTo({ url: '/pages/local/index' })

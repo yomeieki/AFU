@@ -29,7 +29,7 @@ Page({
     this.loadProducts(true)
   },
 
-  // 每次切到本 tab 都会触发：消费首页通过 globalData 传来的分类意图
+  // 每次切到本 tab 都会触发：消费主页通过 globalData 传来的分类意图
   onShow() {
     var g = app.globalData
     if (g.pendingCategoryAll === true) {

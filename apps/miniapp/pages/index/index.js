@@ -60,7 +60,7 @@ Page({
         wx.stopPullDownRefresh()
       })
       .catch(() => {
-        // 断网/接口失败：必须收起骨架屏，否则首页永远停在加载态。
+        // 断网/接口失败：必须收起骨架屏，否则主页永远停在加载态。
         // 这里必须是箭头函数：写成 function 的话 this 是 undefined，setData 抛错被
         // Promise 吞掉，骨架屏反而永远收不起来——正是本行注释要防的事。
         this.setData({ loading: false })
@@ -81,7 +81,7 @@ Page({
   },
 
   // 回封面重选渠道。reLaunch 会清空页面栈，正好符合「封面是起点」的语义；
-  // navigateTo 会把封面叠在首页之上，返回时又掉回首页，反而绕不出去。
+  // navigateTo 会把封面叠在本页之上，返回时又掉回来，反而绕不出去。
   goCover() {
     wx.reLaunch({ url: '/pages/cover/index' })
   },

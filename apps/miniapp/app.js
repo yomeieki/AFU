@@ -1,7 +1,7 @@
 const { wechatLogin } = require('./api/auth')
 const { getCart } = require('./api/cart')
 
-// tabBar 中购物车的索引（首页/分类/购物车/我的）
+// tabBar 中购物车的索引（主页/分类/购物车/我的）
 var CART_TAB_INDEX = 2
 // tabBar 页路由表——与 app.json 的 tabBar.list 一一对应，改那边记得改这里
 var TAB_BAR_PAGES = ['pages/index/index', 'pages/product/list', 'pages/cart/index', 'pages/user/index']
@@ -14,7 +14,7 @@ App({
     // Stores a pending categoryId when navigating from homepage to product list via switchTab
     pendingCategoryId: null,
     pendingCategoryName: null,
-    // 首页「全部商品」入口：置 true 后 switchTab，分类页 onShow 选中「全部」并复位
+    // 主页「全部商品」入口：置 true 后 switchTab，分类页 onShow 选中「全部」并复位
     pendingCategoryAll: false,
     // Stores address selected in address list for order confirm page
     selectedAddress: null,
