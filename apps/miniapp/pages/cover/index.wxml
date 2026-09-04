@@ -1,6 +1,6 @@
 <!-- 封面分流页：pages[0]，非 tabBar。整屏一张图 + 透明热区。
-     热区坐标全部取自 Figma 导出 SVG 里的真实矩形（见 index.js 顶部的 HOTSPOTS 表），
-     不是目测估的；改版时重新从 SVG 的 <rect> 取值即可。 -->
+     热区坐标全部取自 Figma 导出 SVG 里的真实矩形（几何见 index.wxss 底部注释），
+     不是目测估的；改版时重新从 SVG 的 rect 元素取值即可。 -->
 <view class="cover-root">
   <view class="cover-stage" style="{{stageStyle}}">
     <image class="cover-img" src="/assets/cover/cover.png" mode="scaleToFill" binderror="onImgError" />
