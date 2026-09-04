@@ -369,6 +369,60 @@ const statusSchema = z.object({
   status: z.enum(['CANCELLED']),
 })
 
+// ─────────────────────────────────────────────────────────
+// PATCH /api/admin/orders/:id/test-flag — 标记/取消标记「测试单」
+//
+// 联调（快递100 出票、小程序回归）是在**生产服务器**上做的，会在正式库里留下真实测试订单。
+// 标上以后所有经营统计都会排除它（口径见 utils/stats-scope.ts 的 REAL_ORDERS）。
+//
+// 故意**不加** isProduction 守卫：联调恰恰发生在生产环境，挡掉就等于这个功能不存在。
+// 鉴权走 admin/index.ts 上的 verifyAdminToken，与其它后台写接口同级。
+//
+// 只改这一个布尔，不做任何别的副作用（不退款、不改状态、不动库存、不碰 salesCount）。
+//
+// 回溯性：统计是实时查询而不是每日快照，所以把一张**已经计入过统计**的单标成测试单，
+// 历史区间的数字会跟着变小——趋势图上联调那天的柱子会矮下去，总订单数也会减一。
+// 这正是我们要的（假峰应该消失），但它意味着「昨天截图里的数字」和「今天再打开」可能对不上，
+// 别误判成 bug。取消标记同理，数字会回来。
+//
+// 因为它会改变经营数据，每次操作都留痕：谁（管理员账号）在什么时候把哪张单标成了什么。
+// ─────────────────────────────────────────────────────────
+const testFlagSchema = z.object({ isTest: z.boolean() })
+router.patch('/:id/test-flag', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const { isTest } = testFlagSchema.parse(req.body)
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      select: { id: true, orderNo: true, isTest: true, actualAmount: true, createdAt: true },
+    })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+
+    if (order.isTest !== isTest) {
+      await prisma.order.update({ where: { id }, data: { isTest } })
+      const who = req.adminUsername ?? `admin#${req.adminId ?? '?'}`
+      const action = isTest ? '标记为测试单（此后不计入统计）' : '取消测试单标记（重新计入统计）'
+      console.warn(`[test-flag] ${who} 将订单 ${order.orderNo}(#${id}) ${action}`)
+      notifySystemAlert(
+        '订单测试标记变更',
+        [
+          `操作人：${who}`,
+          `订单：${order.orderNo}（#${id}，实付 ${(order.actualAmount / 100).toFixed(2)} 元）`,
+          `变更：${order.isTest ? '测试单' : '真实单'} → ${isTest ? '测试单' : '真实单'}`,
+          '影响：经营统计会回溯性变化（统计是实时查询，非快照）',
+        ],
+        // 每单每方向各自成键：连着标几单时不希望被限频吞掉，那样就等于没留痕
+        { key: `test-flag:${id}:${isTest}` }
+      )
+    }
+
+    success(res, { id, orderNo: order.orderNo, isTest })
+  } catch (e) {
+    next(e)
+  }
+})
+
 router.put('/:id/status', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)

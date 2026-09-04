@@ -918,6 +918,68 @@ R=$(sched '{"quoteRefreshMin":0}')
 R=$(sched '{}'); assert_eq "刚刷过的单不重复查" "$(jq -r .data.localQuoteRefresh <<<"$R")" "0"
 assert_eq "已有在途配送单的单不参与保鲜" "$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT" | jq -r '.data.quote.quotedAt')" "$QAT2"
 
+echo "== 33. 测试单隔离（isTest）=="
+# 生产库联调会留下真实测试单。标记后**所有经营统计都必须真的变小**——只断言接口 code 0
+# 证明不了任何事（isTest 列压根没接进查询时它也会返回 0）。所以这里逐个口径记基线再比差值。
+TFO=$(make_paid_order); [[ -n "$TFO" ]] && ok "隔离用订单 #$TFO 已支付" || { fail "造单失败"; }
+TFAMT=$(req GET "/api/admin/orders/$TFO" "$AT" | jq -r .data.actualAmount)
+TFDAY=$(date +%F)
+# 扫码转化那两处是原生 SQL（片段常量），也要覆盖：补一条本商品的扫码记录，让本单进入转化口径
+req POST /api/scan-logs "$UT" "{\"scene\":\"p_$PID\",\"source\":\"e2e\"}" >/dev/null
+tf_total() { req GET /api/admin/stats "$AT" | jq -r '.data.total.orderCount'; }
+tf_today() { req GET /api/admin/stats "$AT" | jq -r '.data.today.orderCount'; }
+tf_amt()   { req GET /api/admin/stats "$AT" | jq -r '.data.today.salesAmount'; }
+tf_trend() { req GET "/api/admin/stats/trend?days=7" "$AT" | jq -r --arg d "$TFDAY" '[.data.list[]|select(.date==$d)][0].orderCount // 0'; }
+tf_wbn()   { req GET "/api/admin/workbench/snapshot?fresh=1" "$AT" | jq -r '.data.stats.todayOrders'; }
+tf_wba()   { req GET "/api/admin/workbench/snapshot?fresh=1" "$AT" | jq -r '.data.stats.todayRevenueFen'; }
+tf_conv()  { req GET /api/admin/scan-stats/summary "$AT" | jq -r '.data.conversion.orders'; }
+tf_pconv() { req GET "/api/admin/scan-stats/products?pageSize=50" "$AT" | jq -r --argjson p "$PID" '[.data.list[]|select(.productId==$p)][0].orders // 0'; }
+B_TOTAL=$(tf_total); B_TODAY=$(tf_today); B_AMT=$(tf_amt); B_TREND=$(tf_trend)
+B_WBN=$(tf_wbn); B_WBA=$(tf_wba); B_CONV=$(tf_conv); B_PCONV=$(tf_pconv)
+# 前置：这一单确实已经被算进了各口径（不然下面「减 1」在本就没算的情况下也会通过）
+[[ "$B_TOTAL" -ge 1 && "$B_TODAY" -ge 1 && "$B_TREND" -ge 1 && "$B_WBN" -ge 1 && "$B_CONV" -ge 1 && "$B_PCONV" -ge 1 && "$B_AMT" -ge "$TFAMT" ]] \
+  && ok "基线已含本单（total=$B_TOTAL today=$B_TODAY 转化=$B_CONV 商品转化=$B_PCONV）" || fail "基线不含本单，后续断言无证伪力" "total=$B_TOTAL today=$B_TODAY trend=$B_TREND wb=$B_WBN conv=$B_CONV pconv=$B_PCONV amt=$B_AMT/$TFAMT"
+R=$(req PATCH "/api/admin/orders/$TFO/test-flag" "$AT" '{"isTest":true}')
+assert_eq "标记测试单 code 0" "$(code "$R")" "0"
+assert_eq "返回 isTest=true" "$(jq -r .data.isTest <<<"$R")" "true"
+assert_eq "① 总订单数 -1" "$(tf_total)" "$((B_TOTAL-1))"
+assert_eq "② 今日订单数 -1" "$(tf_today)" "$((B_TODAY-1))"
+assert_eq "③ 今日销售额 -实付($TFAMT)" "$(tf_amt)" "$((B_AMT-TFAMT))"
+assert_eq "④ 趋势图今日 -1（原生 SQL）" "$(tf_trend)" "$((B_TREND-1))"
+assert_eq "⑤ 工作台今日单数 -1" "$(tf_wbn)" "$((B_WBN-1))"
+assert_eq "⑥ 工作台今日营业额 -实付" "$(tf_wba)" "$((B_WBA-TFAMT))"
+assert_eq "⑦ 扫码转化订单数 -1（原生 SQL）" "$(tf_conv)" "$((B_CONV-1))"
+assert_eq "⑧ 按商品转化 -1（原生 SQL）" "$(tf_pconv)" "$((B_PCONV-1))"
+# 顾客侧不得看见这个内部标记（withPayExpire 是唯一出口）
+assert_eq "顾客端订单详情不含 isTest" "$(req GET "/api/orders/$TFO" "$UT" | jq -r '.data|has("isTest")')" "false"
+assert_eq "顾客端订单列表不含 isTest" "$(req GET "/api/orders?pageSize=5" "$UT" | jq -r '[.data.list[]|has("isTest")]|any')" "false"
+# 取消标记：统计必须原样回来（证明口径是实时查询、可回溯，也证明没有别的副作用）
+R=$(req PATCH "/api/admin/orders/$TFO/test-flag" "$AT" '{"isTest":false}')
+assert_eq "取消标记 code 0" "$(code "$R")" "0"
+assert_eq "取消后总订单数回到基线" "$(tf_total)" "$B_TOTAL"
+assert_eq "取消后今日销售额回到基线" "$(tf_amt)" "$B_AMT"
+assert_eq "取消后趋势图回到基线" "$(tf_trend)" "$B_TREND"
+assert_eq "取消后扫码转化回到基线" "$(tf_conv)" "$B_CONV"
+assert_eq "订单状态不受标记影响（只改一个布尔）" "$(order_status $TFO)" "PAID"
+# 幂等：重复标记同一方向不报错、数字不再变
+req PATCH "/api/admin/orders/$TFO/test-flag" "$AT" '{"isTest":true}' >/dev/null
+R=$(req PATCH "/api/admin/orders/$TFO/test-flag" "$AT" '{"isTest":true}')
+assert_eq "重复标记幂等 code 0" "$(code "$R")" "0"
+assert_eq "重复标记后仍只减 1" "$(tf_total)" "$((B_TOTAL-1))"
+# 参数与存在性校验
+R=$(req PATCH "/api/admin/orders/$TFO/test-flag" "$AT" '{"isTest":"yes"}'); assert_eq "isTest 非布尔被拒 40001" "$(code "$R")" "40001"
+R=$(req PATCH "/api/admin/orders/99999999/test-flag" "$AT" '{"isTest":true}'); assert_eq "不存在的订单 40401" "$(code "$R")" "40401"
+R=$(curl -s -X PATCH "$BASE/api/admin/orders/$TFO/test-flag" -H 'Content-Type: application/json' -d '{"isTest":true}')
+assert_eq "无 admin token 被拒 40101" "$(code "$R")" "40101"
+# 另外两个携带订单行的顾客出口（PUT /:id/confirm、PUT /:id/cancel）也不能漏
+TFO2=$(make_paid_order)
+R=$(req PUT "/api/orders/$TFO2/cancel" "$UT"); assert_eq "PUT /cancel 出口不含 isTest" "$(jq -r '.data|has("isTest")' <<<"$R")" "false"
+TFO3=$(make_paid_order)
+req POST "/api/admin/orders/$TFO3/ship" "$AT" '{"expressCompany":"其他：同城跑腿","expressNo":"E2ETF"}' >/dev/null
+R=$(req PUT "/api/orders/$TFO3/confirm" "$UT"); assert_eq "PUT /confirm 出口不含 isTest" "$(jq -r '.data|has("isTest")' <<<"$R")" "false"
+# 这三单本来就是回归造出来的，留在库里就该算测试单
+for o in $TFO2 $TFO3; do req PATCH "/api/admin/orders/$o/test-flag" "$AT" '{"isTest":true}' >/dev/null; done
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

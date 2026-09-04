@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
+import { REAL_ORDERS, realOrdersSql } from '../../utils/stats-scope'
 
 const router = Router()
 
@@ -20,19 +21,23 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
       todayRevenue,
       hotProducts,
     ] = await prisma.$transaction([
-      prisma.order.count(),
-      prisma.order.count({ where: { createdAt: { gte: today, lt: tomorrow } } }),
+      prisma.order.count({ where: { ...REAL_ORDERS } }),
+      prisma.order.count({ where: { ...REAL_ORDERS, createdAt: { gte: today, lt: tomorrow } } }),
       // 前端标签是「在售商品数」，必须只数上架的：
       // 全部下架时若仍显示总数，店家会以为商城正常，实际顾客看到的是空货架
       prisma.product.count({ where: { deletedAt: null, status: 'ON_SHELF' } }),
       prisma.category.count({ where: { status: 1 } }),
       prisma.order.aggregate({
         where: {
+          ...REAL_ORDERS,
           status: { in: ['PAID', 'SHIPPED', 'COMPLETED'] },
           paidAt: { gte: today, lt: tomorrow },
         },
         _sum: { actualAmount: true },
       }),
+      // 热销榜按 salesCount 冗余列排序，REAL_ORDERS 对它无效（那列在下单瞬间 +1，不查订单行）。
+      // 测试单的销量污染靠「联调用专门的测试商品 + 联调后软删除」隔离——本查询已按 deletedAt 过滤，
+      // 软删除后它就从榜上消失。分工写在这里，免得后人以为这处漏接了 isTest。详见 docs/ops-test-orders.md
       prisma.product.findMany({
         where: { deletedAt: null },
         orderBy: { salesCount: 'desc' },
@@ -78,6 +83,7 @@ router.get('/trend', async (req: Request, res: Response, next: NextFunction) => 
       SELECT DATE(created_at) d, COUNT(*) cnt, SUM(actual_amount) amt
       FROM orders
       WHERE created_at >= ${start} AND created_at < ${endExclusive} AND status != 'CANCELLED'
+        ${realOrdersSql()}
       GROUP BY d ORDER BY d`
 
     const fmt = (dd: Date) =>

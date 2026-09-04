@@ -8,6 +8,7 @@ import { success } from '../../utils/response'
 import { DELIVERY_STATUS_LABEL } from '../../services/delivery/state'
 import { getCircuitState } from '../../services/delivery/circuit'
 import { getLocalSettings, isOpenNow } from '../../services/local-settings'
+import { REAL_ORDERS } from '../../utils/stats-scope'
 
 const router = Router()
 const WAITING_STATUSES = ['CALLING', 'ACCEPTED', 'ARRIVING', 'ARRIVED', 'REASSIGNING', 'ABNORMAL', 'UNKNOWN']
@@ -93,11 +94,13 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
 
     const today = startOfToday()
     const [todayOrders, revenue, doneLocal, cancelReqCount, badDeliveries] = await Promise.all([
-      prisma.order.count({ where: { paidAt: { gte: today } } }),
-      prisma.order.aggregate({ where: { paidAt: { gte: today } }, _sum: { actualAmount: true } }),
+      // 三个经营数字都排除测试单（口径见 utils/stats-scope）。上面的五列卡片故意**不**排除：
+      // 联调时店员要在工作台上看到自己造的那一单走完流程，那是操作视图不是统计。
+      prisma.order.count({ where: { ...REAL_ORDERS, paidAt: { gte: today } } }),
+      prisma.order.aggregate({ where: { ...REAL_ORDERS, paidAt: { gte: today } }, _sum: { actualAmount: true } }),
       // paidAt 也必须限定今天：跨零点完成的单（昨晚下单、今早送达）会把「平均送达时长」拉成好几小时，
       // 而它的真实配送时长并不长——店主读到的那个数就废了。
-      prisma.order.findMany({ where: { deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today }, paidAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
+      prisma.order.findMany({ where: { ...REAL_ORDERS, deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today }, paidAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
       prisma.order.count({ where: { deliveryType: 'LOCAL', cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } } }),
       prisma.delivery.count({ where: { activeOrderId: { not: null }, status: { in: ['ABNORMAL', 'UNKNOWN'] } } }),
     ])

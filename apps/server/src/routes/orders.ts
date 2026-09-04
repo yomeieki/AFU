@@ -31,20 +31,28 @@ function generateOrderNo(): string {
 
 /** 顾客端订单附加字段：待付款截止时间（倒计时用） */
 /**
- * 顾客侧订单响应的统一出口。顺手剥掉店家内部的运力报价快照（§6b）——那两列是店家付给
- * 骑手的成本与查询时间，顾客只该看到自己付的运费。**任何返回订单行（或订单行展开）的
- * 顾客接口都必须经过这里**——之前漏过一处（PUT /:id/confirm 直接 success(res, updated)），
- * 说明「记数字」靠不住；新增出口时请重新数一遍本文件里所有 success(res, ...) 调用，
- * 逐个确认是否携带订单行。
+ * 顾客侧订单响应的统一出口。顺手剥掉店家内部的字段：
+ *  - quoteSnapshot / quotedAt（§6b）：店家付给骑手的成本与查询时间，顾客只该看到自己付的运费。
+ *  - isTest：内部统计口径标记（见 utils/stats-scope.ts），顾客看到「你这单是测试单」只会困惑，
+ *    联调时用的还是真实小程序账号和真实支付，那一单对顾客而言就是普通订单。
+ * **任何返回订单行（或订单行展开）的顾客接口都必须经过这里**——之前漏过一处
+ * （PUT /:id/confirm 直接 success(res, updated)），说明「记数字」靠不住；
+ * 新增出口时请重新数一遍本文件里所有 success(res, ...) 调用，逐个确认是否携带订单行。
+ * 现存携带订单行的出口共 4 处：GET /（列表）、GET /:id、PUT /:id/confirm、PUT /:id/cancel（两个分支）。
  */
 function withPayExpire<T extends { status: string; createdAt: Date }>(
   order: T
-): Omit<T, 'quoteSnapshot' | 'quotedAt'> & { payExpireAt: Date | null } {
-  const { quoteSnapshot, quotedAt, ...rest } = order as T & { quoteSnapshot?: unknown; quotedAt?: unknown }
+): Omit<T, 'quoteSnapshot' | 'quotedAt' | 'isTest'> & { payExpireAt: Date | null } {
+  const { quoteSnapshot, quotedAt, isTest, ...rest } = order as T & {
+    quoteSnapshot?: unknown
+    quotedAt?: unknown
+    isTest?: unknown
+  }
   void quoteSnapshot
   void quotedAt
+  void isTest
   return {
-    ...(rest as unknown as Omit<T, 'quoteSnapshot' | 'quotedAt'>),
+    ...(rest as unknown as Omit<T, 'quoteSnapshot' | 'quotedAt' | 'isTest'>),
     payExpireAt: order.status === 'PENDING_PAYMENT' ? payExpireAtOf(order.createdAt, config.order.payTimeoutMin) : null,
   }
 }

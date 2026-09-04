@@ -265,6 +265,10 @@ model Order {
   // 接单转备餐的那一刻就要查价，而 Delivery 行要等呼叫时才创建；呼叫时再复制到 Delivery。
   quoteSnapshot       Json?     @map("quote_snapshot")
   quotedAt            DateTime? @map("quoted_at")
+  // 联调/回归留在正式库里的测试单。所有经营统计都排除它（口径见 utils/stats-scope.ts 的
+  // REAL_ORDERS），顾客端不下发（routes/orders.ts 的 withPayExpire 会剥掉）。
+  // 注意它挡不住热销榜：那读的是 Product.salesCount 冗余列，隔离办法见 docs/ops-test-orders.md。
+  isTest              Boolean   @default(false) @map("is_test")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 

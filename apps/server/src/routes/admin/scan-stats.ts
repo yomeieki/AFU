@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
+import { realOrdersSql } from '../../utils/stats-scope'
 
 const router = Router()
 
@@ -52,6 +53,7 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
         SELECT COUNT(DISTINCT o.id) cnt FROM orders o
         WHERE o.created_at >= ${start} AND o.created_at < ${endExclusive}
           AND o.status != 'CANCELLED'
+          ${realOrdersSql('o')}
           AND o.user_id IN (
             SELECT DISTINCT user_id FROM scan_logs
             WHERE created_at >= ${start} AND created_at < ${endExclusive} AND user_id IS NOT NULL
@@ -132,6 +134,7 @@ router.get('/products', async (req: Request, res: Response, next: NextFunction) 
             WHERE oi.product_id IN (${Prisma.join(productIds)})
             AND o.created_at >= ${start} AND o.created_at < ${endExclusive}
             AND o.status != 'CANCELLED'
+            ${realOrdersSql('o')}
             GROUP BY oi.product_id`
         : Promise.resolve([] as { product_id: number; cnt: bigint }[]),
     ])
