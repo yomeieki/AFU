@@ -16,7 +16,7 @@ import { LOW_STOCK_THRESHOLD } from '../utils/constants'
 import {
   remindCallTimeout, remindAcceptedStuck, remindDeliveringTimeout, remindUnknownGhost,
   remindLocalUncalled, remindCancelRequestPending, autoCallRiders, autoCompleteLocalDelivered,
-  housekeepingDelivery,
+  housekeepingDelivery, refreshStaleQuotes,
 } from './delivery/tasks'
 
 const TICK_MS = 60 * 1000
@@ -49,6 +49,7 @@ export interface SchedulerOverrides {
   localUncalledMin?: number
   cancelRequestPendingMin?: number
   autoCallDelayMin?: number
+  quoteRefreshMin?: number
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -67,6 +68,7 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['localUnknown', () => remindUnknownGhost(overrides.unknownStuckMin)],
     ['localUncalled', () => remindLocalUncalled(overrides.localUncalledMin)],
     ['localCancelReq', () => remindCancelRequestPending(overrides.cancelRequestPendingMin)],
+    ['localQuoteRefresh', () => refreshStaleQuotes(overrides.quoteRefreshMin)],
     ['localAutoCall', () => autoCallRiders(overrides.autoCallDelayMin)],
     ['localAutoComplete', () => autoCompleteLocalDelivered(overrides.autoCompleteDays)],
     ['localHousekeeping', housekeepingDelivery],

@@ -36,6 +36,12 @@ export interface LocalDeliverySettings {
   kd100: {
     providers: string[]; goodsType: string; defaultItemWeightG: number
     insurance: boolean; autoDowngradeToSelfOnNoBalance: boolean
+    /**
+     * 「一对一 / 指定单家运力」将来要用的槽（规格 §10）。v1 界面不暴露、服务端也不消费它——
+     * 呼叫接口已经收 providers?: string[]，真要启用时把这个值传进去即可，接口与数据结构都不用动。
+     * 之所以先把槽留在设置里：换运力是运营决策，不该每次都改代码。
+     */
+    soloProvider: string | null
   }
   limits: { maxItems: number; maxWeightKg: number }
   callTimeoutMin: number
@@ -71,7 +77,7 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   defaultProvider: 'KD100',
   kd100: {
     providers: [...KD100_PROVIDERS], goodsType: '食品', defaultItemWeightG: 300,
-    insurance: false, autoDowngradeToSelfOnNoBalance: false,
+    insurance: false, autoDowngradeToSelfOnNoBalance: false, soloProvider: null,
   },
   limits: { maxItems: 30, maxWeightKg: 10 },
   callTimeoutMin: 10,
@@ -142,6 +148,8 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       providers, goodsType: str(kd.goodsType, D.kd100.goodsType, 16),
       defaultItemWeightG: int(kd.defaultItemWeightG, D.kd100.defaultItemWeightG, 50, 20_000),
       insurance: bool(kd.insurance, false), autoDowngradeToSelfOnNoBalance: bool(kd.autoDowngradeToSelfOnNoBalance, false),
+      // 只认已知运力编码，别的（含空串）一律归 null——留着的槽也不该能被写进垃圾值
+      soloProvider: typeof kd.soloProvider === 'string' && (KD100_PROVIDERS as readonly string[]).includes(kd.soloProvider) ? kd.soloProvider : null,
     },
     limits: { maxItems: int(lim.maxItems, D.limits.maxItems, 1, 500), maxWeightKg: num(lim.maxWeightKg, D.limits.maxWeightKg, 0.5, 100) },
     callTimeoutMin: int(o.callTimeoutMin, D.callTimeoutMin, 1, 120),

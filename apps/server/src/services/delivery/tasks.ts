@@ -8,6 +8,7 @@ import { config } from '../../config'
 import { getLocalSettings, isOpenNow } from '../local-settings'
 import { isCircuitTripped } from './circuit'
 import { callRider } from './orchestrator'
+import { refreshOrderQuote, QUOTE_FRESH_MS } from './quote'
 import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert } from '../order-notify'
 import { DELIVERY_STATUS_LABEL, TERMINAL } from './state'
@@ -121,6 +122,37 @@ export async function remindCancelRequestPending(min = 5): Promise<number> {
     if (marked.count === 0) continue
     n++
     notifyLocalDeliveryAlert('顾客取消申请待处理', [`订单 ${o.orderNo}`, `取消申请已挂起超过 ${min} 分钟`, '请尽快确认是否取消'])
+  }
+  return n
+}
+
+/**
+ * 报价保鲜（规格 §6b 保鲜第一层）：「备餐中 + 无在途配送单 + 报价早于 N 分钟」的单重查一次。
+ * 备餐时长不固定（十分钟到半小时都有），报价会过时；查价免费不扣费，所以定时刷比在
+ * 点呼叫时强制重查更好——最坏也就旧 N 分钟，而店员点下去的那一刻不会卡。
+ *
+ * 与其它任务不同，这里没有「每单只做一次」的标记列：保鲜本就要反复做，quotedAt 自己
+ * 就是节流器（刚刷过的单下一轮不会再进候选）。
+ */
+export async function refreshStaleQuotes(min?: number): Promise<number> {
+  const threshold = min ?? QUOTE_FRESH_MS / 60000
+  const orders = await prisma.order.findMany({
+    where: {
+      deliveryType: 'LOCAL', status: 'PREPARING', cancelRequestedAt: null,
+      receiverLatE6: { not: null }, receiverLngE6: { not: null },
+      deliveries: { none: { activeOrderId: { not: null } } },
+      OR: [{ quotedAt: null }, { quotedAt: { lt: ago(threshold) } }],
+    },
+    take: BATCH, select: { id: true },
+  })
+  let n = 0
+  for (const o of orders) {
+    try {
+      if ((await refreshOrderQuote(o.id)).persisted) n++
+    } catch (e) {
+      // 查价是锦上添花：失败只记一行，绝不能让一单的报价问题拖垮整轮定时任务。
+      console.warn('[refreshStaleQuotes] 订单', o.id, '重查报价失败，跳过:', (e as Error)?.message ?? e)
+    }
   }
   return n
 }

@@ -4,11 +4,12 @@
  * verifyAndParseCallback directly reuses kd100Provider's real signature verification.
  */
 
-import { DeliveryProvider, ProviderError, CreateDeliveryOrderResult } from './types'
+import { DeliveryProvider, ProviderError, CreateDeliveryOrderResult, ProviderQuote } from './types'
 import { _mapReturnCode, kd100Provider } from './kd100'
 
 export type MockDirective =
-  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number }
+  // quotes 只对 price 有意义：让 mock 返回多家不同报价，才测得出「快照里存了几家、各是多少」
+  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number; quotes?: ProviderQuote[] }
   | { kind: 'error'; code: '30001' | '30002' | '30003' | '30004' | '30005' | '30006' | '50000' }
   | { kind: 'timeout' }
 
@@ -57,10 +58,12 @@ export const mockProvider: DeliveryProvider = {
   name: 'MOCK',
   async price(input) {
     const d = act('price', input)
-    return {
-      feeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500,
-      distanceM: d.kind === 'ok' && d.distanceM != null ? d.distanceM : 2600,
-    }
+    const distanceM = d.kind === 'ok' && d.distanceM != null ? d.distanceM : 2600
+    const quotes: ProviderQuote[] = d.kind === 'ok' && d.quotes?.length
+      ? d.quotes.map((q) => ({ provider: q.provider, feeFen: q.feeFen, distanceM: q.distanceM ?? distanceM }))
+      : [{ provider: 'mocktongcheng', feeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500, distanceM }]
+    // 与真实 provider 同一口径：feeFen 是这批报价里的最低价，不是随便挑一家
+    return { feeFen: Math.min(...quotes.map((q) => q.feeFen)), distanceM, quotes }
   },
   async createOrder(input): Promise<CreateDeliveryOrderResult> {
     const d = act('createOrder', input)

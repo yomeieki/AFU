@@ -10,7 +10,7 @@
  */
 import crypto from 'crypto'
 import { config, validateKd100Config } from '../../config'
-import { ProviderError, DeliveryProvider, CreateDeliveryOrderInput, CreateDeliveryOrderResult, DeliveryCallbackPayload, ProviderErrorKind } from './types'
+import { ProviderError, DeliveryProvider, CreateDeliveryOrderInput, CreateDeliveryOrderResult, DeliveryCallbackPayload, ProviderErrorKind, ProviderQuote } from './types'
 import { trunc } from './events'
 
 const API_URL = 'https://api.kuaidi100.com/bsamecity/order'
@@ -107,13 +107,28 @@ export const kd100Provider: DeliveryProvider = {
     }
     const param = _buildOrderParam(fullInput, settings.kd100.providers, settings.kd100.goodsType)
     const data = await post('batchPrice', param)
-    const fees = (data.data?.feeDetail as { discountFee?: unknown; distance?: unknown }[] | undefined) ?? []
+    // batchPrice 响应 data.feeDetail[]：每项 kuaidiCom / distance(米) / discountFee(元)
+    // ——注意这里官方文档写的是驼峰 kuaidiCom，与回调里的全小写 kuaidicom 不是同一个拼写，
+    // 两种都读一遍再兜底，读不出编码的那一项不进快照（宁可少一家，也不要一堆 provider:"" 的行）。
+    const fees = (data.data?.feeDetail as Record<string, unknown>[] | undefined) ?? []
+    const quotes: ProviderQuote[] = []
+    for (const f of fees) {
+      const code = String(f.kuaidiCom ?? f.kuaidicom ?? '').trim()
+      const fen = yuanToFen(f.discountFee)
+      if (!code || fen === null) continue
+      quotes.push({ provider: code, feeFen: fen, distanceM: toInt(f.distance ?? f.deliveryDistance) })
+    }
     const feesFen = fees.map((f) => yuanToFen(f.discountFee)).filter((n): n is number => n !== null)
-    return { feeFen: feesFen.length ? Math.min(...feesFen) : yuanToFen(data.data?.discountFee) ?? 0, distanceM: toInt(fees[0]?.distance ?? data.data?.deliveryDistance) }
+    return {
+      feeFen: feesFen.length ? Math.min(...feesFen) : yuanToFen(data.data?.discountFee) ?? 0,
+      distanceM: toInt(fees[0]?.distance ?? data.data?.deliveryDistance),
+      quotes,
+    }
   },
   async createOrder(input): Promise<CreateDeliveryOrderResult> {
     const settings = await import('../local-settings').then((m) => m.getLocalSettings())
-    const param = _buildOrderParam(input, settings.kd100.providers, settings.kd100.goodsType)
+    // input.providers 覆盖设置里的默认列表（规格 §10 的口子）；不传就是并呼默认那几家
+    const param = _buildOrderParam(input, input.providers?.length ? input.providers : settings.kd100.providers, settings.kd100.goodsType)
     const data = await post('batchOrder', param)
     const d = data.data ?? {}
     const fees = (d.fee as { discountFee?: unknown; deliveryDistance?: unknown }[] | undefined) ?? []

@@ -9,7 +9,7 @@ import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { AppError } from '../../middlewares/error'
 import { config } from '../../config'
-import { getLocalSettings } from '../local-settings'
+import { getLocalSettings, KD100_PROVIDERS } from '../local-settings'
 import { getDeliveryProvider } from './provider'
 import { ProviderError, CreateDeliveryOrderInput } from './types'
 import { isCircuitTripped, tripCircuit } from './circuit'
@@ -25,7 +25,18 @@ export async function getActiveDelivery(orderId: number) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-export interface CallRiderInput { orderId: number; operator: string; source: 'ADMIN' | 'SCHEDULER' }
+export interface CallRiderInput {
+  orderId: number
+  operator: string
+  source: 'ADMIN' | 'SCHEDULER'
+  /**
+   * 指定本次呼叫的运力（kuaidicom 编码），不传 = 用设置里的默认列表并呼。
+   * 规格 §10 的口子：将来做「并呼六家 / 某家一对一」二选一时只改配置、不动接口结构，
+   * 所以是具名列表而不是 oneToOne 布尔值——哪家算「一对一」不该焊死在代码里。
+   * v1 后台界面不暴露，但接口与 Delivery.calledProviders 已经能承载它。
+   */
+  providers?: string[]
+}
 
 export async function callRider(input: CallRiderInput) {
   const { orderId, operator, source } = input
@@ -41,6 +52,12 @@ export async function callRider(input: CallRiderInput) {
   const s = await getLocalSettings()
   if (s.store.latE6 === null || s.store.lngE6 === null) throw new AppError(42226, '门店尚未设置坐标')
 
+  // 指定运力必须是已知编码：拼错一个字母，快递100 那边只会返回「没有可用运力」，
+  // 到时候看起来像是运力紧张而不是参数写错——在本地就拦下来，错因才不会被掩埋。
+  const bad = (input.providers ?? []).filter((p) => !(KD100_PROVIDERS as readonly string[]).includes(p))
+  if (bad.length) throw new AppError(40001, `未知运力编码：${bad.join(', ')}`)
+  const calledProviders = input.providers?.length ? input.providers : s.kd100.providers
+
   // 占位事务：activeOrderId 唯一索引 = 并发防线
   const seq = (await prisma.delivery.count({ where: { orderId } })) + 1
   const deliveryNo = `D${orderId}-${seq}`
@@ -53,6 +70,12 @@ export async function callRider(input: CallRiderInput) {
       orderId, orderNo: order.orderNo, deliveryNo, activeOrderId: orderId,
       provider: getDeliveryProvider().name, status: 'PENDING', statusRank: 0,
       callbackSalt, operator: trunc(operator, 64) ?? operator,
+      // 呼叫当次的报价快照从 Order 复制过来（规格 §6b「Delivery 必须存当次六家报价的快照」）。
+      // 可能为空：报价是接单时后台异步取的，「接单并呼叫」这条路径上呼叫可能跑在查价前面。
+      // 不为此阻塞呼叫——高峰期那一刻店员最急，而缺一份快照只是少一条对账线索。
+      quoteSnapshot: (order.quoteSnapshot ?? Prisma.DbNull) as Prisma.InputJsonValue | typeof Prisma.DbNull,
+      quotedAt: order.quotedAt,
+      calledProviders,
     } })
     deliveryId = created.id
   } catch (e) {
@@ -77,6 +100,7 @@ export async function callRider(input: CallRiderInput) {
   const weightKg = order.items.reduce((w, it) => w + ((it.product?.netWeightG ?? s.kd100.defaultItemWeightG) * it.quantity) / 1000, 0)
   const req: CreateDeliveryOrderInput = {
     deliveryNo, callbackUrl, callbackSalt,
+    providers: input.providers?.length ? input.providers : undefined,
     sender: { name: s.store.name, mobile: s.store.phone, province: s.store.province, city: s.store.city, district: s.store.district, address: s.store.address, latE6: s.store.latE6, lngE6: s.store.lngE6 },
     receiver: { name: order.receiverName, mobile: order.receiverPhone, province: order.receiverProvince, city: order.receiverCity, district: order.receiverDistrict,
                 address: `${order.receiverDetail}${order.receiverPoiName ? `（${order.receiverPoiName}）` : ''}`, latE6: order.receiverLatE6, lngE6: order.receiverLngE6 },

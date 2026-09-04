@@ -6,6 +6,7 @@ import { AppError } from '../../middlewares/error'
 import {
   callRider, voidUnknownDelivery, precancelDelivery, cancelDelivery, addTip, selfDeliver, markDelivered,
 } from '../../services/delivery/orchestrator'
+import { refreshOrderQuote, kickOffQuote, isQuoteStale } from '../../services/delivery/quote'
 
 const router = Router()
 
@@ -18,11 +19,19 @@ async function doAccept(id: number) {
   return prisma.order.findUnique({ where: { id } })
 }
 
+// 规格 §10：指定运力用具名列表覆盖设置里的默认列表，不做成 oneToOne 布尔值。
+// v1 界面不传这个字段，接口先把口子留好。
+const callSchema = z.object({ providers: z.array(z.string().trim().min(1).max(32)).min(1).max(10).optional() })
+
 // POST /api/admin/local/orders/:id/accept — 同城接单（PAID → PREPARING）
 router.post('/:id/accept', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    success(res, await doAccept(id))
+    const order = await doAccept(id)
+    // 规格 §6b：转「备餐中」的这一刻后台预取一次六家报价（batchPrice 免费不扣费）。
+    // 备餐那十几分钟店员不急，呼叫的那一刻他最急——把查询放在不急的时候做完。
+    kickOffQuote(id)
+    success(res, order)
   } catch (e) { next(e) }
 })
 
@@ -30,9 +39,13 @@ router.post('/:id/accept', async (req: Request, res: Response, next: NextFunctio
 router.post('/:id/accept-and-call', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
+    const { providers } = callSchema.parse(req.body ?? {})
     await doAccept(id)
+    // 同样预取，但不等它：呼叫要立刻发出去。这条路径上快照多半赶不上被复制到 Delivery，
+    // 复制不到就是空——报价是「锦上添花」，不该让呼叫等它（见 orchestrator 里的同一处注释）。
+    kickOffQuote(id)
     try {
-      const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN' })
+      const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN', providers })
       success(res, { accepted: true, ...r })
     } catch (e) {
       if (e instanceof AppError) e.message = '已接单，' + e.message
@@ -45,8 +58,18 @@ router.post('/:id/accept-and-call', async (req: Request, res: Response, next: Ne
 router.post('/:id/call', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN' })
+    const { providers } = callSchema.parse(req.body ?? {})
+    const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN', providers })
     success(res, r)
+  } catch (e) { next(e) }
+})
+
+// POST /api/admin/local/orders/:id/quote — 手动重查配送报价（规格 §6b 保鲜第二层：呼叫弹窗上的刷新按钮）
+router.post('/:id/quote', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const r = await refreshOrderQuote(id)
+    success(res, { snapshot: r.snapshot, quotedAt: r.quotedAt.toISOString(), stale: false, persisted: r.persisted })
   } catch (e) { next(e) }
 })
 
@@ -59,16 +82,28 @@ router.post('/:id/delivery/void', async (req: Request, res: Response, next: Next
   } catch (e) { next(e) }
 })
 
-// GET /api/admin/local/orders/:id/delivery — 有效配送单（无则最近一张）+ 事件时间线
+// GET /api/admin/local/orders/:id/delivery — 有效配送单（无则最近一张）+ 事件时间线 + 当前报价快照
+// 报价只走这里和呼叫弹窗，**不上工作台卡片**（规格 §4：卡片只回答该不该现在处理这一单）。
 router.get('/:id/delivery', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const delivery = await prisma.delivery.findFirst({
-      where: { orderId: id },
-      orderBy: { id: 'desc' },
-      include: { events: { orderBy: { id: 'asc' } } },
+    const [delivery, order] = await Promise.all([
+      prisma.delivery.findFirst({
+        where: { orderId: id },
+        orderBy: { id: 'desc' },
+        include: { events: { orderBy: { id: 'asc' } } },
+      }),
+      prisma.order.findUnique({ where: { id }, select: { quoteSnapshot: true, quotedAt: true } }),
+    ])
+    success(res, {
+      delivery: delivery ?? null,
+      events: delivery?.events ?? [],
+      // 呼叫弹窗要的那一块：六家报价 + 查询时间 + 是否已过期（>5 分钟转琥珀底并标「已过期」）。
+      // stale 在服务端算，免得前端各自复刻一遍阈值。
+      quote: order
+        ? { snapshot: order.quoteSnapshot ?? null, quotedAt: order.quotedAt?.toISOString() ?? null, stale: isQuoteStale(order.quotedAt) }
+        : null,
     })
-    success(res, { delivery: delivery ?? null, events: delivery?.events ?? [] })
   } catch (e) { next(e) }
 })
 

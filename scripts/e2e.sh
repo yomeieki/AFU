@@ -837,6 +837,64 @@ assert_eq "打印机占位" "$(jq -r .data.printer.status <<<"$S")" "NOT_CONNECT
 assert_eq "熔断未触发" "$(jq -r .data.circuit.tripped <<<"$S")" "false"
 [[ "$(jq -r .data.stats.todayOrders <<<"$S")" -ge 1 ]] && ok "今日单数 ≥1" || fail "stats" "$S"
 
+echo "== 32. 配送报价快照（§6b 取数）=="
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+QO1=$(mk_local_paid); [[ -n "$QO1" ]] && ok "报价用同城单 #$QO1" || fail "造单失败"
+# ① 接单转备餐的瞬间后台异步预取一次报价。这里只断言「管道通了」（有快照、有查询时间），
+#    不断言具体金额：预取是异步的，进程内定时任务每 60 秒也会刷一次报价，
+#    两者都会消费 mock 的 price 指令队列，写死金额就会随机翻车。金额结构在 ② 里同步验。
+req POST "/api/admin/local/orders/$QO1/accept" "$AT" >/dev/null
+sleep 1
+R=$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT")
+assert_eq "接单后预取到报价快照" "$(jq -r '.data.quote.snapshot != null' <<<"$R")" "true"
+assert_eq "快照自带查询时间 at" "$(jq -r '.data.quote.snapshot.at != null' <<<"$R")" "true"
+assert_eq "quotedAt 已写入" "$(jq -r '.data.quote.quotedAt != null' <<<"$R")" "true"
+assert_eq "刚查的报价不算过期" "$(jq -r '.data.quote.stale' <<<"$R")" "false"
+QAT1=$(jq -r '.data.quote.quotedAt' <<<"$R")
+# 规格 §4：报价不上工作台卡片（卡片只回答该不该现在处理这一单）
+S=$(req GET "/api/admin/workbench/snapshot?fresh=1" "$AT")
+assert_eq "报价不上工作台卡片" "$(jq -r --argjson id "$QO1" '[.data.columns.preparing[] | select(.orderId==$id)] | tostring | test("quote";"i")' <<<"$S")" "false"
+# ② 手动刷新（呼叫弹窗里的刷新按钮）：同步返回，指令与调用之间只隔一个往返。
+#    连排两条同样的指令是给后台定时任务留的余量——它若恰好插在中间偷走一条，还剩一条。
+QD='{"op":"price","directive":{"kind":"ok","quotes":[{"provider":"meituantongcheng","feeFen":650,"distanceM":1800},{"provider":"shunfengtongcheng","feeFen":680,"distanceM":1800},{"provider":"dadatongcheng","feeFen":700,"distanceM":1800},{"provider":"uupaotui","feeFen":720,"distanceM":1800},{"provider":"fengniaotongcheng","feeFen":780,"distanceM":1800},{"provider":"shansongtongcheng","feeFen":1200,"distanceM":1800}]}}'
+req POST /api/admin/system/kd100-mock/queue "$AT" "$QD" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" "$QD" >/dev/null
+R=$(req POST "/api/admin/local/orders/$QO1/quote" "$AT")
+assert_eq "手动刷新报价 code 0" "$(code "$R")" "0"
+assert_eq "快照存下六家" "$(jq -r '.data.snapshot.quotes | length' <<<"$R")" "6"
+assert_eq "每家都带运力编码与金额" "$(jq -r '[.data.snapshot.quotes[] | select((.provider|type=="string" and length>0) and (.feeFen|type=="number"))] | length' <<<"$R")" "6"
+assert_eq "最低价运力" "$(jq -r '.data.snapshot.lowest.provider' <<<"$R")" "meituantongcheng"
+assert_eq "最低价金额（分）" "$(jq -r '.data.snapshot.lowest.feeFen' <<<"$R")" "650"
+QAT2=$(jq -r '.data.quotedAt' <<<"$R")
+[[ "$QAT2" > "$QAT1" ]] && ok "quotedAt 前进" || fail "quotedAt 未前进" "$QAT1 → $QAT2"
+# ③ 指定运力（§10 留口子）：具名列表，不是 oneToOne 布尔
+R=$(req POST "/api/admin/local/orders/$QO1/call" "$AT" '{"providers":["nosuchtongcheng"]}')
+assert_eq "未知运力编码被拒 40001" "$(code "$R")" "40001"
+assert_eq "被拒时不留配送单" "$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT" | jq -r .data.delivery)" "null"
+R=$(req POST "/api/admin/local/orders/$QO1/call" "$AT" '{"providers":["meituantongcheng"]}')
+assert_eq "指定单家运力呼叫 code 0" "$(code "$R")" "0"
+R=$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT")
+assert_eq "Delivery 记下本单呼了哪些运力" "$(jq -c '.data.delivery.calledProviders' <<<"$R")" '["meituantongcheng"]'
+assert_eq "Delivery 复制到报价快照" "$(jq -r '.data.delivery.quoteSnapshot != null' <<<"$R")" "true"
+assert_eq "Delivery 快照带查询时间" "$(jq -r '.data.delivery.quotedAt != null' <<<"$R")" "true"
+assert_eq "运力列表传到了下单参数" "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -c '[.data[] | select(.op=="createOrder")] | last | .input.providers')" '["meituantongcheng"]'
+# ④ 查价失败只 warn，接单照常成功（接单是主流程，查价是锦上添花）
+# reset 清掉 ② 里可能没被消费掉的那条余量指令，否则它会跑到下面的错误断言前面
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+QO2=$(mk_local_paid)
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"error","code":"50000"}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$QO2/accept" "$AT")
+assert_eq "查价失败不影响接单 code 0" "$(code "$R")" "0"
+assert_eq "查价失败仍转备餐中" "$(jq -r .data.status <<<"$R")" "PREPARING"
+# ⑤ 定时保鲜：备餐中 + 无在途配送单 + 报价陈旧 → 重查；刚刷过的单不再进候选（quotedAt 自节流）
+# 再 reset 一次：错误指令若没被 ④ 消费掉（后台定时任务也在消费同一个队列），会让这一轮少刷一单，
+# 「第二轮归零」就变成偶发红。保鲜这几条断言只看条数，不需要任何指令。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+R=$(sched '{"quoteRefreshMin":0}')
+[[ "$(jq -r .data.localQuoteRefresh <<<"$R")" -ge 1 ]] && ok "报价保鲜 ≥1" || fail "报价保鲜" "$R"
+R=$(sched '{}'); assert_eq "刚刷过的单不重复查" "$(jq -r .data.localQuoteRefresh <<<"$R")" "0"
+assert_eq "已有在途配送单的单不参与保鲜" "$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT" | jq -r '.data.quote.quotedAt')" "$QAT2"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

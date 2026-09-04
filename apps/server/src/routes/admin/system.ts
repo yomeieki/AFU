@@ -110,6 +110,7 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         localUncalledMin: num(body.localUncalledMin),
         cancelRequestPendingMin: num(body.cancelRequestPendingMin),
         autoCallDelayMin: num(body.autoCallDelayMin),
+        quoteRefreshMin: num(body.quoteRefreshMin),
       })
     )
   } catch (e) {

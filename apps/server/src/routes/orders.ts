@@ -30,9 +30,19 @@ function generateOrderNo(): string {
 }
 
 /** 顾客端订单附加字段：待付款截止时间（倒计时用） */
-function withPayExpire<T extends { status: string; createdAt: Date }>(order: T): T & { payExpireAt: Date | null } {
+/**
+ * 顾客侧订单响应的统一出口。顺手剥掉店家内部的运力报价快照（§6b）——那两列是店家付给
+ * 骑手的成本与查询时间，顾客只该看到自己付的运费。三处顾客接口都经过这里，剥在这一个
+ * 点上，将来 Order 再加内部列也只需改这一处。
+ */
+function withPayExpire<T extends { status: string; createdAt: Date }>(
+  order: T
+): Omit<T, 'quoteSnapshot' | 'quotedAt'> & { payExpireAt: Date | null } {
+  const { quoteSnapshot, quotedAt, ...rest } = order as T & { quoteSnapshot?: unknown; quotedAt?: unknown }
+  void quoteSnapshot
+  void quotedAt
   return {
-    ...order,
+    ...(rest as unknown as Omit<T, 'quoteSnapshot' | 'quotedAt'>),
     payExpireAt: order.status === 'PENDING_PAYMENT' ? payExpireAtOf(order.createdAt, config.order.payTimeoutMin) : null,
   }
 }

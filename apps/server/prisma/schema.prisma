@@ -261,6 +261,10 @@ model Order {
   // M2 定时任务「每单只提醒一次」标记（备餐超时未呼叫 / 顾客取消申请未处理）
   localUncalledRemindedAt  DateTime? @map("local_uncalled_reminded_at")
   cancelRequestRemindedAt  DateTime? @map("cancel_request_reminded_at")
+  // 最近一次六家运力报价快照（结构见 services/delivery/quote.ts）。放在 Order 上是因为
+  // 接单转备餐的那一刻就要查价，而 Delivery 行要等呼叫时才创建；呼叫时再复制到 Delivery。
+  quoteSnapshot       Json?     @map("quote_snapshot")
+  quotedAt            DateTime? @map("quoted_at")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
@@ -501,6 +505,13 @@ model Delivery {
   callbackSalt      String    @map("callback_salt") @db.VarChar(20)
   quotedFee         Int?      @map("quoted_fee")
   actualFee         Int?      @map("actual_fee")
+  // 呼叫当次的六家报价快照（从 Order 复制，结构见 services/delivery/quote.ts）+ 查询时间。
+  // 对账依据：中标运力（courierCompany）在快照里的报价 vs 实扣（quotedFee/actualFee）。
+  quoteSnapshot     Json?     @map("quote_snapshot")
+  quotedAt          DateTime? @map("quoted_at")
+  // 本单实际呼了哪些运力（kuaidicom 编码字符串数组）。规格 §10：将来做「指定单家运力」时，
+  // 费用差异来自哪几家必须看得出来，所以记具名列表而不是一个 oneToOne 布尔值。
+  calledProviders   Json?     @map("called_providers")
   tipFee            Int       @default(0) @map("tip_fee")
   cancelFee         Int       @default(0) @map("cancel_fee")
   providerDistanceM Int?      @map("provider_distance_m")
