@@ -61,11 +61,23 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   paused: null,
   store: {
     name: '阿福凉菜', phone: '15309003232',
-    province: '四川省', city: '自贡市', district: '高新区', address: '汇东新区丹桂40栋底楼',
-    latE6: null, lngE6: null,
+    // district 必须写**正式行政区**「自流井区」而不是俗称「汇东新区」——它会原样作为
+    // sendManDistrict 传给运力方（见 services/delivery/kd100.ts 的 _buildOrderParam）。
+    province: '四川省', city: '自贡市', district: '自流井区', address: '丹桂街道丹桂40栋底楼',
+    // 店主 2026-09-04 现场用微信「经纬度查询」小程序取得，腾讯与高德返回一致 = GCJ-02
+    // （百度那组是 BD-09、谷歌/GPS 那组是 WGS-84，都不能直接用）。
+    // 已用 batchPrice 交叉验证：正北 1998m 的点，四家运力返回 3057–3400m，坐标被正确解读。
+    latE6: 29341126, lngE6: 104779018,
   },
   radiusKm: 5,
-  detourFactor: 1.35,
+  // ⚠ 1.35 是拍脑袋的初值，店主 2026-09-04 用免费 batchPrice 打了 8 个方向实测，证明它系统性低估：
+  //   正北2km 1.67 / 正南2km 1.53 / 正东2km 1.88 / 正西2km 2.12
+  //   东北3km 1.30 / 西南3km 1.54 / 正北5km 1.74 / 正东5km 1.58
+  //   均值 1.67、中位 1.67、范围 1.30–2.12 —— 1.35 平均低估 19%，最差方向低估 36%。
+  // 但**结论不是改成 1.67**：方向间差 63%（正西 2.12 vs 东北 1.30），自贡是山城又夹着釜溪河，
+  // 任何固定系数在某些方向都必然错得离谱。正解是用 batchPrice 返回的真实道路距离算运费，
+  // 这个系数只在查价失败时兜底——所以取 1.7 而不是 1.67：高估只是少赚，低估是每单倒贴。
+  detourFactor: 1.7,
   fee: { baseFee: 300, baseKm: 3, perKmFee: 100, freeThreshold: 0, minOrderAmount: 0 },
   businessHours: [{ start: '09:00', end: '20:00' }],
   prepMinutes: 15,
