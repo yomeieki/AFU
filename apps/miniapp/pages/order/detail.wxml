@@ -22,6 +22,65 @@
     </view>
   </view>
 
+  <!-- 同城配送：不使用原生 map，以静态路线示意和文字距离展示进度。 -->
+  <view class="card" wx:if="{{order.isLocal}}">
+    <view class="card-title">同城配送信息</view>
+    <view class="info-row">
+      <text class="info-label">收货地点</text>
+      <view class="info-value local-address-value">
+        <text wx:if="{{order.receiverPoiName}}">{{order.receiverPoiName}} · </text>
+        <text>{{order.receiverFullAddress}}</text>
+      </view>
+    </view>
+    <view class="info-row">
+      <text class="info-label">配送距离</text>
+      <text class="info-value">距门店 {{order.distanceText}} km</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">预计送达</text>
+      <text class="info-value">{{order.estimatedDeliveryText}}</text>
+    </view>
+    <view class="info-row">
+      <text class="info-label">配送费</text>
+      <text class="info-value">¥{{order.shippingFeeText}}</text>
+    </view>
+    <view class="delivery-status" wx:if="{{order.deliveryStatusLabel}}">
+      <text>{{order.deliveryStatusLabel}}</text>
+      <text class="delivery-neutral-hint" wx:if="{{order.deliveryNeutralHint}}">{{order.deliveryNeutralHint}}</text>
+    </view>
+  </view>
+
+  <view class="card courier-card" wx:if="{{order.showCourierCard}}">
+    <view class="card-title">骑手信息</view>
+    <view class="courier-row">
+      <view class="courier-info">
+        <text class="courier-name">{{order.delivery.courierName || '骑手'}}</text>
+        <text class="courier-company">{{order.delivery.courierCompany || ''}}</text>
+      </view>
+      <view class="courier-contact" wx:if="{{order.delivery.courierMobile}}" bindtap="onContactCourier">联系骑手</view>
+    </view>
+  </view>
+
+  <view class="card courier-route-card" wx:if="{{order.isLocal && courierLoc && storeLoc}}">
+    <view class="card-title">骑手位置</view>
+    <cover-view class="courier-route">
+      <cover-view class="route-line"></cover-view>
+      <cover-view class="route-stop route-store"><cover-view class="route-dot"></cover-view><cover-view>门店</cover-view></cover-view>
+      <cover-view class="route-stop route-receiver"><cover-view class="route-dot"></cover-view><cover-view>收货点</cover-view></cover-view>
+      <cover-view class="route-rider"><cover-view class="route-rider-dot"></cover-view><cover-view>骑手</cover-view></cover-view>
+    </cover-view>
+    <text class="courier-route-distance">距门店 {{order.distanceText}} km</text>
+  </view>
+
+  <view class="card local-cancel-card" wx:if="{{order.isLocal && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelUnavailable)}}">
+    <view class="local-cancel-submitted" wx:if="{{order.cancelRequestedAt}}">取消申请已提交，商家会尽快处理</view>
+    <view wx:elif="{{order.canRequestCancel}}">
+      <text class="local-cancel-title">可申请取消</text>
+      <text class="local-cancel-copy">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.localCancelDeadlineText}}）</text>
+    </view>
+    <view class="local-cancel-unavailable" wx:else>订单已开始制作，如有问题请联系商家</view>
+  </view>
+
   <!-- Items -->
   <view class="card">
     <view class="card-title">商品信息</view>
@@ -156,7 +215,7 @@
   </view>
 
   <!-- Shipment -->
-  <view class="card" wx:if="{{order.shipment}}">
+  <view class="card" wx:if="{{!order.isLocal && order.shipment}}">
     <view class="card-title">物流信息</view>
     <view class="info-row">
       <text class="info-label">快递公司</text>
@@ -186,6 +245,9 @@
   </view>
   <view class="cancel-btn" wx:if="{{order.canSelfCancel}}" bindtap="onCancelOrder">
     <text>{{order.status === 'PENDING_PAYMENT' ? '取消订单' : '申请退款'}}</text>
+  </view>
+  <view class="cancel-btn" wx:if="{{order.isLocal && order.canRequestCancel}}" bindtap="onRequestCancel">
+    <text>申请取消</text>
   </view>
   <view class="cancel-btn" wx:if="{{order.canApplyAfterSale}}" bindtap="onApplyAfterSale">
     <text>申请售后</text>

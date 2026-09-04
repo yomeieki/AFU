@@ -1,4 +1,5 @@
-const { getOrderDetail, confirmOrder, cancelOrder } = require('../../api/order')
+const { getOrderDetail, confirmOrder, cancelOrder, requestCancelOrder, getCourierLocation } = require('../../api/order')
+const { getLocalMeta } = require('../../api/local')
 const { callShop } = require('../../utils/contact')
 const { payOrder } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
@@ -14,6 +15,17 @@ var STATUS_LABEL = {
   CANCELLED: '已取消',
   REFUNDED: '已退款',
 }
+
+// 同城配送的异常状态不展示运力侧的内部处理术语，避免顾客误解为订单出错。
+var DELIVERY_CUSTOMER_LABEL = {
+  PENDING: '商家正在安排配送', CALLING: '正在为您呼叫骑手',
+  ACCEPTED: '骑手已接单', ARRIVING: '骑手正在赶往门店', ARRIVED: '骑手已到店取餐',
+  DELIVERING: '配送中', DELIVERED: '已送达',
+  REASSIGNING: '配送正在协调中', ABNORMAL: '配送正在协调中',
+  UNKNOWN: '配送正在协调中', FAILED: '配送正在协调中', CANCELLED: '配送正在协调中',
+}
+var DELIVERY_NEUTRAL = ['REASSIGNING', 'ABNORMAL', 'UNKNOWN', 'FAILED', 'CANCELLED']
+var COURIER_LIVE_STATUSES = ['ACCEPTED', 'ARRIVING', 'ARRIVED', 'DELIVERING']
 
 // 退款单状态 → 顾客可见文案
 var REFUND_STATUS_LABEL = {
@@ -141,6 +153,63 @@ function buildTimeline(order) {
   return steps
 }
 
+function buildLocalTimeline(order) {
+  var delivery = order.delivery
+  var deliveryStatus = delivery && delivery.status
+  var riderAccepted = delivery && ['ACCEPTED', 'ARRIVING', 'ARRIVED', 'DELIVERING', 'DELIVERED'].indexOf(deliveryStatus) !== -1
+  var riderAtStore = delivery && (delivery.pickedUpAt || ['ARRIVED', 'DELIVERING', 'DELIVERED'].indexOf(deliveryStatus) !== -1)
+  var riderExtra = delivery && [delivery.courierName, delivery.courierCompany].filter(Boolean).join(' · ')
+  var steps = [{ label: '提交订单', time: t(order.createdAt), done: true }]
+
+  // 与邮寄订单相同的取消/退款事实表达，仅将物流节点的文案换成同城配送。
+  if (order.status === 'CANCELLED') {
+    if (order.paidAt) steps.push({ label: '支付成功', time: t(order.paidAt), done: true })
+    var rejectReasonCancelled = rejectReasonText(order.cancelReason)
+    steps.push({
+      label: rejectReasonCancelled ? ('商家已拒单 · ' + rejectReasonCancelled) : '订单已取消',
+      time: t(order.cancelledAt),
+      done: true,
+      extra: rejectReasonCancelled ? '' : (order.cancelReason || ''),
+    })
+    return steps
+  }
+
+  if (order.status === 'REFUNDING' || order.status === 'REFUNDED') {
+    steps.push({ label: '支付成功', time: t(order.paidAt), done: !!order.paidAt })
+    if (order.acceptedAt) steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: true })
+    if (order.status === 'SHIPPED' || (delivery && delivery.pickedUpAt)) {
+      steps.push({ label: '配送中', time: t((delivery && delivery.pickedUpAt) || order.acceptedAt), done: true, extra: riderExtra })
+    }
+    if (order.completedAt) steps.push({ label: '已送达', time: t(order.completedAt), done: true })
+
+    var rejectReason = rejectReasonText(order.cancelReason)
+    var byCustomer = !rejectReason && !!order.cancelReason && order.cancelReason.indexOf('用户') === 0
+    steps.push({
+      label: rejectReason ? ('商家已拒单 · ' + rejectReason) : (byCustomer ? '申请退款' : '商家发起退款'),
+      time: t(order.cancelledAt),
+      done: true,
+      extra: (rejectReason || byCustomer) ? '' : (order.cancelReason || ''),
+    })
+    var refundDone = order.status === 'REFUNDED' && order.refundedAmount > 0
+    var refundFact = refundFactText(order)
+    steps.push({
+      label: refundFact.label,
+      time: refundDone ? t(order.refundedAt) : '',
+      done: refundDone,
+      extra: refundFact.extra,
+    })
+    return steps
+  }
+
+  steps.push({ label: '支付成功', time: t(order.paidAt), done: !!order.paidAt })
+  steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt })
+  steps.push({ label: '骑手已接单', time: '', done: !!riderAccepted, extra: riderAccepted ? riderExtra : '' })
+  steps.push({ label: '骑手已到店', time: '', done: !!riderAtStore })
+  steps.push({ label: '配送中', time: t(delivery && delivery.pickedUpAt), done: order.status === 'SHIPPED', extra: order.status === 'SHIPPED' ? riderExtra : '' })
+  steps.push({ label: '已送达', time: t(order.completedAt), done: !!order.completedAt })
+  return steps
+}
+
 function decorateOrder(order) {
   var refunds = (order.refunds || []).map(function(r) {
     return Object.assign({}, r, {
@@ -156,8 +225,20 @@ function decorateOrder(order) {
         timeText: t(order.afterSale.createdAt),
       })
     : null
+  var isLocal = order.deliveryType === 'LOCAL'
+  var delivery = order.delivery
+  var deliveryStatus = delivery && delivery.status
+  var isDeliveryNeutral = !!deliveryStatus && DELIVERY_NEUTRAL.indexOf(deliveryStatus) !== -1
   return Object.assign({}, order, {
     statusLabel: STATUS_LABEL[order.status] || order.status,
+    isLocal: isLocal,
+    deliveryStatusLabel: deliveryStatus ? (DELIVERY_CUSTOMER_LABEL[deliveryStatus] || deliveryStatus) : '',
+    deliveryNeutralHint: isDeliveryNeutral ? '如超过预计时间请联系商家' : '',
+    showCourierCard: !!delivery && COURIER_LIVE_STATUSES.indexOf(deliveryStatus) !== -1,
+    distanceText: order.distanceM == null ? '' : (order.distanceM / 1000).toFixed(1),
+    estimatedDeliveryText: isLocal ? deadlineText(order.estimatedDeliveryAt) : '',
+    localCancelDeadlineText: isLocal ? deadlineText(order.cancelRequestDeadline) : '',
+    showLocalCancelUnavailable: isLocal && order.status === 'PREPARING' && !order.cancelRequestedAt && order.canRequestCancel !== true,
     // 自助取消/退款：待付款，或已付款且商家未接单
     canSelfCancel: order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt),
     totalAmountText: formatPrice(order.totalAmount),
@@ -167,7 +248,7 @@ function decorateOrder(order) {
     payDeadlineText: order.status === 'PENDING_PAYMENT' ? deadlineText(order.payExpireAt) : '',
     createdAtText: t(order.createdAt),
     paidAtText: order.paidAt ? t(order.paidAt) : null,
-    timeline: buildTimeline(order),
+    timeline: isLocal ? buildLocalTimeline(order) : buildTimeline(order),
     refunds: refunds,
     afterSale: afterSale,
     items: order.items.map(function(item) {
@@ -184,6 +265,9 @@ Page({
     order: null,
     loading: true,
     countdown: '',
+    courierLoc: null,
+    storeLoc: null,
+    graceMin: '',
   },
 
   onLoad(options) {
@@ -200,20 +284,26 @@ Page({
   },
 
   onShow() {
+    this._pageShown = true
     // 从售后申请页返回时刷新
     if (this._orderId && !this.data.loading && this._needRefresh) {
       this._needRefresh = false
       this.loadOrder(this._orderId, true)
     }
     this.startTicker()
+    this.startCourierPoll()
   },
 
   onHide() {
+    this._pageShown = false
     this.stopTicker()
+    this.stopCourierPoll()
   },
 
   onUnload() {
+    this._pageShown = false
     this.stopTicker()
+    this.stopCourierPoll()
   },
 
   onPullDownRefresh() {
@@ -231,7 +321,10 @@ Page({
           order: decorateOrder(order),
           loading: false,
           countdown: order.status === 'PENDING_PAYMENT' ? countdownText(order.payExpireAt) : '',
+          courierLoc: null,
         })
+        if (order.deliveryType === 'LOCAL') self.loadStoreLoc()
+        if (self._pageShown) self.startCourierPoll()
         if (self._autopay) {
           self._autopay = false
           if (order.status === 'PENDING_PAYMENT') self.startPay()
@@ -267,6 +360,48 @@ Page({
     if (this._ticker) {
       clearInterval(this._ticker)
       this._ticker = null
+    }
+  },
+
+  // 门店坐标只在同城订单详情首次需要时取一次；静态示意图不使用原生 map。
+  loadStoreLoc() {
+    var self = this
+    if (this._storeLocLoaded || this._storeLocLoading) return
+    this._storeLocLoading = true
+    getLocalMeta()
+      .then(function(meta) {
+        self._storeLoc = meta && meta.store ? meta.store : null
+        self.setData({ storeLoc: self._storeLoc, graceMin: meta && meta.acceptGraceMin != null ? meta.acceptGraceMin : '' })
+      })
+      .catch(function() {})
+      .then(function() {
+        self._storeLocLoading = false
+        self._storeLocLoaded = true
+      })
+  },
+
+  startCourierPoll() {
+    var self = this
+    this.stopCourierPoll()
+    if (!this.data.order || this.data.order.deliveryType !== 'LOCAL') return
+    var d = this.data.order.delivery
+    if (!d || COURIER_LIVE_STATUSES.indexOf(d.status) === -1) return
+    var tick = function() {
+      getCourierLocation(self._orderId)
+        .then(function(r) {
+          // location 为 null 是正常情况：整块位置示意图随之隐藏。
+          self.setData({ courierLoc: r.location || null })
+        })
+        .catch(function() {})
+    }
+    tick()
+    this._courierTimer = setInterval(tick, 30 * 1000)
+  },
+
+  stopCourierPoll() {
+    if (this._courierTimer) {
+      clearInterval(this._courierTimer)
+      this._courierTimer = null
     }
   },
 
@@ -373,6 +508,34 @@ Page({
           })
       },
     })
+  },
+
+  onRequestCancel() {
+    var self = this
+    wx.showModal({
+      title: '申请取消',
+      content: '商家确认后将全额退款，含配送费。确认提交取消申请？',
+      confirmText: '提交申请',
+      success: function(res) {
+        if (!res.confirm) return
+        requestCancelOrder(self.data.order.id)
+          .then(function() {
+            wx.showToast({ title: '取消申请已提交', icon: 'none', duration: 2000 })
+            self.loadOrder(self._orderId, true)
+          })
+          .catch(function(err) {
+            if (err && err.code === 42229) {
+              wx.showToast({ title: err.message, icon: 'none', duration: 2000 })
+            }
+            self.loadOrder(self._orderId, true)
+          })
+      },
+    })
+  },
+
+  onContactCourier() {
+    var delivery = this.data.order && this.data.order.delivery
+    if (delivery && delivery.courierMobile) wx.makePhoneCall({ phoneNumber: delivery.courierMobile })
   },
 
   onContactShop() {
