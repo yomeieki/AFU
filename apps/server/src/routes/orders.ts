@@ -32,8 +32,10 @@ function generateOrderNo(): string {
 /** 顾客端订单附加字段：待付款截止时间（倒计时用） */
 /**
  * 顾客侧订单响应的统一出口。顺手剥掉店家内部的运力报价快照（§6b）——那两列是店家付给
- * 骑手的成本与查询时间，顾客只该看到自己付的运费。三处顾客接口都经过这里，剥在这一个
- * 点上，将来 Order 再加内部列也只需改这一处。
+ * 骑手的成本与查询时间，顾客只该看到自己付的运费。**任何返回订单行（或订单行展开）的
+ * 顾客接口都必须经过这里**——之前漏过一处（PUT /:id/confirm 直接 success(res, updated)），
+ * 说明「记数字」靠不住；新增出口时请重新数一遍本文件里所有 success(res, ...) 调用，
+ * 逐个确认是否携带订单行。
  */
 function withPayExpire<T extends { status: string; createdAt: Date }>(
   order: T
@@ -503,7 +505,7 @@ router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunctio
       where: { id },
       data: { status: 'COMPLETED', completedAt: new Date() },
     })
-    success(res, updated)
+    success(res, withPayExpire(updated))
   } catch (e) {
     next(e)
   }
@@ -537,7 +539,10 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
       if (!config.mock.pay && order.payment?.paymentType === 'WECHAT' && order.payment.outTradeNo) {
         void closeOrder(order.payment.outTradeNo)
       }
-      return success(res, updated)
+      // PENDING_PAYMENT 下 quoteSnapshot/quotedAt 必为 null（还没接单，取不到报价），
+      // 包一层不构成实际脱敏，但统一走 withPayExpire 免得日后这两列提前到更早状态写入时
+      // 这里又漏一次。
+      return success(res, withPayExpire(updated))
     }
 
     if (order.status === 'PAID' && !order.acceptedAt) {

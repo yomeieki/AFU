@@ -52,11 +52,14 @@ export async function callRider(input: CallRiderInput) {
   const s = await getLocalSettings()
   if (s.store.latE6 === null || s.store.lngE6 === null) throw new AppError(42226, '门店尚未设置坐标')
 
+  // 去重：调用方传重复编码（如页面表单误勾两次）会被原样传进 kuaidiComList，
+  // 快递100 那边行为未定义，本地也没必要留两条一样的 calledProviders。
+  const providers = input.providers?.length ? [...new Set(input.providers)] : undefined
   // 指定运力必须是已知编码：拼错一个字母，快递100 那边只会返回「没有可用运力」，
   // 到时候看起来像是运力紧张而不是参数写错——在本地就拦下来，错因才不会被掩埋。
-  const bad = (input.providers ?? []).filter((p) => !(KD100_PROVIDERS as readonly string[]).includes(p))
+  const bad = (providers ?? []).filter((p) => !(KD100_PROVIDERS as readonly string[]).includes(p))
   if (bad.length) throw new AppError(40001, `未知运力编码：${bad.join(', ')}`)
-  const calledProviders = input.providers?.length ? input.providers : s.kd100.providers
+  const calledProviders = providers?.length ? providers : s.kd100.providers
 
   // 占位事务：activeOrderId 唯一索引 = 并发防线
   const seq = (await prisma.delivery.count({ where: { orderId } })) + 1
@@ -71,8 +74,9 @@ export async function callRider(input: CallRiderInput) {
       provider: getDeliveryProvider().name, status: 'PENDING', statusRank: 0,
       callbackSalt, operator: trunc(operator, 64) ?? operator,
       // 呼叫当次的报价快照从 Order 复制过来（规格 §6b「Delivery 必须存当次六家报价的快照」）。
-      // 可能为空：报价是接单时后台异步取的，「接单并呼叫」这条路径上呼叫可能跑在查价前面。
-      // 不为此阻塞呼叫——高峰期那一刻店员最急，而缺一份快照只是少一条对账线索。
+      // 这里多半为空：报价是接单时后台异步取的（kickOffQuote，一次网络往返），占位创建
+      // 到这里全是本地 DB 调用，几乎必然抢在查价落库之前。不为此阻塞呼叫——高峰期那一刻
+      // 店员最急。空缺会在外呼成功后的落库事务里补（:129 附近），不会一直空着。
       quoteSnapshot: (order.quoteSnapshot ?? Prisma.DbNull) as Prisma.InputJsonValue | typeof Prisma.DbNull,
       quotedAt: order.quotedAt,
       calledProviders,
@@ -100,7 +104,7 @@ export async function callRider(input: CallRiderInput) {
   const weightKg = order.items.reduce((w, it) => w + ((it.product?.netWeightG ?? s.kd100.defaultItemWeightG) * it.quantity) / 1000, 0)
   const req: CreateDeliveryOrderInput = {
     deliveryNo, callbackUrl, callbackSalt,
-    providers: input.providers?.length ? input.providers : undefined,
+    providers,
     sender: { name: s.store.name, mobile: s.store.phone, province: s.store.province, city: s.store.city, district: s.store.district, address: s.store.address, latE6: s.store.latE6, lngE6: s.store.lngE6 },
     receiver: { name: order.receiverName, mobile: order.receiverPhone, province: order.receiverProvince, city: order.receiverCity, district: order.receiverDistrict,
                 address: `${order.receiverDetail}${order.receiverPoiName ? `（${order.receiverPoiName}）` : ''}`, latE6: order.receiverLatE6, lngE6: order.receiverLngE6 },
@@ -126,10 +130,23 @@ export async function callRider(input: CallRiderInput) {
   if (result) {
     try {
       await prisma.$transaction(async (tx) => {
+        // 回填「接单并呼叫」路径上系统性落空的快照（:76 注释）：kickOffQuote 的查价是
+        // 一次网络往返（秒级），而占位创建到这里全是本地 DB 调用（毫秒级），占位时几乎
+        // 必然抢在查价落库之前，order.quoteSnapshot（:45 那次性读出）恒为空。但外呼本身
+        // 通常耗时数秒，此刻查价异步任务大概率已经写完，值得再读一次补上。
+        // 仅在占位时为空才回填——占位时若已带着快照（例如备餐几分钟后的手动「呼叫骑手」
+        // 路径），那份就是「呼叫当时看到的价」，不能被此刻可能已被 5 分钟保鲜任务
+        // 刷新过的新报价覆盖，快照的意义就在于锁定呼叫那一刻。
+        const quoteBackfill = order.quoteSnapshot
+          ? null
+          : await tx.order.findUnique({ where: { id: orderId }, select: { quoteSnapshot: true, quotedAt: true } })
         const landed = await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
           status: 'CALLING', statusRank: 10, calledAt: new Date(),
           providerTaskId: trunc(result!.taskId, 64), providerOrderId: trunc(result!.providerOrderId, 64),
           quotedFee: result!.quotedFeeFen, providerDistanceM: result!.distanceM,
+          ...(quoteBackfill?.quoteSnapshot
+            ? { quoteSnapshot: quoteBackfill.quoteSnapshot as Prisma.InputJsonValue, quotedAt: quoteBackfill.quotedAt }
+            : {}),
         } })
         if (landed.count === 0) {
           // where 里的 status:'PENDING' 本身已经保护了不变量（不会覆盖占位被挪去的其它状态），

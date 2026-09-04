@@ -853,6 +853,9 @@ assert_eq "刚查的报价不算过期" "$(jq -r '.data.quote.stale' <<<"$R")" "
 QAT1=$(jq -r '.data.quote.quotedAt' <<<"$R")
 # 规格 §4：报价不上工作台卡片（卡片只回答该不该现在处理这一单）
 S=$(req GET "/api/admin/workbench/snapshot?fresh=1" "$AT")
+# 前置：先证明该单确实在 preparing 列里——不然下面那条 test("quote") 断言在数组为空时
+# 也会 "[]" 通过，看着像测了实则没测（该单根本不在列里，断言空转过）。
+assert_eq "该单在备餐中列（前置，让下条断言有证伪力）" "$(jq -r --argjson id "$QO1" '[.data.columns.preparing[] | select(.orderId==$id)] | length' <<<"$S")" "1"
 assert_eq "报价不上工作台卡片" "$(jq -r --argjson id "$QO1" '[.data.columns.preparing[] | select(.orderId==$id)] | tostring | test("quote";"i")' <<<"$S")" "false"
 # ② 手动刷新（呼叫弹窗里的刷新按钮）：同步返回，指令与调用之间只隔一个往返。
 #    连排两条同样的指令是给后台定时任务留的余量——它若恰好插在中间偷走一条，还剩一条。
@@ -878,6 +881,26 @@ assert_eq "Delivery 记下本单呼了哪些运力" "$(jq -c '.data.delivery.cal
 assert_eq "Delivery 复制到报价快照" "$(jq -r '.data.delivery.quoteSnapshot != null' <<<"$R")" "true"
 assert_eq "Delivery 快照带查询时间" "$(jq -r '.data.delivery.quotedAt != null' <<<"$R")" "true"
 assert_eq "运力列表传到了下单参数" "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -c '[.data[] | select(.op=="createOrder")] | last | .input.providers')" '["meituantongcheng"]'
+# ③b 不传 providers：应记全部默认运力（覆盖缺口——之前只测过「指定单家」，没测过「默认全呼」）
+EXPPROV=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c '.data.kd100.providers')
+QO3=$(mk_local_paid); req POST "/api/admin/local/orders/$QO3/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$QO3/call" "$AT" '{}')
+assert_eq "不传 providers 呼叫 code 0" "$(code "$R")" "0"
+R=$(req GET "/api/admin/local/orders/$QO3/delivery" "$AT")
+assert_eq "不传 providers 时 calledProviders=设置里的默认列表" "$(jq -c '.data.delivery.calledProviders' <<<"$R")" "$EXPPROV"
+# ③c Important 1 覆盖：「接单并呼叫」这条组合路径上，Delivery.quoteSnapshot 也必须非空。
+#    kickOffQuote 在 doAccept 后 fire-and-forget，callRider 紧接着就跑；占位创建时读到的
+#    Order 快照（callRider 一进来就读一次）几乎必然还是空——这正是 Important 1 描述的系统性
+#    缺口。orchestrator 在外呼成功落库的那段事务里会再读一次 Order 回填（见其注释）：
+#    kickOffQuote 到落库只需 2 次本地 DB 往返，callRider 到达那段事务前要走 5 次以上
+#    （含一次外呼），所以统计上几乎总是后者更晚——回填理应赶上。这条断言在 Important 1
+#    修复前必红（Delivery.quoteSnapshot 恒为 null），修复后必绿，是那处修复的 RED→GREEN 证据。
+QO4=$(mk_local_paid)
+R=$(req POST "/api/admin/local/orders/$QO4/accept-and-call" "$AT" '{}')
+assert_eq "接单并呼叫 code 0" "$(code "$R")" "0"
+R=$(req GET "/api/admin/local/orders/$QO4/delivery" "$AT")
+assert_eq "接单并呼叫路径也带上报价快照（Important 1）" "$(jq -r '.data.delivery.quoteSnapshot != null' <<<"$R")" "true"
+assert_eq "接单并呼叫路径快照带查询时间" "$(jq -r '.data.delivery.quotedAt != null' <<<"$R")" "true"
 # ④ 查价失败只 warn，接单照常成功（接单是主流程，查价是锦上添花）
 # reset 清掉 ② 里可能没被消费掉的那条余量指令，否则它会跑到下面的错误断言前面
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null

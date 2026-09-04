@@ -41,8 +41,9 @@ router.post('/:id/accept-and-call', async (req: Request, res: Response, next: Ne
     const id = Number(req.params.id)
     const { providers } = callSchema.parse(req.body ?? {})
     await doAccept(id)
-    // 同样预取，但不等它：呼叫要立刻发出去。这条路径上快照多半赶不上被复制到 Delivery，
-    // 复制不到就是空——报价是「锦上添花」，不该让呼叫等它（见 orchestrator 里的同一处注释）。
+    // 同样预取，但不等它：呼叫要立刻发出去。占位创建时快照多半赶不上（异步查价还没落库），
+    // 但外呼本身耗时数秒，成功落库那一刻 orchestrator 会再读一次订单补上（见其注释）——
+    // 报价是「锦上添花」，不该让呼叫等它，但也不该白白空着。
     kickOffQuote(id)
     try {
       const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN', providers })
