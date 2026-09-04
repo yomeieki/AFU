@@ -42,6 +42,9 @@
 .wb__banner { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
   background:var(--danger); color:#fff; padding:8px 14px; font-size:13px; font-weight:600; }
 .wb__banner .wb__iconbtn { background:transparent; color:#fff; border-color:rgba(255,255,255,.6); }
+/* 一条细条，不是满屏红字（I1）：轮询连续失败时提醒店员数据可能不是实时的，但不用惊动他 */
+.wb__stale { padding:4px 14px; font-size:12px; color:var(--warn); background:var(--warn-soft);
+  border-bottom:1px solid var(--line); }
 
 /* 图例条（§3）——专注模式下隐藏 */
 .wb__legend { display:flex; align-items:center; gap:16px; flex-wrap:wrap;
@@ -118,6 +121,8 @@
 .wb__btn--fill { color:#fff; }
 .wb__btn--ghost { border-color:var(--line); color:var(--text-1); background:var(--surface); }
 .wb__btn--danger { background:var(--danger); color:#fff; }
+/* 中性填充：退出工作台等不属于任何渠道色的操作——用反色而不是硬编码白/黑，深色主题下才不会踩雷 */
+.wb__btn--neutral { background:var(--text-1); color:var(--surface); }
 .wb__btn--lg { flex:1 1 auto; min-height:44px; }
 
 /* ── 自绘弹窗（§6：确认按钮跟随渠道色，故不用通用 ConfirmDialog）── */
@@ -129,6 +134,9 @@
   display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .wb__modal-body { flex:1; overflow-y:auto; min-height:0; display:flex; flex-direction:column; gap:10px; padding:6px 16px 12px; }
 .wb__modal-body > * { flex:none; }   /* 规格 §5 同款防挤扁：拒单弹窗内容多时要滚动而不是被压没 */
+/* 恒可见错误条：故意放在 .wb__modal-body 外面（body 会滚动，长内容的弹窗里追加的错误
+   条落在折线以下等于没显示），margin 补上 body 同款左右留白，不贴边 */
+.wb__modal-error { flex:none; margin:0 16px; }
 .wb__modal-foot { flex:none; display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
 .wb__modal-foot .wb__btn { flex:1; min-height:44px; }
 .wb__what { display:flex; flex-direction:column; gap:6px; font-size:13px; line-height:1.55; }

@@ -21,8 +21,8 @@ import {
 } from '../api/admin'
 import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
-import { confirmDialog } from '../components/ui/ConfirmDialog'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
+import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 
 type ColKey = keyof WorkbenchSnapshot['columns']
 
@@ -83,8 +83,13 @@ function copyText(text: string) {
 // 自绘弹窗外壳：不用通用 ConfirmDialog，因为规格 §6 要求确认按钮跟随卡片渠道色，
 // 且弹窗要活在 .wb 的日夜 token 里（通用 Modal 是固定白底）。
 // ─────────────────────────────────────────────────────────
-function WbModal({ title, children, footer, onClose }: {
-  title: string; children: ReactNode; footer: ReactNode; onClose: () => void
+function WbModal({ title, children, footer, error, onClose }: {
+  title: string; children: ReactNode; footer: ReactNode
+  /** 服务端错误（42221/42225/…系列，写给店员看的）：必须放在 .wb__modal-body 外面，
+   *  否则店员点确认后按钮变回原样、屏幕上「什么都没变」——body 是 overflow-y:auto，
+   *  内容长的弹窗（拒单）里追加的错误条基本落在折线以下。foot 是 flex:none，恒可见。 */
+  error?: string
+  onClose: () => void
 }) {
   return (
     <div className="wb__modal-mask" role="dialog" aria-modal="true">
@@ -94,6 +99,7 @@ function WbModal({ title, children, footer, onClose }: {
           <button className="wb__iconbtn" onClick={onClose} aria-label="关闭"><X className="w-4 h-4" /></button>
         </div>
         <div className="wb__modal-body">{children}</div>
+        {error && <div className="wb__redbar wb__modal-error">{error}</div>}
         <div className="wb__modal-foot">{footer}</div>
       </div>
     </div>
@@ -147,6 +153,7 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
     <WbModal
       title={spec.title}
       onClose={onClose}
+      error={error}
       footer={
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
@@ -158,7 +165,6 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
     >
       <WhatBlock what={spec.what} customer={spec.customer} cost={spec.cost} />
       {spec.amber && <div className="wb__amber">{spec.amber}</div>}
-      {error && <div className="wb__redbar">{error}</div>}
     </WbModal>
   )
 }
@@ -192,6 +198,7 @@ function CancelDeliveryModal({ orderId, channel, title, onClose, onDone }: {
     <WbModal
       title={title}
       onClose={onClose}
+      error={error}
       footer={
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
@@ -207,7 +214,6 @@ function CancelDeliveryModal({ orderId, channel, title, onClose, onDone }: {
         cost={costText}
       />
       {fee !== 0 && <div className="wb__amber">{costText}</div>}
-      {error && <div className="wb__redbar">{error}</div>}
     </WbModal>
   )
 }
@@ -234,6 +240,7 @@ function TipModal({ orderId, tippedFen, limits, onClose, onDone }: {
     <WbModal
       title="加小费"
       onClose={onClose}
+      error={error}
       footer={
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
@@ -263,7 +270,6 @@ function TipModal({ orderId, tippedFen, limits, onClose, onDone }: {
       {remain > 0 && options.length === 0 && (
         <div className="wb__redbar">本单小费剩余额度不足最小档位 ¥{(TIP_STEPS[0] / 100).toFixed(0)}，无法再加。</div>
       )}
-      {error && <div className="wb__redbar">{error}</div>}
     </WbModal>
   )
 }
@@ -288,6 +294,7 @@ function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
     <WbModal
       title="填单号发货"
       onClose={onClose}
+      error={error}
       footer={
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
@@ -309,7 +316,6 @@ function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
         <input className="wb__input" placeholder="快递公司名称" value={otherCompany} onChange={(e) => setOtherCompany(e.target.value)} />
       )}
       <input className="wb__input" placeholder="快递单号" value={expressNo} onChange={(e) => setExpressNo(e.target.value)} />
-      {error && <div className="wb__redbar">{error}</div>}
     </WbModal>
   )
 }
@@ -334,6 +340,7 @@ function SelfDeliverModal({ orderId, defaultPhone, onClose, onDone }: {
     <WbModal
       title="自己送"
       onClose={onClose}
+      error={error}
       footer={
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
@@ -348,7 +355,6 @@ function SelfDeliverModal({ orderId, defaultPhone, onClose, onDone }: {
       />
       <input className="wb__input" placeholder="送货人姓名" value={name} onChange={(e) => setName(e.target.value)} />
       <input className="wb__input" placeholder="送货人电话" value={phone} onChange={(e) => setPhone(e.target.value)} />
-      {error && <div className="wb__redbar">{error}</div>}
     </WbModal>
   )
 }
@@ -388,12 +394,28 @@ function RejectModal({ order, channel, onClose, onDone }: {
     if (!reason || blocked) return
     setBusy(true); setError('')
     try {
-      await rejectOrder(order.id, {
+      // note 只在「其他原因」发送——服务端会把它原样拼进 cancelReason 给顾客看，
+      // 换成别的原因后如果还带着上一次没清空的说明，顾客会看到文不对题的话（§I4）
+      const res = await rejectOrder(order.id, {
         reason,
-        note: note.trim() || undefined,
+        note: reason === 'OTHER' ? note.trim() : undefined,
         soldOutProductIds: reason === 'SOLD_OUT' ? soldOut : undefined,
       })
-      onDone('已拒单并发起退款')
+      if (reason === 'SOLD_OUT' && soldOut.length > 0) {
+        // 服务端联动下架失败不回滚（退款已成既成事实），只告警——店员是唯一能补救的人，
+        // 固定文案「已拒单并发起退款」会把失败说成成功，必须按真实 offShelfCount 回执（§I5）
+        const off = res.data.data.offShelfCount
+        if (off >= soldOut.length) {
+          onDone(`已拒单并发起退款，已下架 ${off} 个菜品`)
+        } else {
+          toast.error(off > 0
+            ? `菜品下架 ${off}/${soldOut.length} 个成功，其余请手动下架`
+            : '菜品下架失败，请手动下架')
+          onDone('已拒单并发起退款')
+        }
+      } else {
+        onDone('已拒单并发起退款')
+      }
     } catch (e) {
       setError(apiCode(e) === 42221
         ? `${apiMessage(e, '该订单有在途配送单')}——请先在「等待配送员」里取消配送，再回来拒单。`
@@ -405,6 +427,7 @@ function RejectModal({ order, channel, onClose, onDone }: {
     <WbModal
       title="拒单"
       onClose={onClose}
+      error={error}
       footer={
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
@@ -465,7 +488,6 @@ function RejectModal({ order, channel, onClose, onDone }: {
       <div className="wb__redbar">
         确认后全额退款 ¥{yuan(refundFen)} 原路退回，顾客会收到退款通知。此操作不可撤销。
       </div>
-      {error && <div className="wb__redbar">{error}</div>}
     </WbModal>
   )
 }
@@ -473,14 +495,17 @@ function RejectModal({ order, channel, onClose, onDone }: {
 // ─────────────────────────────────────────────────────────
 // 卡片（§3/§4）：三重编码 = 4px 色条 + 徽章（图标+文字）+ 渠道各自的字段
 // ─────────────────────────────────────────────────────────
-function Card({ card, now, onOpen, onHandleCancel }: {
-  card: WorkbenchCard; now: number; onOpen: () => void; onHandleCancel: () => void
+function Card({ card, colKey, now, onOpen, onHandleCancel }: {
+  card: WorkbenchCard; colKey: ColKey; now: number; onOpen: () => void; onHandleCancel: () => void
 }) {
   const local = card.channel === 'LOCAL'
   const d = card.local?.delivery ?? null
   const badFlow = !!d && ['ABNORMAL', 'UNKNOWN', 'FAILED'].includes(d.status)
   const alert = !!card.local && (card.local.cancelRequested || badFlow)
-  const w = waitLabel(card.waitSince, now)
+  // 已完成列不再用等待胶囊的琥珀/红底：红是本页面最稀缺的信号（§0/§5「红框=立即处理」），
+  // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
+  // 改显示静态的完成时刻（服务端给 done 列的锚点就是 completedAt，即 card.waitSince）。
+  const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now)
   const km = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : '--'
   return (
     <div
@@ -538,10 +563,14 @@ function Card({ card, now, onOpen, onHandleCancel }: {
 // ─────────────────────────────────────────────────────────
 // 顶栏（§8）
 // ─────────────────────────────────────────────────────────
-function TopBar({ snap, shopName, targetTheme, onToggleTheme, focus, isFullscreen, onFullscreen, onExit, onResetCircuit, circuitBusy }: {
+function TopBar({
+  snap, shopName, targetTheme, onToggleTheme, focus, isFullscreen, onFullscreen, onExit, onResetCircuit, circuitBusy, staleMinutes,
+}: {
   snap: WorkbenchSnapshot | null; shopName: string; targetTheme: 'light' | 'dark'
   onToggleTheme: () => void; focus: boolean; isFullscreen: boolean; onFullscreen: () => void; onExit: () => void
   onResetCircuit: () => void; circuitBusy: boolean
+  /** 连续轮询失败达到阈值时的「已停摆多久」；null = 正常（I1） */
+  staleMinutes: number | null
 }) {
   const today = new Date()
   const openState = !snap ? { text: '加载中', cls: '' }
@@ -581,6 +610,14 @@ function TopBar({ snap, shopName, targetTheme, onToggleTheme, focus, isFullscree
           <button className="wb__iconbtn" onClick={onExit}><LogOut className="w-4 h-4" />退出工作台</button>
         </div>
       </div>
+      {/* 细条，不是满屏红字（I1 原注释的道理一样适用）：断线时店员该知道，但不该被吓到 */}
+      {staleMinutes != null && (
+        <div className="wb__stale">
+          {staleMinutes < 0
+            ? '尚未连接上服务器，正在重连…'
+            : `数据已 ${staleMinutes < 1 ? '不足 1' : staleMinutes} 分钟未更新，正在重连…`}
+        </div>
+      )}
       {snap?.circuit.tripped && (
         <div className="wb__banner">
           <span>快递100 余额不足已暂停呼叫。充值后点「恢复」，或改用「自己送」。</span>
@@ -599,6 +636,7 @@ type ModalState =
   | { kind: 'self' }
   | { kind: 'reject' }
   | { kind: 'cancelRefund' }
+  | { kind: 'exit' }
   | null
 
 /** 点日夜按钮后会切到的目标主题——按钮图标/文案要描述这个，不是当前主题（§8） */
@@ -619,9 +657,11 @@ export default function Workbench() {
   const navigate = useNavigate()
   const rootRef = useRef<HTMLDivElement>(null)
   const boardRef = useRef<HTMLDivElement>(null)
-  const timerRef = useRef<number | null>(null)
   /** 服务端时间 - 本机时间：店里的平板时钟经常偏几分钟，等待胶囊按服务端锚点算才准 */
   const skewRef = useRef(0)
+  /** load() 请求序号：只应用「已发出的请求里最新那个」的响应，丢弃后到的旧快照（I2） */
+  const loadSeqRef = useRef(0)
+  const appliedSeqRef = useRef(0)
 
   const [snap, setSnap] = useState<WorkbenchSnapshot | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -636,28 +676,54 @@ export default function Workbench() {
   const [modal, setModal] = useState<ModalState>(null)
   const [pendingCancelRefund, setPendingCancelRefund] = useState(false)
   const [circuitBusy, setCircuitBusy] = useState(false)
+  /** 最近一次轮询成功的时间 + 连续失败拍数：区分「没有新单」和「已经断线五分钟」（I1） */
+  const [lastOkAt, setLastOkAt] = useState<number | null>(null)
+  const [pollFailCount, setPollFailCount] = useState(0)
 
   const load = useCallback(async (fresh = false) => {
+    const seq = ++loadSeqRef.current
     try {
       const data = (await getWorkbenchSnapshot(fresh)).data.data
+      // 弱网下顺序不保证：这份响应对应的请求比「已经生效的那份」更旧，说明是迟到的旧快照，丢弃（I2）
+      if (seq < appliedSeqRef.current) return
+      appliedSeqRef.current = seq
       skewRef.current = Date.parse(data.now) - Date.now()
       setSnap(data)
-    } catch { /* 轮询失败静默，下一拍重试——满屏红字对站着的店员没有帮助 */ }
+      setLastOkAt(Date.now())
+      setPollFailCount(0)
+    } catch {
+      // 轮询失败静默，下一拍重试——满屏红字对站着的店员没有帮助；
+      // 但连续失败要留痕，否则店员分不清「没有新单」和页面已经僵住多久（§I1，见 TopBar 的细条）
+      setPollFailCount((c) => c + 1)
+    }
   }, [])
 
-  // 10s 轮询；页面隐藏时降到 60s（§ 计划：省电又不至于回前台一片旧数据）
+  // 10s 轮询；页面隐藏时降到 60s（省电又不至于回前台一片旧数据）。
+  // 用「上一拍落地后再排下一拍」代替 setInterval：弱网下一发不回也不会继续叠加下一发，
+  // 叠加的请求越攒越多，回来的顺序又不保证，正是 I2 剧本里旧快照打回新状态的放大器。
   useEffect(() => {
-    const schedule = () => {
-      if (timerRef.current) window.clearInterval(timerRef.current)
-      timerRef.current = window.setInterval(() => void load(), document.hidden ? 60_000 : 10_000)
-      if (!document.hidden) void load()
+    let cancelled = false
+    let timer: number | null = null
+    const clear = () => { if (timer !== null) { window.clearTimeout(timer); timer = null } }
+    const scheduleNext = () => {
+      if (cancelled) return
+      timer = window.setTimeout(run, document.hidden ? 60_000 : 10_000)
     }
-    void load(true)
-    timerRef.current = window.setInterval(() => void load(), 10_000)
-    document.addEventListener('visibilitychange', schedule)
+    const run = async () => {
+      await load()
+      scheduleNext()
+    }
+    const onVisibilityChange = () => {
+      clear()
+      if (!document.hidden) void run()
+      else scheduleNext()
+    }
+    void load(true).then(scheduleNext)
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
-      if (timerRef.current) window.clearInterval(timerRef.current)
-      document.removeEventListener('visibilitychange', schedule)
+      cancelled = true
+      clear()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [load])
 
@@ -668,6 +734,20 @@ export default function Workbench() {
   }, [])
 
   useEffect(() => { getLocalSettings().then(setSettings, () => { /* 店名/小费上限取不到就用兜底值 */ }) }, [])
+
+  // I8：工作台是店员整天待着的落地页（渲染在 Layout 外，见 App.tsx），却是唯一没有新单提醒的页面——
+  // 新单只会在下一次 10s 快照轮询后静静出现在「待接单」列。挂上和 Layout 同一套三层提醒
+  // （toast / 系统 Notification / 标签页标题闪烁）。系统 Notification 点击后不导航离开——
+  // 店员本来就在这页，把他踢去邮寄订单页只会打断他正在处理的单；改成把看板滚回「待接单」列。
+  usePendingOrders({ onNotificationClick: () => boardRef.current?.scrollTo({ left: 0, behavior: 'smooth' }) })
+
+  // 工作台没有铃铛按钮可供「点一下再要权限」，就借第一次真实点击（几乎必然在几秒内发生：
+  // 点卡片、点按钮）当用户手势申请系统通知权限，比在挂载时直接调用更贴近浏览器的期望
+  useEffect(() => {
+    const onFirstClick = () => requestNotifyPermission()
+    document.addEventListener('click', onFirstClick, { once: true })
+    return () => document.removeEventListener('click', onFirstClick)
+  }, [])
 
   // <900px 五列变横滑，默认停在「待接单」（§9）——它是第一列，滚回 0 即是
   useEffect(() => { boardRef.current?.scrollTo({ left: 0 }) }, [])
@@ -750,6 +830,11 @@ export default function Workbench() {
 
   // 全屏两条路径都要有：被浏览器/iframe（小程序 web-view 就是）拒绝时退化成专注模式（§8）。
   // 成功进入真全屏时不设 focus——focus 只表示「退化专注模式」，图例条常驻（§3）不该因真全屏成功而被隐藏。
+  // 全屏目标必须是 document.documentElement，不能是 .wb 这个子节点：ToastHost/ConfirmDialogHost
+  // 挂在 App.tsx 里、是 <Routes> 的兄弟节点，不在 .wb 子树内。全屏元素进 top layer 后 ::backdrop 会把
+  // 文档其余部分整个盖住，这两个 host 会既画不出来也接不到点击（退出确认框、所有 toast 全部失效）。
+  // 工作台本来就是整页路由（在 Layout 之外），全屏根元素视觉上等价，同时规避非根元素的
+  // :fullscreen UA 样式（强制 position:fixed + height:100%，内容溢出时既出屏又不可滚动）。
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
       void document.exitFullscreen?.().catch(() => undefined)
@@ -757,8 +842,8 @@ export default function Workbench() {
       return
     }
     if (focus) { setFocus(false); return }
-    const el = rootRef.current
-    const req = el?.requestFullscreen?.bind(el)
+    const el = document.documentElement
+    const req = el.requestFullscreen?.bind(el)
     if (!req) { setFocus(true); toast.info('当前环境不支持全屏，已切到专注模式'); return }
     try {
       const p = req()
@@ -769,16 +854,9 @@ export default function Workbench() {
     } catch { setFocus(true); toast.info('浏览器不允许全屏，已切到专注模式') }
   }
 
-  const exitWorkbench = async () => {
-    const ok = await confirmDialog({
-      title: '退出工作台？',
-      // 这句不能改：不写清楚，店员会以为退出就收不到来单提醒，于是没人敢退（§8）
-      content: '工作台仍在后台接单、出票和播报，退出不影响来单提醒',
-      confirmText: '退出',
-      cancelText: '留在工作台',
-    })
-    if (ok) navigate('/dashboard')
-  }
+  // 用工作台自绘弹窗（WbModal），不用通用 ConfirmDialog——那个固定 bg-white，深色主题下是一整块白
+  // （Workbench.css 文件头注释警告的就是这件事，见 CancelAndRefundModal.tsx 顶部同款说明）
+  const exitWorkbench = () => setModal({ kind: 'exit' })
 
   const resetCircuit = async () => {
     setCircuitBusy(true)
@@ -814,6 +892,16 @@ export default function Workbench() {
       cost: '会预扣配送费，实际以运力方结算为准。',
       amber: CALL_AMBER, run,
     })
+    // 「作废重呼」出现在「备餐中」「等待配送员」两列，文案（含琥珀警示的钱字）必须一字不差——
+    // 抽成一处，改文案不会漏改另一份（Minor）
+    const voidRecallSpec: ConfirmSpec = {
+      title: '作废重呼', channel: ch, confirmText: '确认作废并重呼', okMsg: '已作废并重新呼叫',
+      what: '先把这张「状态未确认」的配送单作废，再重新呼叫一次骑手。',
+      customer: '顾客看到「正在为您呼叫骑手」。',
+      cost: '会预扣一次新的配送费。',
+      amber: '作废前请先在快递100 后台确认这张单确实不存在；若它其实已成单，重呼会变成两张单、两笔钱。',
+      run: async () => { await voidUnknownDelivery(order.id); await callRider(order.id) },
+    }
 
     if (colKey === 'pending') {
       btns.push(fill('accept', '接单', () => confirm({
@@ -835,14 +923,7 @@ export default function Workbench() {
     if (colKey === 'preparing') {
       if (ch === 'LOCAL') {
         if (active?.status === 'UNKNOWN') {
-          btns.push(fill('void-recall', '作废重呼', () => confirm({
-            title: '作废重呼', channel: ch, confirmText: '确认作废并重呼', okMsg: '已作废并重新呼叫',
-            what: '先把这张「状态未确认」的配送单作废，再重新呼叫一次骑手。',
-            customer: '顾客看到「正在为您呼叫骑手」。',
-            cost: '会预扣一次新的配送费。',
-            amber: '作废前请先在快递100 后台确认这张单确实不存在；若它其实已成单，重呼会变成两张单、两笔钱。',
-            run: async () => { await voidUnknownDelivery(order.id); await callRider(order.id) },
-          })))
+          btns.push(fill('void-recall', '作废重呼', () => confirm(voidRecallSpec)))
         } else {
           const failed = delivery?.status === 'FAILED'
           btns.push(fill('call', failed ? '重新呼叫骑手' : '呼叫骑手', () => confirm(callSpec(
@@ -862,14 +943,7 @@ export default function Workbench() {
         btns.push(fill('tip', '加小费', () => setModal({ kind: 'tip' })))
         btns.push(ghost('cancel-call', '取消呼叫', () => setModal({ kind: 'cancelDelivery', title: '取消呼叫' })))
       } else if (active?.status === 'UNKNOWN') {
-        btns.push(fill('void-recall2', '作废重呼', () => confirm({
-          title: '作废重呼', channel: ch, confirmText: '确认作废并重呼', okMsg: '已作废并重新呼叫',
-          what: '先把这张「状态未确认」的配送单作废，再重新呼叫一次骑手。',
-          customer: '顾客看到「正在为您呼叫骑手」。',
-          cost: '会预扣一次新的配送费。',
-          amber: '作废前请先在快递100 后台确认这张单确实不存在；若它其实已成单，重呼会变成两张单、两笔钱。',
-          run: async () => { await voidUnknownDelivery(order.id); await callRider(order.id) },
-        })))
+        btns.push(fill('void-recall2', '作废重呼', () => confirm(voidRecallSpec)))
       } else if (active) {
         btns.push(ghost('cancel-dlv', '取消配送', () => setModal({ kind: 'cancelDelivery', title: '取消配送' })))
       }
@@ -907,11 +981,12 @@ export default function Workbench() {
   // ── 详情抽屉（§5）──
   const renderDrawer = (): ReactNode => {
     if (!drawer) return null
-    const { card } = drawer
+    const { card, colKey } = drawer
     const local = card.channel === 'LOCAL'
     const o = detail?.order
     const d = detail?.delivery ?? null
-    const w = waitLabel(card.waitSince, now)
+    // 与卡片同规则：已完成不再用会变色的等待胶囊（I7）
+    const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now)
     const canReject = !!o && ['PENDING_PAYMENT', 'PAID', 'PREPARING'].includes(o.status)
     return (
       <>
@@ -1072,6 +1147,26 @@ export default function Workbench() {
     const ch: Channel = card?.channel ?? 'LOCAL'
     const close = () => setModal(null)
     if (modal.kind === 'confirm') return <ConfirmModal spec={modal.spec} onClose={close} onDone={afterAction} />
+    // 退出不依赖抽屉里的订单详情，必须在 !o || !card 的早退之前处理——顶栏随时可能点「退出工作台」
+    if (modal.kind === 'exit') {
+      return (
+        <WbModal
+          title="退出工作台？"
+          onClose={close}
+          footer={
+            <>
+              <button className="wb__btn wb__btn--ghost" onClick={close}>留在工作台</button>
+              <button className="wb__btn wb__btn--neutral" onClick={() => { close(); navigate('/dashboard') }}>
+                退出
+              </button>
+            </>
+          }
+        >
+          {/* 这句不能改：不写清楚，店员会以为退出就收不到来单提醒，于是没人敢退（§8） */}
+          <p>工作台仍在后台接单、出票和播报，退出不影响来单提醒</p>
+        </WbModal>
+      )
+    }
     if (!o || !card) return null
     switch (modal.kind) {
       case 'cancelDelivery':
@@ -1102,12 +1197,16 @@ export default function Workbench() {
     }
   }
 
+  // 连续 2 拍轮询失败才算「断线」，别为偶发一次抖动就提醒；分钟数按服务端锚点算（I1）。
+  // -1 是「从没成功连接过」的哨兵值，跟「连接过、断了 N 分钟」区分开，文案不同
+  const staleMinutes = pollFailCount >= 2 ? (lastOkAt != null ? Math.floor((now - lastOkAt) / 60000) : -1) : null
+
   return (
     <div className={`wb ${focus ? 'wb--focus' : ''}`} data-theme={theme ?? undefined} ref={rootRef}>
       <TopBar
         snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
-        focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={() => void exitWorkbench()}
-        onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy}
+        focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={exitWorkbench}
+        onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy} staleMinutes={staleMinutes}
       />
 
       {/* 图例常驻（§3）；专注模式下让位给看板 */}
@@ -1132,7 +1231,7 @@ export default function Workbench() {
                 ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
                 : list.map((c) => (
                   <Card
-                    key={c.orderId} card={c} now={now}
+                    key={c.orderId} card={c} colKey={col.key} now={now}
                     onOpen={() => openCard(c, col.key)}
                     onHandleCancel={() => openCard(c, col.key, true)}
                   />
