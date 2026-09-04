@@ -87,6 +87,6 @@ Page({
   // 图是打进包里的本地资源，正常不会触发；真触发了说明路径写错，
   // 而 pages[0] 变成一整屏空白纸底是最糟的失败形态，必须让它在控制台可见。
   onImgError: function (e) {
-    console.error('[cover] 封面图加载失败，检查 /assets/cover/cover.png', e && e.detail)
+    console.error('[cover] 封面图加载失败，检查 /assets/cover/cover.jpg', e && e.detail)
   },
 })
