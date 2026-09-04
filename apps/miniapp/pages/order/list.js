@@ -11,7 +11,7 @@ var TABS = [
   { label: '已取消', status: 'CANCELLED' },
 ]
 
-var STATUS_LABEL = {
+var EXPRESS_STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
   PAID: '待发货',
   PREPARING: '备餐中',
@@ -21,6 +21,10 @@ var STATUS_LABEL = {
   CANCELLED: '已取消',
   REFUNDED: '已退款',
 }
+
+var LOCAL_STATUS_LABEL = Object.assign({}, EXPRESS_STATUS_LABEL, {
+  SHIPPED: '配送中',
+})
 
 var AFTER_SALE_LABEL = {
   PENDING: '售后处理中',
@@ -43,12 +47,13 @@ function countdownText(expireAt) {
 
 function decorate(order) {
   var extra = ''
+  var statusLabels = order.deliveryType === 'LOCAL' ? LOCAL_STATUS_LABEL : EXPRESS_STATUS_LABEL
   if (order.refundedAmount > 0) extra = '已退 ¥' + formatPrice(order.refundedAmount)
   if (order.afterSale && AFTER_SALE_LABEL[order.afterSale.status]) {
     extra = (extra ? extra + ' · ' : '') + AFTER_SALE_LABEL[order.afterSale.status]
   }
   return Object.assign({}, order, {
-    statusLabel: STATUS_LABEL[order.status] || order.status,
+    statusLabel: statusLabels[order.status] || order.status,
     actualAmountText: formatPrice(order.actualAmount),
     firstItem: order.items && order.items[0],
     moreCount: order.items && order.items.length > 1 ? order.items.length - 1 : 0,
