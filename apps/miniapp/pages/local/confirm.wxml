@@ -1,0 +1,109 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
+<view class="page">
+  <view wx:if="{{headNotice}}" class="head-notice">
+    <text class="head-notice-text">{{headNotice}}</text>
+    <view class="head-notice-action" bindtap="goExpress">改用全国邮寄</view>
+  </view>
+
+  <view class="section card address-section" bindtap="onSelectAddress">
+    <view class="address-pin icon icon-pin"></view>
+    <view wx:if="{{address}}" class="address-info">
+      <view class="receiver-row">
+        <text class="receiver-name">{{address.receiverName}}</text>
+        <text class="receiver-phone">{{address.receiverPhone}}</text>
+      </view>
+      <text wx:if="{{address.poiName}}" class="address-poi">{{address.poiName}}</text>
+      <text class="address-full">{{address.fullAddress}}</text>
+      <view wx:if="{{address.latE6 == null || address.lngE6 == null}}" class="address-missing" catchtap="onFixAddress">该地址缺少定位，去补充定位</view>
+    </view>
+    <view wx:else class="no-address">选择收货地址</view>
+    <view class="arrow icon icon-arrow"></view>
+  </view>
+
+  <view class="section card delivery-section">
+    <view class="section-title">配送信息</view>
+    <view wx:if="{{quoting}}" class="delivery-loading">正在计算配送费…</view>
+    <view wx:elif="{{quoteError}}" class="delivery-error">
+      <text>{{quoteError}}</text>
+      <view class="retry-inline" bindtap="onSubmit">重新获取运费</view>
+    </view>
+    <view wx:elif="{{quote}}" class="delivery-info {{feeFlash ? 'fee-flash' : ''}}">
+      <text>距门店 {{quote.distanceText}} km</text>
+      <text wx:if="{{quote.fee > 0}}">配送费 ¥{{pricefmt.fen(quote.fee)}}</text>
+      <text wx:else>免运费</text>
+      <text>预计 {{quote.estimatedMinutes}} 分钟 · {{quote.arrivalTime}} 送达</text>
+    </view>
+    <text wx:elif="{{!address}}" class="delivery-empty">选择地址后计算配送费</text>
+    <text wx:else class="delivery-empty">运费计算中…</text>
+    <text wx:if="{{quote && !quoting && !quoteError}}" class="arrival-time">配送时间以骑手接单后实际安排为准</text>
+    <text wx:if="{{blockReason && quote && !quoting}}" class="delivery-block">{{blockReason}}</text>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">商品明细</view>
+    <view wx:for="{{items}}" wx:key="id" class="item-row">
+      <view class="item-img-wrap">
+        <image wx:if="{{item.productImage}}" class="item-img" src="{{item.productImage}}" mode="aspectFill" />
+        <view wx:else class="item-img img-placeholder"></view>
+      </view>
+      <view class="item-info">
+        <text class="item-name">{{item.productName}}</text>
+        <text wx:if="{{item.specText}}" class="item-spec">{{item.specText}}</text>
+        <text class="item-price">¥{{pricefmt.fen(item.price)}}</text>
+      </view>
+      <view class="item-actions">
+        <view class="stepper">
+          <view class="stepper-btn {{item.quantity <= 1 ? 'disabled' : ''}}" bindtap="onDecrease" data-id="{{item.id}}">−</view>
+          <text class="stepper-num">{{item.quantity}}</text>
+          <view class="stepper-btn" bindtap="onIncrease" data-id="{{item.id}}">+</view>
+        </view>
+        <text class="item-delete" bindtap="onDelete" data-id="{{item.id}}">删除</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="section card remark-section">
+    <view class="tableware-row">
+      <text class="row-label">需要餐具</text>
+      <switch checked="{{needTableware}}" color="#e5441e" bindchange="onTablewareChange" />
+    </view>
+    <view class="remark-row">
+      <text class="row-label">备注</text>
+      <textarea class="remark-input" value="{{remark}}" maxlength="255" auto-height placeholder="如需餐具、放门口等请注明；备注会同步给骑手" placeholder-class="remark-placeholder" bindinput="onRemarkInput" />
+    </view>
+  </view>
+
+  <view class="spacer"></view>
+</view>
+
+<view class="bottom-bar">
+  <view wx:if="{{headBlocking || (quote && !quote.inRange)}}" class="escape-actions">
+    <view class="escape-btn" bindtap="onSelectAddress">换个地址</view>
+    <view class="escape-btn" bindtap="goExpress">改用全国邮寄</view>
+  </view>
+  <view class="agree-row">
+    <text>提交订单即表示同意</text>
+    <text class="agree-link" bindtap="goLegal" data-type="agreement">《用户协议》</text>
+    <text>和</text>
+    <text class="agree-link" bindtap="goLegal" data-type="privacy">《隐私政策》</text>
+  </view>
+  <view class="bottom-main">
+    <view class="bottom-total-wrap">
+      <text class="bottom-total-label">合计</text>
+      <block wx:if="{{quote && !quoting}}">
+        <text class="price-symbol">¥</text>
+        <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(payAmount))}}</text>
+        <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
+      </block>
+      <text wx:else class="bottom-calculating">运费计算中</text>
+    </view>
+    <view class="submit-btn btn-primary {{submitting || quoting || blockReason || (!quoteError && !quoteToken) ? 'btn-disabled' : ''}}" bindtap="onSubmit">
+      <text wx:if="{{submitting}}">提交中…</text>
+      <text wx:elif="{{quoting}}">计算运费中…</text>
+      <text wx:elif="{{quoteError}}">重新获取运费</text>
+      <text wx:elif="{{blockReason}}">{{blockReason}}</text>
+      <text wx:elif="{{quoteToken}}">提交订单 ¥{{pricefmt.fen(payAmount)}}</text>
+      <text wx:else>暂不可提交</text>
+    </view>
+  </view>
+</view>

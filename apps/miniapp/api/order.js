@@ -1,8 +1,8 @@
 const { request } = require('../utils/request')
 const { baseURL } = require('../config/index')
 
-function createOrder(data) {
-  return request({ url: '/orders', method: 'POST', data: data })
+function createOrder(data, silent) {
+  return request({ url: '/orders', method: 'POST', data: data, silent: !!silent })
 }
 
 function getOrders(params) {
