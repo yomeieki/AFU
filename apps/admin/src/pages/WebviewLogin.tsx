@@ -29,9 +29,9 @@ export default function WebviewLogin() {
       .then((res) => {
         const { token, adminInfo } = res.data.data
         setAuth(token, adminInfo)
-        // to=orders?status=PAID 之类的站内相对路径；防止外部跳转只允许无协议的相对路径
+        // to=orders?status=PAID 或 local/orders 之类的站内相对路径（可多段）；防止外部跳转只允许无协议、无空段的相对路径
         const to = params.get('to') ?? ''
-        const safeTo = /^[a-z0-9-]+(\?[^\s]*)?$/i.test(to) ? `/${to}` : '/orders?status=PAID'
+        const safeTo = /^[a-z0-9-]+(\/[a-z0-9-]+)*(\?[^\s]*)?$/i.test(to) ? `/${to}` : '/workbench'
         navigate(safeTo, { replace: true })
       })
       .catch((err: unknown) => {

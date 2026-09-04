@@ -14,6 +14,8 @@ interface Props {
   afterSaleId?: number
   /** 售后模式下的默认回复 */
   defaultReply?: string
+  /** 该单配送成本（分）：已呼骑手运费/小费/取消费合计。传入则在金额输入框下展示参考行，纯展示不参与校验 */
+  deliveryCostFen?: number
   onClose: () => void
   /** 退款请求成功（已退或已发起）后回调，父组件刷新列表 */
   onDone: () => void
@@ -38,7 +40,7 @@ function parseYuan(input: string): number | null {
  *  step 2 红色危险弹窗，必须重新手输与第一步一致的金额才能提交（禁用遮罩/Esc 关闭）
  * 部分退款：订单状态不变、货照发；全额（退完可退余额）：订单进入退款/取消流程。
  */
-export default function RefundDialog({ order, afterSaleId, defaultReply, onClose, onDone }: Props) {
+export default function RefundDialog({ order, afterSaleId, defaultReply, deliveryCostFen, onClose, onDone }: Props) {
   const [step, setStep] = useState<1 | 2>(1)
   const [preset, setPreset] = useState<ReasonPreset | ''>(afterSaleId ? '协商退款' : '')
   const [customReason, setCustomReason] = useState('')
@@ -184,6 +186,11 @@ export default function RefundDialog({ order, afterSaleId, defaultReply, onClose
               </p>
             )}
             {afterEffect && <p className="text-xs text-gray-600 mt-1.5">{afterEffect}</p>}
+            {!!deliveryCostFen && deliveryCostFen > 0 && (
+              <p className="text-xs text-gray-400 mt-1">
+                该单配送成本 ¥{yuan(deliveryCostFen)}（已呼骑手/小费/取消费合计），退款金额不含此成本
+              </p>
+            )}
           </div>
 
           {afterSaleId && (

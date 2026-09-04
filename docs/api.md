@@ -992,6 +992,38 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 
 M2 在 M1「渠道基础设施」之上补齐「配送服务」：骑手呼叫、配送单状态机（对接快递100）、店内自送、拒单（两渠道通用）、顾客端骑手位置、同城定时任务。设计依据 `docs/superpowers/specs/2026-09-03-local-delivery-design.md` §5。
 
+### 接单工作台快照 `GET /api/admin/workbench/snapshot`
+
+M2-B 店员默认落地页 `/workbench` 的唯一数据源：归类（五列）与排序都在服务端做——同城恒排邮寄之上是产品规则，不是前端展示偏好，放服务端保证未来别的客户端复用同一口径。**3 秒进程内缓存**（挡 10 秒轮询×多店员的洪峰）；`?fresh=1` 跳过缓存供操作后强刷。
+
+响应：
+```json
+{
+  "code": 0,
+  "data": {
+    "columns": {
+      "pending": [ /* PAID：待接单 */ ],
+      "preparing": [ /* PREPARING 且非「等待配送员」的部分：备餐中 */ ],
+      "waitingCourier": [ /* 仅 LOCAL：PREPARING 且配送单处于 CALLING/ACCEPTED/ARRIVING/ARRIVED/REASSIGNING/ABNORMAL/UNKNOWN */ ],
+      "delivering": [ /* SHIPPED：配送中 */ ],
+      "done": [ /* 今日 COMPLETED，最新在前，最多 30 条 */ ]
+    },
+    "stats": { "todayOrders": 42, "todayRevenueFen": 128000, "avgDeliverMinutes": 27 },
+    "circuit": { "tripped": false },
+    "localEnabled": true, "localOpenNow": true,
+    "paused": null,
+    "printer": { "status": "NOT_CONNECTED" },
+    "pendingAlerts": 1,
+    "now": "2026-09-04T03:00:00.000Z"
+  }
+}
+```
+- 每张卡片（`columns.*[]`）字段与前端 `WorkbenchCard` 类型同构：`waitSince` 是本列的计时锚点（各列锚点不同，见路由源码注释），`items` 是摘要（`first` 前两菜名、`kinds` 种数、`units` 总份数），`local.delivery` 为该单当前有效配送单的精简视图（无则 `null`）
+- `avgDeliverMinutes` 只统计**当天下单当天完成**的同城单（`paidAt` 与 `completedAt` 都在今天）——跨零点完成的单会把均值拉高但不代表真实配送时长
+- `pendingAlerts` = 顾客取消申请待处理数 + 配送异常（`ABNORMAL`/`UNKNOWN`）数 + 熔断中(1)
+- `printer.status` 目前恒为 `NOT_CONNECTED`（打印机对接是 M2b 范围，此处先占位）
+- 历史订单检索**不**在此端点：`/local/orders` 页走既有 `GET /api/admin/orders?deliveryType=LOCAL`
+
 ### 管理端：同城配送单操作 `/api/admin/local/orders/:id/*`
 
 除标注外均要求订单 `deliveryType=LOCAL`；订单不存在 → `40401`。

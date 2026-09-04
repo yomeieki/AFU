@@ -21,7 +21,7 @@ export default function Login() {
       const res = await login(username, password)
       const { token, adminInfo } = res.data.data
       setAuth(token, adminInfo)
-      navigate('/dashboard')
+      navigate('/workbench')
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
