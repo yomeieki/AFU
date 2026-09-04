@@ -47,6 +47,7 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courie
     local: o.deliveryType === 'LOCAL'
       ? {
           distanceM: d?.providerDistanceM ?? null,
+          estimatedDeliveryAt: o.estimatedDeliveryAt?.toISOString() ?? null,
           cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
           delivery: d ? { status: d.status, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
         }

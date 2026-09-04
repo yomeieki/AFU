@@ -505,6 +505,7 @@ function Card({ card, now, onOpen, onHandleCancel }: {
           <>
             <span>距离 {km}</span>
             <span>骑手 {d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}</span>
+            <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>
           </>
         ) : (
           <>

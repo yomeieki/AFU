@@ -61,6 +61,7 @@ interface WorkbenchCard {
   express: { province: string; city: string; expressCompany: string | null; expressNo: string | null } | null
   local: {
     distanceM: number | null
+    estimatedDeliveryAt: string | null   // 规格 §3 要求同城卡片出现「预计送达」，来自 Order.estimatedDeliveryAt
     cancelRequested: boolean
     delivery: { status: string; statusLabel: string; courierName: string | null; courierMobile: string | null } | null
   } | null
@@ -182,6 +183,7 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courie
     local: o.deliveryType === 'LOCAL'
       ? {
           distanceM: d?.providerDistanceM ?? null,
+          estimatedDeliveryAt: o.estimatedDeliveryAt?.toISOString() ?? null,
           cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
           delivery: d ? { status: d.status, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
         }

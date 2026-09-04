@@ -368,6 +368,7 @@ export interface WorkbenchCard {
   express: { province: string; city: string; expressCompany: string | null; expressNo: string | null } | null
   local: {
     distanceM: number | null
+    estimatedDeliveryAt: string | null   // 规格 §3 要求同城卡片出现「预计送达」，来自 Order.estimatedDeliveryAt
     cancelRequested: boolean
     delivery: { status: string; statusLabel: string; courierName: string | null; courierMobile: string | null } | null
   } | null
