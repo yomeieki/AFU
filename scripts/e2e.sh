@@ -51,7 +51,7 @@ fi
 echo "== 3. 系统状态字段 =="
 R=$(req GET /api/admin/system/status "$AT")
 assert_eq "system/status code" "$(code "$R")" "0"
-for k in pay.verifyMode pay.refundNotifyUrlSet cos.enabled notify.systemAlertWecomSet; do
+for k in pay.verifyMode pay.refundNotifyUrlSet cos.enabled notify.systemAlertWecomSet subscribe.deliverTemplateSet kd100.keySet; do
   v=$(jq -r ".data.$k" <<<"$R"); [[ "$v" != "null" ]] && ok "字段 $k=$v" || fail "字段 $k 缺失"
 done
 

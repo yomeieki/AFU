@@ -75,6 +75,9 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         paidTemplateSet: !!config.subscribe.paidTemplateId && !!config.subscribe.paidFields,
         shipTemplateSet: !!config.subscribe.shipTemplateId && !!config.subscribe.shipFields,
         refundTemplateSet: !!config.subscribe.refundTemplateId && !!config.subscribe.refundFields,
+        // 同城配送「配送中」推送。缺模板时 subscribe-message.ts 会静默 return（无日志无告警），
+        // 所以「生产没报错」不能当作已配置的证据——这一行就是它唯一的可观测出口。
+        deliverTemplateSet: !!config.subscribe.deliverTemplateId && !!config.subscribe.deliverFields,
       },
       kd100: {
         keySet: !!config.kd100.key,

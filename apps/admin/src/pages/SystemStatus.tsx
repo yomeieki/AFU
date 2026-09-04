@@ -39,6 +39,20 @@ interface SystemStatusData {
     systemAlertWecomSet: boolean
     systemAlertPushplusSet: boolean
   }
+  subscribe: {
+    paidTemplateSet: boolean
+    shipTemplateSet: boolean
+    refundTemplateSet: boolean
+    deliverTemplateSet: boolean
+  }
+  kd100: {
+    keySet: boolean
+    secretSet: boolean
+    mock: boolean
+    callbackUrlSample: string
+    callbackUrlOk: boolean
+    circuitTripped: boolean
+  }
   publicBaseUrl: string
 }
 
@@ -93,6 +107,8 @@ export default function SystemStatus() {
   const isDev = data.env !== 'production'
   const anyMock = data.mock.login || data.mock.pay || data.mock.qrcode
   const verifyReady = data.pay.publicKeySet || data.pay.platformCertSet
+  // 同城运力密钥都配好了，才把同城相关项当必填（否则纯邮寄店会看到一堆无关的红叉）
+  const localReady = data.kd100.keySet && data.kd100.secretSet
   const payReady =
     data.pay.mchIdSet &&
     data.pay.serialNoSet &&
@@ -156,6 +172,25 @@ export default function SystemStatus() {
         { ok: data.notify.systemAlertWecomSet || data.notify.wecomSet || data.notify.systemAlertPushplusSet, label: '至少有一个告警通道', hint: '都未配置时告警只写进 pm2 日志，没人会看到' },
         { ok: data.notify.systemAlertPushplusSet, label: '告警 PushPlus（一对一）', hint: 'SYSTEM_ALERT_PUSHPLUS_TOKEN；不配则回退订单 token，且不带群组——只推给本人，不进店员群', optional: true },
         { ok: data.notify.systemAlertWecomSet || data.notify.wecomSet, label: '告警企微群', hint: 'SYSTEM_ALERT_WECOM_WEBHOOK（未配置时回退到新订单推送群）', optional: true },
+      ],
+    },
+    {
+      title: '订阅消息模板（未配置时不弹授权、不推送，且不报错）',
+      items: [
+        { ok: data.subscribe.paidTemplateSet, label: '付款成功通知', hint: 'WECHAT_TMPL_PAID / WECHAT_TMPL_PAID_FIELDS', optional: true },
+        { ok: data.subscribe.shipTemplateSet, label: '发货通知', hint: 'WECHAT_TMPL_SHIP / WECHAT_TMPL_SHIP_FIELDS（公共模板库「发货通知」类）' },
+        { ok: data.subscribe.refundTemplateSet, label: '退款通知', hint: 'WECHAT_TMPL_REFUND / WECHAT_TMPL_REFUND_FIELDS（公共模板库「退款通知」类）' },
+        // 同城专用：缺这项时「配送中」推送会静默不发，页面上看不出异常，只能靠这一行
+        { ok: data.subscribe.deliverTemplateSet, label: '同城「配送中」通知', hint: 'WECHAT_TMPL_DELIVER / WECHAT_TMPL_DELIVER_FIELDS（公共模板 584「订单配送通知」，值见 docs/wechat-platform-local-delivery-setup.md）', optional: !localReady },
+      ],
+    },
+    {
+      title: '同城配送运力（快递100）',
+      items: [
+        { ok: data.kd100.keySet && data.kd100.secretSet, label: '快递100 密钥', hint: 'KD100_KEY / KD100_SECRET（企业版后台 → 我的信息 → 企业信息；需先企业认证并预充值）', optional: isDev },
+        { ok: !data.kd100.mock, label: `运力模式：${data.kd100.mock ? 'Mock（不打真实接口）' : '真实运力'}`, hint: 'LOCAL_DELIVERY_PROVIDER_MOCK=true 时走本地指令队列；生产开启会拒绝启动', optional: isDev },
+        { ok: data.kd100.callbackUrlOk, label: `回调地址长度合规（${data.kd100.callbackUrlSample.length}/50）`, hint: `快递100 对 callbackUrl 限长 50 字符，当前最坏值 ${data.kd100.callbackUrlSample} 超长——换更长域名前须先缩短路径前缀` },
+        { ok: !data.kd100.circuitTripped, label: data.kd100.circuitTripped ? '⚠️ 熔断已触发（呼叫骑手被暂停）' : '熔断未触发', hint: '余额不足/配置错会熔断，充值或改配置后需在配送设置页手动重置' },
       ],
     },
   ]

@@ -27,7 +27,7 @@ M4 Task 6（真机真钱联调）的前置核验发现：**同城配送整条链
 | 键 | 状态 | 影响 |
 |---|---|---|
 | `KD100_KEY` / `KD100_SECRET` | **✔ 已填**（12 / 32 字符，非占位）| P6 密钥侧已绿 |
-| `WECHAT_TMPL_DELIVER` / `_FIELDS` | **两个键都不存在** | P8 未满足 |
+| `WECHAT_TMPL_DELIVER` / `_FIELDS` | **两个键都不存在** | P8 未满足；部署后在系统状态页可见（本次已补该字段）|
 | `WECHAT_TMPL_SHIP/_FIELDS`、`WECHAT_TMPL_REFUND/_FIELDS` | ✔ 已填 | release-checklist 2.6 前两项其实已做，只是没勾 |
 | `LOCAL_DELIVERY_PROVIDER_MOCK` | 不存在（`undefined`）| ✅ 安全，不会触发拒绝启动 |
 | `PUBLIC_BASE_URL` | ✔（31 字符、无尾斜杠）→ 最坏回调 URL **49 字符 ≤ 50** | ✅ 安全 |
@@ -82,7 +82,7 @@ npx ts-node --transpile-only scripts/selftest-local-settings.ts
 | `.env` 里 `LOCAL_DELIVERY_PROVIDER_MOCK` 必须不存在或非 `true` | `apps/server/src/config.ts:99-111` `process.exit(1)` | ✅ 不存在 |
 | `${PUBLIC_BASE_URL}/api/kd/D999999-99` 必须 ≤ 50 字符 | `config.ts:127-131` `process.exit(1)` | ✅ 实测 **49**，余量 **1 个字符** |
 
-> ⚠️ **`.env.example:157` 那行 `LOCAL_DELIVERY_PROVIDER_MOCK=true` 没有注释掉。** 整段复制 `.env.example` 到生产 = 服务拒绝启动。**不要 `cp .env.example .env`，也不要整段粘贴**，逐项用 `set-env.sh` 填。
+> ✅ **已修**：`.env.example` 里 `LOCAL_DELIVERY_PROVIDER_MOCK=true` 已注释掉（原先是裸行，整段复制到生产就会让服务拒绝启动）。**仍然不要 `cp .env.example .env`、不要整段粘贴**，逐项用 `set-env.sh` 填——这条纪律不因为修了那一行而放松。本地开发/e2e 按 `docs/superpowers/plans/2026-09-03-local-delivery-m2-engine.md:23` 在启动命令里带 `LOCAL_DELIVERY_PROVIDER_MOCK=true`。
 > ⚠️ 余量只有 1 个字符：部署窗口里**不要**顺手给 `PUBLIC_BASE_URL` 加尾斜杠、也不要换更长的 API 域名。真要换域名，先把回调路径前缀从 `/api/kd/` 缩短（如 `/api/k/`）。
 
 预检命令（只读）：
@@ -257,8 +257,8 @@ gunzip < /www/backups/pre-deploy/pre_deploy_<时间戳>.sql.gz \
 |---|---|---|---|
 | C1 | 后端已是新版本（P9）| `curl -s -o /dev/null -w '%{http_code}\n' https://api.yuegui-hotel.online/api/local/meta` | **200** |
 | C2 | 服务健康 | `curl -s https://api.yuegui-hotel.online/health` | `status:ok` |
-| C3 | 密钥已配（P6）| 后台 → 系统状态；或 `GET /api/admin/system/status \| jq .data.kd100` | `keySet` ✔ `secretSet` ✔ `mock` false `callbackUrlOk` true `circuitTripped` false |
-| C4 | 配送模板已配（P8）| `bash /www/food-shop/scripts/set-env.sh --list \| grep TMPL_DELIVER` | 两项都 ✔（**系统状态页看不到**，`system.ts:74-78` 缺 `deliverTemplateSet`）|
+| C3 | 密钥已配（P6）| 后台 → 系统状态 → **同城配送运力（快递100）**；或 `GET /api/admin/system/status \| jq .data.kd100` | 四行全绿：密钥、真实运力（非 Mock）、回调地址长度合规、熔断未触发 |
+| C4 | 配送模板已配（P8）| 后台 → 系统状态 → **订阅消息模板** → 「同城「配送中」通知」；或 `bash /www/food-shop/scripts/set-env.sh --list \| grep TMPL_DELIVER` | 绿勾 / 两项都 ✔ |
 | C5 | 快递100 账户余额 | 快递100 企业版后台（**只能 PO 自己看，服务器上查不到**）| ≥ 50 元 |
 | C6 | 同城设置完整并已开启（P10）| 后台 → 同城设置 | 保存无 `validateForEnable` 报错，总开关开 |
 | C7 | LOCAL 分类 + 测试商品已建（P10）| 后台 → 分类/商品 | 见 `docs/ops-test-orders.md:17-26` |
@@ -330,7 +330,10 @@ gunzip < /www/backups/pre-deploy/pre_deploy_<时间戳>.sql.gz \
 
 ---
 
-## J. 建议的两个小修（不在本 runbook 范围，需 PO 点头）
+## J. 两个绿检缺口：已修（随本 runbook 同批提交）
 
-1. **`apps/server/src/routes/admin/system.ts:74-78` 补 `deliverTemplateSet`**，并让 `apps/admin/src/pages/SystemStatus.tsx` 渲染 `kd100` / `subscribe` 两组（现在这两组 API 返回了但前端类型里没有，页面直接丢弃）。做完 P6/P8 就能从后台页面绿检，不必再 SSH。
-2. **`.env.example:157` 把 `LOCAL_DELIVERY_PROVIDER_MOCK=true` 注释掉** —— 这是会在本 runbook 描述的那次部署里咬人的雷。
+1. ✅ **`apps/server/src/routes/admin/system.ts` 的 `subscribe` 补了 `deliverTemplateSet`**，`apps/admin/src/pages/SystemStatus.tsx` 补了「订阅消息模板」与「同城配送运力（快递100）」两组渲染（此前 API 返回了 `subscribe`/`kd100`，前端类型里没有、直接丢弃）。**部署后 P6/P8 可直接在后台「系统状态」页绿检，不必再 SSH。** `scripts/e2e.sh:54` 已把 `subscribe.deliverTemplateSet` 与 `kd100.keySet` 锁进契约断言。
+   - 同城相关项对纯邮寄场景做了降噪：`KD100_KEY/SECRET` 都没配时，「同城「配送中」通知」标为「可选」，不会显示成红叉。
+2. ✅ **`.env.example` 里 `LOCAL_DELIVERY_PROVIDER_MOCK=true` 已注释掉**，并在注释里写清为什么（生产见到 `true` 就 `process.exit(1)`）。
+
+> 这两处改动**尚未部署**——要等 C 节部署之后才在生产后台可见。
