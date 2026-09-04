@@ -19,6 +19,28 @@
 - **封面页**：仍属 **PO 桌面轨**（见 `docs/superpowers/briefs/2026-09-04-cover-page.md`），**不在本 M4 计划范围内**。
 - **本文件角色**：规划文档同步前置现实；Goal / Non-goals 不变。执行 Task 时以本表为准，勿按「写计划时」的 open 假设重做 F5–F7。
 
+### 🔴 2026-09-04 前置绿检的结论（只读核验，无任何密钥出现在本文档）
+
+**同城配送整条链路没有部署到生产**，这是排在 P6/P8 之前的真正阻塞（新增为 **P9**）：
+
+| 证据 | 结果 |
+|---|---|
+| `curl -o /dev/null -w '%{http_code}' https://api.yuegui-hotel.online/api/local/meta` | **404**（`/api/local/quote` 同）|
+| 同上 `/health` / `/api/products` | 200 / 200（服务本身正常，机器 `162.14.114.95`，非 `~/.ssh/config` 里的 `oracle`=140.83.54.60）|
+| `ssh ubuntu@162.14.114.95 'cd /www/food-shop && git log -1'` | **`ca37137`**（#8 商品小程序码），该版本无 KD100 代码、无 `WECHAT_TMPL_DELIVER`、无 `pages/local/` |
+| `scripts/deploy.sh:74` | `git reset --hard origin/main`；同城分支 `914936b` 未合并、未 push |
+
+**P6 收敛为 🟡**（`KD100_KEY` ✔ 12 字符 / `KD100_SECRET` ✔ 32 字符，生产 `.env` 已填；余额与真实询价仍未证）。
+**P8 收敛为 ⬜**（生产 `.env` 里 `WECHAT_TMPL_DELIVER` / `_FIELDS` **两个键都不存在**；公众平台侧模板 584 早已批下来）。
+细节与判据见下方 Prerequisites 表 P6 / P8 / P9 / P10 四行。
+
+**上线路径（合并 → 部署 → 后台配置 → 体验版 → Task 6）**：`docs/superpowers/notes/2026-09-04-local-delivery-golive-runbook.md`。
+
+顺带核到的三件与 M4 相关的事实：
+1. `WECHAT_TMPL_SHIP/REFUND` 四项生产**已配** —— `docs/miniapp-release-checklist.md` 2.6 前两项其实已做，只是没勾。
+2. `WECHAT_PAY_REFUND_NOTIFY_URL` 生产**为空，但不影响退款** —— `apps/server/src/services/wechat-pay.ts:184-189` 会把 `WECHAT_PAY_NOTIFY_URL`（已配）末尾的 `/notify` 换成 `/refund-notify` 作兜底。Task 6 Step 6 的退款回调判据照常。
+3. 生产 `apps/server/` 下堆了 **19 个** `.env.bak-*`（`set-env.sh:56` / `import-secrets.sh:29` 每次改都留一份，**内含明文密钥**）。建议 PO 清理，本计划不动。
+
 ---
 
 ## Prerequisites（M3 Exit Criteria —— 必须先确认，未确认的先去确认，不要带着假设进 Task）
@@ -30,9 +52,11 @@
 | P3 | F5–F8 | ✅ **F5/F6 已关**：`55a20a2`（隐私 `buttonId` + 骑手卡距离语义）+ 同城入口提前隐私门（`c99ecb8` / `b5496c9` / `54386ab` 等）+ **PO DevTools 签收**；✅ **F7 已关**：`81a003b`；✅ **F8 已关**（见 P5 / Task 3：`695fd5f` 后双绿 528/0） | F5–F8 勿再重做；§10 已按双绿回填 ✅ |
 | P4 | Task 0 地图探针（`<map>` 模拟器/真机可用性） | `docs/superpowers/notes/2026-09-04-map-probe.md` 两行仍是「待补测」。**F6 静态方案已先落地**（删误导距离 / `cover-view`→`view`），不再阻塞 F6；探针结论只决定是否升级为真 `<map>` | 本计划 **Task 2**；不再写「必须先于 F6」——可选升级路径 |
 | P5 | e2e 第 34 段（顾客端字段契约锁）+ 全量幂等（F8） | ✅ **已关**：`e96ef3b` + `1714889` + `695fd5f`；**695fd5f 后连续两轮** `/tmp/e2e-mkfix-run.log`、`/tmp/e2e-mkfix-run2.log`（约 20:10–20:11 JST）均为 **通过 528 / 失败 0** | 本计划 **Task 3** Done；spec §10 §34 已 ✅ |
-| P6 | 快递100 已开户、认证、充值、`KD100_KEY/SECRET` 已配置（spec §11 用户侧待办 #1） | ⬜ 待证据核验（撤回口头勾；本地无 KD100；须服务器绿检） | 未绿检前 Task 6 真钱联调阻塞；文档类可先做 |
+| P6 | 快递100 已开户、认证、充值、`KD100_KEY/SECRET` 已配置（spec §11 用户侧待办 #1） | 🟡 **密钥侧已绿，余额与功能未绿**。2026-09-04 只读核验生产机 `162.14.114.95:/www/food-shop/apps/server/.env`（`bash scripts/set-env.sh --list`，只输出键名与 ✔/○，无任何值）：`✔ KD100_KEY`（12 字符）、`✔ KD100_SECRET`（32 字符），均非占位。拿到密钥的前提是快递100 企业认证已过，故「开户/认证」间接成立。**仍未证**：①账户余额/充值（只能在快递100 企业版后台看，仓库与服务器都无此信息）；②真实询价是否通——须在 P9 部署且 P10 门店坐标已存后跑 `npx ts-node --transpile-only apps/server/scripts/selftest-kd100.ts --integration`，拿到非空 `quotes` 才算最终绿检 | 余额未确认前不要开 Task 6 Step 4/6；`30004`(BALANCE) 会触发熔断，需 `POST /api/admin/system/kd100-circuit/reset` 手动解 |
 | P7 | 公众平台位置接口权限、隐私保护指引已生效（`docs/miniapp-release-checklist.md` 2.4 已勾选） | ✅ 已确认（checklist 第 71/79/80 行） | — |
-| P8 | 「配送通知」（310 配送中）订阅模板已获批并在生产可用 | ❓ 部分：操作单已记模板 ID 并入 `.env.example`；交付清单①未勾；生产是否已配待绿检 | Task 6 验 310 推送前确认生产 `WECHAT_TMPL_DELIVER` |
+| P8 | 「配送通知」（310 配送中）订阅模板已获批并在生产可用 | ⬜ **未满足（由 ❓ 收敛为 ⬜）**。公众平台侧 ✅：`docs/wechat-platform-local-delivery-setup.md:63-79` 记 2026-09-03 已选用公共模板 **584「订单配送通知」**，模板 ID 与 5 个字段（`thing6/name7/phone_number3/time13/character_string2`）齐全并写入 `.env.example:132-133`（交付清单①的空勾是回填遗漏，非未完成）。生产侧 ⬜：同一次 `set-env.sh --list` 核验中，`.env` 里**根本没有 `WECHAT_TMPL_DELIVER` / `WECHAT_TMPL_DELIVER_FIELDS` 这两个键**（不是空值，是不存在）。旁证：`WECHAT_TMPL_SHIP/_FIELDS`、`WECHAT_TMPL_REFUND/_FIELDS` 四项**已 ✔**（即 `docs/miniapp-release-checklist.md` 2.6 前两项其实已做，只是没勾） | **绿检不能看后台「系统状态」页**：`apps/server/src/routes/admin/system.ts:74-78` 的 `subscribe` 只有 `paid/ship/refundTemplateSet`，无 `deliverTemplateSet`；且 `apps/server/src/services/subscribe-message.ts:173` 缺模板时静默 `return`（无日志无告警），「生产没报错」不能当证据。唯一手段是 `set-env.sh --list \| grep TMPL_DELIVER` |
+| P9 | **同城配送代码已部署到生产**（本次核验新增） | ⬜ **未满足——这是排在 P6/P8 之前的真正阻塞**。2026-09-04 探测生产 `https://api.yuegui-hotel.online`：`/health` 200、`/api/products` 200，但 `/api/local/meta` **404**、`/api/local/quote` **404**（与不存在的路由同形）。服务器 `cd /www/food-shop && git log -1` = **`ca37137`**（`feat(admin): 实现商品小程序码生成 (#8)`，比本地 `origin/main` 的 b6521d3 还多一个 commit）；该版本 `apps/server/src/` 内 `KD100` 零命中、`config.ts` 无 `WECHAT_TMPL_DELIVER`、无 `apps/miniapp/pages/local/`。而 `scripts/deploy.sh:74` 是 `git reset --hard origin/main`，同城分支 `914936b` 既未合并也未 push | **推论：P6/P8 即便 .env 填满也不成立**，因为跑着的进程没有读这些变量的代码。上线路径见 `docs/superpowers/notes/2026-09-04-local-delivery-golive-runbook.md` |
+| P10 | **同城总开关已开 + LOCAL 分类与测试商品已建**（本次核验新增） | ⬜ 未满足。`apps/server/src/services/local-settings.ts:65` 默认 `enabled: false`，且 `validateForEnable`（同文件 `:239-247`）要求门店坐标/电话/地址/≥1 营业时段/半径>0 齐全才允许开启；`migrations/20260904000000_local_delivery/migration.sql:7,22` 给 `categories`/`products` 的 `channel` 默认 `'EXPRESS'`，**迁移完生产库里一个 LOCAL 商品都不会有**（seed 的两个「同城·」分类只在 `--seed` 且分类表为空时才建，生产两个条件都不满足） | 开关关着时 `/local/meta` 返回 `enabled:false`，`apps/miniapp/pages/index/index.js:75` 首页入口显示「即将开通」且不可点——**真机上 Task 6 Step 2–7 一步都跑不了**。必须在 P9 之后、上传体验版之前做完 |
 
 ---
 
@@ -309,7 +333,21 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 1：`batchPrice` 探测（只读，不产生费用）**
 
-跑 `apps/server/scripts/kd100-probe.mjs`（M0 阶段准备的脚本），确认真实 key/secret 下能拿到覆盖运力与报价，记录 `discountFee` 实际含义与各运力重量限制是否与文档假设一致。
+> ⚠️ **2026-09-04 核验更正**：`apps/server/scripts/kd100-probe.mjs` **全仓库不存在**（M0 那个脚本从未写出来；`docs/superpowers/specs/2026-09-03-local-delivery-design.md:524` 也引用了它，同样失效）。替代品见下。
+
+```bash
+# 在生产服务器上跑（只读、不扣费；打的同样是 batchPrice —— 见 apps/server/src/services/delivery/kd100.ts:111）
+cd /www/food-shop/apps/server && npx ts-node --transpile-only scripts/selftest-kd100.ts --integration
+```
+
+替代品的**三个限制**，执行时按此调整判据：
+1. **必须在 P9 部署之后、P10 门店坐标已存之后跑**。`scripts/selftest-kd100.ts:69-71` 要 `getLocalSettings()` 读数据库里的门店坐标——它不是原计划以为的「M0 开户即可跑」。
+2. **拿不到「各运力重量限制」**：`kd100.ts:105-108` 把 `goods.weightKg` 写死 0.5，只发一次固定重量询价。本条**显式降级为「不核」**，理由写进联调记录；若真要核，只能查快递100 后台文档或问客服。
+3. **`discountFee` 语义可以核**：`kd100.ts:112-123` 会把 `feeDetail[]` 解析成 `quotes: [{provider, feeFen, distanceM}]` 并整体 `JSON.stringify` 打印（`:78`），拿这个 JSON 跟快递100 后台报价页逐项对一遍即可。
+
+**跳过提示的含义**：打印「未配置 KD100_KEY/SECRET」= .env 没填（P6）；打印「门店未设坐标」= 同城设置没存（P10）。两者都是前置没做，不是失败。
+
+**记录**：完整 JSON、覆盖到的运力编码列表、最低 `feeFen`、`distanceM`、`discountFee` 的确认结论。
 
 - [ ] **Step 2：隐私弹窗全链路（验证 Task 1/F5 修复）**
 
@@ -335,7 +373,27 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 7：异常态展示**
 
-若条件允许（例如故意选一个边界地址触发 `510`/`515`），验证顾客端中性文案「配送正在协调中，如超过预计时间请联系商家」；若无法真实触发，用后台 mock 端点（`POST /api/admin/system/kd100-mock/*`，注意这是 M3 F4-VERIFY 文档里纠正过的真实路径，不是设计稿里写的 `delivery-mock`）在真机上推状态验证展示，而不是只看模拟器。
+> ⚠️ **2026-09-04 核验更正：原文的兜底方案在生产上不可用。** `apps/server/src/routes/admin/index.ts:37` 是 `if (config.mock.delivery) router.use('/system/kd100-mock', kd100MockRouter)`，而 `apps/server/src/config.ts:99-111` 见到生产环境开 `LOCAL_DELIVERY_PROVIDER_MOCK` 就 `process.exit(1)`——**两者互斥，生产上永远挂不上 `kd100-mock` 端点**。（同理 `system.ts:95` 的 `run-scheduler` 在生产直接 403，M2 的超时提醒只能真等。）
+
+改用下列三选一，按优先级：
+
+- **7a（推荐，零成本）**：Step 6 的取消本身就会走进异常态分支，直接在真机上看顾客端文案是否为中性的「配送正在协调中，如超过预计时间请联系商家」。
+- **7b（要店主同意，可能产生费用）**：故意在半径边缘选地址触发 `510`/`515`。
+- **7c（零成本，证据等级低一档）**：本机起 `LOCAL_DELIVERY_PROVIDER_MOCK=true` 的开发环境，用 `POST /api/admin/system/kd100-mock/*` 推状态，在**开发者工具**里看（不是真机）。可覆盖全部状态码。
+
+**在联调记录里写明实际用了哪条，以及原方案为何作废。**
+
+- [ ] **Step 7.5：联调后清理（本次核验新增，原计划漏项）**
+
+按 `docs/ops-test-orders.md` 收尾，否则测试数据会永久污染顾客可见的统计：
+1. 后台**软删除**【内部联调】测试商品（`ops-test-orders.md:28-37`）——不删的话「已售 N 份」顾客看得见。
+2. 给每一笔联调订单打测试标记（`ops-test-orders.md:39-48`；接口 `apps/server/src/routes/admin/orders.ts:373-420`，`<ORDER_ID>` 是数字 id 不是订单号，每次调用会发系统告警并留日志）：
+```bash
+curl -X PATCH "https://api.yuegui-hotel.online/api/admin/orders/<ORDER_ID>/test-flag" \
+  -H "Authorization: Bearer <管理员 token>" -H 'Content-Type: application/json' \
+  -d '{"isTest": true}'
+```
+3. 已知残留、**不修**：扫码转化率的分母来自 `scan_logs`，没有测试标记，会偏低。写进记录即可。
 
 - [ ] **Step 8：整理联调记录**
 
