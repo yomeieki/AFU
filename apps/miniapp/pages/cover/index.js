@@ -17,11 +17,13 @@ var BAND_BOTTOM = 1323
 var BAND_LEFT = 45
 var BAND_RIGHT = 727
 
+var app = getApp()
+
 Page({
   data: {
     stageStyle: '',
     // 开发期置 true 可显示热区虚线框，核对是否压在画上的按钮上
-    // ⚠️ 当前为 true，仅供 PO 在开发者工具里核对热区；看完必须改回 false 再提审
+    // 注意：当前为 true，仅供 PO 在开发者工具里核对热区；看完必须改回 false 再提审
     debug: true,
   },
 
@@ -59,7 +61,7 @@ Page({
   goLocal: function () {
     // 与首页/购物车/商品详情/「我的」同一套契约：先过位置许可再进，
     // 避免顾客进到地图选点那一步才被拦。
-    getApp()
+    app
       .ensurePrivacyAuthorize()
       .then(function () {
         wx.navigateTo({ url: '/pages/local/index' })
