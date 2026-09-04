@@ -13,6 +13,7 @@ import Banners from './pages/Banners'
 import SystemStatus from './pages/SystemStatus'
 import ShopSettings from './pages/ShopSettings'
 import LocalSettings from './pages/LocalSettings'
+import Workbench from './pages/Workbench'
 import { ToastHost } from './components/ui/Toast'
 import { ConfirmDialogHost } from './components/ui/ConfirmDialog'
 
@@ -29,6 +30,15 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/m" element={<WebviewLogin />} />
+        {/* 工作台是店员的全屏落地页：在 RequireAuth 内、Layout 外，不吃侧栏 */}
+        <Route
+          path="/workbench"
+          element={
+            <RequireAuth>
+              <Workbench />
+            </RequireAuth>
+          }
+        />
         <Route
           path="/"
           element={

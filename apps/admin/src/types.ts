@@ -79,6 +79,8 @@ export interface QrCodeResult {
 }
 
 export interface OrderItem {
+  /** 订单详情接口返回的是完整 OrderItem 行；商品被删时为 null（拒单售罄勾选要用它） */
+  productId?: number | null
   productName: string
   productImage: string | null
   specText?: string | null
@@ -155,6 +157,12 @@ export interface Order {
   paidAt: string | null
   acceptedAt?: string | null
   completedAt?: string | null
+  /** 以下同城字段仅 GET /admin/orders/:id 返回（列表接口精简后没有） */
+  estimatedDeliveryAt?: string | null
+  /** 计费距离（米） */
+  distanceM?: number | null
+  cancelRequestedAt?: string | null
+  cancelRequestNote?: string | null
   createdAt: string
   items: OrderItem[]
   shipment?: Shipment | null
