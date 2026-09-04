@@ -1,11 +1,15 @@
 /**
  * 「顾客申请取消」的处理引导：取消配送 → 全额退款，两步走在同一个 Modal 里步进。
- * 刻意不嵌 confirmDialog——ConfirmDialogHost 与本 Modal 同为 z-50 且挂在更后面，
- * 弹出来会盖住本体，店员会以为退款弹窗消失了。
+ *
+ * 用工作台自己的弹窗形态（.wb__modal-mask 那套 CSS 变量），而不是通用 Modal + 固定 Tailwind 色——
+ * 后者深色主题下是一整块白（Workbench.css 文件头注释正是为此存在）；确认按钮也要跟随卡片渠道色（§6）。
+ * 只有 Workbench 会渲染这个组件，Workbench.tsx 已经全局引入了 Workbench.css，这里显式再引一次
+ * 是为了不依赖渲染顺序，且这个组件若被其它地方复用时也不会缺样式。
  */
 import { useCallback, useEffect, useState } from 'react'
-import Modal from './ui/Modal'
-import Button from './ui/Button'
+import { X } from 'lucide-react'
+import '../pages/Workbench.css'
+import type { Channel } from '../types'
 import { precancelDelivery, cancelDelivery, refundOrder } from '../api/admin'
 
 interface Props {
@@ -13,6 +17,8 @@ interface Props {
   orderNo: string
   /** 本次要退的金额（分）——传订单的可退余额 */
   amountFen: number
+  /** 卡片渠道，确认按钮取这个颜色（§6） */
+  channel: Channel
   /** 在途配送单状态文案，用于第一步的说明 */
   deliveryStatusLabel?: string | null
   /** 无在途配送单时直接从第二步（退款）起 */
@@ -22,12 +28,13 @@ interface Props {
 }
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
+const chColor = (c: Channel) => (c === 'LOCAL' ? 'var(--local)' : 'var(--express)')
 const apiMessage = (e: unknown, fallback: string) =>
   (e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback
 const apiCode = (e: unknown) => (e as { response?: { data?: { code?: number } } })?.response?.data?.code
 
 export default function CancelAndRefundModal({
-  orderId, orderNo, amountFen, deliveryStatusLabel, hasActiveDelivery, onClose, onDone,
+  orderId, orderNo, amountFen, channel, deliveryStatusLabel, hasActiveDelivery, onClose, onDone,
 }: Props) {
   const [step, setStep] = useState<1 | 2>(hasActiveDelivery ? 1 : 2)
   const [cancelFee, setCancelFee] = useState<number | null | undefined>(undefined) // undefined=还没问到
@@ -75,70 +82,76 @@ export default function CancelAndRefundModal({
   }
 
   const stepDot = (n: 1 | 2, text: string) => (
-    <span className={`flex items-center gap-1.5 ${step === n ? 'text-gray-900 font-semibold' : 'text-gray-400'}`}>
-      <span className={`w-5 h-5 rounded-full text-xs flex items-center justify-center ${step === n ? 'bg-brand-500 text-white' : 'bg-gray-200 text-gray-500'}`}>{n}</span>
+    <span className="wb__step" style={step === n ? { color: 'var(--text-1)', fontWeight: 600 } : undefined}>
+      <span className="wb__step-dot" style={step === n ? { background: chColor(channel), color: '#fff' } : undefined}>{n}</span>
       {text}
     </span>
   )
 
   return (
-    <Modal
-      title="处理取消申请"
-      width="sm"
-      closeOnOverlay={false}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>暂不处理</Button>
-          {step === 1 ? (
-            <Button variant="danger" loading={busy} onClick={doCancel}>取消配送</Button>
-          ) : (
-            <Button variant="danger" loading={busy} onClick={doRefund} disabled={amountFen <= 0}>
-              退款 ¥{yuan(amountFen)}
-            </Button>
-          )}
-        </>
-      }
-    >
-      <div className="space-y-3 text-sm text-gray-700">
-        <div className="flex items-center gap-4 text-xs">
-          {stepDot(1, '取消配送')}
-          <span className="text-gray-300">›</span>
-          {stepDot(2, '全额退款')}
+    <div className="wb__modal-mask" role="dialog" aria-modal="true">
+      <div className="wb__modal">
+        <div className="wb__modal-head">
+          <span>处理取消申请</span>
+          <button className="wb__iconbtn" onClick={onClose} disabled={busy} aria-label="关闭"><X className="w-4 h-4" /></button>
         </div>
-        <p className="text-gray-500">订单 {orderNo}</p>
 
-        {step === 1 ? (
-          <>
-            <p>
-              这一步会向运力方取消当前配送单
-              {deliveryStatusLabel ? `（当前：${deliveryStatusLabel}）` : ''}，骑手不再来取货；订单本身还在，退款是下一步。
-            </p>
-            <p className="text-gray-500">顾客会看到：配送已取消，等待商家退款。</p>
-            <div className="rounded-md bg-amber-50 border border-amber-200 text-amber-700 px-3 py-2">
-              {cancelFee === undefined
-                ? '正在向运力方预估取消费…'
-                : cancelFee === null
-                  ? `取消费未知${feeError ? `（${feeError}）` : ''}——骑手已接单的单通常会产生几元取消费。`
-                  : cancelFee > 0
-                    ? `本次取消费约 ¥${yuan(cancelFee)}，由门店承担。`
-                    : '本次取消不产生取消费。'}
-            </div>
-          </>
-        ) : (
-          <>
-            <p>这一步会把货款原路退回顾客微信，订单转为已退款终态。</p>
-            <p className="text-gray-500">顾客会看到：退款通知，1-3 个工作日到账。</p>
-            <div className="rounded-md bg-red-50 border border-red-200 text-red-600 px-3 py-2 font-semibold">
-              {amountFen > 0
-                ? `确认后退款 ¥${yuan(amountFen)} 原路退回，此操作不可撤销。`
-                : '本单已无可退余额，无需再退款，可直接关闭。'}
-            </div>
-          </>
-        )}
+        <div className="wb__modal-body">
+          <div className="wb__steps">
+            {stepDot(1, '取消配送')}
+            <span className="wb__step-sep">›</span>
+            {stepDot(2, '全额退款')}
+          </div>
+          <div className="wb__meta">订单 {orderNo}</div>
 
-        {error && <p className="text-red-600">{error}</p>}
+          {step === 1 ? (
+            <>
+              <p>
+                这一步会向运力方取消当前配送单
+                {deliveryStatusLabel ? `（当前：${deliveryStatusLabel}）` : ''}，骑手不再来取货；订单本身还在，退款是下一步。
+              </p>
+              <p className="wb__meta">顾客会看到：配送已取消，等待商家退款。</p>
+              <div className="wb__amber">
+                {cancelFee === undefined
+                  ? '正在向运力方预估取消费…'
+                  : cancelFee === null
+                    ? `取消费未知${feeError ? `（${feeError}）` : ''}——骑手已接单的单通常会产生几元取消费。`
+                    : cancelFee > 0
+                      ? `本次取消费约 ¥${yuan(cancelFee)}，由门店承担。`
+                      : '本次取消不产生取消费。'}
+              </div>
+            </>
+          ) : (
+            <>
+              <p>这一步会把货款原路退回顾客微信，订单转为已退款终态。</p>
+              <p className="wb__meta">顾客会看到：退款通知，1-3 个工作日到账。</p>
+              <div className="wb__redbar">
+                {amountFen > 0
+                  ? `确认后退款 ¥${yuan(amountFen)} 原路退回，此操作不可撤销。`
+                  : '本单已无可退余额，无需再退款，可直接关闭。'}
+              </div>
+            </>
+          )}
+
+          {error && <div className="wb__redbar">{error}</div>}
+        </div>
+
+        <div className="wb__modal-foot">
+          <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>暂不处理</button>
+          {step === 1 ? (
+            <button className="wb__btn wb__btn--fill" style={{ background: chColor(channel) }} disabled={busy} onClick={() => void doCancel()}>
+              {busy ? '处理中…' : '取消配送'}
+            </button>
+          ) : (
+            <button
+              className="wb__btn wb__btn--fill" style={{ background: chColor(channel) }}
+              disabled={busy || amountFen <= 0} onClick={() => void doRefund()}
+            >
+              {busy ? '处理中…' : `退款 ¥${yuan(amountFen)}`}
+            </button>
+          )}
+        </div>
       </div>
-    </Modal>
+    </div>
   )
 }

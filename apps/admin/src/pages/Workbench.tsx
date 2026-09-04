@@ -35,6 +35,7 @@ const COLUMNS: { key: ColKey; title: string }[] = [
 /** 配送单已结束（不再是「在途」）的三个终态 */
 const TERMINAL_DELIVERY = ['DELIVERED', 'CANCELLED', 'FAILED']
 const EXPRESS_COMPANIES = ['顺丰速运', '京东物流', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政 EMS', '德邦快递']
+const TIP_STEPS = [200, 500, 1000, 2000]
 const OTHER_COMPANY = '__other__'
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
@@ -55,21 +56,21 @@ function dateTime(iso: string | null | undefined) {
   return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${hhmm(iso)}`
 }
 
-/** 等待胶囊：m:ss 等宽数字；>3:00 琥珀、>6:00 红底白字（§4） */
+/** 等待胶囊：m:ss 等宽数字；>3:00 琥珀、>6:00 红底白字（§4）—— 按秒比较，3:00/6:00 整点不提前变色 */
 function waitLabel(sinceIso: string, now: number): { text: string; cls: string } {
   const sec = Math.max(0, Math.floor((now - Date.parse(sinceIso)) / 1000))
   const min = Math.floor(sec / 60)
   const text = `${min}:${String(sec % 60).padStart(2, '0')}`
-  return { text, cls: min >= 6 ? 'wb__wait--danger' : min >= 3 ? 'wb__wait--warn' : '' }
+  return { text, cls: sec > 360 ? 'wb__wait--danger' : sec > 180 ? 'wb__wait--warn' : '' }
 }
 
-/** ≤2 样列全名；≥3 样给「前两菜名 等 N 样 / M 份」（§4） */
-function itemsSummary(items: WorkbenchCard['items']): ReactNode {
+/** ≤2 样列全名；≥3 样给「前两菜名 等 N 样 / M 份」，「等 N 样」用渠道色（§4） */
+function itemsSummary(items: WorkbenchCard['items'], channel: Channel): ReactNode {
   if (items.kinds <= 2) return items.first.join(' · ')
   return (
     <>
       {items.first.map((s) => s.replace(/ ×\d+$/, '')).join('、')}
-      <span className="wb__kinds"> 等 {items.kinds} 样 / {items.units} 份</span>
+      <span className="wb__kinds" style={{ color: chColor(channel) }}> 等 {items.kinds} 样 / {items.units} 份</span>
     </>
   )
 }
@@ -219,7 +220,7 @@ function TipModal({ orderId, tippedFen, limits, onClose, onDone }: {
   const maxPerCall = limits?.maxPerCall ?? 2000
   const maxPerOrder = limits?.maxPerOrder ?? 5000
   const remain = Math.max(0, maxPerOrder - tippedFen)
-  const options = [200, 500, 1000, 2000].filter((v) => v <= maxPerCall && v <= remain)
+  const options = TIP_STEPS.filter((v) => v <= maxPerCall && v <= remain)
   const [amount, setAmount] = useState(() => options.find((v) => v === 500) ?? options[0] ?? 0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -259,6 +260,9 @@ function TipModal({ orderId, tippedFen, limits, onClose, onDone }: {
         本次 ¥{yuan(amount)}。单次上限 ¥{(maxPerCall / 100).toFixed(0)}，本单已加 ¥{yuan(tippedFen)}，累计上限 ¥{(maxPerOrder / 100).toFixed(0)}。
       </div>
       {remain <= 0 && <div className="wb__redbar">本单小费已到累计上限，无法再加。</div>}
+      {remain > 0 && options.length === 0 && (
+        <div className="wb__redbar">本单小费剩余额度不足最小档位 ¥{(TIP_STEPS[0] / 100).toFixed(0)}，无法再加。</div>
+      )}
       {error && <div className="wb__redbar">{error}</div>}
     </WbModal>
   )
@@ -495,7 +499,7 @@ function Card({ card, now, onOpen, onHandleCancel }: {
       </div>
 
       <div className="wb__no"><span>{card.orderNo}</span><b>¥{yuan(card.amountFen)}</b></div>
-      <div className="wb__items">{itemsSummary(card.items)}</div>
+      <div className="wb__items">{itemsSummary(card.items, card.channel)}</div>
 
       {/* 无备注必须明写，留空则「没看见」与「没有」无法区分（§4） */}
       {card.note ? <div className="wb__note">{card.note}</div> : <div className="wb__nonote">无备注</div>}
@@ -534,9 +538,10 @@ function Card({ card, now, onOpen, onHandleCancel }: {
 // ─────────────────────────────────────────────────────────
 // 顶栏（§8）
 // ─────────────────────────────────────────────────────────
-function TopBar({ snap, shopName, theme, onToggleTheme, focus, onFullscreen, onExit, onResetCircuit }: {
-  snap: WorkbenchSnapshot | null; shopName: string; theme: 'light' | 'dark' | null
-  onToggleTheme: () => void; focus: boolean; onFullscreen: () => void; onExit: () => void; onResetCircuit: () => void
+function TopBar({ snap, shopName, targetTheme, onToggleTheme, focus, onFullscreen, onExit, onResetCircuit, circuitBusy }: {
+  snap: WorkbenchSnapshot | null; shopName: string; targetTheme: 'light' | 'dark'
+  onToggleTheme: () => void; focus: boolean; onFullscreen: () => void; onExit: () => void
+  onResetCircuit: () => void; circuitBusy: boolean
 }) {
   const today = new Date()
   const openState = !snap ? { text: '加载中', cls: '' }
@@ -563,9 +568,10 @@ function TopBar({ snap, shopName, theme, onToggleTheme, focus, onFullscreen, onE
             <span>营业额<b>¥{snap ? yuan(snap.stats.todayRevenueFen) : '--'}</b></span>
             <span>平均送达<b>{snap?.stats.avgDeliverMinutes != null ? `${snap.stats.avgDeliverMinutes} 分` : '--'}</b></span>
           </div>
+          {/* 图标与文案统一描述「点击后会变成什么」，不描述当前状态——否则跟随系统时会出现图标指向和实际切换方向相反（§8） */}
           <button className="wb__iconbtn" onClick={onToggleTheme}>
-            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            {theme === null ? '跟随系统' : theme === 'dark' ? '浅色' : '深色'}
+            {targetTheme === 'dark' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            {targetTheme === 'dark' ? '深色' : '浅色'}
           </button>
           <button className="wb__iconbtn" onClick={onFullscreen}>
             <Maximize className="w-4 h-4" />{focus ? '退出专注' : '全屏'}
@@ -576,7 +582,7 @@ function TopBar({ snap, shopName, theme, onToggleTheme, focus, onFullscreen, onE
       {snap?.circuit.tripped && (
         <div className="wb__banner">
           <span>快递100 余额不足已暂停呼叫。充值后点「恢复」，或改用「自己送」。</span>
-          <button className="wb__iconbtn" onClick={onResetCircuit}>恢复</button>
+          <button className="wb__iconbtn" onClick={onResetCircuit} disabled={circuitBusy}>{circuitBusy ? '处理中…' : '恢复'}</button>
         </div>
       )}
     </>
@@ -592,6 +598,12 @@ type ModalState =
   | { kind: 'reject' }
   | { kind: 'cancelRefund' }
   | null
+
+/** 点日夜按钮后会切到的目标主题——按钮图标/文案要描述这个，不是当前主题（§8） */
+function nextTheme(theme: 'light' | 'dark' | null): 'light' | 'dark' {
+  const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
+  return theme === null ? (systemDark ? 'light' : 'dark') : theme === 'dark' ? 'light' : 'dark'
+}
 
 function readTheme(): 'light' | 'dark' | null {
   // localStorage 在无痕/被禁用 cookie 的机器上直接抛异常，工作台不能因为记个主题就白屏
@@ -620,6 +632,7 @@ export default function Workbench() {
   const [showEvents, setShowEvents] = useState(false)
   const [modal, setModal] = useState<ModalState>(null)
   const [pendingCancelRefund, setPendingCancelRefund] = useState(false)
+  const [circuitBusy, setCircuitBusy] = useState(false)
 
   const load = useCallback(async (fresh = false) => {
     try {
@@ -665,7 +678,15 @@ export default function Workbench() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  })
+  }, [modal, drawer])
+
+  // 用户按 Esc/F11 原生退出真全屏时，document.fullscreenElement 会变 null——若 focus 这时仍是
+  // true（理论上不该发生，见 toggleFullscreen 的注释），在这里兜底复位，避免卡在专注模式要再点一次
+  useEffect(() => {
+    const onFsChange = () => { if (!document.fullscreenElement) setFocus(false) }
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
 
   const loadDetail = useCallback(async (orderId: number, channel: Channel) => {
     setDetailLoading(true)
@@ -674,6 +695,8 @@ export default function Workbench() {
       setDetail({ order: o.data.data, delivery: d?.data.data.delivery ?? null, events: d?.data.data.events ?? [] })
     } catch (e) {
       toast.error(apiMessage(e, '订单详情加载失败'))
+      // 卡片「去处理」把标志位置了 true，详情却加载失败：不复位的话下一次任意一次成功加载都会莫名弹出退款引导
+      setPendingCancelRefund(false)
     } finally { setDetailLoading(false) }
   }, [])
 
@@ -711,13 +734,13 @@ export default function Workbench() {
   }
 
   const toggleTheme = () => {
-    const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
-    const next: 'light' | 'dark' = theme === null ? (systemDark ? 'light' : 'dark') : theme === 'dark' ? 'light' : 'dark'
+    const next = nextTheme(theme)
     setTheme(next)
     try { localStorage.setItem('wb-theme', next) } catch { /* 存不下就只在本次会话生效 */ }
   }
 
-  // 全屏两条路径都要有：被浏览器/iframe（小程序 web-view 就是）拒绝时退化成专注模式（§8）
+  // 全屏两条路径都要有：被浏览器/iframe（小程序 web-view 就是）拒绝时退化成专注模式（§8）。
+  // 成功进入真全屏时不设 focus——focus 只表示「退化专注模式」，图例条常驻（§3）不该因真全屏成功而被隐藏。
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
       void document.exitFullscreen?.().catch(() => undefined)
@@ -731,8 +754,9 @@ export default function Workbench() {
     try {
       const p = req()
       if (p && typeof p.then === 'function') {
-        p.then(() => setFocus(true)).catch(() => { setFocus(true); toast.info('浏览器不允许全屏，已切到专注模式') })
-      } else { setFocus(true) }
+        p.catch(() => { setFocus(true); toast.info('浏览器不允许全屏，已切到专注模式') })
+      }
+      // 同步/无 Promise 的旧浏览器：成功与否交给下面的 fullscreenchange 监听去判断，这里不猜。
     } catch { setFocus(true); toast.info('浏览器不允许全屏，已切到专注模式') }
   }
 
@@ -748,8 +772,10 @@ export default function Workbench() {
   }
 
   const resetCircuit = async () => {
+    setCircuitBusy(true)
     try { await resetKd100Circuit(); toast.success('已恢复呼叫'); await load(true) }
     catch (e) { toast.error(apiMessage(e, '恢复失败，请重试')) }
+    finally { setCircuitBusy(false) }
   }
 
   // ── 操作区（§6 分级确认：改状态或花钱的全弹；打给骑手/看进度/查物流不弹）──
@@ -931,7 +957,7 @@ export default function Workbench() {
               <div className="wb__line"><span>收货人</span><span>{o?.receiverName ?? card.receiver.name}</span></div>
               <div className="wb__line">
                 <span>电话</span>
-                <a className="wb__tel" href={`tel:${o?.receiverPhone ?? card.receiver.phone}`}>{o?.receiverPhone ?? card.receiver.phone}</a>
+                <a className="wb__tel" style={{ color: chColor(card.channel) }} href={`tel:${o?.receiverPhone ?? card.receiver.phone}`}>{o?.receiverPhone ?? card.receiver.phone}</a>
               </div>
               <div className="wb__line"><span>地址</span><span style={{ textAlign: 'right' }}>{o?.receiverFullAddress ?? '--'}</span></div>
               {local ? (
@@ -966,7 +992,7 @@ export default function Workbench() {
                 <div className="wb__line">
                   <span>电话</span>
                   {d.courierMobile
-                    ? <a className="wb__tel" href={`tel:${d.courierMobile}`}>{d.courierMobile}</a>
+                    ? <a className="wb__tel" style={{ color: chColor(card.channel) }} href={`tel:${d.courierMobile}`}>{d.courierMobile}</a>
                     : <span>--</span>}
                 </div>
                 {d.failReason && <div className="wb__line"><span>失败原因</span><span>{d.failReason}</span></div>}
@@ -1055,6 +1081,7 @@ export default function Workbench() {
             orderId={o.id}
             orderNo={o.orderNo}
             amountFen={o.remainingRefundable}
+            channel={ch}
             deliveryStatusLabel={card.local?.delivery?.statusLabel ?? null}
             hasActiveDelivery={!!d && d.activeOrderId === o.id && !TERMINAL_DELIVERY.includes(d.status)}
             onClose={close}
@@ -1069,8 +1096,9 @@ export default function Workbench() {
   return (
     <div className={`wb ${focus ? 'wb--focus' : ''}`} data-theme={theme ?? undefined} ref={rootRef}>
       <TopBar
-        snap={snap} shopName={settings?.store.name || '接单工作台'} theme={theme} onToggleTheme={toggleTheme}
-        focus={focus} onFullscreen={toggleFullscreen} onExit={() => void exitWorkbench()} onResetCircuit={() => void resetCircuit()}
+        snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
+        focus={focus} onFullscreen={toggleFullscreen} onExit={() => void exitWorkbench()}
+        onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy}
       />
 
       {/* 图例常驻（§3）；专注模式下让位给看板 */}
