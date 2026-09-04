@@ -794,6 +794,43 @@ R=$(sched '{}'); [[ "$(jq -r '.data | has("localHousekeeping")' <<<"$R")" == "tr
 # 此刻 SCH2 是 PREPARING 且无在途单的合格候选，若手动模式的门被绕过这条会变红
 assert_eq "手动模式（不传 override）不自动呼叫" "$(jq -r .data.localAutoCall <<<"$R")" "0"
 
+echo "== 31. 工作台快照 =="
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+snap() { req GET "/api/admin/workbench/snapshot?fresh=1" "$AT"; }
+col_has() { jq -r --argjson id "$2" ".data.columns.$1 | map(.orderId) | index(\$id) != null" <<<"$3"; }
+# 先造邮寄单再造同城单：邮寄等得更久，若实现只按等待时长排序这条硬规则断言就会翻车（规格 §2 活例）
+R=$(req POST /api/cart "$UT" "{\"productId\":$PID,\"quantity\":1}"); WBC=$(jq -r .data.id <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$WBC],\"addressId\":$ADDR,\"deliveryType\":\"EXPRESS\"}")
+WBE1=$(jq -r .data.orderId <<<"$R"); req POST "/api/orders/$WBE1/pay" "$UT" >/dev/null
+sleep 1
+WBL1=$(mk_local_paid)
+S=$(snap)
+assert_eq "同城单入待接单列" "$(col_has pending $WBL1 "$S")" "true"
+assert_eq "邮寄单入待接单列" "$(col_has pending $WBE1 "$S")" "true"
+# 硬排序：邮寄单付款更早（等更久），同城单仍必须排在它上面
+LIDX=$(jq -r --argjson id $WBL1 '.data.columns.pending | map(.orderId) | index($id)' <<<"$S")
+EIDX=$(jq -r --argjson id $WBE1 '.data.columns.pending | map(.orderId) | index($id)' <<<"$S")
+[[ "$LIDX" -lt "$EIDX" ]] && ok "同城恒排邮寄之上" || fail "排序硬规则" "local=$LIDX express=$EIDX"
+assert_eq "卡片渠道标注 LOCAL" "$(jq -r --argjson id $WBL1 '.data.columns.pending[] | select(.orderId==$id) | .channel' <<<"$S")" "LOCAL"
+assert_eq "邮寄卡片带省市" "$(jq -r --argjson id $WBE1 '.data.columns.pending[] | select(.orderId==$id) | .express.province != null' <<<"$S")" "true"
+assert_eq "同城卡片 local 块存在" "$(jq -r --argjson id $WBL1 '.data.columns.pending[] | select(.orderId==$id) | .local != null' <<<"$S")" "true"
+req POST "/api/admin/local/orders/$WBL1/accept" "$AT" >/dev/null
+S=$(snap); assert_eq "接单后入备餐中" "$(col_has preparing $WBL1 "$S")" "true"
+req POST "/api/admin/local/orders/$WBL1/call" "$AT" >/dev/null
+S=$(snap)
+assert_eq "呼叫后入等待配送员" "$(col_has waitingCourier $WBL1 "$S")" "true"
+assert_eq "配送状态标签=待抢单" "$(jq -r --argjson id $WBL1 '.data.columns.waitingCourier[] | select(.orderId==$id) | .local.delivery.statusLabel' <<<"$S")" "待抢单"
+assert_eq "等待配送员列无邮寄单（N2）" "$(jq -r '[.data.columns.waitingCourier[] | select(.channel=="EXPRESS")] | length' <<<"$S")" "0"
+WBT=$(req GET "/api/admin/local/orders/$WBL1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+WBD=$(req GET "/api/admin/local/orders/$WBL1/delivery" "$AT" | jq -r .data.delivery.deliveryNo)
+kd_cb "$WBD" "$WBT" 310 '骑手已取货' '2026-09-04 15:00:00' >/dev/null
+S=$(snap); assert_eq "310 后入配送中" "$(col_has delivering $WBL1 "$S")" "true"
+kd_cb "$WBD" "$WBT" 520 '已送达' '2026-09-04 15:20:00' >/dev/null
+S=$(snap); assert_eq "520 后入已完成" "$(col_has done $WBL1 "$S")" "true"
+assert_eq "打印机占位" "$(jq -r .data.printer.status <<<"$S")" "NOT_CONNECTED"
+assert_eq "熔断未触发" "$(jq -r .data.circuit.tripped <<<"$S")" "false"
+[[ "$(jq -r .data.stats.todayOrders <<<"$S")" -ge 1 ]] && ok "今日单数 ≥1" || fail "stats" "$S"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
