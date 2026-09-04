@@ -346,7 +346,7 @@ _quote_token() {  # 内部用：echo quoteToken，诊断走 stderr，可安全�
   [[ -n "$t" ]] || echo "  ✘ /local/quote(addressId=$1) 未返回 quoteToken：$r" >&2
   echo "$t"
 }
-lquote() {  # 顶层用：结果写进 $LQTOKEN/$LQFEE/$LQDIST；拿不到当场记一条 fail，绝不静默返回空串
+lquote() {  # 顶层用：结果写进 $LQTOKEN/$LQFEE/${LQDIST}；拿不到当场记一条 fail，绝不静默返回空串
   local r
   r=$(req POST /api/local/quote "$UT" "{\"addressId\":$1,\"subtotal\":${2:-0}}")
   LQTOKEN=$(jq -r '.data.quoteToken // empty' <<<"$r"); LQFEE=$(jq -r '.data.fee' <<<"$r"); LQDIST=$(jq -r '.data.distanceM' <<<"$r")
@@ -676,7 +676,7 @@ mk_local_paid() {  # 造一笔已支付同城单，echo orderId
   # 这种怪路径），最终仍会红但诊断链变长、看不出病根其实是报价失败。这里显式记一条失败并写进
   # 跨子 shell 的失败计数文件，让根因直接出现在 stderr 而不是被后面一串莫名其妙的红淹没。
   if [[ -z "$tok" ]]; then
-    echo "  ✘ mk_local_paid 拿不到 quoteToken（addressId=$LADDR），后续调用方会收到空 orderId" >&2
+    echo "  ✘ mk_local_paid 拿不到 quoteToken（addressId=${LADDR}），后续调用方会收到空 orderId" >&2
     echo x >> "$MK_LOCAL_PAID_FAIL_FILE"
     echo ""; return
   fi
@@ -1147,7 +1147,7 @@ B_TOTAL=$(tf_total); B_TODAY=$(tf_today); B_AMT=$(tf_amt); B_TREND=$(tf_trend)
 B_WBN=$(tf_wbn); B_WBA=$(tf_wba); B_CONV=$(tf_conv); B_PCONV=$(tf_pconv)
 # 前置：这一单确实已经被算进了各口径（不然下面「减 1」在本就没算的情况下也会通过）
 [[ "$B_TOTAL" -ge 1 && "$B_TODAY" -ge 1 && "$B_TREND" -ge 1 && "$B_WBN" -ge 1 && "$B_CONV" -ge 1 && "$B_PCONV" -ge 1 && "$B_AMT" -ge "$TFAMT" ]] \
-  && ok "基线已含本单（total=$B_TOTAL today=$B_TODAY 转化=$B_CONV 商品转化=$B_PCONV）" || fail "基线不含本单，后续断言无证伪力" "total=$B_TOTAL today=$B_TODAY trend=$B_TREND wb=$B_WBN conv=$B_CONV pconv=$B_PCONV amt=$B_AMT/$TFAMT"
+  && ok "基线已含本单（total=$B_TOTAL today=$B_TODAY 转化=$B_CONV 商品转化=${B_PCONV}）" || fail "基线不含本单，后续断言无证伪力" "total=$B_TOTAL today=$B_TODAY trend=$B_TREND wb=$B_WBN conv=$B_CONV pconv=$B_PCONV amt=$B_AMT/$TFAMT"
 R=$(req PATCH "/api/admin/orders/$TFO/test-flag" "$AT" '{"isTest":true}')
 assert_eq "标记测试单 code 0" "$(code "$R")" "0"
 assert_eq "返回 isTest=true" "$(jq -r .data.isTest <<<"$R")" "true"
@@ -1197,7 +1197,7 @@ R=$(req GET /api/local/meta)
 for k in enabled isOpen nextOpenText businessHours store radiusKm radiusStraightKm fee prepMinutes acceptGraceMin limits; do
   assert_eq "meta.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data <<<"$R")")" "true"
 done
-# /local/quote（复用 §22 已建的 $LADDR）
+# /local/quote（复用 §22 已建的 ${LADDR}）
 R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":5000}")
 for k in inRange distanceM distanceSource straightDistanceM fee minOrderAmount belowMin estimatedMinutes quoteToken; do
   assert_eq "quote.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data <<<"$R")")" "true"
