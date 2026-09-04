@@ -8,6 +8,7 @@ import StatusBadge from '../components/ui/StatusBadge'
 import EmptyState from '../components/ui/EmptyState'
 import Spinner from '../components/ui/Spinner'
 import RefundDialog from '../components/RefundDialog'
+import { toast } from '../components/ui/Toast'
 import type { DeliveryEventInfo, DeliveryInfo, Order } from '../types'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
@@ -58,6 +59,7 @@ export default function LocalOrders() {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
       })
+      .catch(() => { /* 网络抖动时保留当前列表，避免无提示地清空成空白页 */ })
       .finally(() => setLoading(false))
   }
 
@@ -73,7 +75,8 @@ export default function LocalOrders() {
     setSearchParams(value ? { status: value } : {}, { replace: true })
   }
 
-  // 懒加载配送单 + 事件时间线，按订单 id 缓存，展开卡片与打开退款弹窗共用
+  // 懒加载配送单 + 事件时间线，按订单 id 缓存，展开卡片与打开退款弹窗共用。
+  // 配送成本只是参考展示，这个请求失败（网络抖动）不该挡住任何调用方——尤其是退款按钮（I6）
   const loadDelivery = async (orderId: number) => {
     if (deliveryCache[orderId]) return deliveryCache[orderId]
     setDeliveryLoading(orderId)
@@ -82,6 +85,9 @@ export default function LocalOrders() {
       const data = res.data.data
       setDeliveryCache((m) => ({ ...m, [orderId]: data }))
       return data
+    } catch {
+      toast.error('配送信息加载失败，可稍后重试')
+      return undefined
     } finally {
       setDeliveryLoading((cur) => (cur === orderId ? null : cur))
     }
@@ -93,10 +99,11 @@ export default function LocalOrders() {
       return
     }
     setExpanded(order.id)
-    loadDelivery(order.id)
+    void loadDelivery(order.id)
   }
 
   const openRefund = async (order: Order) => {
+    // 不用 await 的失败去挡住退款：loadDelivery 已经把异常吞掉，这里只是尽力而为地预取
     await loadDelivery(order.id)
     setRefundTarget(order)
   }
