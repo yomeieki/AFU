@@ -52,11 +52,15 @@ function rejectReasonText(cancelReason) {
 // 见 apps/server/src/services/refund.ts:243），所以只有它 >0 时才敢说「已原路退回」。
 function refundFactText(order) {
   if (order.status === 'REFUNDED' && order.refundedAmount > 0) {
-    return '款项 ¥' + formatPrice(order.refundedAmount) + ' 已原路退回'
+    return { label: '款项 ¥' + formatPrice(order.refundedAmount) + ' 已原路退回', extra: '' }
   }
   var latest = order.refunds && order.refunds[0]
   var stuck = latest && (latest.status === 'ABNORMAL' || latest.status === 'CLOSED' || latest.status === 'FAILED')
-  return stuck ? '退款处理中，如有疑问请联系商家' : '退款处理中'
+  // 「钱什么时候回来」是顾客此刻最想知道的，所以处理中也必须给出预期，不能只说一句「处理中」就没了。
+  // 异常态不写「退款失败」——顾客拿这四个字既没法自救也只会更慌；说清去找谁才有用。
+  return stuck
+    ? { label: '退款处理中', extra: '银行处理异常，如有疑问请联系商家' }
+    : { label: '退款处理中', extra: '预计 1-3 个工作日原路退回' }
 }
 
 // 待付款倒计时文案：hh:mm:ss；到期返回 ''
@@ -116,10 +120,13 @@ function buildTimeline(order) {
       extra: (rejectReason || byCustomer) ? '' : (order.cancelReason || ''),
     })
     // 第二行：退款事实，按退款单实时状态渲染（PENDING/PROCESSING「退款处理中」，SUCCESS 才「已原路退回」）。
+    var refundDone = order.status === 'REFUNDED' && order.refundedAmount > 0
+    var refundFact = refundFactText(order)
     steps.push({
-      label: refundFactText(order),
-      time: order.status === 'REFUNDED' && order.refundedAmount > 0 ? t(order.refundedAt) : '',
-      done: order.status === 'REFUNDED' && order.refundedAmount > 0,
+      label: refundFact.label,
+      time: refundDone ? t(order.refundedAt) : '',
+      done: refundDone,
+      extra: refundFact.extra,
     })
     return steps
   }
