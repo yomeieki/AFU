@@ -104,4 +104,4 @@ Page({
       .catch(function() {
         wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
       })
-  })
+  },
