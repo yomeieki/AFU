@@ -174,7 +174,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     let shippingFee = 0
     let localSnapshot: {
       receiverLatE6?: number; receiverLngE6?: number; receiverPoiName?: string | null
-      distanceM?: number; estimatedDeliveryAt?: Date
+      distanceM?: number; distanceSource?: string; estimatedDeliveryAt?: Date
     } = {}
     if (deliveryType === 'LOCAL') {
       const s = await getLocalSettings()
@@ -208,11 +208,12 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
        * 起送门槛）都在下面用**当前**设置重新求值，那条粗粒度作废是纯冗余——留着只会让店主改一次
        * 营业时间或小费上限，就把正在结算页的顾客全踢下来。
        *
-       * 下面「重算 fee 更贵 → 42227，否则取较低者」那一段**仍然必须留着**，它挡的不是距离漂移
-       * 而是 subtotal 造假：`/local/quote` 的 subtotal 是顾客传的，报个 ¥99 就能拿到 fee=0 的免运
-       * 凭证，再拿它去下一单 ¥40 的。距离同源之后，重算 fee 与凭证 fee 唯一可能的差异就来自
+       * 下面「重算 fee 更贵 → 42227，否则按重算 fee 收」那一段**仍然必须留着**，它挡的不是距离
+       * 漂移而是 subtotal 造假：`/local/quote` 的 subtotal 是顾客传的，报个 ¥99 就能拿到 fee=0
+       * 的免运凭证，再拿它去下一单 ¥40 的。距离同源之后，重算 fee 与凭证 fee 唯一可能的差异就来自
        * subtotal，于是这条比较正好把它兜住；反向（重算更便宜，比如顾客实际买得更多跨过了免运门槛）
-       * 则取低者，该免的运费照免。
+       * 实收也是重算 fee，该免的运费照免——实收永远是重算价，凭证价只用来判断要不要拒单，
+       * 从不参与「谁更低」的比较（这里不存在凭证价胜出的分支）。
        */
       const quoted = quoteToken ? verifyQuote(quoteToken) : null
       if (!quoted || quoted.addressId !== address.id || quoted.latE6 !== address.latE6 || quoted.lngE6 !== address.lngE6) {
@@ -230,15 +231,19 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       if (totalItems > s.limits.maxItems || totalWeightKg > s.limits.maxWeightKg) {
         throw new AppError(42230, `单次配送最多 ${s.limits.maxItems} 件 / ${s.limits.maxWeightKg} kg，请分单或电话联系商家`)
       }
-      let fee = q.fee
-      if (fee > quoted.fee) throw new AppError(42227, '配送费已更新，请刷新后重新提交')
-      fee = Math.min(fee, quoted.fee)
-      shippingFee = fee
+      if (q.fee > quoted.fee) throw new AppError(42227, '配送费已更新，请刷新后重新提交')
+      shippingFee = q.fee
       localSnapshot = {
         receiverLatE6: address.latE6,
         receiverLngE6: address.lngE6,
         receiverPoiName: address.poiName,
         distanceM,
+        // 这一单的运费是按运力方实测道路距离收的，还是 /local/quote 查价失败退回的直线估算——
+        // 判定只发生在报价那一刻（下单端点不重新外呼），所以这里直接落 token 里签的值，不是
+        // 重新判定。目的是让「查价失败时按估算价成交」这类单事后可查：不用去关联别的表推断，
+        // 订单行上直接看得出这一单收没收贵/收没收亏（quoted.distanceSource 的信任边界见
+        // services/local-settings.ts 的 QuotePayload.distanceSource 注释）。
+        distanceSource: quoted.distanceSource,
         estimatedDeliveryAt: new Date(Date.now() + estimateMinutes(s, distanceM) * 60 * 1000),
       }
     } else {

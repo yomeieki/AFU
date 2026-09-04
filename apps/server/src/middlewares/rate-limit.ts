@@ -34,6 +34,23 @@ export const payLimiter = rateLimit({
 })
 
 /**
+ * 同城报价限流：`POST /local/quote` 挂 `optionalUserAuth`，匿名传坐标即可调用；
+ * 报价强制凭证之后，每次调用都会外呼一次运力方 `batchPrice`（最长 5 秒连接占用），
+ * 免费但仍是匿名可触发的第三方外呼，也会挤占店员侧共用的呼叫/回调队列节奏。
+ *
+ * 阈值要覆盖真实用法而不是拍脑袋：顾客在地址页选点可能连点好几次微调，进结算页
+ * 通常还要再报一次——给到比登录/支付宽得多的窗口，只挡异常高频（脚本刷、死循环），
+ * 不误伤正常顾客。
+ */
+export const localQuoteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(30, 500),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
+})
+
+/**
  * 快递100 回调限流：/api/kd/:deliveryNo 未鉴权（安全性只靠 per-单 salt 验签），
  * deliveryNo=D<orderId>-<seq> 易猜，需要防有人拿它当灌爆事件表的免费写入点。
  *

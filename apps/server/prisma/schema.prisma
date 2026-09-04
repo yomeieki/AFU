@@ -248,8 +248,12 @@ model Order {
   receiverLatE6       Int?      @map("receiver_lat_e6")
   receiverLngE6       Int?      @map("receiver_lng_e6")
   receiverPoiName     String?   @map("receiver_poi_name") @db.VarChar(128)
-  // 计费距离（米）= 直线 × detourFactor
+  // 计费距离（米）：运力方 batchPrice 返回的真实道路距离，查价失败时退回直线 × detourFactor 估算
   distanceM           Int?      @map("distance_m")
+  // 上面这段距离是实测（MEASURED）还是估算（ESTIMATED）——随行审计信息，不参与任何计费/作废判断，
+  // 见 services/local-settings.ts 的 QuotePayload.distanceSource 注释。查价失败按估算价成交的单，
+  // 事后靠这一列直接查得出来，不用去关联别的表推断。
+  distanceSource      String?   @map("distance_source") @db.VarChar(16)
   estimatedDeliveryAt DateTime? @map("estimated_delivery_at")
   // 顾客在接单后宽限期内申请取消（D6 ②）；快照当时有效配送单状态，NONE=无单
   cancelRequestedAt   DateTime? @map("cancel_requested_at")

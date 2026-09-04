@@ -389,12 +389,29 @@ export function estimateMinutes(s: LocalDeliverySettings, distanceM: number): nu
  * 求值，所以这里**不签 `settings.version`**：那条粗粒度作废是纯冗余，删掉不丢任何保护，却会让
  * 店主改一次营业时间就把正在结算页的顾客全踢下来。
  *
- * 于是这个结构本身就是规格：**签进去的每一个字段都会在下单时被比对**，一个都不多。
+ * 于是这个结构本身就是规格：**签进去的每一个字段都会在下单时被比对**，一个都不多——
+ * `distanceSource` 是这条规则唯一的例外，见它自己的注释。
  */
 interface QuotePayload {
   fee: number; distanceM: number; addressId: number
   latE6: number; lngE6: number
   storeLatE6: number; storeLngE6: number
+  /**
+   * ── `distanceSource` 不参与信任比对，纯属随行审计信息 ──
+   *
+   * 这一项和上面几项性质不同：它不是「下单时用来判断这张凭证还作不作数」的信任凭据，
+   * 而是**报价那一刻发生了什么**的既成事实（这段 `distanceM` 到底是运力方 batchPrice 量出来的，
+   * 还是 `/local/quote` 查价失败退回的直线估算）——下单端点没有第二次外呼去重新判定它，
+   * 也不该有：判定只能发生一次，在报价那一刻。
+   *
+   * 之所以仍然签进 token（而不是让客户端在下单请求里另传一个字段）：HMAC 保证它不会被
+   * 篡改成与实际报价不符的值，同时把它和这一次报价的 `distanceM/fee` 绑成同一个不可分割的
+   * 事实，snapshot 到订单上才有意义。但**它不影响任何一条计费或作废判断**——不比对、
+   * 不参与 42239/42227 的任何分支——纯粹是「这一单的运费当时是按实测还是估算收的」这一句
+   * 事后审计要用的话，落在订单行上，见 routes/orders.ts。verifyQuote 里仍对它做白名单校验
+   * （只认 'MEASURED'/'ESTIMATED'），这是防御性解析，不是安全边界。
+   */
+  distanceSource: 'MEASURED' | 'ESTIMATED'
 }
 const b64u = (s: string) => Buffer.from(s, 'utf8').toString('base64url')
 const hmac = (s: string) => crypto.createHmac('sha256', `quote:${config.jwt.userSecret}`).update(s).digest('hex').slice(0, 32)
@@ -403,6 +420,7 @@ export function signQuote(p: QuotePayload, now: Date = new Date()): string {
   const body = b64u(JSON.stringify({
     f: p.fee, d: p.distanceM, a: p.addressId,
     la: p.latE6, ln: p.lngE6, sla: p.storeLatE6, sln: p.storeLngE6,
+    ds: p.distanceSource,
     e: now.getTime() + QUOTE_TTL_MS,
   }))
   return `${body}.${hmac(body)}`
@@ -430,9 +448,13 @@ export function verifyQuote(token: string, now: Date = new Date()): QuotePayload
     // 缺字段判无效在下单侧就是 42239（没有可信凭证），顾客重报一次价即可，不存在兼容包袱。
     const fields = [o.f, o.d, o.a, o.la, o.ln, o.sla, o.sln]
     if (fields.some((n) => typeof n !== 'number' || !Number.isFinite(n))) return null
+    // ds 同样是后加字段：白名单校验（只认这两个值），不是信任比对——它不参与任何计费/作废判断，
+    // 见上面 QuotePayload.distanceSource 的注释。老格式 token 缺这一项一律判无效，与坐标四项同规则。
+    if (o.ds !== 'MEASURED' && o.ds !== 'ESTIMATED') return null
     return {
       fee: o.f, distanceM: o.d, addressId: o.a,
       latE6: o.la, lngE6: o.ln, storeLatE6: o.sla, storeLngE6: o.sln,
+      distanceSource: o.ds,
     }
   } catch {
     return null

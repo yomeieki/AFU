@@ -9,6 +9,10 @@ BASE="${BASE:-http://localhost:3100}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin123456}"
 PASS=0; FAIL=0
+# mk_local_paid 造单失败要能让整跑变红，但它总是在 $(...) 子 shell 里被调用（如
+# `DLO1=$(mk_local_paid)`），子 shell 里改的 FAIL 变量回不到主 shell——`fail` 在那里形同虚设。
+# 用文件在子 shell 与主 shell 之间传递失败次数：跑完主流程后统一读一次、并入 FAIL（见文件尾）。
+MK_LOCAL_PAID_FAIL_FILE=$(mktemp)
 
 for cmd in curl jq; do command -v $cmd >/dev/null || { echo "需要 $cmd"; exit 1; }; done
 
@@ -383,6 +387,7 @@ assert_eq "运费=报价 fee" "$(jq -r .data.shippingFee <<<"$R")" "$QFEE"
 R=$(req GET "/api/orders/$LO1" "$UT")
 assert_eq "订单 deliveryType=LOCAL" "$(jq -r .data.deliveryType <<<"$R")" "LOCAL"
 [[ "$(jq -r .data.distanceM <<<"$R")" -gt 0 ]] && ok "distanceM 已快照" || fail "distanceM" "$R"
+[[ "$(jq -r .data.distanceSource <<<"$R")" =~ ^(MEASURED|ESTIMATED)$ ]] && ok "distanceSource 已快照" || fail "distanceSource" "$R"
 [[ "$(jq -r .data.estimatedDeliveryAt <<<"$R")" != "null" ]] && ok "estimatedDeliveryAt 已写" || fail "estimatedDeliveryAt"
 assert_eq "shipment 为空（LOCAL 不写 Shipment）" "$(jq -r .data.shipment <<<"$R")" "null"
 # 全局邮寄运费被设成 9999 也不影响同城运费
@@ -490,6 +495,7 @@ MO=$(jq -r '.data.orderId // empty' <<<"$R")
 assert_eq "下单按 token 里的实测距离收 500（重算直线只会给 300）" "$(jq -r .data.shippingFee <<<"$R")" "500"
 R=$(req GET "/api/orders/$MO" "$UT")
 assert_eq "订单快照存的是实测距离" "$(jq -r .data.distanceM <<<"$R")" "4600"
+assert_eq "订单快照记的距离来源=实测（对账用，事后能分清这单按实测还是估算收的钱）" "$(jq -r .data.distanceSource <<<"$R")" "MEASURED"
 
 # —— 收货坐标一改，在途凭证立即作废 ——
 # 不绑坐标的话这条路可以薅：近处报价拿凭证 → 把同一个 addressId 的坐标改到远处 → 用旧凭证下单，
@@ -523,6 +529,21 @@ lquote $LADDR
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$SGC],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
 assert_eq "门店坐标还原 + 重新报价 → 下单成功" "$(code "$R")" "0"
 
+# —— 全量 PUT 改门店坐标，同样作废在途凭证（另一条入口，与上面 PATCH 互为镜像）——
+# 门店坐标除了 PATCH /store-location 这条专用入口，管理端「保存全部设置」的 PUT /local-delivery
+# 也能把它一起改掉。作废判据必须两条入口都覆盖，不能只测常走的那条——否则「PUT 改坐标但漏更新
+# 内存缓存/漏比对」这类实现也能让上面那组 PATCH 断言全绿。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+lquote $LADDR; PGT="$LQTOKEN"
+R=$(req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.store.latE6=29341000 | .store.lngE6=104780000' <<<"$LSNAP")")
+assert_eq "全量 PUT 改门店坐标 code 0" "$(code "$R")" "0"
+assert_eq "全量 PUT 后门店坐标已生效" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.store.latE6)" "29341000"
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); PGC=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$PGC],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$PGT\"}")
+assert_eq "全量 PUT 动了门店坐标 → 在途凭证作废 42227" "$(code "$R")" "42227"
+req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
+assert_eq "全量 PUT 还原门店坐标" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.store.latE6)" "29339500"
+
 # —— 与门店坐标无关的设置变更，在途凭证继续有效 ——
 # 这是本次改动的头号卖点，也是它的直接证据：凭证里除 distanceM 外每一个量（运费/范围/起送门槛）
 # 都在下单时用**当前**设置重新求值，所以店主改备餐时长（或营业时间、小费上限）不该把正在结算页
@@ -539,6 +560,21 @@ assert_eq "只改 prepMinutes → 在途凭证继续有效 code 0" "$(code "$R")
 assert_eq "该单仍按凭证里签的实测 4600 收费" "$(jq -r .data.shippingFee <<<"$R")" "$LQFEE"
 req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+
+# —— 报价 subtotal 造假换到免运 token，下单按小额实付 → 42227（42227 真正要挡的攻击零覆盖，补上）——
+# 距离同源之后，42227 唯一还在挡的洞是：/local/quote 的 subtotal 是顾客自己报的，报高换一张
+# fee=0 的免运 token，再拿它去下一单只买几十块的。前面只测了店主调 baseFee 那条分支（重算变贵
+# 是因为设置变了），这条链路——重算变贵是因为 subtotal 造假——一次都没测过，而这恰是这条防线
+# 存在的理由。lquote helper 默认 subtotal=0，签出的凭证永远是最高价，走 helper 的用例天然碰不到
+# 这条防线，这里必须显式传高 subtotal。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":99900}")
+assert_eq "报高 subtotal（¥999）越过免运门槛，拿到 fee=0 的凭证" "$(jq -r .data.fee <<<"$R")" "0"
+FAKETOKEN=$(jq -r .data.quoteToken <<<"$R")
+[[ -n "$FAKETOKEN" && "$FAKETOKEN" != "null" ]] && ok "报高 subtotal 仍能签到 quoteToken" || fail "报高 subtotal 未签发 quoteToken" "$R"
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); FKC=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$FKC],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$FAKETOKEN\"}")
+assert_eq "免运 token 配小额实付（¥24）→ 重算有运费、贵于凭证 → 42227" "$(code "$R")" "42227"
 
 # 改了文字地址却没重新选点 → 坐标一并清空（防止 M2 骑手被派到旧地址）
 R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"detail":"改成了完全不同的门牌 9 栋"}')
@@ -636,10 +672,22 @@ mk_local_paid() {  # 造一笔已支付同城单，echo orderId
   # 到时候一片莫名其妙的 42239 会淹掉真正的失败。
   local r cid oid tok
   tok=$(_quote_token "$LADDR")
-  [[ -n "$tok" ]] || { echo ""; return; }
+  # 取不到凭证不能静默返回空串：空串会被十几处调用方直接拼进 URL（/api/admin/local/orders//accept
+  # 这种怪路径），最终仍会红但诊断链变长、看不出病根其实是报价失败。这里显式记一条失败并写进
+  # 跨子 shell 的失败计数文件，让根因直接出现在 stderr 而不是被后面一串莫名其妙的红淹没。
+  if [[ -z "$tok" ]]; then
+    echo "  ✘ mk_local_paid 拿不到 quoteToken（addressId=$LADDR），后续调用方会收到空 orderId" >&2
+    echo x >> "$MK_LOCAL_PAID_FAIL_FILE"
+    echo ""; return
+  fi
   r=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); cid=$(jq -r '.data.id // empty' <<<"$r")
   r=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$cid],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$tok\"}")
-  oid=$(jq -r '.data.orderId // empty' <<<"$r"); [[ -n "$oid" ]] || { echo "  ✘ mk_local_paid 下单失败：$r" >&2; echo ""; return; }
+  oid=$(jq -r '.data.orderId // empty' <<<"$r")
+  if [[ -z "$oid" ]]; then
+    echo "  ✘ mk_local_paid 下单失败：$r" >&2
+    echo x >> "$MK_LOCAL_PAID_FAIL_FILE"
+    echo ""; return
+  fi
   req POST "/api/orders/$oid/pay" "$UT" >/dev/null; echo "$oid"
 }
 DLO1=$(mk_local_paid); [[ -n "$DLO1" ]] && ok "同城单 #$DLO1 已支付" || fail "造单失败"
@@ -1157,6 +1205,14 @@ req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null 2>&1 || true
 
 echo "== 24. 渠道一致性 =="
 node scripts/check-channel-consistency.mjs && ok "product.channel = category.channel" || fail "渠道不一致"
+
+# mk_local_paid 在子 shell 里记的失败次数，主 shell 现在才第一次看得到——并入总计数，
+# 否则 mk_local_paid 报价/下单失败时，脚本可能因为后续断言恰好没被那个空 orderId 绊到而误报全绿。
+if [[ -s "$MK_LOCAL_PAID_FAIL_FILE" ]]; then
+  MLP_FAILS=$(wc -l < "$MK_LOCAL_PAID_FAIL_FILE" | tr -d ' ')
+  fail "mk_local_paid 造单失败 $MLP_FAILS 次（根因见上方 stderr 的 ✘ 行，而不是后面一串莫名其妙的红）"
+fi
+rm -f "$MK_LOCAL_PAID_FAIL_FILE"
 
 echo ""
 echo "================ 通过 $PASS / 失败 $FAIL ================"

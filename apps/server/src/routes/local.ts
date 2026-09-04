@@ -8,6 +8,7 @@ import prisma from '../utils/prisma'
 import { success } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { optionalUserAuth } from '../middlewares/auth'
+import { localQuoteLimiter } from '../middlewares/rate-limit'
 import {
   getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText,
   billableDistanceM, haversineM, calcLocalFee, estimateMinutes, signQuote,
@@ -35,7 +36,7 @@ const quoteSchema = z
     message: '请提供 addressId 或坐标',
   })
 
-router.post('/quote', optionalUserAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = quoteSchema.parse(req.body)
     const s = await getLocalSettings()
@@ -85,6 +86,7 @@ router.post('/quote', optionalUserAuth, async (req: Request, res: Response, next
         ? signQuote({
             fee: q.fee, distanceM, addressId, latE6, lngE6,
             storeLatE6: s.store.latE6, storeLngE6: s.store.lngE6,
+            distanceSource,
           })
         : null,
     })

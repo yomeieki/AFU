@@ -114,6 +114,7 @@ t('quoteToken 往返、篡改失败、过期失败', () => {
   const P = {
     fee: 500, distanceM: 4200, addressId: 7,
     latE6: 29350000, lngE6: 104790000, storeLatE6: 29339500, storeLngE6: 104778500,
+    distanceSource: 'MEASURED' as const,
   }
   const tok = signQuote(P, NOON)
   assert.deepStrictEqual(verifyQuote(tok, NOON), P)
@@ -143,6 +144,30 @@ t('quoteToken 必须带门店坐标：没有 sla/sln 的老 token 一律作废',
   // 于是一张老 token 就能永远绕过门店坐标比对，签着一段与当前门店无关的距离照常计费。
   assert.strictEqual(
     verifyQuote(signBody({ f: 500, d: 4200, a: 7, la: 29350000, ln: 104790000, e: NOON.getTime() + 60_000 }), NOON),
+    null
+  )
+})
+t('quoteToken 的 distanceSource 白名单校验：缺字段或非法值一律作废，但不参与信任比对', () => {
+  // 缺 ds 的老 token：与 la/ln、sla/sln 同规则，判无效。
+  assert.strictEqual(
+    verifyQuote(
+      signBody({
+        f: 500, d: 4200, a: 7, la: 29350000, ln: 104790000, sla: 29339500, sln: 104778500,
+        e: NOON.getTime() + 60_000,
+      }),
+      NOON
+    ),
+    null
+  )
+  // ds 是白名单而非任意字符串：篡改成词表之外的值同样判无效。
+  assert.strictEqual(
+    verifyQuote(
+      signBody({
+        f: 500, d: 4200, a: 7, la: 29350000, ln: 104790000, sla: 29339500, sln: 104778500,
+        ds: 'FORGED', e: NOON.getTime() + 60_000,
+      } as unknown as Record<string, number>),
+      NOON
+    ),
     null
   )
 })
