@@ -132,9 +132,10 @@ export default function CancelAndRefundModal({
               </div>
             </>
           )}
-
-          {error && <div className="wb__redbar">{error}</div>}
         </div>
+
+        {/* 恒可见：body 会滚动，同 Workbench.tsx 的 WbModal 错误条处理（见其注释） */}
+        {error && <div className="wb__redbar wb__modal-error">{error}</div>}
 
         <div className="wb__modal-foot">
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>暂不处理</button>
