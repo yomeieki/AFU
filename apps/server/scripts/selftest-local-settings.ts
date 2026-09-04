@@ -111,24 +111,40 @@ t('estimateMinutes = prep + 距离/速度', () => {
   assert.strictEqual(estimateMinutes({ ...base, prepMinutes: 15, riderSpeedKmh: 15 }, 3750), 30)
 })
 t('quoteToken 往返、篡改失败、过期失败', () => {
-  const P = { fee: 500, distanceM: 4200, addressId: 7, latE6: 29350000, lngE6: 104790000, version: 3 }
+  const P = {
+    fee: 500, distanceM: 4200, addressId: 7,
+    latE6: 29350000, lngE6: 104790000, storeLatE6: 29339500, storeLngE6: 104778500,
+  }
   const tok = signQuote(P, NOON)
   assert.deepStrictEqual(verifyQuote(tok, NOON), P)
   assert.strictEqual(verifyQuote(tok.slice(0, -1) + (tok.endsWith('a') ? 'b' : 'a'), NOON), null)
-  assert.strictEqual(verifyQuote(tok, new Date(NOON.getTime() + 6 * 60 * 1000)), null)
+  // TTL 15 分钟：14 分钟仍有效、16 分钟已过期（两条一起才钉得住这个值，只测过期那条把 TTL 调大也照样绿）
+  assert.notStrictEqual(verifyQuote(tok, new Date(NOON.getTime() + 14 * 60 * 1000)), null)
+  assert.strictEqual(verifyQuote(tok, new Date(NOON.getTime() + 16 * 60 * 1000)), null)
   // 修复项1：sig 段换成 32 个多字节字符（字符数=32，但 Buffer 字节数=96）时应返回 null 而不是抛异常
   // （sig.length===32 曾经把「字符数」误当「字节数」校验，timingSafeEqual 两个不等长 Buffer 会抛 RangeError）
   const body = tok.split('.')[0]
   assert.strictEqual(verifyQuote(`${body}.${'汉'.repeat(32)}`, NOON), null)
 })
-t('quoteToken 必须带坐标：本次改动之前签发的老 token（无 la/ln）一律作废', () => {
-  // 手工拼一个「老格式」token（f/d/a/v/e，没有 la/ln）并用同一把密钥正确签名——
+const b64u = (x: string) => Buffer.from(x, 'utf8').toString('base64url')
+const signBody = (o: Record<string, number>) => {
+  const body = b64u(JSON.stringify(o))
+  return `${body}.${crypto.createHmac('sha256', `quote:${config.jwt.userSecret}`).update(body).digest('hex').slice(0, 32)}`
+}
+t('quoteToken 必须带收货坐标：没有 la/ln 的老 token 一律作废', () => {
+  // 手工拼一个「老格式」token（f/d/a/e，没有 la/ln）并用同一把密钥正确签名——
   // 它签名合法、也没过期，唯一的问题就是缺坐标。下单端点信任 token 里的距离，
   // 缺坐标就意味着「改坐标薅低价」那条路没人守，所以只能当无效处理。
-  const b64u = (x: string) => Buffer.from(x, 'utf8').toString('base64url')
-  const legacyBody = b64u(JSON.stringify({ f: 500, d: 4200, a: 7, v: 3, e: NOON.getTime() + 60_000 }))
-  const sig = crypto.createHmac('sha256', `quote:${config.jwt.userSecret}`).update(legacyBody).digest('hex').slice(0, 32)
-  assert.strictEqual(verifyQuote(`${legacyBody}.${sig}`, NOON), null)
+  assert.strictEqual(verifyQuote(signBody({ f: 500, d: 4200, a: 7, e: NOON.getTime() + 60_000 }), NOON), null)
+})
+t('quoteToken 必须带门店坐标：没有 sla/sln 的老 token 一律作废', () => {
+  // 同上，但缺的是门店坐标。它是 geoVersion 的全部实现——「门店搬家/改坐标 → 在途报价作废」
+  // 只由这两个字段保证。缺了不能当成 0：0 会与「门店在赤道本初子午线」这种理论坐标相等，
+  // 于是一张老 token 就能永远绕过门店坐标比对，签着一段与当前门店无关的距离照常计费。
+  assert.strictEqual(
+    verifyQuote(signBody({ f: 500, d: 4200, a: 7, la: 29350000, ln: 104790000, e: NOON.getTime() + 60_000 }), NOON),
+    null
+  )
 })
 t('道路距离进了 token：同一地址不同实测距离 → 不同运费档', () => {
   // 报价端签的是运力方返回的真实道路距离，下单端直接按它算钱。

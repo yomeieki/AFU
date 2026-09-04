@@ -74,9 +74,19 @@ router.post('/quote', optionalUserAuth, async (req: Request, res: Response, next
       minOrderAmount: s.fee.minOrderAmount,
       belowMin: q.belowMin,
       estimatedMinutes: estimateMinutes(s, distanceM),
-      // 坐标一并签进 token：下单端点信任 token 里的 distanceM，若只绑 addressId，顾客可以
-      // 「近处报价 → 改这个地址的坐标到远处 → 用旧 token 下单」按近处收费（见 signQuote 注释）。
-      quoteToken: q.inRange ? signQuote({ fee: q.fee, distanceM, addressId, latE6, lngE6, version: s.version }) : null,
+      // 收货坐标与门店坐标一并签进 token：下单端点信任 token 里的 distanceM，两对坐标任何一边动了
+      // 这段距离就不再成立（见 signQuote 注释）。
+      //
+      // 签发条件是 `inRange && addressId > 0`，不是只看 inRange：匿名报价（只传坐标、不传 addressId）
+      // 签出来的是 addressId=0，而下单必然带一个真实地址 id，这张票 100% 兑不了。留着它就是个陷阱——
+      // 将来有人拿匿名报价的 token 去下单，只会看到一个指不到病根的 42239。
+      // 于是这里的不变量可以直说：**签出来的凭证，在签发那一刻一定是可兑付的**。
+      quoteToken: q.inRange && addressId > 0
+        ? signQuote({
+            fee: q.fee, distanceM, addressId, latE6, lngE6,
+            storeLatE6: s.store.latE6, storeLngE6: s.store.lngE6,
+          })
+        : null,
     })
   } catch (e) {
     next(e)

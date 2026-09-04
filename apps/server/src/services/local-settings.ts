@@ -11,7 +11,12 @@ import { config } from '../config'
 
 export const LOCAL_SETTINGS_KEY = 'local_delivery'
 const CACHE_TTL_MS = 60 * 1000
-const QUOTE_TTL_MS = 5 * 60 * 1000
+/**
+ * 报价凭证有效期。5 → 15 分钟：凭证里每一个「会变」的量（运费、配送范围、起送门槛）在下单时
+ * 都用当前设置重新求值，唯一不能重算的是运力方给的道路距离——而同一对坐标之间的道路 15 分钟内
+ * 不会变。把窗口开大只放宽「顾客在结算页磨蹭多久要重报一次价」，不放宽任何一条计费保护。
+ */
+const QUOTE_TTL_MS = 15 * 60 * 1000
 
 export interface BusinessHour { start: string; end: string }
 
@@ -283,6 +288,11 @@ export async function patchLocalSettings(patch: Partial<LocalDeliverySettings>):
   return setLocalSettings({ ...current, ...patch, store: { ...current.store, ...(patch.store ?? {}) } })
 }
 
+/**
+ * 仅供测试/脚本按需清缓存。**线上没有调用方，也不需要有**：`ecosystem.config.js` 是单进程 fork，
+ * `setLocalSettings` 写库后立刻刷本进程的 `cached`，陈旧窗口实际为 0 而不是 CACHE_TTL_MS。
+ * 保留它是为了将来真起多进程时有个现成的手柄，不代表现在存在一套「失效机制」。
+ */
 export function clearLocalSettingsCache(): void {
   cached = null
 }
@@ -363,20 +373,37 @@ export function estimateMinutes(s: LocalDeliverySettings, distanceM: number): nu
 
 // ── 报价签名（防 quote 与下单之间金额漂移）───────────────────
 /**
- * 签名里为什么要带坐标（la/ln）：
- * 下单端点信任 token 里的 `distanceM` 而不再自己重算（见 routes/orders.ts 的「token 信任边界」注释），
- * 于是「同一个 addressId 的坐标被改掉」就成了一条真实的薅价路径——顾客先对近处报价拿到 token，
- * 再 `PUT /addresses/:id` 把坐标改到 30 km 外，然后拿旧 token 下单：距离、范围、运费全按近处算。
- * 旧实现按当前坐标重算，这条路走不通（重算更贵 → 42227）；改成信任 token 后必须把坐标一起签进去，
- * 下单时逐字段比对，坐标一动 token 立即作废、退回 Haversine 兜底。
+ * ── 凭证里签什么、为什么恰好是这些 ──
+ *
+ * 核心不变量：**token 里唯一不可在下单时重算的量是 `distanceM`**。它是运力方按「门店坐标 → 收货
+ * 坐标」算出来的真实道路距离，下单端点信任它而不再自己重算（见 routes/orders.ts 的「token 信任
+ * 边界」注释）。它只依赖两对坐标，所以两对坐标都必须签进去、下单时逐字段比对：
+ *
+ *  - 收货坐标（la/ln）：不签就有一条真实的薅价路径——顾客先对近处报价拿 token，再
+ *    `PUT /addresses/:id` 把坐标改到 30 km 外，然后拿旧 token 下单，距离/范围/运费全按近处算。
+ *  - 门店坐标（sla/sln）：概念上就是 geoVersion。店主改门店坐标（搬家、一键定位纠偏）之后，
+ *    旧 token 里那段距离量的是另一条路，必须整张作废。用「把坐标签进去比对」而不是加一个计数器
+ *    字段，是因为前者由结构保证、后者要靠「有人记得 +1」，且与收货坐标的做法对称。
+ *
+ * 其余每一个设置字段（运费阶梯、半径、起送门槛、免运门槛……）在下单路径上都用**当前**设置重新
+ * 求值，所以这里**不签 `settings.version`**：那条粗粒度作废是纯冗余，删掉不丢任何保护，却会让
+ * 店主改一次营业时间就把正在结算页的顾客全踢下来。
+ *
+ * 于是这个结构本身就是规格：**签进去的每一个字段都会在下单时被比对**，一个都不多。
  */
-interface QuotePayload { fee: number; distanceM: number; addressId: number; latE6: number; lngE6: number; version: number }
+interface QuotePayload {
+  fee: number; distanceM: number; addressId: number
+  latE6: number; lngE6: number
+  storeLatE6: number; storeLngE6: number
+}
 const b64u = (s: string) => Buffer.from(s, 'utf8').toString('base64url')
 const hmac = (s: string) => crypto.createHmac('sha256', `quote:${config.jwt.userSecret}`).update(s).digest('hex').slice(0, 32)
 
 export function signQuote(p: QuotePayload, now: Date = new Date()): string {
   const body = b64u(JSON.stringify({
-    f: p.fee, d: p.distanceM, a: p.addressId, la: p.latE6, ln: p.lngE6, v: p.version, e: now.getTime() + QUOTE_TTL_MS,
+    f: p.fee, d: p.distanceM, a: p.addressId,
+    la: p.latE6, ln: p.lngE6, sla: p.storeLatE6, sln: p.storeLngE6,
+    e: now.getTime() + QUOTE_TTL_MS,
   }))
   return `${body}.${hmac(body)}`
 }
@@ -398,11 +425,15 @@ export function verifyQuote(token: string, now: Date = new Date()): QuotePayload
   try {
     const o = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
     if (typeof o.e !== 'number' || o.e < now.getTime()) return null
-    // la/ln 是后加的字段：本次改动之前签发的 token 没有它们，一律按无效处理（退回 Haversine 兜底），
-    // 而不是当成 0——0 会与「门店在赤道本初子午线」这种理论坐标相等，且让老 token 绕过坐标比对。
-    const fields = [o.f, o.d, o.a, o.la, o.ln, o.v]
+    // 坐标四项（la/ln 收货、sla/sln 门店）都是后加的字段：老格式 token 缺其中任何一个一律判无效，
+    // 而不是当成 0——0 会与「点在赤道本初子午线」这种理论坐标相等，等于让老 token 永久绕过坐标比对。
+    // 缺字段判无效在下单侧就是 42239（没有可信凭证），顾客重报一次价即可，不存在兼容包袱。
+    const fields = [o.f, o.d, o.a, o.la, o.ln, o.sla, o.sln]
     if (fields.some((n) => typeof n !== 'number' || !Number.isFinite(n))) return null
-    return { fee: o.f, distanceM: o.d, addressId: o.a, latE6: o.la, lngE6: o.ln, version: o.v }
+    return {
+      fee: o.f, distanceM: o.d, addressId: o.a,
+      latE6: o.la, lngE6: o.ln, storeLatE6: o.sla, storeLngE6: o.sln,
+    }
   } catch {
     return null
   }
