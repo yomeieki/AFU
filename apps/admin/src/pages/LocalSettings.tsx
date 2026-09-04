@@ -78,7 +78,9 @@ export default function LocalSettings() {
     setSaving(true)
     try {
       hydrate(await updateLocalSettings(payload))
-      toast.success('已保存（运费改动后 5 分钟内已报价的订单仍按旧价执行）')
+      // 改动即刻生效：距离与运费都写在 quoteToken 的签名里，settings.version 一变旧 token 立即作废，
+      // 正在结算页的顾客提交时会收到「配送费已更新，请刷新后重新提交」（42227）。
+      toast.success('已保存（即刻生效；正在结算页的顾客需刷新后重新报价）')
     } catch (e) {
       toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '保存失败')
     } finally {
@@ -162,9 +164,9 @@ export default function LocalSettings() {
       <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="font-medium text-gray-800">配送范围与运费</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <Field label="配送半径（计费距离，km）" hint={`≈ 直线 ${(s.radiusKm / s.detourFactor).toFixed(1)} km`}>
+          <Field label="配送半径（道路距离，km）" hint={`查价失败时按直线 ${(s.radiusKm / s.detourFactor).toFixed(1)} km 兜底`}>
             <input className={inputCls} type="number" step="0.5" min={0.5} value={s.radiusKm} onChange={(e) => patch({ radiusKm: Number(e.target.value) })} /></Field>
-          <Field label="绕路系数" hint="计费距离 = 直线 × 系数，默认 1.35">
+          <Field label="绕路系数（兜底用）" hint="正常按运力方返回的真实道路距离计费；只有查价超时/失败时才用「直线 × 系数」估算，默认 1.7">
             <input className={inputCls} type="number" step="0.05" min={1} max={3} value={s.detourFactor} onChange={(e) => patch({ detourFactor: Number(e.target.value) })} /></Field>
           <Field label="基础运费（元）"><input className={inputCls} inputMode="decimal" value={money.baseFee} onChange={(e) => setMoney({ ...money, baseFee: e.target.value })} /></Field>
           <Field label="基础公里数" hint="不超过此距离只收基础运费">

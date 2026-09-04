@@ -12,6 +12,7 @@ import {
   getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText,
   billableDistanceM, haversineM, calcLocalFee, estimateMinutes, signQuote,
 } from '../services/local-settings'
+import { measureRoadDistanceM } from '../services/delivery/quote'
 
 const router = Router()
 
@@ -52,7 +53,13 @@ router.post('/quote', optionalUserAuth, async (req: Request, res: Response, next
       latE6 = body.latE6!; lngE6 = body.lngE6!
     }
 
-    const distanceM = billableDistanceM(s, latE6, lngE6)!
+    // 真实道路距离优先，查不到（超时/运力方报错/门店未设坐标）就退回直线 × detourFactor 的估算，
+    // **不报错**：顾客只是在看运费，让他看到一个偏保守的数字远好过弹一个「暂时查不到」。
+    // distanceSource 让调用方分得清这次是实测还是估算（小程序据此决定文案）。
+    const estimatedM = billableDistanceM(s, latE6, lngE6)!
+    const measuredM = await measureRoadDistanceM(s, { latE6, lngE6 })
+    const distanceM = measuredM ?? estimatedM
+    const distanceSource: 'MEASURED' | 'ESTIMATED' = measuredM === null ? 'ESTIMATED' : 'MEASURED'
     const q = calcLocalFee(s, distanceM, body.subtotal)
     success(res, {
       enabled: s.enabled,
@@ -61,12 +68,15 @@ router.post('/quote', optionalUserAuth, async (req: Request, res: Response, next
       nextOpenText: nextOpenText(s),
       inRange: q.inRange,
       distanceM,
+      distanceSource,
       straightDistanceM: haversineM(s.store.latE6, s.store.lngE6, latE6, lngE6),
       fee: q.fee,
       minOrderAmount: s.fee.minOrderAmount,
       belowMin: q.belowMin,
       estimatedMinutes: estimateMinutes(s, distanceM),
-      quoteToken: q.inRange ? signQuote({ fee: q.fee, distanceM, addressId, version: s.version }) : null,
+      // 坐标一并签进 token：下单端点信任 token 里的 distanceM，若只绑 addressId，顾客可以
+      // 「近处报价 → 改这个地址的坐标到远处 → 用旧 token 下单」按近处收费（见 signQuote 注释）。
+      quoteToken: q.inRange ? signQuote({ fee: q.fee, distanceM, addressId, latE6, lngE6, version: s.version }) : null,
     })
   } catch (e) {
     next(e)

@@ -280,7 +280,9 @@ echo "== 21. 同城设置/报价 =="
 # 而不是假设库里还是刚建库的初始状态。
 R=$(req GET /api/admin/settings/local-delivery "$AT"); assert_eq "读取同城设置 code 0" "$(code "$R")" "0"
 OLDVER=$(jq -r '.data.version' <<<"$R")
-LS=$(jq -c '.data | .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:8000,minOrderAmount:2000} | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true' <<<"$R")
+# detourFactor 显式钉成 1.7：它是**查价失败时的兜底系数**，下面好几条断言要拿它算期望值。
+# 不钉的话会沿用开发库里历史遗留的旧值（1.35），期望值与实际值差一个运费档，断言变成偶发红。
+LS=$(jq -c '.data | .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .detourFactor=1.7 | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:8000,minOrderAmount:2000} | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true' <<<"$R")
 R=$(req PUT /api/admin/settings/local-delivery "$AT" "$LS"); assert_eq "保存并开启 code 0" "$(code "$R")" "0"
 assert_eq "保存并开启后 enabled=true" "$(jq -r '.data.enabled' <<<"$R")" "true"
 assert_eq "version 递增 1" "$(jq -r '.data.version' <<<"$R")" "$((OLDVER + 1))"
@@ -293,6 +295,32 @@ assert_eq "范围内" "$(jq -r .data.inRange <<<"$R")" "true"
 QFEE=$(jq -r .data.fee <<<"$R"); [[ "$QFEE" =~ ^[0-9]+$ ]] && ok "fee=$QFEE" || fail "fee 非整数" "$R"
 QTOKEN=$(jq -r '.data.quoteToken // empty' <<<"$R"); [[ -n "$QTOKEN" ]] && ok "返回 quoteToken" || fail "quoteToken 缺失"
 R=$(req POST /api/local/quote "" '{"latE6":29600000,"lngE6":105100000,"subtotal":3000}'); assert_eq "超范围 inRange=false" "$(jq -r .data.inRange <<<"$R")" "false"
+# —— 运费按运力方返回的**真实道路距离**算，查不到才退回「直线 × detourFactor」估算 ——
+# 固定绕路系数在自贡（山城 + 釜溪河）各方向差 63%（实测 1.30–2.12），任何一个值都必然在某些方向错得离谱。
+# 这三条要能真证伪：实测 4200m 时运费必须跳到 4.2km 档（300+2×100=500），直线只有 1.6km（基础费 300）。
+# reset 是为了清掉可能残留的指令；每条指令都紧跟着一次请求发出，把后台保鲜任务偷走它的窗口压到最小。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":4200}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "查价成功 → 距离取实测值" "$(jq -r .data.distanceM <<<"$R")" "4200"
+assert_eq "查价成功 → distanceSource=MEASURED" "$(jq -r .data.distanceSource <<<"$R")" "MEASURED"
+assert_eq "运费按实测距离分档（4.2km → 500）" "$(jq -r .data.fee <<<"$R")" "500"
+[[ "$(jq -r .data.straightDistanceM <<<"$R")" -lt 2000 ]] && ok "straightDistanceM 仍是直线口径（没被实测值顶掉）" || fail "straightDistanceM 被污染" "$R"
+# 查价失败：不报错、退回估算，且估算恰为 直线 × 1.7（detourFactor 兜底值）
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"error","code":"50000"}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "查价失败仍 code 0（顾客侧不因外呼失败而报错）" "$(code "$R")" "0"
+assert_eq "查价失败 → distanceSource=ESTIMATED" "$(jq -r .data.distanceSource <<<"$R")" "ESTIMATED"
+assert_eq "估算距离 = 直线 × 1.7" "$(jq -r .data.distanceM <<<"$R")" "$(jq -r '.data.straightDistanceM * 1.7 | round' <<<"$R")"
+assert_eq "估算时运费回到 2.7km 档（300）" "$(jq -r .data.fee <<<"$R")" "300"
+# 查价超时同样退回估算而不是报错
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"timeout"}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "查价超时仍 code 0" "$(code "$R")" "0"
+assert_eq "查价超时 → distanceSource=ESTIMATED" "$(jq -r .data.distanceSource <<<"$R")" "ESTIMATED"
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 R=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR}"); assert_eq "旧地址无坐标 42223" "$(code "$R")" "42223"
 R=$(req POST /api/admin/settings/local-delivery/pause "$AT" '{"reason":"暴雨暂停"}'); assert_eq "暂停 code 0" "$(code "$R")" "0"
 assert_eq "meta 暂停后 isOpen=false" "$(req GET /api/local/meta "" | jq -r .data.isOpen)" "false"
@@ -359,7 +387,12 @@ ADDR2=$(jq -r '.data.id // empty' <<<"$R")
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC1],\"addressId\":$ADDR2,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QTOKEN\"}")
 LO3=$(jq -r '.data.orderId // empty' <<<"$R")
 QR2=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR2,\"subtotal\":2400}")
-assert_eq "token 与 addressId 不符时按重算值收费" "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.shippingFee)" "$(jq -r .data.fee <<<"$QR2")"
+# LO3 用的是别的地址的 token → token 必须被整张忽略，距离退回「直线 × detourFactor」兜底。
+# 断言距离而不是运费：运费只有几档，两个不同的距离常常落进同一档，比运费证伪不了什么
+# （原来那条正是如此——它在 token 被完整校验和被完全忽略时都会绿）。
+assert_eq "token 与 addressId 不符 → 忽略 token，距离退回直线 × 1.7 兜底" \
+  "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.distanceM)" "$(jq -r '.data.straightDistanceM * 1.7 | round' <<<"$QR2")"
+assert_eq "该单运费按兜底距离分档" "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.shippingFee)" "400"
 
 # 调高基础运费后用旧 token 下单 → 重算更贵，必须 42227
 LSNAP=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c '.data')
@@ -385,6 +418,48 @@ assert_eq "非法营业时段被拒 40001" "$(code "$R")" "40001"
 [[ "$(jq -r .message <<<"$R")" == *"格式不正确"* ]] && ok "非法时段错误信息指出格式问题" || fail "非法时段错误信息不明确" "$R"
 req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
 assert_eq "营业时段已恢复" "$(req GET /api/local/meta "" | jq -r .data.isOpen)" "true"
+
+# —— 下单必须信任 token 里签过名的**实测**距离，不能自己按直线重算 ——
+# 这是本次改动的要害：若报价按实测（贵）而下单按直线重算（便宜），重算 fee < token.fee 不触发 42227，
+# 顾客照着便宜的直线价付款——倒贴一分没修，还白白多了一次外呼。
+# 构造实测 4600m：直线重算只有 2744m（基础费 300），实测该收 300+2×100=500。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":4600}}' >/dev/null
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":2400}")
+assert_eq "按地址报价取到实测 4600" "$(jq -r .data.distanceM <<<"$R")" "4600"
+assert_eq "实测报价运费 500" "$(jq -r .data.fee <<<"$R")" "500"
+MTOKEN=$(jq -r .data.quoteToken <<<"$R")
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); MCID=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$MCID],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$MTOKEN\"}")
+MO=$(jq -r '.data.orderId // empty' <<<"$R")
+assert_eq "下单按 token 里的实测距离收 500（重算直线只会给 300）" "$(jq -r .data.shippingFee <<<"$R")" "500"
+R=$(req GET "/api/orders/$MO" "$UT")
+assert_eq "订单快照存的是实测距离" "$(jq -r .data.distanceM <<<"$R")" "4600"
+
+# —— 地址坐标一改，旧 token 立即作废 ——
+# 不绑坐标的话这条路可以薅：近处报价拿 token → 把同一个 addressId 的坐标改到远处 → 用旧 token 下单，
+# 距离/范围/运费全按近处算，骑手却要跑很远。作废后按兜底估算判，直线 4.6km × 1.7 = 7.9km > 5km → 42220。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":4600}}' >/dev/null
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":2400}"); MT2=$(jq -r .data.quoteToken <<<"$R")
+req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29380000}' >/dev/null
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); MC2=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$MC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$MT2\"}")
+assert_eq "坐标被改远 → 旧 token 不作数，按兜底估算判超范围 42220" "$(code "$R")" "42220"
+req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000}' >/dev/null
+R=$(req GET /api/addresses "$UT")
+assert_eq "地址坐标已还原" "$(jq -r "[.data[] | select(.id==$LADDR)][0].latE6" <<<"$R")" "29350000"
+
+# —— 设置一改（哪怕只动备餐时长），在途 token 立即作废 ——
+# 距离与运费都来自 token，用旧参数签出来的那张已经没有任何东西能证伪，只能整张作废让顾客刷新重报。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":4600}}' >/dev/null
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":2400}"); VT=$(jq -r .data.quoteToken <<<"$R")
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.prepMinutes=16' <<<"$LSNAP")" >/dev/null
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$MC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$VT\"}")
+assert_eq "settings version 变了 → 旧 token 42227" "$(code "$R")" "42227"
+req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 
 # 改了文字地址却没重新选点 → 坐标一并清空（防止 M2 骑手被派到旧地址）
 R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"detail":"改成了完全不同的门牌 9 栋"}')

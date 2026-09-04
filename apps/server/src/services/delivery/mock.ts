@@ -6,6 +6,22 @@
 
 import { DeliveryProvider, ProviderError, CreateDeliveryOrderResult, ProviderQuote } from './types'
 import { _mapReturnCode, kd100Provider } from './kd100'
+import { haversineM } from '../local-settings'
+
+/**
+ * 未指定 distanceM 的指令下，mock 的默认「道路距离」= 直线 × 1.6。
+ *
+ * 曾经写死 2600 米。真实道路距离接进报价与下单之后这就不能再写死了——e2e 里那个 40 km 外的
+ * 「超范围」点会被 mock 报成 2.6 km 判进配送范围，一条本该发红的断言反而变绿。系数取 1.6
+ * 只是为了与兜底的 detourFactor(1.7) 不同，好让「这次用的是实测还是估算」在断言里可区分。
+ */
+const MOCK_DETOUR = 1.6
+function mockDistanceM(input: unknown): number {
+  const i = input as { sender?: { latE6?: number; lngE6?: number }; receiver?: { latE6?: number; lngE6?: number } }
+  const s = i?.sender, r = i?.receiver
+  if (typeof s?.latE6 !== 'number' || typeof s?.lngE6 !== 'number' || typeof r?.latE6 !== 'number' || typeof r?.lngE6 !== 'number') return 2600
+  return Math.round(haversineM(s.latE6, s.lngE6, r.latE6, r.lngE6) * MOCK_DETOUR)
+}
 
 export type MockDirective =
   // quotes 只对 price 有意义：让 mock 返回多家不同报价，才测得出「快照里存了几家、各是多少」
@@ -58,7 +74,7 @@ export const mockProvider: DeliveryProvider = {
   name: 'MOCK',
   async price(input) {
     const d = act('price', input)
-    const distanceM = d.kind === 'ok' && d.distanceM != null ? d.distanceM : 2600
+    const distanceM = d.kind === 'ok' && d.distanceM != null ? d.distanceM : mockDistanceM(input)
     const quotes: ProviderQuote[] = d.kind === 'ok' && d.quotes?.length
       ? d.quotes.map((q) => ({ provider: q.provider, feeFen: q.feeFen, distanceM: q.distanceM ?? distanceM }))
       : [{ provider: 'mocktongcheng', feeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500, distanceM }]
@@ -72,7 +88,7 @@ export const mockProvider: DeliveryProvider = {
       taskId: (d.kind === 'ok' && d.taskId) || `MOCKTASK-${procTag}-${seq}`,
       providerOrderId: (d.kind === 'ok' && d.providerOrderId) || `MOCKORD-${procTag}-${seq}`,
       quotedFeeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500,
-      distanceM: d.kind === 'ok' && d.distanceM != null ? d.distanceM : 2600,
+      distanceM: d.kind === 'ok' && d.distanceM != null ? d.distanceM : mockDistanceM(input),
       raw: { mock: true },
     }
   },

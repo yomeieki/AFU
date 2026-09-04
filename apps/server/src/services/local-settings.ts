@@ -331,7 +331,14 @@ export function haversineM(aLatE6: number, aLngE6: number, bLatE6: number, bLngE
   return Math.round(2 * R_EARTH_M * Math.asin(Math.min(1, Math.sqrt(h))))
 }
 
-/** 计费距离 = 直线 × 绕路系数；门店未设坐标返回 null（调用方按 42226 处理） */
+/**
+ * **兜底**计费距离 = 直线 × 绕路系数；门店未设坐标返回 null（调用方按 42226 处理）。
+ *
+ * 正常路径已经不走这里了：`POST /local/quote` 调运力方 batchPrice 拿真实道路距离
+ * （见 services/delivery/quote.ts 的 measureRoadDistanceM），下单再信任 token 里签过名的那个值。
+ * 这个函数只在「查价超时/失败」与「下单时没有可信 token」两种情况下顶上——所以 detourFactor
+ * 取的是偏高的 1.7 而不是实测均值 1.67：高估只是少赚，低估是每单倒贴。
+ */
 export function billableDistanceM(s: LocalDeliverySettings, latE6: number, lngE6: number): number | null {
   if (s.store.latE6 === null || s.store.lngE6 === null) return null
   return Math.round(haversineM(s.store.latE6, s.store.lngE6, latE6, lngE6) * s.detourFactor)
@@ -355,12 +362,22 @@ export function estimateMinutes(s: LocalDeliverySettings, distanceM: number): nu
 }
 
 // ── 报价签名（防 quote 与下单之间金额漂移）───────────────────
-interface QuotePayload { fee: number; distanceM: number; addressId: number; version: number }
+/**
+ * 签名里为什么要带坐标（la/ln）：
+ * 下单端点信任 token 里的 `distanceM` 而不再自己重算（见 routes/orders.ts 的「token 信任边界」注释），
+ * 于是「同一个 addressId 的坐标被改掉」就成了一条真实的薅价路径——顾客先对近处报价拿到 token，
+ * 再 `PUT /addresses/:id` 把坐标改到 30 km 外，然后拿旧 token 下单：距离、范围、运费全按近处算。
+ * 旧实现按当前坐标重算，这条路走不通（重算更贵 → 42227）；改成信任 token 后必须把坐标一起签进去，
+ * 下单时逐字段比对，坐标一动 token 立即作废、退回 Haversine 兜底。
+ */
+interface QuotePayload { fee: number; distanceM: number; addressId: number; latE6: number; lngE6: number; version: number }
 const b64u = (s: string) => Buffer.from(s, 'utf8').toString('base64url')
 const hmac = (s: string) => crypto.createHmac('sha256', `quote:${config.jwt.userSecret}`).update(s).digest('hex').slice(0, 32)
 
 export function signQuote(p: QuotePayload, now: Date = new Date()): string {
-  const body = b64u(JSON.stringify({ f: p.fee, d: p.distanceM, a: p.addressId, v: p.version, e: now.getTime() + QUOTE_TTL_MS }))
+  const body = b64u(JSON.stringify({
+    f: p.fee, d: p.distanceM, a: p.addressId, la: p.latE6, ln: p.lngE6, v: p.version, e: now.getTime() + QUOTE_TTL_MS,
+  }))
   return `${body}.${hmac(body)}`
 }
 
@@ -381,7 +398,11 @@ export function verifyQuote(token: string, now: Date = new Date()): QuotePayload
   try {
     const o = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
     if (typeof o.e !== 'number' || o.e < now.getTime()) return null
-    return { fee: Number(o.f), distanceM: Number(o.d), addressId: Number(o.a), version: Number(o.v) }
+    // la/ln 是后加的字段：本次改动之前签发的 token 没有它们，一律按无效处理（退回 Haversine 兜底），
+    // 而不是当成 0——0 会与「门店在赤道本初子午线」这种理论坐标相等，且让老 token 绕过坐标比对。
+    const fields = [o.f, o.d, o.a, o.la, o.ln, o.v]
+    if (fields.some((n) => typeof n !== 'number' || !Number.isFinite(n))) return null
+    return { fee: o.f, distanceM: o.d, addressId: o.a, latE6: o.la, lngE6: o.ln, version: o.v }
   } catch {
     return null
   }

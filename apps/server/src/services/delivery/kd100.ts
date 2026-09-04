@@ -5,7 +5,7 @@
  *  - sign = MD5(param + t + key + secret) 32 位大写
  *  - 不支持商户自有单号 → deliveryNo 拼进 callbackUrl（回调按 URL 直取）
  *  - 回调 sign = MD5(param + salt)
- * ⚠️ 全仓其它 fetch 都没有超时；这里必须 AbortSignal.timeout(8000)——超时时下单可能已成功，
+ * ⚠️ 全仓其它 fetch 都没有超时；这里必须 AbortSignal.timeout(...)——超时时下单可能已成功，
  *    调用方按 UNKNOWN 处理等回调认领，绝不能重试（会双呼骑手）。
  */
 import crypto from 'crypto'
@@ -45,7 +45,9 @@ export function _buildOrderParam(input: CreateDeliveryOrderInput, providers: str
 }
 
 interface Kd100Response { code?: number | string; returnCode?: number | string; success?: boolean; message?: string; data?: Record<string, unknown> }
-async function post(method: string, param: Record<string, unknown>): Promise<Kd100Response> {
+/** 默认请求超时。调用方可逐次覆盖（目前只有顾客侧查价这么做，见 DeliveryProvider.price 的注释） */
+const DEFAULT_TIMEOUT_MS = 8000
+async function post(method: string, param: Record<string, unknown>, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<Kd100Response> {
   validateKd100Config()
   const t = Date.now().toString()
   const paramStr = JSON.stringify(param)
@@ -54,7 +56,7 @@ async function post(method: string, param: Record<string, unknown>): Promise<Kd1
   try {
     res = await fetch(API_URL, {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-      body: body.toString(), signal: AbortSignal.timeout(8000),
+      body: body.toString(), signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (e) {
     const err = e as Error & { cause?: unknown }
@@ -106,7 +108,7 @@ export const kd100Provider: DeliveryProvider = {
       goods: { title: '', weightKg: 0.5, totalPriceFen: 0, count: 1 }
     }
     const param = _buildOrderParam(fullInput, settings.kd100.providers, settings.kd100.goodsType)
-    const data = await post('batchPrice', param)
+    const data = await post('batchPrice', param, input.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     // batchPrice 响应 data.feeDetail[]：每项 kuaidiCom / distance(米) / discountFee(元)
     // ——注意这里官方文档写的是驼峰 kuaidiCom，与回调里的全小写 kuaidicom 不是同一个拼写，
     // 两种都读一遍再兜底，读不出编码的那一项不进快照（宁可少一家，也不要一堆 provider:"" 的行）。

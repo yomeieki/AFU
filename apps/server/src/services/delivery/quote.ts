@@ -28,12 +28,70 @@
  */
 import prisma from '../../utils/prisma'
 import { AppError } from '../../middlewares/error'
-import { getLocalSettings } from '../local-settings'
+import { getLocalSettings, LocalDeliverySettings } from '../local-settings'
 import { getDeliveryProvider } from './provider'
 import { ProviderError, ProviderQuote } from './types'
 
 /** 规格 §6b：超过 5 分钟的报价算「已过期」，定时任务也按这个阈值重查 */
 export const QUOTE_FRESH_MS = 5 * 60 * 1000
+
+/**
+ * 顾客侧查价的超时预算。店员侧仍用 provider 默认的 8 秒（见 DeliveryProvider.price 注释）：
+ * 顾客站在地址页等这个数字，5 秒不回就该拿估算值先给他看，而不是让他盯着转圈。
+ */
+export const CUSTOMER_QUOTE_TIMEOUT_MS = 5000
+
+/**
+ * 拿运力方返回的**真实道路距离**（米）。查不到就返回 null，由调用方退回 Haversine 估算——
+ * 这里永远不抛异常。
+ *
+ * 为什么顾客侧要用真实距离而不是「直线 × 系数」：店主 2026-09-04 用免费的 batchPrice 打了 8 个方向，
+ * 实测比值 1.30–2.12（正西 2.12 vs 东北 1.30，差 63%）。自贡是山城又夹着釜溪河，任何固定系数
+ * 在某些方向都必然错得离谱——原来的 1.35 平均低估 19%、最差方向低估 36%，每单都在倒贴。
+ *
+ * 超时做了两层：
+ *  ① `timeoutMs` 传进 provider，让底层 fetch 真的 abort（否则连接会挂在那儿等 8 秒才释放）；
+ *  ② 外层再 race 一个稍宽的计时器兜底，保证**无论 provider 怎么实现**顾客都不会等超过这个预算。
+ *     ② 单独存在不够（socket 会泄漏到 8 秒），① 单独存在也不够（provider 可以忽略这个参数）。
+ *
+ * 只取 distanceM，**不取 feeFen/quotes**：那是店家付给骑手的成本，不能顺着顾客侧接口漏出去。
+ */
+export async function measureRoadDistanceM(
+  s: LocalDeliverySettings,
+  receiver: { latE6: number; lngE6: number },
+  timeoutMs: number = CUSTOMER_QUOTE_TIMEOUT_MS
+): Promise<number | null> {
+  if (s.store.latE6 === null || s.store.lngE6 === null) return null
+  let timer: NodeJS.Timeout | undefined
+  try {
+    const priced = await Promise.race([
+      getDeliveryProvider().price({
+        sender: {
+          name: s.store.name, mobile: s.store.phone, province: s.store.province, city: s.store.city,
+          district: s.store.district, address: s.store.address, latE6: s.store.latE6, lngE6: s.store.lngE6,
+        },
+        // 报价只用坐标算路，收件人信息在这一步没有意义（顾客可能还没选好地址）——
+        // 用门店自己的行政区 + 占位人名，避免把顾客姓名手机号送给运力方做一次无谓的外发。
+        receiver: {
+          name: '报价', mobile: s.store.phone, province: s.store.province, city: s.store.city,
+          district: s.store.district, address: '报价点', latE6: receiver.latE6, lngE6: receiver.lngE6,
+        },
+        timeoutMs,
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`查价超时 ${timeoutMs}ms`)), timeoutMs + 300)
+      }),
+    ])
+    const d = priced.distanceM
+    // 0 与负数不是「很近」，是运力方没算出路来。当成没查到，别拿它去判范围和算钱。
+    return typeof d === 'number' && Number.isFinite(d) && d > 0 ? Math.round(d) : null
+  } catch (e) {
+    console.warn('[quote] 顾客侧查价失败，退回直线估算:', (e as Error)?.message ?? e)
+    return null
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 export interface QuoteSnapshot {
   at: string

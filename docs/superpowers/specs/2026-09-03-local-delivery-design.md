@@ -86,7 +86,7 @@ v3 = v2 + 用户追加需求：云打印机出票与语音播报（D7）、同�
    而非降级兜底——对小城市单店每周都可能用到：高峰期无人接单、近距离单（骑手费 ¥5–8 而自己走两步就到）、
    余额用尽未及时充值、骑手取消或改派失败。
    **连带后果：M1 完成后不能单独上线同城通道，必须等 M2 + 快递100 联调通过。**
-3. **金额全部服务端算，且 LOCAL 与 EXPRESS 两套计费互不叠加。** 距离 = Haversine 直线 × `detourFactor`（默认 1.35）。
+3. **金额全部服务端算，且 LOCAL 与 EXPRESS 两套计费互不叠加。** 距离 = 运力方返回的真实道路距离，查价失败才退回 Haversine 直线 × `detourFactor`（兜底 1.7）。
 4. **回调驱动 + 主动兜底 + 可对账。** 每张配送单在外呼前先落库（含商户单号 `deliveryNo` 与 `salt`），回调按 `taskId` 或 `deliveryNo` 双路查找；事件先落库再推进状态机；状态单调；无回调靠定时任务提醒，不自动改状态。
 5. **花钱的操作有上限、有审计、有二次确认。**
 
@@ -98,12 +98,12 @@ v3 = v2 + 用户追加需求：云打印机出票与语音播报（D7）、同�
 |---|---|---|---|
 | 顾客选收货位置 | `wx.chooseLocation`（**微信原生 API**，非腾讯 LBS 插件） | 否 | 0 |
 | 地址文字 + 坐标 | chooseLocation 直接返回 `name/address/latitude/longitude` | 否 | 0 |
-| 计费距离 | 服务端 Haversine × `detourFactor` | 否 | 0 |
+| 计费距离 | 运力方 `batchPrice` 实测道路距离（免费），失败退回服务端 Haversine × `detourFactor` | 否 | 0 |
 | 配送费 | 服务端阶梯公式 | 否 | 0 |
 | 骑手位置数据 | 快递100 `queryCourier` 返回经纬度 | 否 | 含在配送费内 |
 | 商家设门店坐标 | `wx.chooseLocation`（店主在地图上点自家店） | 否 | 0 |
 
-刻意避开的付费能力：**路网距离/距离矩阵 API**（改用直线 × 绕路系数）、**逆地理编码**（chooseLocation 已给坐标）、**后台网页嵌地图 JS API**（改为手填坐标 + 外链腾讯地图核对）、**腾讯位置服务地图选点插件**（改用微信原生 API）、**个性化地图样式**（2023-06-29 起需购买）。
+刻意避开的付费能力：**路网距离/距离矩阵 API**（改用运力方免费的 `batchPrice`，它本就返回道路距离；查不到才退回直线 × 绕路系数）、**逆地理编码**（chooseLocation 已给坐标）、**后台网页嵌地图 JS API**（改为手填坐标 + 外链腾讯地图核对）、**腾讯位置服务地图选点插件**（改用微信原生 API）、**个性化地图样式**（2023-06-29 起需购买）。
 
 `<map>` 组件的商业授权条款原文有前置条件：「**若开发者使用通过 LBS 开放平台自行申请的服务账号**，在小程序连接并调用位置服务产品用于商业行为…腾讯位置服务有权收取商业授权费」。我们不申请该服务账号、不调用 LBS 产品，不触发该条件。另：即便日后要用 WebService API，认证企业免费额度为 **10000 次/日**，单店日均几十单永远用不满——"高额年费"针对的是日调用百万级应用。
 
@@ -188,7 +188,7 @@ model Order {
   receiverLatE6       Int?      @map("receiver_lat_e6")
   receiverLngE6       Int?      @map("receiver_lng_e6")
   receiverPoiName     String?   @map("receiver_poi_name") @db.VarChar(128)
-  distanceM           Int?      @map("distance_m")            // 直线×detourFactor 后的计费距离
+  distanceM           Int?      @map("distance_m")            // 计费距离：运力方实测道路距离，查不到才是直线×detourFactor
   estimatedDeliveryAt DateTime? @map("estimated_delivery_at")
   cancelRequestedAt   DateTime? @map("cancel_requested_at")   // D6 ② 顾客申请取消
   cancelRequestNote   String?   @map("cancel_request_note") @db.VarChar(255)
@@ -264,8 +264,8 @@ interface LocalDeliverySettings {
   enabled: boolean                     // 默认 false；开启前完整性校验（坐标/半径/运费/≥1 营业时段）
   paused: { until: string | null; reason: string } | null   // 临时暂停
   store: { name, phone, province, city, district, address, latE6, lngE6 }
-  radiusKm: number                     // 配送半径，按计费距离（直线 × detourFactor）判定；设置页实时显示换算后的直线值，顾客端页头展示直线口径 radiusKm/detourFactor
-  detourFactor: number                 // 默认 1.35
+  radiusKm: number                     // 配送半径，按计费距离（实测道路距离；查不到才是直线 × detourFactor）判定
+  detourFactor: number                 // 默认 1.7，**仅查价失败时兜底**（实测方向系数 1.30–2.12，固定值必然在某些方向错得离谱）
   fee: { baseFee, baseKm, perKmFee, freeThreshold, minOrderAmount }   // 分 / 公里
   businessHours: Array<{ start: 'HH:mm'; end: 'HH:mm' }>   // 首期禁止跨零点、禁止重叠；Asia/Shanghai
   prepMinutes: number; riderSpeedKmh: number                // 预计送达估算，默认 15 / 15
@@ -294,8 +294,11 @@ interface LocalDeliverySettings {
 
 ### 5.2 LOCAL 下单计费
 - `createOrder` 按 `deliveryType` 分派两套实现：EXPRESS 走 `settings.ts`（不变）；LOCAL 走 `local-settings.ts`，**不调用** `getShippingSettings/calcShippingFee`。
-- `distanceM = haversine(store, receiver) × detourFactor`；`> radiusKm` → 42220；`subtotal < minOrderAmount` → 42210；`fee = baseFee + max(0, ceil(km − baseKm)) × perKmFee`；`freeThreshold>0 && subtotal>=freeThreshold → 0`。
-- `POST /local/quote` 返回 `quoteToken = HMAC(fee|distanceM|settings.version|addressId|exp)`（TTL 5 分钟）。下单实收 `fee = min(token.fee, 重算 fee)`；仅当 `重算 fee > token.fee` 时返回 42227「配送费已更新，请刷新」。`settings.version` 只用于审计排障，**不作废在途 token**（设置页提示「运费改动后 5 分钟内下单的订单仍按旧价执行」）。
+- `distanceM` = 运力方 `batchPrice` 返回的**真实道路距离**；查价超时（顾客侧 5 秒）或失败时退回 `haversine(store, receiver) × detourFactor` 兜底估算。`> radiusKm` → 42220；`subtotal < minOrderAmount` → 42210；`fee = baseFee + max(0, ceil(km − baseKm)) × perKmFee`；`freeThreshold>0 && subtotal>=freeThreshold → 0`。
+  - 2026-09-04 实测修正：固定绕路系数被证明不可用（8 个方向实测 1.30–2.12，方向间差 63%；山城 + 釜溪河），原 1.35 平均低估 19%、最差方向低估 36%。`detourFactor` 降级为**纯兜底**，取偏高的 1.7（高估只是少赚，低估是每单倒贴）。
+- `POST /local/quote` 返回 `quoteToken = HMAC(fee|distanceM|addressId|latE6|lngE6|settings.version|exp)`（TTL 5 分钟），另返回 `distanceSource` 区分实测/估算。**下单端点不再自己重算距离**，而是信任 token 里签过名的 `distanceM`——报价按实测（贵）、下单按直线重算（便宜）会让 `重算 fee < token.fee` 恒成立、不报错，顾客照便宜的估算价付款，倒贴一分没修。token 五项校验全过才采用：签名与有效期、`addressId`、**坐标**（否则「近处报价 → 改这个地址的坐标到远处 → 用旧 token 下单」可薅）、`settings.version`。实收仍 `fee = min(token.fee, 重算 fee)`，`重算 fee > token.fee` → 42227——距离同源之后这条挡的是顾客把 `subtotal` 报高换免运 token。
+  - `settings.version` 改为**作废在途 token**（原设计只当审计字段）：距离与运费都来自 token，用旧参数签出来的那张已经没有任何东西能证伪它。作废时直接 42227 让顾客刷新重报，而不是静默退回估算价（否则顾客看到的价与实收价会在店主改设置那一刻悄悄分叉）。
+  - **已知残余风险**：客户端可以干脆不传 `quoteToken`，此时下单退回 `直线 × 1.7` 兜底，一个「直线内、道路外」的点仍可能被放进来。彻底堵住要让下单端点在无 token 时自己同步查一次价（给下单路径加一次外呼），M4 联调看实际单量与超范围频次后再定。
 - 预计送达：下单时 `estimatedDeliveryAt = now + prepMinutes + 骑行时间`；呼叫成功时按 `now + 骑行时间` 重算一次；顾客端显示 15 分钟区间文案「预计 18:40–18:55 送达」。
 - 快递100 参数：`weight = max(0.5, Σ(netWeightG ?? default) × qty / 1000)`；`price = 商品小计(元)`；`goods = [{name:'凉菜', type:'食品', count: 总件数}]`；`remark = 顾客备注 + 餐具标记`；`insurance` 按设置。
 
@@ -598,7 +601,7 @@ model PrintJob {
 - 无查单 → 事件先落库、状态单调、6 个定时提醒、店员「标记送达/作废」出口。
 - 下单响应超时 → `deliveryNo` 已在回调 URL 里，按 path 直取即可认领，不依赖 taskId（原「幽灵单」风险基本消除）。
 - 资金一致性 → 退款入口前置取消配送单；取消费/小费入账；小费上限 + 审计；30004 熔断。
-- 直线距离偏差 → `detourFactor`，M4 用快递100 `deliveryDistance` 回归校准。
+- ~~直线距离偏差 → `detourFactor`，M4 用快递100 `deliveryDistance` 回归校准。~~ 2026-09-04 已收口：8 方向实测证明固定系数不可用，改为报价与下单都走 `batchPrice` 的实测道路距离，`detourFactor` 只做兜底。
 - 坐标系与填反 → 全链路 GCJ-02 微度 Int；商家端一键定位为主，手填 bbox 校验。
 - 打印机成为单点 → 离线 5 分钟告警 + 新单打印失败自动回退强化推送 + 工作台/商家端响铃三层兜底；飞鹅无去重与沙箱 → `PrintJob.dedupeKey` + 真机测试页联调。
 - 两套购物车 → 服务端双向渠道校验 + toast/空态提示。

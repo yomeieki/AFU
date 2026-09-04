@@ -83,8 +83,18 @@ export interface DeliveryCallbackPayload {
 
 export interface DeliveryProvider {
   readonly name: 'KD100' | 'MOCK'
-  /** 批量查价（快递100 batchPrice，免费不扣费）。feeFen = 六家里的最低价，quotes = 每家明细 */
-  price(input: { sender: CreateDeliveryOrderInput['sender']; receiver: CreateDeliveryOrderInput['receiver'] }): Promise<{ feeFen: number; distanceM: number | null; quotes: ProviderQuote[] }>
+  /**
+   * 批量查价（快递100 batchPrice，免费不扣费）。feeFen = 六家里的最低价，quotes = 每家明细。
+   *
+   * `timeoutMs` 只对本次查价生效，不传按全局默认（8 秒）。之所以做成**逐次可指定**而不是调小全局：
+   * 顾客在地址页等报价，5 秒不回就该退回估算；店员侧的呼叫弹窗/报价保鲜是内部操作，
+   * 宁可多等几秒也要拿到真数据。把全局改成 5 秒会把店员侧一并改掉，把顾客侧改成 8 秒则是让顾客干等。
+   */
+  price(input: {
+    sender: CreateDeliveryOrderInput['sender']
+    receiver: CreateDeliveryOrderInput['receiver']
+    timeoutMs?: number
+  }): Promise<{ feeFen: number; distanceM: number | null; quotes: ProviderQuote[] }>
   createOrder(input: CreateDeliveryOrderInput): Promise<CreateDeliveryOrderResult>
   precancelOrder(i: { taskId: string }): Promise<{ cancelFeeFen: number | null }>
   cancelOrder(i: { taskId: string; reason: string }): Promise<{ cancelFeeFen: number | null; raw: unknown }>

@@ -182,8 +182,45 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       if (isPaused(s)) throw new AppError(42226, `同城配送暂停接单${s.paused?.reason ? `：${s.paused.reason}` : ''}`)
       if (!isOpenNow(s)) throw new AppError(42222, `当前非营业时间，${nextOpenText(s)}`)
       if (address.latE6 === null || address.lngE6 === null) throw new AppError(42223, '该地址缺少定位，请编辑地址并在地图上选点')
-      const distanceM = billableDistanceM(s, address.latE6, address.lngE6)
-      if (distanceM === null) throw new AppError(42226, '门店尚未设置坐标，暂不能配送')
+      const estimatedM = billableDistanceM(s, address.latE6, address.lngE6)
+      if (estimatedM === null) throw new AppError(42226, '门店尚未设置坐标，暂不能配送')
+      /**
+       * ── quoteToken 的信任边界（改错这里就是每单漏钱，动之前先读完）──
+       *
+       * 这里**不再自己重算距离**，而是信任 token 里签过名的 `distanceM`——那是 /local/quote 从运力方
+       * batchPrice 拿到的真实道路距离。为什么必须这样：本地 Haversine × 1.7 是个偏低的估算
+       * （实测方向系数 1.30–2.12），若报价按实测算而下单按估算重算，`fee < p.fee` 恒成立、不报错，
+       * 顾客照着更便宜的估算价付款——倒贴一分没修，还白白多了一次外呼。范围（inRange）同理：
+       * 按直线判会把「直线内、道路外」的点放进来。所以距离、范围、运费三者必须同源。
+       *
+       * token 只在四项全对时才可信，任一不符即当作没有 token：
+       *  ① 签名与 5 分钟有效期（verifyQuote）——防伪造、防拿着隔夜的价来下单；
+       *  ② addressId 一致——token 只能用在它报价的那个地址上，而地址归属已在上面查过（userId 过滤），
+       *     所以一个 token 天然只有它的主人用得上；
+       *  ③ 坐标一致——光绑 addressId 挡不住「近处报价 → 改这个地址的坐标到远处 → 用旧 token 下单」，
+       *     那会按近处的距离判范围和收费，骑手却要跑 30 km（详见 local-settings.ts signQuote 的注释）；
+       *  ④ settings.version 一致——运营参数一改（含门店坐标、半径、费率），旧 token 立即作废。
+       *     这条与老实现不同：老实现把 version 只当审计字段，靠「重算更贵 → 42227」拦价格漂移；
+       *     现在距离来自 token，用旧参数算出来的那个 fee 已经没有任何东西能证伪，只能整张作废。
+       *     作废后不是静默退回估算价，而是直接 42227 让顾客刷新重报——否则顾客看到的价与实收价
+       *     会在店主改设置的那一刻悄悄分叉（估算可能高也可能低，两个方向都不可接受）。
+       *
+       * 下面「重算 fee 更贵 → 42227，否则取较低者」这一段**仍然必须留着**，它现在挡的不是距离漂移
+       * 而是 subtotal 造假：`/local/quote` 的 subtotal 是顾客传的，报个 ¥99 就能拿到 fee=0 的免运 token，
+       * 再拿它去下一单 ¥40 的。距离同源之后，重算 fee 与 token fee 唯一可能的差异就来自 subtotal，
+       * 于是这条比较正好把它兜住；反向（重算更便宜，比如顾客实际买得更多跨过了免运门槛）则取低者，
+       * 该免的运费照免。
+       */
+      let distanceM = estimatedM
+      let quoted: ReturnType<typeof verifyQuote> = null
+      if (quoteToken) {
+        const p = verifyQuote(quoteToken)
+        if (p && p.addressId === address.id && p.latE6 === address.latE6 && p.lngE6 === address.lngE6) {
+          if (p.version !== s.version) throw new AppError(42227, '配送费已更新，请刷新后重新提交')
+          quoted = p
+          distanceM = p.distanceM
+        }
+      }
       const q = calcLocalFee(s, distanceM, totalAmount)
       if (!q.inRange) throw new AppError(42220, `超出配送范围（约 ${(distanceM / 1000).toFixed(1)} km，最远 ${s.radiusKm} km）`)
       if (q.belowMin) throw new AppError(42210, `同城配送满 ¥${(s.fee.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`)
@@ -193,12 +230,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         throw new AppError(42230, `单次配送最多 ${s.limits.maxItems} 件 / ${s.limits.maxWeightKg} kg，请分单或电话联系商家`)
       }
       let fee = q.fee
-      if (quoteToken) {
-        const p = verifyQuote(quoteToken)
-        if (p && p.addressId === address.id) {
-          if (fee > p.fee) throw new AppError(42227, '配送费已更新，请刷新后重新提交')
-          fee = Math.min(fee, p.fee)
-        }
+      if (quoted) {
+        if (fee > quoted.fee) throw new AppError(42227, '配送费已更新，请刷新后重新提交')
+        fee = Math.min(fee, quoted.fee)
       }
       shippingFee = fee
       localSnapshot = {

@@ -3,6 +3,8 @@
  *   cd apps/server && npx ts-node --transpile-only scripts/selftest-local-settings.ts
  */
 import assert from 'assert'
+import crypto from 'crypto'
+import { config } from '../src/config'
 import {
   DEFAULT_LOCAL_SETTINGS,
   sanitizeLocalSettings,
@@ -109,14 +111,33 @@ t('estimateMinutes = prep + 距离/速度', () => {
   assert.strictEqual(estimateMinutes({ ...base, prepMinutes: 15, riderSpeedKmh: 15 }, 3750), 30)
 })
 t('quoteToken 往返、篡改失败、过期失败', () => {
-  const tok = signQuote({ fee: 500, distanceM: 4200, addressId: 7, version: 3 }, NOON)
-  assert.deepStrictEqual(verifyQuote(tok, NOON), { fee: 500, distanceM: 4200, addressId: 7, version: 3 })
+  const P = { fee: 500, distanceM: 4200, addressId: 7, latE6: 29350000, lngE6: 104790000, version: 3 }
+  const tok = signQuote(P, NOON)
+  assert.deepStrictEqual(verifyQuote(tok, NOON), P)
   assert.strictEqual(verifyQuote(tok.slice(0, -1) + (tok.endsWith('a') ? 'b' : 'a'), NOON), null)
   assert.strictEqual(verifyQuote(tok, new Date(NOON.getTime() + 6 * 60 * 1000)), null)
   // 修复项1：sig 段换成 32 个多字节字符（字符数=32，但 Buffer 字节数=96）时应返回 null 而不是抛异常
   // （sig.length===32 曾经把「字符数」误当「字节数」校验，timingSafeEqual 两个不等长 Buffer 会抛 RangeError）
   const body = tok.split('.')[0]
   assert.strictEqual(verifyQuote(`${body}.${'汉'.repeat(32)}`, NOON), null)
+})
+t('quoteToken 必须带坐标：本次改动之前签发的老 token（无 la/ln）一律作废', () => {
+  // 手工拼一个「老格式」token（f/d/a/v/e，没有 la/ln）并用同一把密钥正确签名——
+  // 它签名合法、也没过期，唯一的问题就是缺坐标。下单端点信任 token 里的距离，
+  // 缺坐标就意味着「改坐标薅低价」那条路没人守，所以只能当无效处理。
+  const b64u = (x: string) => Buffer.from(x, 'utf8').toString('base64url')
+  const legacyBody = b64u(JSON.stringify({ f: 500, d: 4200, a: 7, v: 3, e: NOON.getTime() + 60_000 }))
+  const sig = crypto.createHmac('sha256', `quote:${config.jwt.userSecret}`).update(legacyBody).digest('hex').slice(0, 32)
+  assert.strictEqual(verifyQuote(`${legacyBody}.${sig}`, NOON), null)
+})
+t('道路距离进了 token：同一地址不同实测距离 → 不同运费档', () => {
+  // 报价端签的是运力方返回的真实道路距离，下单端直接按它算钱。
+  // 直线 1.6 km 的点，正西向（实测系数 2.12）道路 3.4 km 要多收一档，
+  // 东北向（1.30）2.1 km 只收基础费——固定系数做不到这个区分，这正是改用实测的理由。
+  assert.strictEqual(calcLocalFee(base, 3400, 3000).fee, 400)
+  assert.strictEqual(calcLocalFee(base, 2100, 3000).fee, 300)
+  // 直线 3 km 在范围内（× 1.7 = 5.1 km 其实已超），实测 5.4 km → 必须判超范围
+  assert.strictEqual(calcLocalFee(base, 5400, 3000).inRange, false)
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)
