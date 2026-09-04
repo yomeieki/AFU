@@ -31,6 +31,9 @@
       <text class="unit">/ {{product.unit}}</text>
     </view>
     <text class="product-name">{{product.name}}</text>
+    <view wx:if="{{product.channel === 'LOCAL'}}" class="meta-tag">
+      <text>同城配送</text>
+    </view>
     <text class="product-subtitle" wx:if="{{product.subtitle}}">{{product.subtitle}}</text>
     <view class="meta-row">
       <view class="meta-tag stock-tag {{product.stock <= 0 ? 'stock-tag-out' : (product.stock <= 10 ? 'stock-tag-low' : '')}}">
@@ -95,8 +98,9 @@
 
 <!-- Bottom action bar -->
 <view class="action-bar safe-bottom" wx:if="{{!loading && product && entered}}">
-  <button class="btn-cart btn-plain" hover-class="none" bindtap="onAddToCart">加入购物车</button>
-  <button class="btn-buy btn-primary" hover-class="none" bindtap="onBuyNow">立即购买</button>
+  <button class="btn-cart btn-plain" hover-class="none" bindtap="onAddToCart">{{product.channel === 'LOCAL' ? '加入同城购物车' : '加入购物车'}}</button>
+  <button wx:if="{{product.channel !== 'LOCAL'}}" class="btn-buy btn-primary" hover-class="none" bindtap="onBuyNow">立即购买</button>
+  <button wx:else class="btn-buy btn-primary" hover-class="none" bindtap="goLocalCheckout">去同城结算</button>
 </view>
 
 <!-- 规格选择弹层 -->

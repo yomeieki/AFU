@@ -6,6 +6,7 @@ Page({
     items: [],
     totalAmount: 0,
     selectedCount: 0,
+    localPendingCount: 0,
     loading: true,
   },
 
@@ -26,6 +27,16 @@ Page({
           selectedCount: data.selectedCount,
           loading: false,
         })
+        if ((data.items || []).length === 0) {
+          getCart('LOCAL')
+            .then(function(local) {
+              var n = (local.items || []).reduce(function(s, i) { return s + (i.quantity || 0) }, 0)
+              self.setData({ localPendingCount: n })
+            })
+            .catch(function() { self.setData({ localPendingCount: 0 }) })
+        } else {
+          self.setData({ localPendingCount: 0 })
+        }
         getApp().updateCartCount()
       })
       .catch(function() {
@@ -82,6 +93,10 @@ Page({
     }
     var ids = selectedItems.map(function(i) { return i.id }).join(',')
     wx.navigateTo({ url: '/pages/order/confirm?cartItemIds=' + ids })
+  },
+
+  goLocal: function() {
+    wx.navigateTo({ url: '/pages/local/index' })
   },
 
   formatTotal() {

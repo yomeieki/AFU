@@ -115,7 +115,8 @@ Page({
     var skuId = e.detail.skuId
     var quantity = e.detail.quantity
     var specText = e.detail.specText
-    var isBuy = this.data.skuPopupMode === 'buy'
+    var isLocal = product.channel === 'LOCAL'
+    var isBuy = this.data.skuPopupMode === 'buy' && !isLocal
     var selectedSkuText = specText ? specText + ' ×' + quantity : '×' + quantity
 
     // 立即购买：不经购物车，直接带商品/规格/数量去确认页（避免与已加购数量合并）
@@ -132,11 +133,15 @@ Page({
       .then(function() {
         wx.hideLoading()
         self.setData({ skuPopupShow: false, selectedSkuText: selectedSkuText })
-        wx.showToast({ title: '已加入购物车', icon: 'success', duration: 1500 })
-        getApp().updateCartCount()
+        wx.showToast({ title: isLocal ? '已加入同城购物车' : '已加入购物车', icon: 'success', duration: 1500 })
+        if (!isLocal) getApp().updateCartCount()
       })
       .catch(function() {
         wx.hideLoading()
       })
+  },
+
+  goLocalCheckout: function() {
+    wx.navigateTo({ url: '/pages/local/index' })
   },
 })

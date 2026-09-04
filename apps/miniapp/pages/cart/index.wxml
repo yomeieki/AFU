@@ -7,6 +7,9 @@
 
   <view wx:elif="{{items.length === 0}}" class="empty-wrap">
     <empty-state type="cart" text="购物车还是空的" />
+    <view wx:if="{{localPendingCount > 0}}" class="cross-channel-tip" bindtap="goLocal">
+      你在同城配送还有 {{localPendingCount}} 件未结算 <text class="icon icon-arrow"></text>
+    </view>
     <navigator url="/pages/index/index" open-type="switchTab" class="go-shop-btn btn-primary">
       去逛逛
     </navigator>
