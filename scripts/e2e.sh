@@ -1189,6 +1189,34 @@ R=$(req PUT "/api/orders/$TFO3/confirm" "$UT"); assert_eq "PUT /confirm 出口�
 # 这三单本来就是回归造出来的，留在库里就该算测试单
 for o in $TFO2 $TFO3; do req PATCH "/api/admin/orders/$o/test-flag" "$AT" '{"isTest":true}' >/dev/null; done
 
+echo "== 34. 顾客端字段契约锁（M3 依赖的响应字段名）=="
+# 复用第 32 段已经创建且已有 Delivery 的同城订单，不新增资源，清理段无需调整。
+LOCAL_ORDER_ID=$QO1
+# /local/meta 公开子集
+R=$(req GET /api/local/meta)
+for k in enabled isOpen nextOpenText businessHours store radiusKm radiusStraightKm fee prepMinutes acceptGraceMin limits; do
+  assert_eq "meta.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data <<<"$R")")" "true"
+done
+# /local/quote（复用 §22 已建的 $LADDR）
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":5000}")
+for k in inRange distanceM distanceSource straightDistanceM fee minOrderAmount belowMin estimatedMinutes quoteToken; do
+  assert_eq "quote.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data <<<"$R")")" "true"
+done
+# 订单详情 LOCAL 分支：M3 页面读的每一个字段
+R=$(req GET "/api/orders/$LOCAL_ORDER_ID" "$UT")
+for k in deliveryType distanceM estimatedDeliveryAt receiverPoiName receiverLatE6 receiverLngE6 canRequestCancel cancelRequestDeadline cancelRequestedAt delivery; do
+  assert_eq "orderDetail.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data <<<"$R")")" "true"
+done
+# delivery 白名单：该有的有，敏感的一个都不能有
+for k in status statusLabel courierName courierMobile courierCompany pickedUpAt deliveredAt; do
+  assert_eq "delivery.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data.delivery <<<"$R")")" "true"
+done
+for k in callbackSalt quotedFee actualFee providerTaskId cancelFee; do
+  assert_eq "delivery 不含 $k" "$(jq -r "has(\"$k\")" <<<"$(jq .data.delivery <<<"$R")")" "false"
+done
+# 订单列表带 deliveryType（渠道标签靠它）
+assert_eq "orderList[0].deliveryType 存在" "$(jq -r '.data.list[0] | has("deliveryType")' <<<"$(req GET /api/orders "$UT")")" "true"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

@@ -125,7 +125,7 @@ v3 = v2 + 用户追加需求：云打印机出票与语音播报（D7）、同�
 ### 3.1 顾客侧
 1. **进入**：封面「同城配送」→ `pages/local/index`。页头：门店名、营业状态（营业中 / 已打烊·HH:mm 营业 / 暂停接单·原因）、配送范围、起送、运费规则摘要。地址条：默认同城地址 → 「配送至 xx · 约 x.x km · 运费 ¥y」，无地址 → 「选择收货地址」。`enabled=false` 时页面显示「同城配送即将开通」并给「去全国邮寄」按钮。
 2. **选品**：左分类（`channel=LOCAL`）右商品；`sku-popup` 加购，toast 文案「已加入同城购物车」；底部同城购物车条（件数/小计/差额起送/去结算，可展开改数量）。tabBar 购物车页空态时若检测到 LOCAL 购物车有货，显示「你在同城配送还有 N 件未结算 →」。
-3. **地址**：`pages/local/confirm` 地址卡 → `address/list?mode=select&channel=LOCAL`（显示距离标签；无坐标地址置灰「补充定位」）→ `address/edit?channel=LOCAL`：**必须地图选点**（`wx.chooseLocation`）；省/市固定为门店所在省市（来自设置），区从 POI 地址粗解析并允许修改，POI 名 + 门牌楼层 + 姓名电话。授权处理复用 `edit.js:78-84` 范式：用户取消 = 静默；拒绝权限 = 引导 `wx.openSetting`。首次调用位置接口前触发官方隐私弹窗（见 §6）。
+3. **地址**：`pages/local/confirm` 地址卡 → `address/list?mode=select&channel=LOCAL`（显示**直线**粗估标签与可配送状态；道路距离与运费仅在确认页由 `/local/quote` 给出，避免逐地址报价触发限流与外呼成本；无坐标地址置灰「补充定位」）→ `address/edit?channel=LOCAL`：**必须地图选点**（`wx.chooseLocation`）；省/市固定为门店所在省市（来自设置），区从 POI 地址粗解析并允许修改，POI 名 + 门牌楼层 + 姓名电话。授权处理复用 `edit.js:78-84` 范式：用户取消 = 静默；拒绝权限 = 引导 `wx.openSetting`。首次调用位置接口前触发官方隐私弹窗（见 §6）。
 4. **报价**：选中地址即调 `POST /local/quote` → 距离、运费、起送差额、是否超范围、预计送达时间、`quoteToken`。超范围/打烊/暂停时提交按钮禁用并给出路：「换个地址」「改选全国邮寄」按钮。
 5. **附加项**：备注（占位「如需餐具、放门口等请注明；备注会同步给骑手」）、「需要餐具」勾选（拼进备注前缀，满足限塑合规最低要求）。
 6. **下单**：`POST /orders { deliveryType:'LOCAL', cartItemIds, addressId, remark, quoteToken }`。服务端：渠道双向一致性、`enabled && !paused && isOpenNow`、地址坐标、范围、起送、最大件数/重量、阶梯运费（`quoteToken` 防漂移，见 §5.2）、坐标/POI/距离/预计送达快照。支付流程不变。
@@ -409,7 +409,7 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 ## 6. 小程序（apps/miniapp）
 
 - `app.json`：`pages/local/index`、`pages/local/confirm`；`requiredPrivateInfos: ["chooseLocation","getLocation"]`；`permission.scope.userLocation.desc`；启用 `__usePrivacyCheck__`，新增 `components/privacy-popup` + `wx.onNeedPrivacyAuthorization` 监听（`app.js`）。
-- `pages/local/index` / `pages/local/confirm`：见 §3.1；运费/距离只展示 `quote` 结果，不本地计算。
+- `pages/local/index` / `pages/local/confirm`：见 §3.1；运费/距离只展示 `quote` 结果，不本地计算。**M3 已落地（2026-09-04）**。
 - `pages/address/edit|list`：§3.1.3。
 - `pages/order/detail`：同城分支时间线/骑手卡/`<map>`/轮询生命周期/异常中性文案/「申请取消」窗口按钮/「联系商家」/「申请售后」；隐藏快递卡。
 - `pages/order/list`：渠道标签。`pages/cart/index`：空态同城提示。`app.js updateCartCount` 只统计 EXPRESS。
@@ -417,6 +417,7 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 - `config/legal.js`：隐私政策新增「位置信息（地图选点）」与「向第三方即时配送服务商（快递100 及其接入运力）提供收货人姓名、电话、地址、坐标」条款。
 - 订阅消息：只在 310 发一条「配送中」；文案避免「单号:」，运力名进公司字段、骑手联系方式进备注类字段；M0 尝试申请专门「配送通知」模板，若沿用发货模板则字段映射由 env 控制；「骑手已接单」不推送；「已送达」若要做，须新增模板 ID 加入下单页 `requestSubscribe` 列表。
 - 封面入口契约：同城 → `wx.navigateTo('/pages/local/index')`；全国邮寄 → `wx.switchTab('/pages/index/index')`。
+- 临时入口：首页双入口卡片；封面落地后删除该临时入口。
 - 预览台镜像：`local-index.html`、`local-confirm.html`、order-detail 同城态。
 
 ## 7. 后台（apps/admin）
@@ -524,7 +525,7 @@ model PrintJob {
 - **M1 渠道与数据基础**（注意：M1 完成**不等于**同城可上线，见 §2 原则 2）：迁移（§4 全部表结构一次落库）、`channel` 贯通、`product-channel.ts`、`local-settings.ts`（含 `isOpenNow/paused/haversine/calcLocalFee/quoteToken`）、`/local/meta|quote`、`createOrder` LOCAL 分支（绕开全局运费）、`cancel-request`、后台分类/商品渠道 Tab、`LocalSettings.tsx`、商家端一键定位、`.env.example`、一致性脚本、e2e（渠道双向校验、范围内外、打烊/暂停、起送、阶梯三档、quoteToken 过期、LOCAL 运费与全局运费无关）。
 - **M2 配送服务与看板**：`provider.ts`、`kuaidi100.ts`、`self.ts`、`mock.ts`（可注入异常）、回调路由、编排（呼叫/下单超时认领/错误分流/熔断/重呼/自送/送达/认领作废）、状态机白名单、退款联动（入口前置 42221）、scheduler 6 任务、通知、`admin/local-orders.ts`、`LocalOrders.tsx`、`RefundDialog` 参考行、`pending-count`、e2e（§10 全部场景）、`selftest-kd100.ts`。
 - **M2b 出票与工作台**：`PrintJob` 表（并入同一迁移）、`services/ticket/*`（printer 接口 + feie + mock）、票面渲染器（单测比对 32 列排版）、触发点接入两处支付成功与退款/取消、重复播报与打印机健康两项 scheduler、`PrinterSettings.tsx`、`/workbench` 页 + `snapshot` 接口 + 声音/通知层、`Layout` 首项与登录落地改工作台、小程序商家端铃声震动；e2e：付款→PrintJob PENDING→mock PRINTED；打印失败三次→FAILED+回退推送；离线→告警一次→恢复补打且 30 分钟前旧单不补；未接单 2 分钟播报、接单后停止、5 次耗尽告警；重打幂等；snapshot 四列归类断言。
-- **M3 小程序**：`pages/local/*`、隐私弹窗、地址地图选点、订单详情同城分支/地图/轮询/取消窗口、渠道标签、购物车提示、`legal.js`、`app.json`、预览台、封面入口契约。
+- **M3 小程序**：`pages/local/*`、隐私弹窗、地址地图选点、订单详情同城分支/地图/轮询/取消窗口、渠道标签、购物车提示、`legal.js`、`app.json`、预览台、封面入口契约。实施计划：`docs/superpowers/plans/2026-09-04-local-delivery-m3-customer.md`。
 - **M4 联调与文档**：真机真钱联调（`batchPrice` 探测 → 1 单全流程 → 1 单立即取消看取消费 → 记录 `statusDesc` 文案与回调时延）；`docs/order-flow.md`（同城状态表 + Order×Delivery 非法组合矩阵）、`docs/staff-guide.md` 新章节（术语大白话：呼叫骑手/预扣/改派/取消费 vs 小费；「接单」在同城的含义；无人接单处理顺序；门店坐标设置；暂停接单；常见问题）、`docs/api.md`、`docs/deployment.md`（env、callbackUrl 长度预算、nginx 无需新 location 但需 curl 演练）、`docs/miniapp-release-checklist.md`（隐私一致性检查章节）。
 
 实施方式：`writing-plans` 拆任务 → `subagent-driven-development` 执行；每个里程碑完成后由 Opus 审架构/并发/资金、Sonnet 审文案/边界/文档，意见回流后再合并。
@@ -572,11 +573,12 @@ model PrintJob {
   | 拒单：待付款单走取消不走退款，库存回滚 | ✅（新增，原设计未列） | §29 |
   | 同城 9 项兜底定时任务（呼叫超时/接单卡住/配送中超时/幽灵单/未呼叫/取消申请超时/自动呼叫/housekeeping） | ✅（新增，原设计未列） | §30 |
   | 探测接口 `POST .../probe` | ✅（新增，原设计未列） | §28 |
+  | 顾客端字段契约锁（`/local/meta`、`/local/quote`、LOCAL 订单详情、delivery 白名单、订单列表渠道字段） | ⬜ 待补测 | §34 已加入；本次 e2e 在既有 §13 的 `AS1�` 未绑定变量处中止，未执行到本段 |
 
 - `selftest-kd100.ts`：签名向量、form 编码、回调验签、错误码映射；`--integration` 只读 `batchPrice`。
 - 后台浏览器（桌面 + 375px）：工作台四列归类/主按钮/响铃（一次点击授权后触发）/打印机状态灯/手机单列；同城列表页全部按钮路径、取消并退款引导、设置页校验/试算/探测/暂停、打印机绑定/测试页/重打、分类商品渠道 Tab、邮寄订单页行为不变。
 - 打印实物联调（用户）：绑定真机 → 测试页 → 一分钱下单出票 + 语音播报 → 拔网线 5 分钟收到离线告警 → 恢复自动补打 → 不接单 2 分钟重复播报。
-- 小程序预览台截图 + 真机（用户）：隐私弹窗、地图选点授权拒绝/取消分支、下单支付、详情地图、取消窗口、商家端定位。
+- 小程序预览台截图：✅ 同城菜单、同城确认、订单详情同城态镜像已补齐。微信开发者工具/真机：⬜ 待补测——隐私弹窗、地图选点授权拒绝/取消分支、下单支付、详情地图、取消窗口、商家端定位；当前自动化环境无法执行。
 - 生产联调：M0 探测 → 部署 → `curl` 演练回调路径 → 2 笔真单 → 核对快递100 账单与 `Delivery.actualFee/cancelFee`。
 
 ## 11. 用户侧待办

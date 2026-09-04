@@ -28,6 +28,7 @@ const PAGE_COMPONENTS = {
   cart: ['empty-state'],
   'order-list': ['empty-state', 'order-status-tag'],
   'address-list': ['empty-state'],
+  'local-index': ['sku-popup', 'empty-state'],
 }
 
 // wxss → 浏览器 CSS
@@ -79,6 +80,8 @@ const PAGE_WXSS = {
   'address-edit-local': 'pages/address/edit.wxss',
   about: 'pages/about/index.wxss',
   legal: 'pages/legal/index.wxss',
+  'local-index': 'pages/local/index.wxss',
+  'local-confirm': 'pages/local/confirm.wxss',
 }
 
 let version = Date.now()
