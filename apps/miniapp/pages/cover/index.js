@@ -21,7 +21,8 @@ Page({
   data: {
     stageStyle: '',
     // 开发期置 true 可显示热区虚线框，核对是否压在画上的按钮上
-    debug: false,
+    // ⚠️ 当前为 true，仅供 PO 在开发者工具里核对热区；看完必须改回 false 再提审
+    debug: true,
   },
 
   onLoad: function () {
