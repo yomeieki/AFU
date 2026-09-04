@@ -8,7 +8,7 @@
     </view>
     <view class="privacy-actions">
       <button class="privacy-disagree" bindtap="onDisagree">拒绝</button>
-      <button class="privacy-agree" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="onAgree">同意并继续</button>
+      <button id="privacy-agree-btn" class="privacy-agree" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="onAgree">同意并继续</button>
     </view>
   </view>
 </view>

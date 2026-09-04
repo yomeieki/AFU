@@ -3,25 +3,36 @@ Component({
     visible: false,
   },
 
+  lifetimes: {
+    // 页面/组件卸载时若弹层仍可见，先 disagree 掉挂起的 resolve，避免调用方 Promise 永远悬着。
+    detached() {
+      var app = getApp()
+      var resolve = app.globalData.privacyResolve
+      if (!resolve) return
+      app.globalData.privacyResolve = null
+      resolve({ event: 'disagree' })
+    },
+  },
+
   methods: {
     show() {
       this.setData({ visible: true })
     },
 
-    resolvePrivacy(event) {
+    resolvePrivacy(payload) {
       var app = getApp()
       var resolve = app.globalData.privacyResolve
       this.setData({ visible: false })
       app.globalData.privacyResolve = null
-      if (resolve) resolve({ event: event })
+      if (resolve) resolve(payload)
     },
 
     onAgree() {
-      this.resolvePrivacy('agree')
+      this.resolvePrivacy({ event: 'agree', buttonId: 'privacy-agree-btn' })
     },
 
     onDisagree() {
-      this.resolvePrivacy('disagree')
+      this.resolvePrivacy({ event: 'disagree' })
     },
 
     openPrivacyContract() {

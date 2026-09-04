@@ -63,13 +63,13 @@
 
   <view class="card courier-route-card" wx:if="{{order.isLocal && courierLoc && storeLoc}}">
     <view class="card-title">骑手位置</view>
-    <cover-view class="courier-route">
-      <cover-view class="route-line"></cover-view>
-      <cover-view class="route-stop route-store"><cover-view class="route-dot"></cover-view><cover-view>门店</cover-view></cover-view>
-      <cover-view class="route-stop route-receiver"><cover-view class="route-dot"></cover-view><cover-view>收货点</cover-view></cover-view>
-      <cover-view class="route-rider"><cover-view class="route-rider-dot"></cover-view><cover-view>骑手</cover-view></cover-view>
-    </cover-view>
-    <text class="courier-route-distance">距门店 {{order.distanceText}} km</text>
+    <view class="courier-route">
+      <view class="route-line"></view>
+      <view class="route-stop route-store"><view class="route-dot"></view><view>门店</view></view>
+      <view class="route-stop route-receiver"><view class="route-dot"></view><view>收货点</view></view>
+      <view class="route-rider"><view class="route-rider-dot"></view><view>骑手</view></view>
+    </view>
+    <text class="courier-route-distance" wx:if="{{courierDistanceText}}">骑手距您约 {{courierDistanceText}} km</text>
   </view>
 
   <view class="card local-cancel-card" wx:if="{{order.isLocal && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelUnavailable)}}">

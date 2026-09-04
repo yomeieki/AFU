@@ -31,12 +31,19 @@ App({
     if (wx.onNeedPrivacyAuthorization) {
       wx.onNeedPrivacyAuthorization(function(resolve) {
         // 小程序没有全局事件机制；同一时刻只可能有一个待决的授权请求。
-        getApp().globalData.privacyResolve = resolve
+        // 新请求覆盖前先 disagree 掉旧的，避免上一轮 Promise 永远悬着。
+        var app = getApp()
+        var pending = app.globalData.privacyResolve
+        if (pending) pending({ event: 'disagree' })
+        app.globalData.privacyResolve = resolve
         var pages = getCurrentPages()
         var cur = pages[pages.length - 1]
         var popup = cur && cur.selectComponent && cur.selectComponent('#privacy-popup')
         if (popup) popup.show()
-        else resolve({ event: 'disagree' })
+        else {
+          app.globalData.privacyResolve = null
+          resolve({ event: 'disagree' })
+        }
       })
     }
   },

@@ -210,6 +210,32 @@ function buildLocalTimeline(order) {
   return steps
 }
 
+
+// 直线距离（km）。展示用：骑手→收货点，不参与计费。
+function getStraightDistanceKm(fromLatE6, fromLngE6, toLatE6, toLngE6) {
+  var rad = Math.PI / 180
+  var earthRadiusKm = 6371
+  var lat1 = fromLatE6 / 1e6 * rad
+  var lat2 = toLatE6 / 1e6 * rad
+  var deltaLat = lat2 - lat1
+  var deltaLng = (toLngE6 - fromLngE6) / 1e6 * rad
+  var a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2)
+  a += Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2)
+  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return earthRadiusKm * c
+}
+
+// 骑手距收货点直线距离文案；坐标缺失则返回 ''（整行隐藏）。纯展示，不影响配送费。
+function courierDistanceText(courierLoc, order) {
+  if (!courierLoc || !order) return ''
+  if (courierLoc.latE6 == null || courierLoc.lngE6 == null) return ''
+  if (order.receiverLatE6 == null || order.receiverLngE6 == null) return ''
+  return getStraightDistanceKm(
+    courierLoc.latE6, courierLoc.lngE6,
+    order.receiverLatE6, order.receiverLngE6
+  ).toFixed(1)
+}
+
 function decorateOrder(order) {
   var refunds = (order.refunds || []).map(function(r) {
     return Object.assign({}, r, {
@@ -266,6 +292,7 @@ Page({
     loading: true,
     countdown: '',
     courierLoc: null,
+    courierDistanceText: '',
     storeLoc: null,
     graceMin: '',
   },
@@ -322,6 +349,7 @@ Page({
           loading: false,
           countdown: order.status === 'PENDING_PAYMENT' ? countdownText(order.payExpireAt) : '',
           courierLoc: null,
+          courierDistanceText: '',
         })
         if (order.deliveryType === 'LOCAL') self.loadStoreLoc()
         if (self._pageShown) self.startCourierPoll()
@@ -390,14 +418,21 @@ Page({
       getCourierLocation(self._orderId)
         .then(function(r) {
           // location 为 null 是正常情况：整块位置示意图随之隐藏。
-          self.setData({ courierLoc: r.location || null })
+          // courierDistanceText 为展示用直线距离，不参与计费。
+          var loc = r.location || null
+          self.setData({
+            courierLoc: loc,
+            courierDistanceText: courierDistanceText(loc, self.data.order),
+          })
         })
         .catch(function() {})
       getOrderDetail(self._orderId)
         .then(function(order) {
+          var decorated = decorateOrder(order)
           self.setData({
-            order: decorateOrder(order),
+            order: decorated,
             countdown: order.status === 'PENDING_PAYMENT' ? countdownText(order.payExpireAt) : '',
+            courierDistanceText: courierDistanceText(self.data.courierLoc, decorated),
           })
           var delivery = order.delivery
           if (!delivery || COURIER_LIVE_STATUSES.indexOf(delivery.status) === -1) self.stopCourierPoll()
