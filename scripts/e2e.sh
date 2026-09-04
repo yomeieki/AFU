@@ -155,7 +155,7 @@ AS1=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$AS1" ]] && ok "售后单 #$AS1
 R=$(req POST "/api/orders/$O6/after-sale" "$UT" '{"reason":"DAMAGED"}'); assert_eq "重复申请被拒 42208" "$(code "$R")" "42208"
 R=$(req GET "/api/admin/orders/pending-count" "$AT"); [[ "$(jq -r .data.afterSaleCount <<<"$R")" -ge 1 ]] && ok "afterSaleCount ≥1" || fail "afterSaleCount"
 R=$(req GET "/api/admin/after-sales?status=PENDING" "$AT")
-[[ "$(jq -r "[.data.list[] | select(.id==$AS1)] | length" <<<"$R")" == "1" ]] && ok "售后列表含 #$AS1（reasonLabel=$(jq -r ".data.list[] | select(.id==$AS1) | .reasonLabel" <<<"$R")）" || fail "售后列表"
+[[ "$(jq -r "[.data.list[] | select(.id==$AS1)] | length" <<<"$R")" == "1" ]] && ok "售后列表含 #${AS1}（reasonLabel=$(jq -r ".data.list[] | select(.id==$AS1) | .reasonLabel" <<<"$R")）" || fail "售后列表"
 R=$(req POST "/api/admin/after-sales/$AS1/approve" "$AT" '{"amount":1,"reply":"已退 0.01"}')
 assert_eq "同意售后 code 0" "$(code "$R")" "0"
 assert_eq "售后单 → DONE（mock 即时到账）" "$(jq -r .data.afterSale.status <<<"$R")" "DONE"
@@ -1209,10 +1209,10 @@ for k in deliveryType distanceM estimatedDeliveryAt receiverPoiName receiverLatE
 done
 # delivery 白名单：该有的有，敏感的一个都不能有
 for k in status statusLabel courierName courierMobile courierCompany pickedUpAt deliveredAt; do
-  assert_eq "delivery.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data.delivery <<<"$R")")" "true"
+  assert_eq "delivery.$k 存在" "$(jq -r '(.data.delivery // {}) | has("'"$k"'")' <<<"$R")" "true"
 done
 for k in callbackSalt quotedFee actualFee providerTaskId cancelFee; do
-  assert_eq "delivery 不含 $k" "$(jq -r "has(\"$k\")" <<<"$(jq .data.delivery <<<"$R")")" "false"
+  assert_eq "delivery 不含 $k" "$(jq -r '(.data.delivery // {}) | has("'"$k"'")' <<<"$R")" "false"
 done
 # 订单列表带 deliveryType（渠道标签靠它）
 assert_eq "orderList[0].deliveryType 存在" "$(jq -r '.data.list[0] | has("deliveryType")' <<<"$(req GET /api/orders "$UT")")" "true"
