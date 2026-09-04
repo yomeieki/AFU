@@ -81,6 +81,26 @@
   color: var(--text-2);
   line-height: 1.5;
 }
+.address-card-location-missing {
+  opacity: 0.55;
+}
+.local-distance-tag {
+  align-self: flex-start;
+  color: var(--info);
+  background-color: var(--info-bg);
+  font-size: 22rpx;
+  line-height: 1.4;
+  padding: 4rpx 12rpx;
+  border-radius: 999rpx;
+}
+.local-distance-tag-missing {
+  color: var(--text-3);
+  background-color: var(--bg);
+}
+.local-distance-tag-far {
+  color: var(--warning);
+  background-color: var(--warning-bg);
+}
 .address-actions {
   display: flex;
   flex-direction: column;

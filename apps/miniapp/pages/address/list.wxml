@@ -14,7 +14,7 @@
       <view
         wx:for="{{addresses}}"
         wx:key="id"
-        class="address-card card {{mode === 'select' ? 'selectable' : ''}}"
+        class="address-card card {{mode === 'select' ? 'selectable' : ''}} {{channel === 'LOCAL' && item.localStatus === 'missing' ? 'address-card-location-missing' : ''}}"
         hover-class="address-card-hover"
         bindtap="onSelectAddress"
         data-address="{{item}}"
@@ -27,6 +27,9 @@
             <view wx:if="{{item.isDefault}}" class="default-tag">默认</view>
           </view>
           <text class="address-full">{{item.fullAddress}}</text>
+          <view wx:if="{{channel === 'LOCAL'}}" class="local-distance-tag {{item.localStatus === 'missing' ? 'local-distance-tag-missing' : ''}} {{item.localStatus === 'far' ? 'local-distance-tag-far' : ''}}">
+            {{item.localDistanceText}}
+          </view>
         </view>
         <view class="address-actions" wx:if="{{mode !== 'select'}}">
           <view class="action-btn" catchtap="onEditAddress" data-id="{{item.id}}">编辑</view>
