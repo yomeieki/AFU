@@ -1,0 +1,11 @@
+{
+  "navigationStyle": "custom",
+  "navigationBarTitleText": "阿福凉菜",
+  "backgroundColor": "#FBF5E7",
+  "backgroundColorTop": "#FBF5E7",
+  "backgroundColorBottom": "#FBF5E7",
+  "disableScroll": true,
+  "usingComponents": {
+    "privacy-popup": "/components/privacy-popup/index"
+  }
+}

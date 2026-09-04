@@ -22,6 +22,7 @@ const PORT = argPort !== -1 ? Number(process.argv[argPort + 1]) : 5180
 
 // 每个预览页用到的组件 wxss（随 usingComponents 手工登记）
 const PAGE_COMPONENTS = {
+  cover: ['privacy-popup'],
   index: ['empty-state'],
   'product-detail': ['sku-popup'],
   'product-list': ['empty-state'],
@@ -65,6 +66,7 @@ function buildPageCss(pageKey, pageWxssPath) {
 
 // 页面 key → 源 wxss 路径
 const PAGE_WXSS = {
+  cover: 'pages/cover/index.wxss',
   index: 'pages/index/index.wxss',
   'product-detail': 'pages/product/detail.wxss',
   'product-list': 'pages/product/list.wxss',

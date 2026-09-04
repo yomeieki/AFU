@@ -1,6 +1,7 @@
 {
   "__usePrivacyCheck__": true,
   "pages": [
+    "pages/cover/index",
     "pages/index/index",
     "pages/product/list",
     "pages/product/detail",

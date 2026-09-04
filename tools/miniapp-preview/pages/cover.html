@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/cover.generated.css">
+<!-- 镜像说明：真机上 .cover-stage 的 left/top/width/height 是 index.js 按屏幕比例算出来的，
+     预览台不跑 JS，所以这里硬编码 375×812 这一种「设计比例完全吻合」的情况。
+     它能验的是「热区是否压在画上的按钮上」；裁剪与 clamp 行为验不了，那要去微信开发者工具。
+     .hot-debug 默认开着——这个镜像存在的意义就是看框对不对。 -->
+<style>
+  html { --rpx: .5px }
+  body { margin: 0; width: 375px; height: 812px; background: #FBF5E7; overflow: hidden }
+  .mp-page { height: 812px }
+</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="cover-root">
+    <div class="cover-stage" style="left:0;top:0;width:375px;height:812px">
+      <img class="cover-img" src="/assets/cover/cover.png" style="width:100%;height:100%;display:block">
+      <div class="hot hot-local hot-debug"></div>
+      <div class="hot hot-express hot-debug"></div>
+      <div class="hot hot-member hot-debug"></div>
+      <div class="hot hot-coupon hot-debug"></div>
+      <div class="hot hot-points hot-debug"></div>
+      <div class="hot hot-banner hot-debug"></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

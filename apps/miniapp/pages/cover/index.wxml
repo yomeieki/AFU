@@ -1,0 +1,23 @@
+<!-- 封面分流页：pages[0]，非 tabBar。整屏一张图 + 透明热区。
+     热区坐标全部取自 Figma 导出 SVG 里的真实矩形（见 index.js 顶部的 HOTSPOTS 表），
+     不是目测估的；改版时重新从 SVG 的 <rect> 取值即可。 -->
+<view class="cover-root">
+  <view class="cover-stage" style="{{stageStyle}}">
+    <image class="cover-img" src="/assets/cover/cover.png" mode="scaleToFill" binderror="onImgError" />
+
+    <view class="hot hot-local {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goLocal"></view>
+    <view class="hot hot-express {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goExpress"></view>
+
+    <view class="hot hot-member {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goMember" data-key="member"></view>
+    <view class="hot hot-coupon {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goMember" data-key="coupon"></view>
+    <view class="hot hot-points {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goMember" data-key="points"></view>
+
+    <view class="hot hot-banner {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goExpress"></view>
+  </view>
+</view>
+
+<!-- 必须是 .cover-root 的兄弟而不是 .cover-stage 的子节点：
+     舞台带负偏移，放进去会把固定定位的遮罩一起拖歪。
+     也必须存在——app.js 的 onNeedPrivacyAuthorization 是按当前页找 #privacy-popup 的，
+     找不到就静默 resolve(disagree)，同城入口会永远失败且不报错。 -->
+<privacy-popup id="privacy-popup" />

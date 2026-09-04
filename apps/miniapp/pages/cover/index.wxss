@@ -1,0 +1,62 @@
+/* 封面分流页。
+   底色写死 #FBF5E7（与封面图纸底同色）而不是继承 app.wxss 的 --bg：
+   冷启动时 WeChat 先画 page 背景再渲染，同色才不会闪一下灰白。 */
+page {
+  height: 100%;
+  overflow: hidden;
+  background: #FBF5E7;
+}
+
+.cover-root {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #FBF5E7;
+}
+
+/* 舞台 = 「含被裁部分的完整缩放尺寸」，由 JS 算出 left/top/width/height 内联下发。
+   它的宽高比恒等于 750:1624，所以内部百分比与 Figma 坐标 1:1 对应——
+   这正是不能直接用 aspectFill + 页面百分比的原因（那样会差一个裁剪偏移量）。 */
+.cover-stage {
+  position: absolute;
+  z-index: 1;
+}
+
+.cover-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hot {
+  position: absolute;
+  z-index: 2;
+}
+
+/* 按钮是画在位图里的，没有按压反馈顾客会重复点 */
+.hot-hover {
+  background: rgba(0, 0, 0, 0.07);
+  border-radius: 12rpx;
+}
+
+/* 开发期把 data.debug 打开，用虚线框核对热区是否压在画上的按钮上 */
+.hot-debug {
+  outline: 1rpx dashed rgba(229, 68, 30, 0.9);
+  background: rgba(229, 68, 30, 0.12);
+}
+
+/* ── 热区几何：均为 750×1624 设计坐标换算的百分比 ──
+   同城/邮寄     rect x=69.5|397.5 y=902.5 w=305 h=111 rx=15.5（含 0.5 描边外扩）
+   会员三格      组 translate(162 1081) 470×54，两条分隔线 x=320.225(w2) / 449.225(w1)
+                 高度由 54 上下各扩 29 到 112，以满足 44pt 可点下限；
+                 上距快捷入口 34px、下距横幅 34.5px，均不重叠
+   冷链横幅      rect x=162.5 y=1198.5 w=469 h=100 rx=7.5                        */
+.hot-local   { left:  9.200%; top: 55.542%; width: 40.800%; height: 6.897%; }
+.hot-express { left: 52.933%; top: 55.542%; width: 40.800%; height: 6.897%; }
+
+.hot-member  { left: 21.600%; top: 64.778%; width: 21.230%; height: 6.897%; }
+.hot-coupon  { left: 42.830%; top: 64.778%; width: 17.133%; height: 6.897%; }
+.hot-points  { left: 59.963%; top: 64.778%; width: 24.303%; height: 6.897%; }
+
+.hot-banner  { left: 21.600%; top: 73.768%; width: 62.667%; height: 6.219%; }
