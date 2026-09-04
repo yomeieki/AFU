@@ -1,6 +1,5 @@
 const { request } = require('../../utils/request')
 const { formatPrice } = require('../../utils/format')
-const { getLocalMeta } = require('../../api/local')
 const app = getApp()
 
 Page({
@@ -9,12 +8,10 @@ Page({
     categories: [],
     products: [],
     loading: true,
-    localEntry: null,
   },
 
   onLoad() {
     this.loadData()
-    this.loadLocalEntry()
   },
 
   onBannerTap(e) {
@@ -31,7 +28,6 @@ Page({
 
   onPullDownRefresh() {
     this.loadData()
-    this.loadLocalEntry()
   },
 
   onShareAppMessage() {
@@ -72,37 +68,6 @@ Page({
       })
   },
 
-  // 临时入口：封面落地后整块删除（见 M3 计划 §临时入口决定）
-  loadLocalEntry() {
-    var self = this
-    getLocalMeta()
-      .then(function(m) {
-        var sub = ''
-        var clickable = true
-        if (!m.enabled) { sub = '即将开通'; clickable = false }
-        else if (m.paused) { sub = '暂停接单' + (m.paused.reason ? ' · ' + m.paused.reason : ''); clickable = false }
-        else if (!m.isOpen) { sub = m.nextOpenText || '已打烊' }
-        else { sub = m.radiusKm + ' km 内送达 · 满 ¥' + formatPrice(m.fee.minOrderAmount) + ' 起送' }
-        self.setData({ localEntry: { sub: sub, clickable: clickable } })
-      })
-      .catch(function() {
-        // 同城接口挂了不影响首页：入口不显示，顾客照常买邮寄
-        self.setData({ localEntry: null })
-      })
-  },
-
-  goLocal() {
-    if (!this.data.localEntry || !this.data.localEntry.clickable) return
-    var self = this
-    // 一点同城就先过位置许可，避免进到地图选点才弹窗
-    app.ensurePrivacyAuthorize()
-      .then(function() {
-        wx.navigateTo({ url: '/pages/local/index' })
-      })
-      .catch(function() {
-        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
-      })
-  },
 
   // Navigate to product list filtered by categoryId.
   // pages/product/list is a tabBar page — must use switchTab,
