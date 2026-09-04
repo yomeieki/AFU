@@ -77,6 +77,20 @@ App({
     p.then(clear, clear)
     return p
   },
+  // 主动拉起官方隐私授权（未授权时会走到 onNeedPrivacyAuthorization → privacy-popup）。
+  // 同城入口提前问，避免顾客进到选点才被拦。
+  ensurePrivacyAuthorize() {
+    return new Promise(function(resolve, reject) {
+      if (!wx.requirePrivacyAuthorize) {
+        resolve()
+        return
+      }
+      wx.requirePrivacyAuthorize({
+        success: function() { resolve() },
+        fail: function(err) { reject(err || new Error('privacy denied')) },
+      })
+    })
+  },
   // 刷新购物车数量并更新 tabBar 角标（登录成功、加购、购物车变更、下单后调用）
   updateCartCount() {
     var self = this

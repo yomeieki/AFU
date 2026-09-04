@@ -86,7 +86,15 @@ Page({
 
   goLocal() {
     if (!this.data.localEntry || !this.data.localEntry.clickable) return
-    wx.navigateTo({ url: '/pages/local/index' })
+    var self = this
+    // 一点同城就先过位置许可，避免进到地图选点才弹窗
+    app.ensurePrivacyAuthorize()
+      .then(function() {
+        wx.navigateTo({ url: '/pages/local/index' })
+      })
+      .catch(function() {
+        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+      })
   },
 
   // Navigate to product list filtered by categoryId.

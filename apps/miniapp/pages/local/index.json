@@ -2,6 +2,7 @@
   "navigationBarTitleText": "同城配送",
   "usingComponents": {
     "sku-popup": "/components/sku-popup/index",
-    "empty-state": "/components/empty-state/index"
+    "empty-state": "/components/empty-state/index",
+    "privacy-popup": "/components/privacy-popup/index"
   }
 }

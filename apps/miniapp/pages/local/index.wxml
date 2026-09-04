@@ -136,3 +136,5 @@
 
   <sku-popup show="{{skuShow}}" product="{{skuProduct}}" mode="cart" bind:close="onSkuClose" bind:confirm="onSkuConfirm" />
 </view>
+
+<privacy-popup id="privacy-popup" />

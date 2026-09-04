@@ -96,10 +96,12 @@ Page({
   },
 
   goLocal: function() {
-    wx.navigateTo({ url: '/pages/local/index' })
-  },
-
-  formatTotal() {
-    return formatPrice(this.data.totalAmount)
-  },
-})
+    var app = getApp()
+    app.ensurePrivacyAuthorize()
+      .then(function() {
+        wx.navigateTo({ url: '/pages/local/index' })
+      })
+      .catch(function() {
+        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+      })
+  })
