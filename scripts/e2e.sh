@@ -595,6 +595,9 @@ assert_eq "换成新骑手" "$(req GET "/api/admin/local/orders/$CBO2/delivery" 
 # —— 720 匹配 taskId：终态化 + SHIPPED 回退 PREPARING（三重护栏都通过时）
 assert_eq "cb 310 http 200" "$(kd_cb "$CBD2" "$CBT2" 310 '骑手已取货' '2026-09-04 12:07:00')" "200"
 assert_eq "订单 →SHIPPED" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "SHIPPED"
+# 真已是 SHIPPED 的 LOCAL 单，邮寄端点 complete 必须仍拒（不是巧合命中「非 SHIPPED」分支的假阳性）
+R=$(req POST "/api/admin/orders/$CBO2/complete" "$AT"); assert_eq "已 SHIPPED 的 LOCAL 单邮寄 complete 仍拒 42204" "$(code "$R")" "42204"
+assert_eq "complete 被拒后订单仍 SHIPPED（未被误置 COMPLETED）" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "SHIPPED"
 assert_eq "匹配 taskId 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '骑手取消订单' '2026-09-04 12:08:00')" "200"
 assert_eq "720→CANCELLED" "$(dstat $CBO2)" "CANCELLED"
 assert_eq "订单回退 PREPARING" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "PREPARING"
@@ -609,6 +612,25 @@ LATET="LATE-TASK-$CBO3"
 assert_eq "迟到回调认领 http 200" "$(kd_cb "$CBD3" "$LATET" 0 '并呼抢单中' '2026-09-04 12:10:00')" "200"
 assert_eq "UNKNOWN→CALLING（认领成功）" "$(dstat $CBO3)" "CALLING"
 assert_eq "认领写入 taskId" "$(req GET "/api/admin/local/orders/$CBO3/delivery" "$AT" | jq -r .data.delivery.providerTaskId)" "$LATET"
+# —— 缺 updateTime 时用 rawBody 摘要去重：同内容两次只 +1 事件；换内容再 +1（不误合并）
+CBO4=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO4/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$CBO4/call" "$AT"); CBD4=$(jq -r .data.deliveryNo <<<"$R")
+CBT4=$(req GET "/api/admin/local/orders/$CBO4/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+EVN4=$(req GET "/api/admin/local/orders/$CBO4/delivery" "$AT" | jq -r '.data.events | length')
+assert_eq "缺 updateTime 首次回调 http 200" "$(kd_cb "$CBD4" "$CBT4" 100 '骑手已接单-无时间戳' '')" "200"
+EVN4A=$(req GET "/api/admin/local/orders/$CBO4/delivery" "$AT" | jq -r '.data.events | length')
+assert_eq "首次回调事件数 +1" "$EVN4A" "$((EVN4+1))"
+assert_eq "缺 updateTime 重复回调（同内容）http 200" "$(kd_cb "$CBD4" "$CBT4" 100 '骑手已接单-无时间戳' '')" "200"
+assert_eq "同内容用 rawBody 摘要去重，事件数不增" "$(req GET "/api/admin/local/orders/$CBO4/delivery" "$AT" | jq -r '.data.events | length')" "$EVN4A"
+assert_eq "缺 updateTime 换内容回调 http 200" "$(kd_cb "$CBD4" "$CBT4" 100 '骑手已接单-换个描述' '')" "200"
+assert_eq "换内容不会被误合并，事件数 +1" "$(req GET "/api/admin/local/orders/$CBO4/delivery" "$AT" | jq -r '.data.events | length')" "$((EVN4A+1))"
+# —— 缺字段（statusDesc/courierName/courierMobile/kuaidicom 均不传）仍 200，且状态机照常推进
+salt4=$(req GET "/api/admin/system/kd100-mock/salt/$CBD4" "$AT" | jq -r '.data.salt // empty')
+PMIN=$(jq -cn --arg t "$CBT4" '{taskId:$t,status:"310",updateTime:"2026-09-04 12:10:00"}')
+SIGNMIN=$(md5hex "${PMIN}${salt4}" | tr 'a-f' 'A-F')
+HTTPMIN=$(curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$CBD4" --data-urlencode "param=$PMIN" --data-urlencode "sign=$SIGNMIN" --data-urlencode "taskId=$CBT4")
+assert_eq "缺字段（仅 taskId/status/updateTime）回调 http 200" "$HTTPMIN" "200"
+assert_eq "缺字段回调仍推进状态机 →DELIVERING" "$(dstat $CBO4)" "DELIVERING"
 
 echo "== 28. 配送单操作与资金联动 =="
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
@@ -735,6 +757,12 @@ R=$(sched '{"autoCallDelayMin":0.01}')
 [[ "$(jq -r .data.localAutoCall <<<"$R")" -ge 1 ]] && ok "autoCall ≥1" || fail "autoCall" "$R"
 assert_eq "SCH1 被自动呼叫 → CALLING" "$(dstat $SCH1)" "CALLING"
 R=$(sched '{"autoCallDelayMin":0.01}'); assert_eq "已有在途单不重呼" "$(jq -r .data.localAutoCall <<<"$R")" "0"
+# 有 cancelRequest 的候选不参与自动呼叫（即便超过延迟时长、无在途配送单也不能呼）
+SCHCR=$(mk_local_paid); req POST "/api/admin/local/orders/$SCHCR/accept" "$AT" >/dev/null
+req POST "/api/orders/$SCHCR/cancel-request" "$UT" '{"note":"e2e 呼叫前取消"}' >/dev/null
+sleep 1
+sched '{"autoCallDelayMin":0.01}' >/dev/null
+assert_eq "有 cancelRequest 的候选未被自动呼叫（无配送单）" "$(req GET "/api/admin/local/orders/$SCHCR/delivery" "$AT" | jq -r .data.delivery)" "null"
 # 待抢单超时（每单一次）
 R=$(sched '{"callTimeoutMin":0}'); [[ "$(jq -r .data.localCallTimeout <<<"$R")" -ge 1 ]] && ok "callTimeout ≥1" || fail "callTimeout" "$R"
 R=$(sched '{"callTimeoutMin":0}'); assert_eq "callTimeout 第二跑归零" "$(jq -r .data.localCallTimeout <<<"$R")" "0"

@@ -526,20 +526,24 @@ model PrintJob {
 
 ## 10. 验证
 
-- e2e（mock provider，`LOCAL_DELIVERY_PROVIDER_MOCK=true`）场景。本里程碑（M2 引擎，T0-T9）已落地为 `scripts/e2e.sh` 第 **25-30 段**，**358/0** 全绿、可零间隔连跑两轮验证幂等；下表逐条勾掉已覆盖项，未覆盖项保留给后续里程碑或标注原因：
+- e2e（mock provider，`LOCAL_DELIVERY_PROVIDER_MOCK=true`）场景。本里程碑（M2 引擎，T0-T9）已落地为 `scripts/e2e.sh` 第 **25-30 段**，**369/0** 全绿、可零间隔连跑两轮验证幂等；下表逐条勾掉已覆盖项，未覆盖项保留给后续里程碑或标注原因（复合场景一律拆成两行分别标注，不用一个 ✅ 盖住两件事）：
 
   | 场景 | 状态 | e2e 段 |
   |---|---|---|
   | happy path 0→100→230→310→520 | ✅ | §27 |
   | 终态后迟到 310 不复活（rank 单调，迟到 210 不回退） | ✅ | §27 |
   | 720 后 activeOrderId 已释放且可重呼 | ✅ | §27/§28 |
-  | 自动呼叫每单只触发一次、有 cancelRequest 时不触发 | ✅ | §30 |
+  | 自动呼叫每单只触发一次（已有在途配送单时不重呼） | ✅ | §30（「已有在途单不重呼」断言） |
+  | 自动呼叫：候选订单有 cancelRequest 时跳过、不触发呼叫 | ✅（新增） | §30（造一笔已 `cancelRequestedAt` 的候选订单，断言调度器跑后仍无配送单） |
   | cancel-request 快照为 CALLING 而店员处理时已 DELIVERING 仍预填全额 | ⬜ 未覆盖 | — 属 `RefundDialog` 前端预填逻辑，非服务端可断言范围，留给后台浏览器验证（见下） |
   | quoteToken 下单实收取 min | ✅（M1 起已覆盖） | §22 |
-  | 邮寄端点 ship/complete 对 LOCAL 单返回 42204 | ✅（M1 起已覆盖） | §22 |
+  | 邮寄端点 ship 对 LOCAL 单返回 42204 | ✅（M1 起已覆盖） | §22 |
+  | 邮寄端点 complete 对 LOCAL 单返回 42204 | ✅（新增） | §27（对一笔真正已 `SHIPPED`（经 310 回调）的 LOCAL 单调用 complete，验证不会被误置 COMPLETED） |
   | 乱序（310 先于 210 不回退） | ✅ | §27 |
-  | 重复回调（同 updateTime 去重、缺 updateTime 用 rawBody 去重） | ✅ | §27 |
-  | 缺字段/超长 statusDesc 仍 200 | ✅（`selftest-kd100.ts` 覆盖截断；e2e 覆盖缺字段场景） | §27 + selftest |
+  | 重复回调：同 updateTime 去重 | ✅ | §27 |
+  | 重复回调：缺 updateTime 时退化 rawBody 摘要去重（同内容两次只留一条事件、换内容不误合并） | ✅（新增） | §27 |
+  | 超长 statusDesc 仍 200（入库前截断） | ✅ | `selftest-kd100.ts` |
+  | 缺字段（statusDesc/courierName/courierMobile/kuaidicom 均缺失，仅传 taskId/status/updateTime）回调仍 200 且状态机照常推进 | ✅（新增） | §27 |
   | 验签失败 200 不改状态 | ✅ | §27 |
   | 下单响应超时后回调按 URL 里的 deliveryNo 认领并回填 taskId | ✅ | §27 |
   | 回调 URL 长度上限的启动断言 | ⬜ 未覆盖 | — 是 `config.ts` 启动期 `process.exit(1)` 断言，不在 e2e（e2e 跑在服务已启动之后）覆盖范围内；靠部署时换域名会立刻炸的方式兜底，§5.5 已写明 |
