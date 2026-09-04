@@ -307,3 +307,84 @@ export interface LocalDeliverySettings {
   deliveringTimeoutMin: number
   tip: { maxPerCall: number; maxPerOrder: number }
 }
+
+/** 配送单（同城）。与服务端 Prisma Delivery 模型同构，仅取前端用得到的字段。 */
+export interface DeliveryInfo {
+  id: number
+  deliveryNo: string
+  provider: 'KD100' | 'SELF' | 'MOCK'
+  status: string
+  statusRank: number
+  activeOrderId: number | null
+  courierCompany: string | null
+  courierName: string | null
+  courierMobile: string | null
+  quotedFee: number | null
+  actualFee: number | null
+  tipFee: number
+  cancelFee: number
+  providerDistanceM: number | null
+  errorCode: string | null
+  failReason: string | null
+  calledAt: string | null
+  acceptedAt: string | null
+  pickedUpAt: string | null
+  deliveredAt: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+}
+
+/** 配送单事件时间线（与服务端 DeliveryEvent 模型同构，仅取前端用得到的字段） */
+export interface DeliveryEventInfo {
+  id: number
+  source: string
+  providerStatus: number | null
+  statusDesc: string | null
+  courierName: string | null
+  operator: string | null
+  createdAt: string
+}
+
+/** 工作台看板卡片。与服务端 GET /admin/workbench/snapshot 的 toCard() 同构 */
+export interface WorkbenchCard {
+  orderId: number
+  orderNo: string
+  channel: Channel
+  status: string
+  /** 本列计时锚点 ISO：pending=paidAt / preparing=acceptedAt / waitingCourier=delivery.calledAt / delivering=同城取货或邮寄发货 / done=completedAt */
+  waitSince: string
+  amountFen: number
+  items: { first: string[]; kinds: number; units: number }
+  note: string | null
+  receiver: { name: string; phone: string }
+  express: { province: string; city: string; expressCompany: string | null; expressNo: string | null } | null
+  local: {
+    distanceM: number | null
+    cancelRequested: boolean
+    delivery: { status: string; statusLabel: string; courierName: string | null; courierMobile: string | null } | null
+  } | null
+}
+
+/** 工作台看板快照。与服务端 GET /admin/workbench/snapshot 响应同构 */
+export interface WorkbenchSnapshot {
+  columns: {
+    pending: WorkbenchCard[]
+    preparing: WorkbenchCard[]
+    waitingCourier: WorkbenchCard[]
+    delivering: WorkbenchCard[]
+    done: WorkbenchCard[]
+  }
+  stats: { todayOrders: number; todayRevenueFen: number; avgDeliverMinutes: number | null }
+  circuit: { tripped: boolean }
+  localEnabled: boolean
+  localOpenNow: boolean
+  paused: { reason: string; until: string | null } | null
+  /** M2b 接飞鹅打印机后替换 */
+  printer: { status: 'NOT_CONNECTED' }
+  /** 未处理取消申请 + ABNORMAL/UNKNOWN 在途配送单 + 熔断(1) */
+  pendingAlerts: number
+  now: string
+}
+
+/** 拒单原因（顾客原样可见的文案由服务端映射） */
+export type RejectReason = 'SOLD_OUT' | 'OUT_OF_RANGE' | 'PAST_ACCEPT_TIME' | 'CUSTOMER_CANCEL' | 'OTHER'

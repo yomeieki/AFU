@@ -12,6 +12,18 @@ const STATUS_MAP: Record<string, { label: string; className: string }> = {
   // 商品状态
   ON_SHELF: { label: '上架', className: 'bg-green-50 text-green-600' },
   OFF_SHELF: { label: '下架', className: 'bg-gray-100 text-gray-500' },
+  // 配送单状态（CANCELLED 复用上面订单的「已取消」键，文案一致）
+  PENDING: { label: '待呼叫', className: 'bg-gray-100 text-gray-500' },
+  CALLING: { label: '待抢单', className: 'bg-[#fff7e8] text-[#a15c07]' },
+  ACCEPTED: { label: '骑手已接单', className: 'bg-blue-50 text-blue-600' },
+  ARRIVING: { label: '赶来取货', className: 'bg-blue-50 text-blue-600' },
+  ARRIVED: { label: '已到店', className: 'bg-indigo-50 text-indigo-600' },
+  DELIVERING: { label: '配送中', className: 'bg-cyan-50 text-cyan-700' },
+  REASSIGNING: { label: '改派中', className: 'bg-[#fff7e8] text-[#a15c07]' },
+  ABNORMAL: { label: '配送异常', className: 'bg-red-50 text-red-600' },
+  DELIVERED: { label: '已送达', className: 'bg-green-50 text-green-600' },
+  FAILED: { label: '呼叫失败', className: 'bg-red-50 text-red-600' },
+  UNKNOWN: { label: '状态未确认', className: 'bg-red-50 text-red-600' },
 }
 
 interface StatusBadgeProps {

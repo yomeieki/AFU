@@ -20,6 +20,10 @@ import type {
   ShippingSettings,
   Channel,
   LocalDeliverySettings,
+  WorkbenchSnapshot,
+  DeliveryInfo,
+  DeliveryEventInfo,
+  RejectReason,
 } from '../types'
 
 // Auth
@@ -220,3 +224,33 @@ export const pauseLocal = (reason: string, until?: string) =>
   client.post<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery/pause', { reason, until }).then((r) => r.data.data)
 export const resumeLocal = () =>
   client.delete<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery/pause').then((r) => r.data.data)
+
+// 接单工作台
+export const getWorkbenchSnapshot = (fresh = false) =>
+  client.get<ApiResponse<WorkbenchSnapshot>>('/admin/workbench/snapshot', { params: fresh ? { fresh: 1 } : undefined })
+
+// 同城订单——接单/呼叫/配送单操作
+export const acceptLocalOrder = (id: number) => client.post<ApiResponse<Order>>(`/admin/local/orders/${id}/accept`)
+export const acceptAndCallLocalOrder = (id: number) =>
+  client.post<ApiResponse<{ accepted: boolean; deliveryNo: string; status: string }>>(`/admin/local/orders/${id}/accept-and-call`)
+export const callRider = (id: number) =>
+  client.post<ApiResponse<{ deliveryNo: string; status: string; quotedFeeFen: number | null }>>(`/admin/local/orders/${id}/call`)
+export const getOrderDelivery = (id: number) =>
+  client.get<ApiResponse<{ delivery: DeliveryInfo | null; events: DeliveryEventInfo[] }>>(`/admin/local/orders/${id}/delivery`)
+export const precancelDelivery = (id: number) =>
+  client.post<ApiResponse<{ cancelFeeFen: number | null }>>(`/admin/local/orders/${id}/delivery/precancel`)
+export const cancelDelivery = (id: number, reason?: string) =>
+  client.post<ApiResponse<{ cancelFeeFen: number | null }>>(`/admin/local/orders/${id}/delivery/cancel`, { reason })
+export const addDeliveryTip = (id: number, amount: number) =>
+  client.post<ApiResponse<{ tipFeeFen: number }>>(`/admin/local/orders/${id}/delivery/tip`, { amount })
+export const selfDeliverOrder = (id: number, data: { name: string; phone: string }) =>
+  client.post<ApiResponse<{ deliveryNo: string }>>(`/admin/local/orders/${id}/self-deliver`, data)
+export const markOrderDelivered = (id: number) => client.post<ApiResponse<null>>(`/admin/local/orders/${id}/delivered`)
+export const voidUnknownDelivery = (id: number) => client.post<ApiResponse<null>>(`/admin/local/orders/${id}/delivery/void`)
+
+// 拒单（PENDING_PAYMENT/PAID/PREPARING 均可）
+export const rejectOrder = (id: number, data: { reason: RejectReason; note?: string; soldOutProductIds?: number[] }) =>
+  client.post<ApiResponse<{ refund: unknown; offShelfCount: number; cancelReason: string }>>(`/admin/orders/${id}/reject`, data)
+
+// 快递100 余额熔断——手动恢复
+export const resetKd100Circuit = () => client.post<ApiResponse<unknown>>('/admin/system/kd100-circuit/reset')

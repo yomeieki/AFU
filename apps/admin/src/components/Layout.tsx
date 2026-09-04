@@ -15,12 +15,14 @@ import {
   Bell,
   Menu,
   Bike,
+  LayoutGrid,
   LucideIcon,
 } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 
 const navItems: { to: string; label: string; icon: LucideIcon }[] = [
+  { to: '/workbench', label: '接单工作台', icon: LayoutGrid },
   { to: '/dashboard', label: '概览', icon: LayoutDashboard },
   { to: '/categories', label: '分类管理', icon: FolderTree },
   { to: '/products', label: '商品管理', icon: Package },
@@ -36,8 +38,9 @@ const navItems: { to: string; label: string; icon: LucideIcon }[] = [
 export default function Layout() {
   const { admin, clearAuth } = useAuthStore()
   const navigate = useNavigate()
-  const { count: pendingCount, afterSaleCount } = usePendingOrders()
+  const { count: pendingCount, afterSaleCount, localPendingCount } = usePendingOrders()
   const orderBadge = pendingCount + afterSaleCount
+  const navBadge: Record<string, number> = { '/orders': orderBadge, '/workbench': localPendingCount }
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const handleBellClick = () => {
@@ -86,12 +89,16 @@ export default function Layout() {
             >
               <item.icon className="w-5 h-5" strokeWidth={1.8} />
               {item.label}
-              {item.to === '/orders' && orderBadge > 0 && (
+              {(navBadge[item.to] ?? 0) > 0 && (
                 <span
                   className="ml-auto min-w-[1.25rem] h-5 px-1 rounded-full bg-red-500 text-white text-xs flex items-center justify-center"
-                  title={`待处理 ${pendingCount} · 售后 ${afterSaleCount}`}
+                  title={
+                    item.to === '/orders'
+                      ? `待处理 ${pendingCount} · 售后 ${afterSaleCount}`
+                      : `同城待接单 ${localPendingCount}`
+                  }
                 >
-                  {orderBadge > 99 ? '99+' : orderBadge}
+                  {navBadge[item.to] > 99 ? '99+' : navBadge[item.to]}
                 </span>
               )}
             </NavLink>
