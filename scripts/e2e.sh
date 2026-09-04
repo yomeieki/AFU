@@ -820,7 +820,13 @@ req POST "/api/admin/local/orders/$WBL1/call" "$AT" >/dev/null
 S=$(snap)
 assert_eq "呼叫后入等待配送员" "$(col_has waitingCourier $WBL1 "$S")" "true"
 assert_eq "配送状态标签=待抢单" "$(jq -r --argjson id $WBL1 '.data.columns.waitingCourier[] | select(.orderId==$id) | .local.delivery.statusLabel' <<<"$S")" "待抢单"
-assert_eq "等待配送员列无邮寄单（N2）" "$(jq -r '[.data.columns.waitingCourier[] | select(.channel=="EXPRESS")] | length' <<<"$S")" "0"
+# 注意：不要写「等待配送员列没有邮寄单」——那条恒真（byOrder 只按 LOCAL 订单 id 建，
+# EXPRESS 单结构上就拿不到配送单），删掉归类里的渠道守卫它也不会红。要测就测能证伪的：
+# 已接单的邮寄单必须落在「备餐中」列（N2：邮寄不进等待配送员列，从备餐中填单号直接跳配送中）
+req POST "/api/admin/orders/$WBE1/accept" "$AT" >/dev/null
+S=$(snap)
+assert_eq "邮寄单接单后入备餐中" "$(col_has preparing $WBE1 "$S")" "true"
+assert_eq "邮寄单不入等待配送员（N2）" "$(col_has waitingCourier $WBE1 "$S")" "false"
 WBT=$(req GET "/api/admin/local/orders/$WBL1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
 WBD=$(req GET "/api/admin/local/orders/$WBL1/delivery" "$AT" | jq -r .data.delivery.deliveryNo)
 kd_cb "$WBD" "$WBT" 310 '骑手已取货' '2026-09-04 15:00:00' >/dev/null

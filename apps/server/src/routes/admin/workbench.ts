@@ -64,7 +64,9 @@ function sortColumn(cards: { channel: string; waitSince: string }[], newestFirst
 
 router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (req.query.fresh !== '1' && cache && Date.now() - cache.at < 3000) return success(res, cache.data)
+    // 命中缓存要返回副本：缓存对象会被 3 秒内的每一个请求共享，
+    // 将来任何一个中间件顺手往响应体上挂个字段，就会污染所有后续读者。
+    if (req.query.fresh !== '1' && cache && Date.now() - cache.at < 3000) return success(res, structuredClone(cache.data))
     const [orders, settings] = await Promise.all([loadOrders(), getLocalSettings()])
     const localIds = orders.filter((o) => o.deliveryType === 'LOCAL').map((o) => o.id)
     const actives = localIds.length
@@ -92,7 +94,9 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     const [todayOrders, revenue, doneLocal, cancelReqCount, badDeliveries] = await Promise.all([
       prisma.order.count({ where: { paidAt: { gte: today } } }),
       prisma.order.aggregate({ where: { paidAt: { gte: today } }, _sum: { actualAmount: true } }),
-      prisma.order.findMany({ where: { deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
+      // paidAt 也必须限定今天：跨零点完成的单（昨晚下单、今早送达）会把「平均送达时长」拉成好几小时，
+      // 而它的真实配送时长并不长——店主读到的那个数就废了。
+      prisma.order.findMany({ where: { deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today }, paidAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
       prisma.order.count({ where: { deliveryType: 'LOCAL', cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } } }),
       prisma.delivery.count({ where: { activeOrderId: { not: null }, status: { in: ['ABNORMAL', 'UNKNOWN'] } } }),
     ])

@@ -110,7 +110,13 @@ req POST "/api/admin/local/orders/$WBL1/call" "$AT" >/dev/null
 S=$(snap)
 assert_eq "呼叫后入等待配送员" "$(col_has waitingCourier $WBL1 "$S")" "true"
 assert_eq "配送状态标签=待抢单" "$(jq -r --argjson id $WBL1 '.data.columns.waitingCourier[] | select(.orderId==$id) | .local.delivery.statusLabel' <<<"$S")" "待抢单"
-assert_eq "等待配送员列无邮寄单（N2）" "$(jq -r '[.data.columns.waitingCourier[] | select(.channel=="EXPRESS")] | length' <<<"$S")" "0"
+# 注意：不要写「等待配送员列没有邮寄单」——那条恒真（byOrder 只按 LOCAL 订单 id 建，
+# EXPRESS 单结构上就拿不到配送单），删掉归类里的渠道守卫它也不会红。要测就测能证伪的：
+# 已接单的邮寄单必须落在「备餐中」列（N2：邮寄不进等待配送员列，从备餐中填单号直接跳配送中）
+req POST "/api/admin/orders/$WBE1/accept" "$AT" >/dev/null
+S=$(snap)
+assert_eq "邮寄单接单后入备餐中" "$(col_has preparing $WBE1 "$S")" "true"
+assert_eq "邮寄单不入等待配送员（N2）" "$(col_has waitingCourier $WBE1 "$S")" "false"
 WBT=$(req GET "/api/admin/local/orders/$WBL1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
 WBD=$(req GET "/api/admin/local/orders/$WBL1/delivery" "$AT" | jq -r .data.delivery.deliveryNo)
 kd_cb "$WBD" "$WBT" 310 '骑手已取货' '2026-09-04 15:00:00' >/dev/null
@@ -193,7 +199,9 @@ function sortColumn(cards: { channel: string; waitSince: string }[], newestFirst
 
 router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (req.query.fresh !== '1' && cache && Date.now() - cache.at < 3000) return success(res, cache.data)
+    // 命中缓存要返回副本：缓存对象会被 3 秒内的每一个请求共享，
+    // 将来任何一个中间件顺手往响应体上挂个字段，就会污染所有后续读者。
+    if (req.query.fresh !== '1' && cache && Date.now() - cache.at < 3000) return success(res, structuredClone(cache.data))
     const [orders, settings] = await Promise.all([loadOrders(), getLocalSettings()])
     const localIds = orders.filter((o) => o.deliveryType === 'LOCAL').map((o) => o.id)
     const actives = localIds.length
@@ -220,7 +228,9 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     const [todayOrders, revenue, doneLocal, cancelReqCount, badDeliveries] = await Promise.all([
       prisma.order.count({ where: { paidAt: { gte: today } } }),
       prisma.order.aggregate({ where: { paidAt: { gte: today } }, _sum: { actualAmount: true } }),
-      prisma.order.findMany({ where: { deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
+      // paidAt 也必须限定今天：跨零点完成的单（昨晚下单、今早送达）会把「平均送达时长」拉成好几小时，
+      // 而它的真实配送时长并不长——店主读到的那个数就废了。
+      prisma.order.findMany({ where: { deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today }, paidAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
       prisma.order.count({ where: { deliveryType: 'LOCAL', cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } } }),
       prisma.delivery.count({ where: { activeOrderId: { not: null }, status: { in: ['ABNORMAL', 'UNKNOWN'] } } }),
     ])
