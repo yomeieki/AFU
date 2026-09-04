@@ -293,7 +293,9 @@ assert_eq "meta 不泄漏 tip" "$(jq -r '.data.tip // "absent"' <<<"$R")" "absen
 R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}'); assert_eq "匿名坐标报价 code 0" "$(code "$R")" "0"
 assert_eq "范围内" "$(jq -r .data.inRange <<<"$R")" "true"
 QFEE=$(jq -r .data.fee <<<"$R"); [[ "$QFEE" =~ ^[0-9]+$ ]] && ok "fee=$QFEE" || fail "fee 非整数" "$R"
-QTOKEN=$(jq -r '.data.quoteToken // empty' <<<"$R"); [[ -n "$QTOKEN" ]] && ok "返回 quoteToken" || fail "quoteToken 缺失"
+# 匿名报价（只传坐标、没有 addressId）不签发凭证：签出来的 addressId=0，而下单必然带一个真实地址 id，
+# 这张票 100% 兑不了。宁可这里就返回 null，也不要留一张将来指不到病根的废票。
+assert_eq "匿名报价不签发 quoteToken" "$(jq -r '.data.quoteToken' <<<"$R")" "null"
 R=$(req POST /api/local/quote "" '{"latE6":29600000,"lngE6":105100000,"subtotal":3000}'); assert_eq "超范围 inRange=false" "$(jq -r .data.inRange <<<"$R")" "false"
 # —— 运费按运力方返回的**真实道路距离**算，查不到才退回「直线 × detourFactor」估算 ——
 # 固定绕路系数在自贡（山城 + 釜溪河）各方向差 63%（实测 1.30–2.12），任何一个值都必然在某些方向错得离谱。
@@ -329,8 +331,26 @@ R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E同城","receiverPhone":"
 LADDR=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$LADDR" ]] && ok "创建带坐标地址 #$LADDR" || fail "创建带坐标地址" "$R"
 assert_eq "poiName 落库" "$(jq -r .data.poiName <<<"$R")" "丹桂小区"
 R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E半坐标","receiverPhone":"13800000002","province":"四川省","city":"自贡市","district":"高新区","detail":"x","latE6":29350000}'); assert_eq "坐标不成对 40001" "$(code "$R")" "40001"
+# —— 报价凭证 helper ——
+# 同城下单强制凭证（不带 → 42239），所以每一处 LOCAL 下单前都得先报一次价。
+# 拆成两个函数是因为 bash 的命令替换会开子 shell：在子 shell 里调 fail 既不计数，
+# 打印出来的字还会混进被捕获的返回值里。
+_quote_token() {  # 内部用：echo quoteToken，诊断走 stderr，可安全放进 $( ) 里
+  local r t
+  r=$(req POST /api/local/quote "$UT" "{\"addressId\":$1,\"subtotal\":${2:-0}}")
+  t=$(jq -r '.data.quoteToken // empty' <<<"$r")
+  [[ -n "$t" ]] || echo "  ✘ /local/quote(addressId=$1) 未返回 quoteToken：$r" >&2
+  echo "$t"
+}
+lquote() {  # 顶层用：结果写进 $LQTOKEN/$LQFEE/$LQDIST；拿不到当场记一条 fail，绝不静默返回空串
+  local r
+  r=$(req POST /api/local/quote "$UT" "{\"addressId\":$1,\"subtotal\":${2:-0}}")
+  LQTOKEN=$(jq -r '.data.quoteToken // empty' <<<"$r"); LQFEE=$(jq -r '.data.fee' <<<"$r"); LQDIST=$(jq -r '.data.distanceM' <<<"$r")
+  [[ -n "$LQTOKEN" ]] || fail "报价未返回 quoteToken（addressId=$1）" "$r"
+}
 R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":3000}"); assert_eq "按地址报价 code 0" "$(code "$R")" "0"
 QTOKEN=$(jq -r .data.quoteToken <<<"$R"); QFEE=$(jq -r .data.fee <<<"$R")
+[[ -n "$QTOKEN" && "$QTOKEN" != "null" ]] && ok "按地址报价签发 quoteToken" || fail "按地址报价未签发 quoteToken" "$R"
 # 坐标必须成对（合并态校验）：PUT 只带一个键时要与库内已有值合并后判断，而不是只看请求体自身
 R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":null}'); assert_eq "已有坐标地址仅清纬度 40001" "$(code "$R")" "40001"
 R=$(req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29360000}'); assert_eq "已有坐标地址合法更新纬度 code 0" "$(code "$R")" "0"
@@ -348,6 +368,15 @@ R=$(req POST /api/cart "$UT" "{\"productId\":$EPID,\"quantity\":1}"); ECID2=$(jq
 [[ -n "$ECID2" ]] && ok "邮寄商品再加购 #$ECID2" || fail "邮寄商品再加购" "$R"
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$ECID2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\"}"); assert_eq "邮寄商品配同城被拒 42224" "$(code "$R")" "42224"
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$ADDR,\"deliveryType\":\"LOCAL\"}"); assert_eq "无坐标地址下同城单 42223" "$(code "$R")" "42223"
+# 强制凭证：不带 quoteToken 一律拒。这条是本次改动的存在理由——从前这里会退回
+# 「直线 × detourFactor」估算，而实测 3/8 的方向真实系数超过兜底的 1.7，
+# 客户端干脆不传凭证就能少付一档运费，还能把「直线内、道路外」的点塞进配送范围。
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\"}")
+assert_eq "不带 quoteToken 下同城单 42239" "$(code "$R")" "42239"
+# 带了但验不过（末位改一个字符）同样 42239——与「没带」分开测，才说明拒绝来自验签而不是「有没有这个字段」
+BADTOKEN="${QTOKEN%?}$([[ "$QTOKEN" == *a ]] && echo b || echo a)"
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$BADTOKEN\"}")
+assert_eq "篡改 quoteToken 下同城单 42239" "$(code "$R")" "42239"
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QTOKEN\"}")
 LO1=$(jq -r '.data.orderId // empty' <<<"$R"); [[ -n "$LO1" ]] && ok "同城下单 #$LO1" || fail "同城下单" "$R"
 assert_eq "运费=报价 fee" "$(jq -r .data.shippingFee <<<"$R")" "$QFEE"
@@ -359,8 +388,11 @@ assert_eq "shipment 为空（LOCAL 不写 Shipment）" "$(jq -r .data.shipment <
 # 全局邮寄运费被设成 9999 也不影响同城运费
 req PUT /api/admin/settings/shipping "$AT" '{"fee":999900,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); LCID3=$(jq -r '.data.id // empty' <<<"$R")
-R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID3],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\"}")
+lquote $LADDR
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID3],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
 LO2=$(jq -r '.data.orderId // empty' <<<"$R"); [[ "$(jq -r .data.shippingFee <<<"$R")" -lt 999900 ]] && ok "LOCAL 运费与全局邮寄运费无关" || fail "LOCAL 叠加了全局运费" "$R"
+# 只断言「比 9999 元小」太弱：算错成任何一个小数都能过。钉死在本次同城报价的 fee 上。
+assert_eq "LOCAL 运费 = 本次同城报价 fee" "$(jq -r .data.shippingFee <<<"$R")" "$LQFEE"
 req PUT /api/admin/settings/shipping "$AT" '{"fee":0,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
 # 支付 → 邮寄端点守卫 → 取消申请窗口
 req POST "/api/orders/$LO1/pay" "$UT" >/dev/null
@@ -384,29 +416,52 @@ R=$(req GET /api/admin/orders/pending-count "$AT"); [[ "$(jq -r .data.localPendi
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); QC1=$(jq -r '.data.id // empty' <<<"$R")
 R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E另一地址","receiverPhone":"13800000004","province":"四川省","city":"自贡市","district":"高新区","detail":"另一处 1 号","latE6":29352000,"lngE6":104792000}')
 ADDR2=$(jq -r '.data.id // empty' <<<"$R")
+# 凭证的 addressId 与下单地址不符 → 不再「忽略凭证退回估算」，而是整单拒收。
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC1],\"addressId\":$ADDR2,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QTOKEN\"}")
+assert_eq "凭证 addressId 与下单地址不符 → 42239" "$(code "$R")" "42239"
+# 配对断言：换成 ADDR2 自己的凭证必须下得成。少了这条，一个「无论什么凭证都拒」的实现也能让上一条变绿。
+lquote $ADDR2
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC1],\"addressId\":$ADDR2,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
 LO3=$(jq -r '.data.orderId // empty' <<<"$R")
-QR2=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR2,\"subtotal\":2400}")
-# LO3 用的是别的地址的 token → token 必须被整张忽略，距离退回「直线 × detourFactor」兜底。
-# 断言距离而不是运费：运费只有几档，两个不同的距离常常落进同一档，比运费证伪不了什么
-# （原来那条正是如此——它在 token 被完整校验和被完全忽略时都会绿）。
-assert_eq "token 与 addressId 不符 → 忽略 token，距离退回直线 × 1.7 兜底" \
-  "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.distanceM)" "$(jq -r '.data.straightDistanceM * 1.7 | round' <<<"$QR2")"
-assert_eq "该单运费按兜底距离分档" "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.shippingFee)" "400"
+[[ -n "$LO3" ]] && ok "换用该地址自己的凭证下单成功 #$LO3" || fail "配对断言：正确凭证仍下不了单" "$R"
+# 距离直接钉在凭证签的那个值上：距离若被下单端点私自重算过，这条立刻红
+assert_eq "订单距离 = 凭证里签的距离" "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.distanceM)" "$LQDIST"
+assert_eq "该单运费 = 本次报价 fee" "$(req GET "/api/orders/$LO3" "$UT" | jq -r .data.shippingFee)" "$LQFEE"
 
-# 调高基础运费后用旧 token 下单 → 重算更贵，必须 42227
+# 调高基础运费后用旧凭证下单 → 重算更贵，必须 42227。
+# 顺序固定「报价 → 改 baseFee → 下单」：凭证必须在改设置之前签出来，否则测的是另一回事。
+# 这条断言的性质变了：从前它其实撞的是 42227(settings.version 不符)，凭证不再签 version 之后，
+# 它才第一次真的走到「重算 fee > 凭证 fee」那条防线上——码值相同、路径不同。
 LSNAP=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c '.data')
+lquote $LADDR
 req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.fee.baseFee=99900' <<<"$LSNAP")" >/dev/null
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); QC2=$(jq -r '.data.id // empty' <<<"$R")
-R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QTOKEN\"}")
-assert_eq "重算贵于 token → 42227" "$(code "$R")" "42227"
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
+assert_eq "重算贵于凭证 → 42227" "$(code "$R")" "42227"
 req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
 
-# 超出配送半径 → 42220（注意不是 /local/quote 的 inRange，而是下单端点自己拒）
+# ④a 超范围保护现在真正所在的位置：/local/quote 对远地址 inRange=false 且**不签发凭证**，
+#     顾客手上根本拿不到票，下单端点直接 42239。
 R=$(req POST /api/addresses "$UT" '{"receiverName":"E2E远地址","receiverPhone":"13800000005","province":"四川省","city":"自贡市","district":"高新区","detail":"很远的地方","latE6":29600000,"lngE6":105100000}')
 FADDR=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/local/quote "$UT" "{\"addressId\":$FADDR,\"subtotal\":0}")
+assert_eq "远地址报价 inRange=false" "$(jq -r .data.inRange <<<"$R")" "false"
+assert_eq "超范围不签发 quoteToken" "$(jq -r .data.quoteToken <<<"$R")" "null"
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC2],\"addressId\":$FADDR,\"deliveryType\":\"LOCAL\"}")
-assert_eq "超出配送范围下单 42220" "$(code "$R")" "42220"
+assert_eq "超范围地址拿不到凭证 → 下单 42239" "$(code "$R")" "42239"
+# ④b 下单端点自己的 42220 仍然可达：凭证只签坐标，与配送半径无关。
+#     实测 4600 m 报价拿凭证 → 把 radiusKm 从 5 收到 3（**坐标一个都不动**）→ 用同一张凭证下单。
+#     一条断言同时钉三件事：42220 仍可达；与坐标无关的设置变更不作废凭证；范围守卫读的是**当前**设置。
+#     若还留着 settings.version 比对（或门店坐标绑定写错），这里会变成 42227 而红。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":4600}}' >/dev/null
+lquote $LADDR
+assert_eq "④b 报价取到实测 4600" "$LQDIST" "4600"
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.radiusKm=3' <<<"$LSNAP")" >/dev/null
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
+assert_eq "半径收到 3km → 凭证里的 4.6km 超范围 42220" "$(code "$R")" "42220"
+req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 
 # 非营业时间 → 42222
 req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.businessHours=[{start:"03:00",end:"03:01"}]' <<<"$LSNAP")" >/dev/null
@@ -436,28 +491,52 @@ assert_eq "下单按 token 里的实测距离收 500（重算直线只会给 300
 R=$(req GET "/api/orders/$MO" "$UT")
 assert_eq "订单快照存的是实测距离" "$(jq -r .data.distanceM <<<"$R")" "4600"
 
-# —— 地址坐标一改，旧 token 立即作废 ——
-# 不绑坐标的话这条路可以薅：近处报价拿 token → 把同一个 addressId 的坐标改到远处 → 用旧 token 下单，
-# 距离/范围/运费全按近处算，骑手却要跑很远。作废后按兜底估算判，直线 4.6km × 1.7 = 7.9km > 5km → 42220。
+# —— 收货坐标一改，在途凭证立即作废 ——
+# 不绑坐标的话这条路可以薅：近处报价拿凭证 → 把同一个 addressId 的坐标改到远处 → 用旧凭证下单，
+# 距离/范围/运费全按近处算，骑手却要跑很远。现在没有「退回估算」这条路了，直接整单拒收。
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":4600}}' >/dev/null
-R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":2400}"); MT2=$(jq -r .data.quoteToken <<<"$R")
+lquote $LADDR; MT2="$LQTOKEN"
 req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29380000}' >/dev/null
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); MC2=$(jq -r '.data.id // empty' <<<"$R")
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$MC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$MT2\"}")
-assert_eq "坐标被改远 → 旧 token 不作数，按兜底估算判超范围 42220" "$(code "$R")" "42220"
+assert_eq "收货坐标被改远 → 凭证作废 42239" "$(code "$R")" "42239"
 req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000}' >/dev/null
 R=$(req GET /api/addresses "$UT")
 assert_eq "地址坐标已还原" "$(jq -r "[.data[] | select(.id==$LADDR)][0].latE6" <<<"$R")" "29350000"
 
-# —— 设置一改（哪怕只动备餐时长），在途 token 立即作废 ——
-# 距离与运费都来自 token，用旧参数签出来的那张已经没有任何东西能证伪，只能整张作废让顾客刷新重报。
+# —— 门店坐标一改，在途凭证立即作废（geoVersion 的全部实现就是签在凭证里的那两个门店坐标）——
+# 凭证里唯一不能在下单时重算的是那段道路距离，它同时取决于门店坐标：门店一搬，这段距离量的是
+# 另一条路。这个场景从前是被「任何设置写入都 bump version」顺带覆盖的，version 拿掉之后不补这条
+# 就等于裸奔。用 42227（与「重算更贵」同码同文案：对顾客而言都是「店家改了参数，刷新重报」）。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+lquote $LADDR; SGT="$LQTOKEN"
+R=$(req PATCH /api/admin/settings/local-delivery/store-location "$AT" '{"latE6":29341000,"lngE6":104780000}')
+assert_eq "门店坐标已改" "$(jq -r .data.store.latE6 <<<"$R")" "29341000"
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); SGC=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$SGC],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$SGT\"}")
+assert_eq "门店坐标一改 → 在途凭证作废 42227" "$(code "$R")" "42227"
+# 配对断言：坐标还原 + 重新报价后，同一张购物车必须下得成——证明上一条拒的是「凭证过时」，
+# 而不是「门店坐标动过就从此收不了单」。
+req PATCH /api/admin/settings/local-delivery/store-location "$AT" '{"latE6":29339500,"lngE6":104778500}' >/dev/null
+lquote $LADDR
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$SGC],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
+assert_eq "门店坐标还原 + 重新报价 → 下单成功" "$(code "$R")" "0"
+
+# —— 与门店坐标无关的设置变更，在途凭证继续有效 ——
+# 这是本次改动的头号卖点，也是它的直接证据：凭证里除 distanceM 外每一个量（运费/范围/起送门槛）
+# 都在下单时用**当前**设置重新求值，所以店主改备餐时长（或营业时间、小费上限）不该把正在结算页
+# 的顾客踢下来。改动前这条是 42227（settings.version 一变就整张作废），现在必须 code 0。
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":4600}}' >/dev/null
-R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR,\"subtotal\":2400}"); VT=$(jq -r .data.quoteToken <<<"$R")
+lquote $LADDR; VT="$LQTOKEN"
+assert_eq "prepMinutes 用例的报价取到实测 4600" "$LQDIST" "4600"
 req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.prepMinutes=16' <<<"$LSNAP")" >/dev/null
-R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$MC2],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$VT\"}")
-assert_eq "settings version 变了 → 旧 token 42227" "$(code "$R")" "42227"
+# 现加一件：POST /api/cart 对同一 productId 是合并到已有行，上面几段里的 $MC2 早已被合并后一并下掉了
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); VC=$(jq -r '.data.id // empty' <<<"$R")
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$VC],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$VT\"}")
+assert_eq "只改 prepMinutes → 在途凭证继续有效 code 0" "$(code "$R")" "0"
+assert_eq "该单仍按凭证里签的实测 4600 收费" "$(jq -r .data.shippingFee <<<"$R")" "$LQFEE"
 req PUT /api/admin/settings/local-delivery "$AT" "$LSNAP" >/dev/null
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 
@@ -471,8 +550,10 @@ R=$(req POST /api/local/quote "$UT" "{\"addressId\":$LADDR}"); assert_eq "坐标
 
 # 商品换分类跨渠道，同样要走待付款订单守卫（不能只在「分类改渠道」入口把关）
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); QC3=$(jq -r '.data.id // empty' <<<"$R")
-R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC3],\"addressId\":$ADDR2,\"deliveryType\":\"LOCAL\"}")
+lquote $ADDR2
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QC3],\"addressId\":$ADDR2,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
 LO4=$(jq -r '.data.orderId // empty' <<<"$R")
+[[ -n "$LO4" ]] || fail "跨渠道守卫用同城单没造出来" "$R"
 R=$(req PUT "/api/admin/products/$LPID" "$AT" "{\"categoryId\":$ECAT}")
 assert_eq "商品跨渠道换分类被待付款订单挡住 42231" "$(code "$R")" "42231"
 # 把该用户所有待付款单一并取消——本段之前的若干断言也会留下含 $LPID 的待付款单，
@@ -550,10 +631,15 @@ req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000,"lngE6":104790000}' >/dev/null
 req PUT "/api/admin/products/$LPID" "$AT" '{"stock":500}' >/dev/null
 mk_local_paid() {  # 造一笔已支付同城单，echo orderId
-  local r cid oid
+  # 凭证必须在函数内部**现取现用**，不能在外面取一次存成全局：本函数被调用二十余次、横跨大半个
+  # 脚本，中间有 TTL 到期、有改配送半径、有改门店坐标，任何一处都会让一张早先取的凭证失效，
+  # 到时候一片莫名其妙的 42239 会淹掉真正的失败。
+  local r cid oid tok
+  tok=$(_quote_token "$LADDR")
+  [[ -n "$tok" ]] || { echo ""; return; }
   r=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); cid=$(jq -r '.data.id // empty' <<<"$r")
-  r=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$cid],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\"}")
-  oid=$(jq -r '.data.orderId // empty' <<<"$r"); [[ -n "$oid" ]] || { echo ""; return; }
+  r=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$cid],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$tok\"}")
+  oid=$(jq -r '.data.orderId // empty' <<<"$r"); [[ -n "$oid" ]] || { echo "  ✘ mk_local_paid 下单失败：$r" >&2; echo ""; return; }
   req POST "/api/orders/$oid/pay" "$UT" >/dev/null; echo "$oid"
 }
 DLO1=$(mk_local_paid); [[ -n "$DLO1" ]] && ok "同城单 #$DLO1 已支付" || fail "造单失败"
