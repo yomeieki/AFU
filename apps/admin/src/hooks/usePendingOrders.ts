@@ -6,9 +6,17 @@ import { toast } from '../components/ui/Toast'
 const POLL_INTERVAL = 30_000
 const ORIGINAL_TITLE = document.title
 
-// 挂在 Layout 上全局生效：轮询待发货订单数，发现新付款订单时三层提醒
-// ① toast ② 系统 Notification（需授权，仅 localhost/HTTPS）③ 标签页失焦时标题闪烁
-export function usePendingOrders() {
+interface UsePendingOrdersOptions {
+  /** 系统 Notification 被点击后的行为，默认跳转邮寄订单页。
+   *  工作台（/workbench）本身就是店员整天待着的落地页，不该被这个提醒踢去邮寄订单页——
+   *  传入的回调只应该把当前页面拉到前台/带回可见处，不导航离开（I8） */
+  onNotificationClick?: () => void
+}
+
+// 挂在 Layout 上全局生效；Workbench 也单独挂一份（它渲染在 Layout 外，见 App.tsx）——
+// 否则店员整天待着的那一页反而是唯一没有新单提醒的页面（I8）。
+// 轮询待发货订单数，发现新付款订单时三层提醒：① toast ② 系统 Notification（需授权，仅 localhost/HTTPS）③ 标签页失焦时标题闪烁
+export function usePendingOrders(options?: UsePendingOrdersOptions) {
   const [count, setCount] = useState(0)
   const [afterSaleCount, setAfterSaleCount] = useState(0)
   const [localPendingCount, setLocalPendingCount] = useState(0)
@@ -17,6 +25,10 @@ export function usePendingOrders() {
   const lowStockNotifiedRef = useRef(false)
   const flashTimerRef = useRef<number | null>(null)
   const navigate = useNavigate()
+  // 用 ref 存最新的 options：轮询 effect 只跑一次（依赖数组是 []，避免调用方每次渲染新回调
+  // 就把整个轮询重启一遍），但 onclick 触发时要拿到最新的回调，不是挂载那一刻的旧闭包
+  const optionsRef = useRef(options)
+  optionsRef.current = options
 
   const stopTitleFlash = () => {
     if (flashTimerRef.current !== null) {
@@ -68,7 +80,8 @@ export function usePendingOrders() {
           })
           n.onclick = () => {
             window.focus()
-            navigate('/orders?status=PAID')
+            if (optionsRef.current?.onNotificationClick) optionsRef.current.onNotificationClick()
+            else navigate('/orders?status=PAID')
             n.close()
           }
         }
