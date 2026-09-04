@@ -286,7 +286,9 @@ R=$(req GET /api/admin/settings/local-delivery "$AT"); assert_eq "读取同城�
 OLDVER=$(jq -r '.data.version' <<<"$R")
 # detourFactor 显式钉成 1.7：它是**查价失败时的兜底系数**，下面好几条断言要拿它算期望值。
 # 不钉的话会沿用开发库里历史遗留的旧值（1.35），期望值与实际值差一个运费档，断言变成偶发红。
-LS=$(jq -c '.data | .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .detourFactor=1.7 | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:8000,minOrderAmount:2000} | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true' <<<"$R")
+# autoCallDelayMin 显式钉 0：开发库若被人改成 >0，后台 60s tick 会在接单后偷呼骑手，
+# §32「被拒时不留配送单 / 指定单家运力」就会偶发被 CALLING 占位污染（operator=scheduler）。
+LS=$(jq -c '.data | .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .detourFactor=1.7 | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:8000,minOrderAmount:2000} | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true | .autoCallDelayMin=0' <<<"$R")
 R=$(req PUT /api/admin/settings/local-delivery "$AT" "$LS"); assert_eq "保存并开启 code 0" "$(code "$R")" "0"
 assert_eq "保存并开启后 enabled=true" "$(jq -r '.data.enabled' <<<"$R")" "true"
 assert_eq "version 递增 1" "$(jq -r '.data.version' <<<"$R")" "$((OLDVER + 1))"
@@ -314,7 +316,8 @@ assert_eq "运费按实测距离分档（4.2km → 500）" "$(jq -r .data.fee <<
 [[ "$(jq -r .data.straightDistanceM <<<"$R")" -lt 2000 ]] && ok "straightDistanceM 仍是直线口径（没被实测值顶掉）" || fail "straightDistanceM 被污染" "$R"
 # 查价失败：不报错、退回估算，且估算恰为 直线 × 1.7（detourFactor 兜底值）
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
-req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"error","code":"50000"}}' >/dev/null
+# 连排 3 条：后台报价保鲜若偷走一条，还剩给本断言用的
+for _ in 1 2 3; do req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"error","code":"50000"}}' >/dev/null; done
 R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
 assert_eq "查价失败仍 code 0（顾客侧不因外呼失败而报错）" "$(code "$R")" "0"
 assert_eq "查价失败 → distanceSource=ESTIMATED" "$(jq -r .data.distanceSource <<<"$R")" "ESTIMATED"
@@ -322,7 +325,7 @@ assert_eq "估算距离 = 直线 × 1.7" "$(jq -r .data.distanceM <<<"$R")" "$(j
 assert_eq "估算时运费回到 2.7km 档（300）" "$(jq -r .data.fee <<<"$R")" "300"
 # 查价超时同样退回估算而不是报错
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
-req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"timeout"}}' >/dev/null
+for _ in 1 2 3; do req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"timeout"}}' >/dev/null; done
 R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
 assert_eq "查价超时仍 code 0" "$(code "$R")" "0"
 assert_eq "查价超时 → distanceSource=ESTIMATED" "$(jq -r .data.distanceSource <<<"$R")" "ESTIMATED"
@@ -669,26 +672,34 @@ req PUT "/api/admin/products/$LPID" "$AT" '{"stock":500}' >/dev/null
 mk_local_paid() {  # 造一笔已支付同城单，echo orderId
   # 凭证必须在函数内部**现取现用**，不能在外面取一次存成全局：本函数被调用二十余次、横跨大半个
   # 脚本，中间有 TTL 到期、有改配送半径、有改门店坐标，任何一处都会让一张早先取的凭证失效，
-  # 到时候一片莫名其妙的 42239 会淹掉真正的失败。
-  local r cid oid tok
-  tok=$(_quote_token "$LADDR")
-  # 取不到凭证不能静默返回空串：空串会被十几处调用方直接拼进 URL（/api/admin/local/orders//accept
-  # 这种怪路径），最终仍会红但诊断链变长、看不出病根其实是报价失败。这里显式记一条失败并写进
-  # 跨子 shell 的失败计数文件，让根因直接出现在 stderr 而不是被后面一串莫名其妙的红淹没。
-  if [[ -z "$tok" ]]; then
-    echo "  ✘ mk_local_paid 拿不到 quoteToken（addressId=${LADDR}），后续调用方会收到空 orderId" >&2
-    echo x >> "$MK_LOCAL_PAID_FAIL_FILE"
-    echo ""; return
-  fi
-  r=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); cid=$(jq -r '.data.id // empty' <<<"$r")
-  r=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$cid],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$tok\"}")
-  oid=$(jq -r '.data.orderId // empty' <<<"$r")
-  if [[ -z "$oid" ]]; then
+  # 到时候一片莫名其妙的 42239 会淹没掉真正的失败。
+  #
+  # 走 directItem 而不是购物车：cart 路径偶发拿到空 cid 时会变成 cartItemIds:[] → 40001「请选择商品」，
+  # 整段回调/调度断言连锁红。directItem 不经购物车，根上消掉这类造单噪音。
+  # 下单前现取凭证；若撞 42227/42239（门店坐标刚被改 / 运费档漂移），刷新凭证再试一次。
+  local r oid tok c attempt
+  for attempt in 1 2; do
+    # subtotal 按本函数固定的 2×¥12 报，避免与真实小计之间的无关差异。
+    tok=$(_quote_token "$LADDR" 2400)
+    if [[ -z "$tok" ]]; then
+      echo "  ✘ mk_local_paid 拿不到 quoteToken（addressId=${LADDR}），后续调用方会收到空 orderId" >&2
+      echo x >> "$MK_LOCAL_PAID_FAIL_FILE"
+      echo ""; return
+    fi
+    r=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":2},\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$tok\"}")
+    oid=$(jq -r '.data.orderId // empty' <<<"$r")
+    if [[ -n "$oid" ]]; then
+      req POST "/api/orders/$oid/pay" "$UT" >/dev/null; echo "$oid"; return
+    fi
+    c=$(code "$r")
+    if [[ "$attempt" == "1" && ( "$c" == "42227" || "$c" == "42239" ) ]]; then
+      echo "  … mk_local_paid 撞 $c，刷新 quoteToken 重试一次" >&2
+      continue
+    fi
     echo "  ✘ mk_local_paid 下单失败：$r" >&2
     echo x >> "$MK_LOCAL_PAID_FAIL_FILE"
     echo ""; return
-  fi
-  req POST "/api/orders/$oid/pay" "$UT" >/dev/null; echo "$oid"
+  done
 }
 DLO1=$(mk_local_paid); [[ -n "$DLO1" ]] && ok "同城单 #$DLO1 已支付" || fail "造单失败"
 R=$(req POST "/api/admin/local/orders/$DLO1/call" "$AT"); assert_eq "未接单不能呼叫 42204" "$(code "$R")" "42204"
@@ -753,7 +764,10 @@ kd_cb() { # deliveryNo taskId status desc updateTime [courierName] [courierMobil
   curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$dno" \
     --data-urlencode "param=$param" --data-urlencode "sign=$sign" --data-urlencode "taskId=$task"
 }
-dstat() { req GET "/api/admin/local/orders/$1/delivery" "$AT" | jq -r .data.delivery.status; }
+dstat() { # 空 orderId 时不碰 $1：mk_local_paid 失败后 set -u 会在这里报 unbound variable，淹没根因
+  [[ -n "${1:-}" ]] || { echo ""; return; }
+  req GET "/api/admin/local/orders/$1/delivery" "$AT" | jq -r .data.delivery.status
+}
 # —— 正向剧本：0→100→310→520，Order 联动 PREPARING→SHIPPED→COMPLETED
 CBO1=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO1/accept" "$AT" >/dev/null
 R=$(req POST "/api/admin/local/orders/$CBO1/call" "$AT"); CBD1=$(jq -r .data.deliveryNo <<<"$R")
@@ -1017,9 +1031,14 @@ S=$(snap)
 assert_eq "同城单入待接单列" "$(col_has pending $WBL1 "$S")" "true"
 assert_eq "邮寄单入待接单列" "$(col_has pending $WBE1 "$S")" "true"
 # 硬排序：邮寄单付款更早（等更久），同城单仍必须排在它上面
-LIDX=$(jq -r --argjson id $WBL1 '.data.columns.pending | map(.orderId) | index($id)' <<<"$S")
-EIDX=$(jq -r --argjson id $WBE1 '.data.columns.pending | map(.orderId) | index($id)' <<<"$S")
-[[ "$LIDX" -lt "$EIDX" ]] && ok "同城恒排邮寄之上" || fail "排序硬规则" "local=$LIDX express=$EIDX"
+# jq index 未命中返回 null；macOS bash 3.2 + set -u 下 [[ "null" -lt ... ]] 会把 null 当变量名解开
+if [[ -n "${WBL1:-}" && -n "${WBE1:-}" ]]; then
+  LIDX=$(jq -r --argjson id "$WBL1" '.data.columns.pending | map(.orderId) | index($id) // "missing"' <<<"$S")
+  EIDX=$(jq -r --argjson id "$WBE1" '.data.columns.pending | map(.orderId) | index($id) // "missing"' <<<"$S")
+else
+  LIDX=missing; EIDX=missing
+fi
+if [[ "$LIDX" =~ ^[0-9]+$ && "$EIDX" =~ ^[0-9]+$ && "$LIDX" -lt "$EIDX" ]]; then ok "同城恒排邮寄之上"; else fail "排序硬规则" "local=$LIDX express=$EIDX"; fi
 assert_eq "卡片渠道标注 LOCAL" "$(jq -r --argjson id $WBL1 '.data.columns.pending[] | select(.orderId==$id) | .channel' <<<"$S")" "LOCAL"
 assert_eq "邮寄卡片带省市" "$(jq -r --argjson id $WBE1 '.data.columns.pending[] | select(.orderId==$id) | .express.province != null' <<<"$S")" "true"
 assert_eq "同城卡片 local 块存在" "$(jq -r --argjson id $WBL1 '.data.columns.pending[] | select(.orderId==$id) | .local != null' <<<"$S")" "true"
@@ -1080,9 +1099,14 @@ assert_eq "最低价金额（分）" "$(jq -r '.data.snapshot.lowest.feeFen' <<<
 QAT2=$(jq -r '.data.quotedAt' <<<"$R")
 [[ "$QAT2" > "$QAT1" ]] && ok "quotedAt 前进" || fail "quotedAt 未前进" "$QAT1 → $QAT2"
 # ③ 指定运力（§10 留口子）：具名列表，不是 oneToOne 布尔
+# 清场：若后台 tick / 并行跑误开了 autoCall，接单后可能已有 CALLING 占位（operator=scheduler），
+# 直接断言「拒单不留配送单」会假红。先取消在途单（无单时 42233 可忽略），再测拒单与指定运力。
+# GET /delivery 是「有效单，无则最近一张」——取消后仍可能返回 CANCELLED 历史行，所以看 activeOrderId。
+req POST "/api/admin/local/orders/$QO1/delivery/cancel" "$AT" '{"reason":"e2e 清场再测指定运力"}' >/dev/null || true
+assert_eq "清场后无在途配送单" "$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT" | jq -r '.data.delivery.activeOrderId // "null"')" "null"
 R=$(req POST "/api/admin/local/orders/$QO1/call" "$AT" '{"providers":["nosuchtongcheng"]}')
 assert_eq "未知运力编码被拒 40001" "$(code "$R")" "40001"
-assert_eq "被拒时不留配送单" "$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT" | jq -r .data.delivery)" "null"
+assert_eq "被拒时不留配送单" "$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT" | jq -r '.data.delivery.activeOrderId // "null"')" "null"
 R=$(req POST "/api/admin/local/orders/$QO1/call" "$AT" '{"providers":["meituantongcheng"]}')
 assert_eq "指定单家运力呼叫 code 0" "$(code "$R")" "0"
 R=$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT")
