@@ -1,0 +1,155 @@
+<svg width="390" height="844" viewBox="0 0 390 844" xmlns="http://www.w3.org/2000/svg" font-family="'Songti SC','Noto Serif SC','STSong','SimSun',serif">
+  <defs>
+    <linearGradient id="s3-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8A2027"/>
+      <stop offset="1" stop-color="#6F181E"/>
+    </linearGradient>
+    <radialGradient id="s3-glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#A93038" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#A93038" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ============ 背景 ============ -->
+  <g id="背景">
+    <rect x="0" y="0" width="390" height="844" fill="url(#s3-bg)"/>
+    <ellipse cx="195" cy="190" rx="250" ry="230" fill="url(#s3-glow)"/>
+    <path id="装饰-祥云-左上" d="M26,92 c-5,-14 9,-23 20,-17 c3,-10 18,-12 25,-4 c12,-6 22,5 17,15"
+          fill="none" stroke="#E3C27E" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+    <path id="装饰-祥云-右上" d="M310,62 c-5,-14 9,-23 20,-17 c3,-10 18,-12 25,-4 c12,-6 22,5 17,15"
+          fill="none" stroke="#E3C27E" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/>
+    <g id="装饰-金点" fill="#E3C27E" opacity="0.35">
+      <rect x="67" y="237" width="5" height="5" transform="rotate(45 69.5 239.5)"/>
+      <rect x="327" y="207" width="5" height="5" transform="rotate(45 329.5 209.5)"/>
+      <rect x="38" y="557" width="5" height="5" transform="rotate(45 40.5 559.5)"/>
+      <rect x="349" y="637" width="5" height="5" transform="rotate(45 351.5 639.5)"/>
+    </g>
+  </g>
+
+  <!-- ============ 品牌区 ============ -->
+  <g id="品牌区">
+    <g id="logo-印章">
+      <rect x="152" y="79" width="86" height="86" rx="11" fill="none" stroke="#E3C27E" stroke-width="1.2" opacity="0.8"/>
+      <rect x="157" y="84" width="76" height="76" rx="9" fill="#F6E8CC"/>
+      <rect x="161" y="88" width="68" height="68" rx="6" fill="none" stroke="#9C262E" stroke-width="1.2" opacity="0.55"/>
+      <text x="176" y="117" font-size="26" font-weight="800" fill="#9C262E" text-anchor="middle">阿</text>
+      <text x="214" y="117" font-size="26" font-weight="800" fill="#9C262E" text-anchor="middle">福</text>
+      <text x="176" y="149" font-size="26" font-weight="800" fill="#9C262E" text-anchor="middle">凉</text>
+      <text x="214" y="149" font-size="26" font-weight="800" fill="#9C262E" text-anchor="middle">菜</text>
+    </g>
+    <text id="文字-店名" x="198" y="222" font-size="36" font-weight="700" letter-spacing="6"
+          fill="#F6E8CC" text-anchor="middle">丹桂阿福凉菜</text>
+    <text id="文字-拼音" x="197" y="248" font-size="10" letter-spacing="5" fill="#E3C27E" text-anchor="middle"
+          font-family="'PingFang SC','Noto Sans SC',sans-serif">DANGUI AFU LIANGCAI</text>
+    <g id="标签-三十年老店">
+      <line x1="84" y1="284" x2="126" y2="284" stroke="#E3C27E" stroke-width="1"/>
+      <rect x="132" y="281" width="6" height="6" transform="rotate(45 135 284)" fill="#E3C27E"/>
+      <text x="198" y="290" font-size="15" letter-spacing="6" fill="#E3C27E" text-anchor="middle">三十年老店</text>
+      <rect x="252" y="281" width="6" height="6" transform="rotate(45 255 284)" fill="#E3C27E"/>
+      <line x1="264" y1="284" x2="306" y2="284" stroke="#E3C27E" stroke-width="1"/>
+      <text x="196" y="312" font-size="9" letter-spacing="3" fill="#F6E8CC" opacity="0.65" text-anchor="middle"
+            font-family="'PingFang SC','Noto Sans SC',sans-serif">SINCE 1995 — 2025</text>
+    </g>
+  </g>
+
+  <!-- ============ 主视觉：金线花窗 ============ -->
+  <g id="主视觉-花窗">
+    <path d="M276,381 L229,334 L161,334 L114,381 L114,449 L161,496 L229,496 L276,449 Z"
+          fill="none" stroke="#E3C27E" stroke-width="2"/>
+    <path d="M268,385 L225,342 L165,342 L122,385 L122,445 L165,488 L225,488 L268,445 Z"
+          fill="none" stroke="#E3C27E" stroke-width="1" opacity="0.55"/>
+    <rect x="191.5" y="348.5" width="7" height="7" transform="rotate(45 195 352)" fill="#E3C27E"/>
+    <g id="文字-家的味道" fill="#F6E8CC">
+      <text x="195" y="384" font-size="28" letter-spacing="2" text-anchor="middle">家</text>
+      <text x="195" y="416" font-size="28" letter-spacing="2" text-anchor="middle">的</text>
+      <text x="195" y="448" font-size="28" letter-spacing="2" text-anchor="middle">味</text>
+      <text x="195" y="480" font-size="28" letter-spacing="2" text-anchor="middle">道</text>
+    </g>
+    <path d="M138,432 c-3,-9 6,-15 13,-11 c2,-7 12,-8 17,-2" fill="none" stroke="#E3C27E"
+          stroke-width="1.1" stroke-linecap="round" opacity="0.6"/>
+    <path d="M252,432 c3,-9 -6,-15 -13,-11 c-2,-7 -12,-8 -17,-2" fill="none" stroke="#E3C27E"
+          stroke-width="1.1" stroke-linecap="round" opacity="0.6"/>
+    <g id="装饰-灯笼-左" stroke="#E3C27E" fill="none">
+      <line x1="64" y1="340" x2="64" y2="362" stroke-width="1.4"/>
+      <ellipse cx="64" cy="376" rx="11" ry="13" stroke-width="1.8" fill="#6E161C"/>
+      <path d="M58,366 q6,10 0,20 M70,366 q-6,10 0,20" stroke-width="0.9"/>
+      <line x1="64" y1="389" x2="64" y2="403" stroke-width="1.2"/>
+    </g>
+    <g id="装饰-灯笼-右" stroke="#E3C27E" fill="none">
+      <line x1="326" y1="340" x2="326" y2="362" stroke-width="1.4"/>
+      <ellipse cx="326" cy="376" rx="11" ry="13" stroke-width="1.8" fill="#6E161C"/>
+      <path d="M320,366 q6,10 0,20 M332,366 q-6,10 0,20" stroke-width="0.9"/>
+      <line x1="326" y1="389" x2="326" y2="403" stroke-width="1.2"/>
+    </g>
+  </g>
+
+  <!-- ============ 主入口按钮 ============ -->
+  <g id="按钮组-主入口">
+    <g id="按钮-同城配送">
+      <rect x="24" y="530" width="166" height="70" rx="10" fill="#6E161C" stroke="#E3C27E" stroke-width="1.6"/>
+      <rect x="28.5" y="534.5" width="157" height="61" rx="7" fill="none" stroke="#E3C27E" stroke-width="0.8" opacity="0.45"/>
+      <path d="M27,533 h9 M27,533 v9 M187,533 h-9 M187,533 v9 M27,597 h9 M27,597 v-9 M187,597 h-9 M187,597 v-9"
+            stroke="#E3C27E" stroke-width="1.4" fill="none"/>
+      <text x="109" y="566" font-size="21" font-weight="700" letter-spacing="4" fill="#E3C27E" text-anchor="middle">同城配送</text>
+      <text x="107" y="585" font-size="9" letter-spacing="1.5" fill="#F6E8CC" opacity="0.7" text-anchor="middle"
+            font-family="'PingFang SC','Noto Sans SC',sans-serif">LOCAL DELIVERY</text>
+    </g>
+    <rect id="装饰-按钮分隔" x="192" y="562" width="6" height="6" transform="rotate(45 195 565)" fill="#E3C27E"/>
+    <g id="按钮-全国邮寄">
+      <rect x="200" y="530" width="166" height="70" rx="10" fill="#6E161C" stroke="#E3C27E" stroke-width="1.6"/>
+      <rect x="204.5" y="534.5" width="157" height="61" rx="7" fill="none" stroke="#E3C27E" stroke-width="0.8" opacity="0.45"/>
+      <path d="M203,533 h9 M203,533 v9 M363,533 h-9 M363,533 v9 M203,597 h9 M203,597 v-9 M363,597 h-9 M363,597 v-9"
+            stroke="#E3C27E" stroke-width="1.4" fill="none"/>
+      <text x="285" y="566" font-size="21" font-weight="700" letter-spacing="4" fill="#E3C27E" text-anchor="middle">全国邮寄</text>
+      <text x="283" y="585" font-size="9" letter-spacing="1.2" fill="#F6E8CC" opacity="0.7" text-anchor="middle"
+            font-family="'PingFang SC','Noto Sans SC',sans-serif">NATIONWIDE SHIPPING</text>
+    </g>
+  </g>
+
+  <!-- ============ 会员服务入口 ============ -->
+  <g id="按钮组-会员服务">
+    <g id="按钮-会员中心">
+      <circle cx="77" cy="672" r="26" fill="#6E161C" stroke="#E3C27E" stroke-width="1.6"/>
+      <text x="77" y="680" font-size="21" font-weight="700" fill="#E3C27E" text-anchor="middle">会</text>
+      <text x="77" y="720" font-size="12.5" letter-spacing="1.5" fill="#F6E8CC" text-anchor="middle"
+            font-family="'PingFang SC','Noto Sans SC',sans-serif">会员中心</text>
+    </g>
+    <circle cx="136" cy="672" r="2" fill="#E3C27E" opacity="0.6"/>
+    <g id="按钮-会员储值">
+      <circle cx="195" cy="672" r="26" fill="#6E161C" stroke="#E3C27E" stroke-width="1.6"/>
+      <text x="195" y="680" font-size="21" font-weight="700" fill="#E3C27E" text-anchor="middle">储</text>
+      <text x="195" y="720" font-size="12.5" letter-spacing="1.5" fill="#F6E8CC" text-anchor="middle"
+            font-family="'PingFang SC','Noto Sans SC',sans-serif">会员储值</text>
+    </g>
+    <circle cx="254" cy="672" r="2" fill="#E3C27E" opacity="0.6"/>
+    <g id="按钮-积分商城">
+      <circle cx="313" cy="672" r="26" fill="#6E161C" stroke="#E3C27E" stroke-width="1.6"/>
+      <text x="313" y="680" font-size="21" font-weight="700" fill="#E3C27E" text-anchor="middle">积</text>
+      <text x="313" y="720" font-size="12.5" letter-spacing="1.5" fill="#F6E8CC" text-anchor="middle"
+            font-family="'PingFang SC','Noto Sans SC',sans-serif">积分商城</text>
+    </g>
+  </g>
+
+  <!-- ============ 底部装饰与页脚 ============ -->
+  <g id="装饰-底部">
+    <line x1="40" y1="756" x2="185" y2="756" stroke="#E3C27E" stroke-width="1" opacity="0.7"/>
+    <rect x="191.5" y="752.5" width="7" height="7" transform="rotate(45 195 756)" fill="#E3C27E"/>
+    <line x1="205" y1="756" x2="350" y2="756" stroke="#E3C27E" stroke-width="1" opacity="0.7"/>
+    <text id="文字-页脚口号" x="197" y="788" font-size="13" letter-spacing="4" fill="#E3C27E" text-anchor="middle">传承三十载 · 家的味道</text>
+    <text id="文字-页脚品牌" x="196" y="808" font-size="8" letter-spacing="2" fill="#F6E8CC" opacity="0.55" text-anchor="middle"
+          font-family="'PingFang SC','Noto Sans SC',sans-serif">丹桂阿福凉菜 · DANGUI AFU LIANGCAI</text>
+    <g id="装饰-底部菱纹" fill="#E3C27E" opacity="0.45">
+      <rect x="55" y="824" width="4" height="4" transform="rotate(45 57 826)"/>
+      <rect x="83" y="824" width="4" height="4" transform="rotate(45 85 826)"/>
+      <rect x="111" y="824" width="4" height="4" transform="rotate(45 113 826)"/>
+      <rect x="139" y="824" width="4" height="4" transform="rotate(45 141 826)"/>
+      <rect x="167" y="824" width="4" height="4" transform="rotate(45 169 826)"/>
+      <rect x="195" y="824" width="4" height="4" transform="rotate(45 197 826)"/>
+      <rect x="223" y="824" width="4" height="4" transform="rotate(45 225 826)"/>
+      <rect x="251" y="824" width="4" height="4" transform="rotate(45 253 826)"/>
+      <rect x="279" y="824" width="4" height="4" transform="rotate(45 281 826)"/>
+      <rect x="307" y="824" width="4" height="4" transform="rotate(45 309 826)"/>
+      <rect x="335" y="824" width="4" height="4" transform="rotate(45 337 826)"/>
+    </g>
+  </g>
+</svg>
