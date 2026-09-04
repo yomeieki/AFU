@@ -37,6 +37,28 @@ function t(v) {
   return v ? new Date(v).toLocaleString() : ''
 }
 
+// 商家拒单原因前缀（服务端 apps/server/src/routes/admin/orders.ts 拼的 cancelReason 格式，服务端不会改）：
+// 「商家拒单：菜品售罄」「商家拒单：其他原因（说明）」。命中前缀才认为是拒单，其余取消原因原样展示。
+var REJECT_REASON_PREFIX = '商家拒单：'
+function rejectReasonText(cancelReason) {
+  if (!cancelReason || cancelReason.indexOf(REJECT_REASON_PREFIX) !== 0) return ''
+  return cancelReason.slice(REJECT_REASON_PREFIX.length)
+}
+
+// 退款事实这一行只认服务端权威字段（order.status / order.refundedAmount / 最新退款单状态），
+// 不解析 cancelReason 文案——同一个 cancelReason 还被后台订单列表和退款订阅消息消费，
+// 顾客端在这里画蛇添足地拼串会导致退款单状态变化时（PENDING→SUCCESS）文案不同步刷新。
+// order.refundedAmount 是「已确认到账的累计值」（仅在退款单 SUCCESS 落库时才 increment，
+// 见 apps/server/src/services/refund.ts:243），所以只有它 >0 时才敢说「已原路退回」。
+function refundFactText(order) {
+  if (order.status === 'REFUNDED' && order.refundedAmount > 0) {
+    return '款项 ¥' + formatPrice(order.refundedAmount) + ' 已原路退回'
+  }
+  var latest = order.refunds && order.refunds[0]
+  var stuck = latest && (latest.status === 'ABNORMAL' || latest.status === 'CLOSED' || latest.status === 'FAILED')
+  return stuck ? '退款处理中，如有疑问请联系商家' : '退款处理中'
+}
+
 // 待付款倒计时文案：hh:mm:ss；到期返回 ''
 function countdownText(expireAt) {
   if (!expireAt) return ''
@@ -64,7 +86,14 @@ function buildTimeline(order) {
 
   if (order.status === 'CANCELLED') {
     if (order.paidAt) steps.push({ label: '支付成功', time: t(order.paidAt), done: true })
-    steps.push({ label: '订单已取消', time: t(order.cancelledAt), done: true, extra: order.cancelReason || '' })
+    var rejectReasonCancelled = rejectReasonText(order.cancelReason)
+    // 未付款就被拒单：没收过钱，不欠顾客第二行「退款」事实——那是假话，见 refundFactText 的注释。
+    steps.push({
+      label: rejectReasonCancelled ? ('商家已拒单 · ' + rejectReasonCancelled) : '订单已取消',
+      time: t(order.cancelledAt),
+      done: true,
+      extra: rejectReasonCancelled ? '' : (order.cancelReason || ''),
+    })
     return steps
   }
 
@@ -73,20 +102,24 @@ function buildTimeline(order) {
     if (order.acceptedAt) steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: true })
     if (shipped) steps.push({ label: '已发货', time: t(shipped), done: true, extra: shipExtra })
     if (order.completedAt) steps.push({ label: '已完成', time: t(order.completedAt), done: true })
-    var byCustomer = order.cancelReason === '用户申请退款'
+
+    var rejectReason = rejectReasonText(order.cancelReason)
+    // 顾客自助发起的取消/退款：cancelReason 固定以「用户」开头（见 apps/server/src/routes/orders.ts
+    // 的「用户取消」「用户申请退款」）。用前缀匹配代替原来的 === '用户申请退款' 精确比较——
+    // 精确比较只要文案措辞一改就会静默判错且没有任何报错。这仍是字符串猜测，真要根治
+    // 得服务端加一个结构化字段（如 cancelledBy），本轮先在顾客端做得更稳健，见任务报告。
+    var byCustomer = !rejectReason && !!order.cancelReason && order.cancelReason.indexOf('用户') === 0
     steps.push({
-      label: byCustomer ? '申请退款' : '商家发起退款',
+      label: rejectReason ? ('商家已拒单 · ' + rejectReason) : (byCustomer ? '申请退款' : '商家发起退款'),
       time: t(order.cancelledAt),
       done: true,
-      extra: byCustomer ? '' : (order.cancelReason || ''),
+      extra: (rejectReason || byCustomer) ? '' : (order.cancelReason || ''),
     })
-    var latest = order.refunds && order.refunds[0]
-    var stuck = latest && (latest.status === 'CLOSED' || latest.status === 'FAILED' || latest.status === 'ABNORMAL')
+    // 第二行：退款事实，按退款单实时状态渲染（PENDING/PROCESSING「退款处理中」，SUCCESS 才「已原路退回」）。
     steps.push({
-      label: '退款完成（原路退回）',
-      time: t(order.refundedAt),
-      done: !!order.refundedAt,
-      extra: !order.refundedAt ? (stuck ? '退款处理中，如有疑问请联系商家' : '预计 1-3 个工作日到账') : '',
+      label: refundFactText(order),
+      time: order.status === 'REFUNDED' && order.refundedAmount > 0 ? t(order.refundedAt) : '',
+      done: order.status === 'REFUNDED' && order.refundedAmount > 0,
     })
     return steps
   }
