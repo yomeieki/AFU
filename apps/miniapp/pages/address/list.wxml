@@ -27,7 +27,7 @@
             <view wx:if="{{item.isDefault}}" class="default-tag">默认</view>
           </view>
           <text class="address-full">{{item.fullAddress}}</text>
-          <view wx:if="{{channel === 'LOCAL'}}" class="local-distance-tag {{item.localStatus === 'missing' ? 'local-distance-tag-missing' : ''}} {{item.localStatus === 'far' ? 'local-distance-tag-far' : ''}}">
+          <view wx:if="{{channel === 'LOCAL' && item.localDistanceText}}" class="local-distance-tag {{item.localStatus === 'missing' ? 'local-distance-tag-missing' : ''}} {{item.localStatus === 'far' ? 'local-distance-tag-far' : ''}}">
             {{item.localDistanceText}}
           </view>
         </view>

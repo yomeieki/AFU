@@ -203,6 +203,12 @@ Page({
       })
   },
 
+  invalidateQuote: function() {
+    // 购物车一开始改就作废旧票：写入与 reloadCart 的两趟往返里，按钮不能还写着旧金额。
+    this._quoteSeq = (this._quoteSeq || 0) + 1
+    this.setData({ quoting: true, quoteToken: null })
+  },
+
   scheduleQuote: function() {
     var self = this
     if (this._quoteTimer) clearTimeout(this._quoteTimer)
@@ -239,10 +245,15 @@ Page({
   updateQuantity: function(id, quantity) {
     var self = this
     this._cartMutating = true
+    this.invalidateQuote()
     updateCartItem(id, { quantity: quantity })
       .then(function() { return self.reloadCart() })
       .then(function() { self._cartMutating = false })
-      .catch(function() { self._cartMutating = false })
+      .catch(function() {
+        self._cartMutating = false
+        // 写入失败时解除 quoting，否则按钮会永久卡在「计算运费中…」
+        self.refreshQuote('retry')
+      })
   },
 
   onDelete: function(e) {
@@ -255,13 +266,17 @@ Page({
       success: function(result) {
         if (!result.confirm) return
         self._cartMutating = true
+        self.invalidateQuote()
         deleteCartItem(id)
           .then(function() {
             self.setData({ cartItemIds: self.data.cartItemIds.filter(function(itemId) { return itemId !== id }) })
             return self.reloadCart()
           })
           .then(function() { self._cartMutating = false })
-          .catch(function() { self._cartMutating = false })
+          .catch(function() {
+            self._cartMutating = false
+            self.refreshQuote('retry')
+          })
       },
     })
   },
