@@ -296,9 +296,9 @@ interface LocalDeliverySettings {
 - `createOrder` 按 `deliveryType` 分派两套实现：EXPRESS 走 `settings.ts`（不变）；LOCAL 走 `local-settings.ts`，**不调用** `getShippingSettings/calcShippingFee`。
 - `distanceM` = 运力方 `batchPrice` 返回的**真实道路距离**；查价超时（顾客侧 5 秒）或失败时退回 `haversine(store, receiver) × detourFactor` 兜底估算。`> radiusKm` → 42220；`subtotal < minOrderAmount` → 42210；`fee = baseFee + max(0, ceil(km − baseKm)) × perKmFee`；`freeThreshold>0 && subtotal>=freeThreshold → 0`。
   - 2026-09-04 实测修正：固定绕路系数被证明不可用（8 个方向实测 1.30–2.12，方向间差 63%；山城 + 釜溪河），原 1.35 平均低估 19%、最差方向低估 36%。`detourFactor` 降级为**纯兜底**，取偏高的 1.7（高估只是少赚，低估是每单倒贴）。
-- `POST /local/quote` 返回 `quoteToken = HMAC(fee|distanceM|addressId|latE6|lngE6|settings.version|exp)`（TTL 5 分钟），另返回 `distanceSource` 区分实测/估算。**下单端点不再自己重算距离**，而是信任 token 里签过名的 `distanceM`——报价按实测（贵）、下单按直线重算（便宜）会让 `重算 fee < token.fee` 恒成立、不报错，顾客照便宜的估算价付款，倒贴一分没修。token 五项校验全过才采用：签名与有效期、`addressId`、**坐标**（否则「近处报价 → 改这个地址的坐标到远处 → 用旧 token 下单」可薅）、`settings.version`。实收仍 `fee = min(token.fee, 重算 fee)`，`重算 fee > token.fee` → 42227——距离同源之后这条挡的是顾客把 `subtotal` 报高换免运 token。
+- `POST /local/quote` 返回 `quoteToken = HMAC(fee|distanceM|addressId|收货 latE6/lngE6|门店 latE6/lngE6|exp)`（TTL 15 分钟，仅在 `inRange && addressId > 0` 时签发），另返回 `distanceSource` 区分实测/估算。**下单端点不再自己重算距离**，而是信任 token 里签过名的 `distanceM`——报价按实测（贵）、下单按直线重算（便宜）会让 `重算 fee < token.fee` 恒成立、不报错，顾客照便宜的估算价付款，倒贴一分没修。**凭证是必填的**，四项校验全过才收单：签名与有效期、`addressId`、**收货坐标**（否则「近处报价 → 改这个地址的坐标到远处 → 用旧 token 下单」可薅）、**门店坐标**（即 geoVersion：门店一搬，凭证里那段距离量的是另一条路）。前三项不符 → 42239，门店坐标不符 → 42227。**不签也不比 `settings.version`**：除 `distanceM` 外每个量都在下单时用当前设置重算，那条粗粒度作废是纯冗余，却会让店主改一次营业时间就把结算页上的顾客全踢下来。实收仍 `fee = min(token.fee, 重算 fee)`，`重算 fee > token.fee` → 42227——距离同源之后这条挡的是顾客把 `subtotal` 报高换免运 token。
   - `settings.version` 改为**作废在途 token**（原设计只当审计字段）：距离与运费都来自 token，用旧参数签出来的那张已经没有任何东西能证伪它。作废时直接 42227 让顾客刷新重报，而不是静默退回估算价（否则顾客看到的价与实收价会在店主改设置那一刻悄悄分叉）。
-  - **已知残余风险**：客户端可以干脆不传 `quoteToken`，此时下单退回 `直线 × 1.7` 兜底，一个「直线内、道路外」的点仍可能被放进来。彻底堵住要让下单端点在无 token 时自己同步查一次价（给下单路径加一次外呼），M4 联调看实际单量与超范围频次后再定。
+  - ~~**已知残余风险**：客户端可以干脆不传 `quoteToken`，此时下单退回 `直线 × 1.7` 兜底~~ —— **已堵住**：无凭证一律 42239，估算距离已彻底逐出计费路径（`billableDistanceM` 不再被下单路径 import），因此也不需要「无 token 时同步外呼」那个备选方案。估算只剩一个用途：`/local/quote` 查价失败时给顾客看一个偏保守的数字（`distanceSource='ESTIMATED'`）。
 - 预计送达：下单时 `estimatedDeliveryAt = now + prepMinutes + 骑行时间`；呼叫成功时按 `now + 骑行时间` 重算一次；顾客端显示 15 分钟区间文案「预计 18:40–18:55 送达」。
 - 快递100 参数：`weight = max(0.5, Σ(netWeightG ?? default) × qty / 1000)`；`price = 商品小计(元)`；`goods = [{name:'凉菜', type:'食品', count: 总件数}]`；`remark = 顾客备注 + 餐具标记`；`insurance` 按设置。
 
@@ -386,7 +386,7 @@ Order 侧写入一律 `updateMany({where:{id, deliveryType:'LOCAL', status:{in: 
 - 非生产：`POST /admin/system/delivery-mock {orderId, scenario}`，场景由服务端用真实 salt 构造：`advance:<status>`、`out_of_order`、`replay_last_callback`、`callback_without_update_time`、`callback_bad_sign`、`oversized_status_desc`、`create_timeout_then_callback`（下单响应超时后回调仍按 deliveryNo 命中）、`error:30004`、`error:30005`、`cancel_after_delivering`（720 在 310 后）。
 
 ### 5.10 错误码
-`42220` 超出配送范围 · `42221` 请先取消配送单 · `42222` 非营业时间 · `42223` 地址缺少定位 · `42224` 商品渠道不符 · `42225` 呼叫/取消配送单失败(附运力方原文) · `42226` 同城暂未开通/暂停 · `42227` 配送费已更新 · `42228` 已有进行中的配送单 · `42229` 已超过可取消时间 · `42230` 超出单次配送上限 · `42232` 快递100 余额不足已熔断（充值后系统状态页点「恢复」）· `42233` 无在途配送单 · `42234` 配送单状态不允许该操作（未成单/状态未确认/仅「状态未确认」可作废）· `42235` 小费超上限或非待抢单状态 · `42236` 加小费被运力拒绝/请求超时 · `42237` 配送单状态已变化请刷新（并发保护）· `42238` 取消请求超时、状态未变化。`42232`-`42238` 均在 `services/delivery/orchestrator.ts` 抛出，详见 `docs/api.md` 附录错误码表。
+`42220` 超出配送范围 · `42221` 请先取消配送单 · `42222` 非营业时间 · `42223` 地址缺少定位 · `42224` 商品渠道不符 · `42225` 呼叫/取消配送单失败(附运力方原文) · `42226` 同城暂未开通/暂停 · `42227` 配送费已更新 · `42228` 已有进行中的配送单 · `42229` 已超过可取消时间 · `42230` 超出单次配送上限 · `42232` 快递100 余额不足已熔断（充值后系统状态页点「恢复」）· `42233` 无在途配送单 · `42234` 配送单状态不允许该操作（未成单/状态未确认/仅「状态未确认」可作废）· `42235` 小费超上限或非待抢单状态 · `42236` 加小费被运力拒绝/请求超时 · `42237` 配送单状态已变化请刷新（并发保护）· `42238` 取消请求超时、状态未变化 · `42239` 请重新获取配送报价（LOCAL 下单缺少/无效 `quoteToken`；42240-42242 已预留给打印机，故取 42238 之后这唯一的空位）。`42232`-`42238` 均在 `services/delivery/orchestrator.ts` 抛出，详见 `docs/api.md` 附录错误码表。
 
 ### 5.11 拒单（`POST /admin/orders/:id/reject`，实现于 M2，本节为原设计遗漏的补记）
 

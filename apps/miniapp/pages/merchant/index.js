@@ -127,7 +127,14 @@ Page({
               success(res) {
                 var body = res.data
                 if (body && body.code === 0) {
-                  wx.showToast({ title: '门店坐标已保存', icon: 'success' })
+                  // 门店坐标是报价凭证的签名字段之一（服务端 signQuote 的 sla/sln）：一改，所有在途
+                  // 报价立刻作废，正在结算页的顾客提交时会收到「配送费已更新，请刷新后重新提交」。
+                  // 别只说「已保存」——店主得知道这一下会打断正在下单的人，才不会在高峰期随手点它。
+                  wx.showModal({
+                    title: '门店坐标已保存',
+                    content: '配送距离与运费都按新坐标重新计算。正在结算页的顾客需要刷新后重新报价。',
+                    showCancel: false,
+                  })
                 } else if (res.statusCode === 401 || (body && (body.code === 40101 || body.code === 40102))) {
                   self._backToLogin()
                 } else {

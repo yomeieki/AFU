@@ -75,12 +75,18 @@ export default function LocalSettings() {
       fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, freeThreshold: fen.freeThreshold!, minOrderAmount: fen.minOrderAmount! },
       tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
     }
+    // 保存后的提示按「这次是否动了门店坐标」分叉，因为两种情况对顾客的影响完全不同：
+    //  - 动了坐标：在途报价凭证里签的是旧门店坐标，那段道路距离量的是另一条路，只能整张作废
+    //    （顾客提交时收到 42227「配送费已更新，请刷新后重新提交」）；
+    //  - 没动坐标：凭证里除距离外每个量（运费/范围/起送门槛）都在下单时按当前设置重算，
+    //    所以新参数立刻生效，正在结算页的顾客**不会**被踢下来，按新参数校验即可。
+    const storeMoved = latE6 !== s.store.latE6 || lngE6 !== s.store.lngE6
     setSaving(true)
     try {
       hydrate(await updateLocalSettings(payload))
-      // 改动即刻生效：距离与运费都写在 quoteToken 的签名里，settings.version 一变旧 token 立即作废，
-      // 正在结算页的顾客提交时会收到「配送费已更新，请刷新后重新提交」（42227）。
-      toast.success('已保存（即刻生效；正在结算页的顾客需刷新后重新报价）')
+      toast.success(storeMoved
+        ? '已保存（门店坐标已变更，正在结算页的顾客需刷新后重新报价）'
+        : '已保存（即刻生效；正在结算页的顾客提交时按新参数校验，无需重新报价）')
     } catch (e) {
       toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '保存失败')
     } finally {

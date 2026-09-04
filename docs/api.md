@@ -951,8 +951,8 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 | 接口 | 说明 |
 |---|---|
 | `GET /api/local/meta` | 公开，无需登录。同城配送店头信息：`{ enabled, isOpen, paused, nextOpenText, businessHours, store{name,phone,province,city,district,address,latE6,lngE6}, radiusKm, radiusStraightKm, fee, prepMinutes, acceptGraceMin, limits }` |
-| `POST /api/local/quote` | 地址/坐标报价。`optionalUserAuth`：传 `addressId` 需登录（校验地址归属）；传 `latE6,lngE6` 可匿名（如未登录预览页）。Body `{ addressId?, latE6?, lngE6?, subtotal?=0 }`（金额分，`addressId` 与坐标二选一）。返回 `{ enabled, isOpen, paused, nextOpenText, inRange, distanceM, distanceSource, straightDistanceM, fee, minOrderAmount, belowMin, estimatedMinutes, quoteToken }`。`distanceM` 优先取运力方 `batchPrice` 返回的**真实道路距离**（5 秒超时）；查不到就退回 `直线 × detourFactor` 的估算，**不报错**，此时 `distanceSource='ESTIMATED'`（实测为 `'MEASURED'`），调用方据此决定文案。`quoteToken` 仅在 `inRange=true` 时签发，TTL 5 分钟，签入 `fee/distanceM/addressId/坐标/settings.version`，下单时携带（见下） |
-| `POST /api/orders`（LOCAL 分支） | `deliveryType: 'LOCAL'` 时走独立计费（`services/local-settings.ts`，**不调用**全局运费 `getShippingSettings/calcShippingFee`）：校验营业时段/暂停/门店坐标/地址坐标/配送范围/起送门槛/单次件数与重量上限。**距离不再在这里重算**：`quoteToken` 的签名/有效期/`addressId`/坐标/`settings.version` 五项全对时，直接采用 token 里签过名的真实道路距离，范围与运费都按它判；任一不符即当作没有 token，退回 `直线 × detourFactor` 兜底（`version` 不符则直接 42227 要求刷新）。实收运费仍取 `min(token.fee, 重算 fee)`，重算更贵报 42227——距离同源之后这条挡的是顾客把 `/local/quote` 的 `subtotal` 报高换免运 token |
+| `POST /api/local/quote` | 地址/坐标报价。`optionalUserAuth`：传 `addressId` 需登录（校验地址归属）；传 `latE6,lngE6` 可匿名（如未登录预览页）。Body `{ addressId?, latE6?, lngE6?, subtotal?=0 }`（金额分，`addressId` 与坐标二选一）。返回 `{ enabled, isOpen, paused, nextOpenText, inRange, distanceM, distanceSource, straightDistanceM, fee, minOrderAmount, belowMin, estimatedMinutes, quoteToken }`。`distanceM` 优先取运力方 `batchPrice` 返回的**真实道路距离**（5 秒超时）；查不到就退回 `直线 × detourFactor` 的估算，**不报错**，此时 `distanceSource='ESTIMATED'`（实测为 `'MEASURED'`），调用方据此决定文案。`quoteToken` 仅在 **`inRange=true` 且传了 `addressId`** 时签发（匿名坐标报价签出来的 `addressId=0` 必然兑不了，索性不签），TTL **15 分钟**，签入 `fee/distanceM/addressId/收货坐标/门店坐标`（**不含 `settings.version`**）。下单**必须**携带，见下 |
+| `POST /api/orders`（LOCAL 分支） | `deliveryType: 'LOCAL'` 时走独立计费（`services/local-settings.ts`，**不调用**全局运费 `getShippingSettings/calcShippingFee`）：校验营业时段/暂停/门店坐标/地址坐标/配送范围/起送门槛/单次件数与重量上限。**距离不再在这里重算，也没有兜底估算这条路**：`quoteToken` 是必填的——不带 / 验签或有效期不过 / `addressId` 不符 / **收货**坐标不符 → **42239**；**门店**坐标不符（店主改过门店坐标）→ 42227。全对时直接采用 token 里签过名的真实道路距离，范围与运费都按它判。**不比 `settings.version`**：除距离外每个量都在这里用当前设置重算，与门店坐标无关的设置变更（营业时间、备餐时长、费率、半径…）不作废在途报价。实收运费仍取 `min(token.fee, 重算 fee)`，重算更贵报 42227——距离同源之后这条挡的是顾客把 `/local/quote` 的 `subtotal` 报高换免运 token |
 | `POST /api/orders/:id/cancel-request` | 同城订单被接单（`PREPARING`）后 `acceptGraceMin` 分钟宽限期内，顾客可申请取消（订单状态**不变**，交由店员在后台确认后全额退款；不是自助取消）。Body `{ note? }` → `{ cancelRequestedAt }`。窗口外或已申请过 → 42229。M1 无配送单，`cancelRequestDeliveryStatus` 快照字段恒为 `NONE`（M2 起改为快照当时有效配送单状态） |
 
 ### 管理端
@@ -967,7 +967,7 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 
 共享的邮寄端点 `POST /api/admin/orders/:id/accept|ship|complete` 命中 `deliveryType='LOCAL'` 的订单一律返回 42204「同城订单请在同城看板操作」（M1 尚无同城看板，这条防线先挡住误操作；避免给 LOCAL 订单写出 `Shipment` 记录）。
 
-### 新错误码（12 个）
+### 新错误码（13 个）
 
 | code | HTTP | 含义 | 出现位置 |
 |---|---|---|---|
@@ -979,12 +979,13 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 | 42223 | 400 | 地址缺少定位（未在地图上选点） | `POST /api/local/quote`、`POST /api/orders`（LOCAL） |
 | 42224 | 400 | 商品渠道与下单渠道不符 | `POST /api/orders` 逐行校验 `product.channel === channelOfDeliveryType(deliveryType)` |
 | 42226 | 400 | 同城配送未开通 / 已暂停 / 门店未设坐标 | `POST /api/local/quote`、`POST /api/orders`（LOCAL） |
-| 42227 | 400 | 配送费已更新，请刷新后重新提交 | `POST /api/orders`（LOCAL，携带 `quoteToken` 且「重算运费更贵」或「签发后同城设置改过（`version` 不符）」时） |
+| 42227 | 400 | 配送费已更新，请刷新后重新提交 | `POST /api/orders`（LOCAL，「重算运费更贵」或「凭证签发后**门店坐标**变更」时） |
 | 42229 | 400 | 已超过可取消时间 / 已提交过取消申请 | `POST /api/orders/:id/cancel-request` |
 | 42230 | 400 | 超出单次配送件数/重量上限 | `POST /api/orders`（LOCAL） |
 | 42231 | 400 | 该分类下有待付款订单，暂不可切换渠道 | `PUT /api/admin/categories/:id`（改 `channel` 时，`services/product-channel.ts`） |
+| 42239 | 400 | 请重新获取配送报价后再提交 | `POST /api/orders`（LOCAL）：`quoteToken` 缺失/验签失败/已过期/`addressId` 或**收货**坐标与凭证不符。与 42227 的分工：42239 是「你手上这张票不作数，重报一次价」，42227 是「店家改了参数，刷新后重新提交」 |
 
-> 上述 12 个码值均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出（`42221` 在 M1 阶段仅预留码值，M2 起已实现，见附录 C）；`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）两个码值不在该清单中，同样在 M1 阶段仅预留，**M2 起已实现，用法见附录 C**。
+> 上述码值中的 12 个均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出（`42221` 在 M1 阶段仅预留码值，M2 起已实现，见附录 C）；`42239` 是后加的（强制报价凭证），占用 42238 与预留给打印机的 42240-42242 之间唯一的空位；`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）两个码值不在该清单中，同样在 M1 阶段仅预留，**M2 起已实现，用法见附录 C**。
 
 ---
 
