@@ -115,6 +115,12 @@ Page({
     wx.switchTab({ url: '/pages/product/list' })
   },
 
+  // 回封面重选渠道。reLaunch 会清空页面栈，正好符合「封面是起点」的语义；
+  // navigateTo 会把封面叠在首页之上，返回时又掉回首页，反而绕不出去。
+  goCover() {
+    wx.reLaunch({ url: '/pages/cover/index' })
+  },
+
   goToAllProducts() {
     app.globalData.pendingCategoryId = null
     app.globalData.pendingCategoryName = null

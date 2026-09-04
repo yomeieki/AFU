@@ -1,6 +1,14 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
 
+  <!-- 返回封面：首页是 tabBar 页，原生导航栏左上角没有返回箭头也加不了，
+       所以放在内容区最顶。封面用 reLaunch 而不是 navigateTo——它是 pages[0] 且非
+       tabBar 页，语义上是「回到起点重新选渠道」，不该在栈里叠一层。 -->
+  <view class="back-cover" hover-class="back-cover-hover" hover-stay-time="60" bindtap="goCover">
+    <view class="back-cover-icon"></view>
+    <text class="back-cover-text">封面</text>
+  </view>
+
   <!-- Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
   <swiper
     wx:if="{{banners.length > 0}}"

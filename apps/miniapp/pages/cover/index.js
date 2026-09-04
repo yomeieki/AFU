@@ -22,9 +22,9 @@ var app = getApp()
 Page({
   data: {
     stageStyle: '',
-    // 开发期置 true 可显示热区虚线框，核对是否压在画上的按钮上
-    // 注意：当前为 true，仅供 PO 在开发者工具里核对热区；看完必须改回 false 再提审
-    debug: true,
+    // 开发期置 true 可显示热区虚线框，核对是否压在画上的按钮上。
+    // 2026-09-05 PO 已在开发者工具核对通过，改回 false。
+    debug: false,
   },
 
   onLoad: function () {

@@ -12,8 +12,10 @@
 }
 .privacy-panel {
   box-sizing: border-box;
-  min-height: 50vh;
-  padding: 44rpx 36rpx 28rpx;
+  /* 不设 min-height：面板按内容撑高即可。
+     原来写死 50vh，而内容只有一段话加两个按钮，半屏高度里有一大半是空白，
+     顶边压到屏幕中线以上，观感像是弹错了层。 */
+  padding: 44rpx 36rpx calc(28rpx + env(safe-area-inset-bottom));
   background: var(--card, #ffffff);
   border-radius: var(--radius-xl, 24rpx) var(--radius-xl, 24rpx) 0 0;
   animation: privacy-slide-up 0.24s ease-out;
