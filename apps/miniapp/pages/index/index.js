@@ -24,6 +24,11 @@ Page({
     }
   },
 
+  // 从封面 switchTab 进来时补写购物车角标：onLaunch 那次写在非 tabBar 的封面页上会被跳过
+  onShow() {
+    app.applyCartBadge()
+  },
+
   onPullDownRefresh() {
     this.loadData()
     this.loadLocalEntry()
@@ -58,8 +63,10 @@ Page({
         })
         wx.stopPullDownRefresh()
       })
-      .catch(function() {
-        // 断网/接口失败：必须收起骨架屏，否则首页永远停在加载态
+      .catch(() => {
+        // 断网/接口失败：必须收起骨架屏，否则首页永远停在加载态。
+        // 这里必须是箭头函数：写成 function 的话 this 是 undefined，setData 抛错被
+        // Promise 吞掉，骨架屏反而永远收不起来——正是本行注释要防的事。
         this.setData({ loading: false })
         wx.stopPullDownRefresh()
       })

@@ -49,6 +49,13 @@
   <!-- More menu -->
   <view class="menu-section card">
     <view class="menu-list">
+      <!-- 常驻同城入口：封面点「全国邮寄」走 switchTab 会销毁封面，
+           这一整个会话里顾客就再也回不到同城，这里是唯一的常驻回路 -->
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="goLocal">
+        <view class="menu-icon icon icon-truck"></view>
+        <text class="menu-label">同城配送</text>
+        <view class="menu-arrow icon icon-arrow"></view>
+      </view>
       <view class="menu-item" hover-class="menu-item-hover" bindtap="goToAddresses">
         <view class="menu-icon icon icon-pin"></view>
         <text class="menu-label">收货地址</text>
@@ -73,3 +80,5 @@
   </view>
 
 </view>
+
+<privacy-popup id="privacy-popup" />

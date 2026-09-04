@@ -84,6 +84,17 @@ Page({
     wx.navigateTo({ url: url })
   },
 
+  goLocal() {
+    // 与首页/购物车/商品详情的同城入口同一套契约：先过位置许可再进
+    getApp().ensurePrivacyAuthorize()
+      .then(function() {
+        wx.navigateTo({ url: '/pages/local/index' })
+      })
+      .catch(function() {
+        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+      })
+  },
+
   goToAddresses() {
     wx.navigateTo({ url: '/pages/address/list' })
   },

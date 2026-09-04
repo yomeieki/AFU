@@ -3,6 +3,8 @@ const { getCart } = require('./api/cart')
 
 // tabBar 中购物车的索引（首页/分类/购物车/我的）
 var CART_TAB_INDEX = 2
+// tabBar 页路由表——与 app.json 的 tabBar.list 一一对应，改那边记得改这里
+var TAB_BAR_PAGES = ['pages/index/index', 'pages/product/list', 'pages/cart/index', 'pages/user/index']
 
 App({
   globalData: {
@@ -103,14 +105,26 @@ App({
           return sum + (item.quantity || 0)
         }, 0)
         self.globalData.cartCount = count
-        if (count > 0) {
-          wx.setTabBarBadge({ index: CART_TAB_INDEX, text: count > 99 ? '99+' : String(count) })
-        } else {
-          wx.removeTabBarBadge({ index: CART_TAB_INDEX })
-        }
+        self.applyCartBadge()
       })
       .catch(function() {
         // 未登录等场景静默忽略
       })
+  },
+
+  // 把 globalData.cartCount 写到 tabBar 角标上。
+  // 必须先判当前页是不是 tabBar 页：封面页（pages[0]，非 tabBar）在 onLaunch 时就是当前页，
+  // 此时调 setTabBarBadge 会 fail «not TabBar page»，且整个首次会话角标都不会出现
+  // ——因为另外几个 updateCartCount 调用点都不在启动路径上。
+  applyCartBadge() {
+    var pages = getCurrentPages()
+    var cur = pages[pages.length - 1]
+    if (!cur || TAB_BAR_PAGES.indexOf(cur.route) === -1) return
+    var count = this.globalData.cartCount
+    if (count > 0) {
+      wx.setTabBarBadge({ index: CART_TAB_INDEX, text: count > 99 ? '99+' : String(count), fail: function() {} })
+    } else {
+      wx.removeTabBarBadge({ index: CART_TAB_INDEX, fail: function() {} })
+    }
   },
 })

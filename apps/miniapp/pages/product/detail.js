@@ -142,6 +142,13 @@ Page({
   },
 
   goLocalCheckout: function() {
-    wx.navigateTo({ url: '/pages/local/index' })
+    // 与首页/购物车/封面的同城入口保持一致：先过位置许可，避免进到地图选点才被拦
+    getApp().ensurePrivacyAuthorize()
+      .then(function() {
+        wx.navigateTo({ url: '/pages/local/index' })
+      })
+      .catch(function() {
+        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+      })
   },
 })
