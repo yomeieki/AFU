@@ -69,6 +69,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     // 已用 batchPrice 交叉验证：正北 1998m 的点，四家运力返回 3057–3400m，坐标被正确解读。
     latE6: 29341126, lngE6: 104779018,
   },
+  // 半径按**道路距离**判，不是直线（见 billableDistanceM 与 §配送报价）。
+  // 5 km 而不是 7-8：5 km 骑手成本已 ¥14.5（实测），7-8 km 约 ¥20，
+  // 对一单五六十块的凉菜吃不消；凉菜夏天也有食安顾虑，送太远不合适。
   radiusKm: 5,
   // ⚠ 1.35 是拍脑袋的初值，店主 2026-09-04 用免费 batchPrice 打了 8 个方向实测，证明它系统性低估：
   //   正北2km 1.67 / 正南2km 1.53 / 正东2km 1.88 / 正西2km 2.12
@@ -78,7 +81,14 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   // 任何固定系数在某些方向都必然错得离谱。正解是用 batchPrice 返回的真实道路距离算运费，
   // 这个系数只在查价失败时兜底——所以取 1.7 而不是 1.67：高估只是少赚，低估是每单倒贴。
   detourFactor: 1.7,
-  fee: { baseFee: 300, baseKm: 3, perKmFee: 100, freeThreshold: 0, minOrderAmount: 0 },
+  // 店主 2026-09-04 按实测骑手成本定：2km ¥7.15–8.58 / 3km ¥7.98–9.19 / 5km ¥13.75–15.35。
+  // 账（顾客付 / 骑手成本 / 店家担）：
+  //   3km ¥40 单 → ¥6 / ¥8.5 / 担 ¥2.5
+  //   5km ¥40 单 → ¥11 / ¥14.5 / 担 ¥3.5
+  //   5km ¥99 单 → 免运费 / ¥14.5 / 担 ¥14.5
+  // 每单补贴占订单 6-9%，毛利扛得住。免运门槛特意设在 ¥99——5 km 成本 ¥14.5，
+  // 只有把客单价推上去才摊得平。先跑一个月看单量与距离分布再调。
+  fee: { baseFee: 600, baseKm: 3, perKmFee: 250, freeThreshold: 9900, minOrderAmount: 4000 },
   businessHours: [{ start: '09:00', end: '20:00' }],
   prepMinutes: 15,
   riderSpeedKmh: 15,
