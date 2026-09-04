@@ -194,6 +194,8 @@ Page({
         // 商品渠道由服务端按商品本身确定；菜单页只接受 LOCAL，避免混入邮寄车。
         if (result && result.channel !== 'LOCAL') {
           wx.showToast({ title: '该商品不属于同城菜单', icon: 'none' })
+          // 已落入邮寄车：刷新 tabBar 角标，避免角标与真实邮寄车不一致
+          getApp().updateCartCount()
           self._adding = false
           return
         }

@@ -556,6 +556,7 @@ Page({
   },
 
   onRequestCancel() {
+    if (this._requestCanceling) return
     var self = this
     wx.showModal({
       title: '申请取消',
@@ -563,14 +564,21 @@ Page({
       confirmText: '提交申请',
       success: function(res) {
         if (!res.confirm) return
+        if (self._requestCanceling) return
+        self._requestCanceling = true
         requestCancelOrder(self.data.order.id)
           .then(function() {
+            self._requestCanceling = false
             wx.showToast({ title: '取消申请已提交', icon: 'none', duration: 2000 })
             self.loadOrder(self._orderId, true)
           })
           .catch(function(err) {
+            self._requestCanceling = false
+            // requestCancelOrder 为 silent:true，页面需自行提示非 42229 失败
             if (err && err.code === 42229) {
               wx.showToast({ title: err.message, icon: 'none', duration: 2000 })
+            } else {
+              wx.showToast({ title: (err && err.message) || '申请失败，请重试', icon: 'none', duration: 2000 })
             }
             self.loadOrder(self._orderId, true)
           })

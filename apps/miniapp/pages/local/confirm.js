@@ -29,8 +29,11 @@ function formatArrival(minutes) {
 }
 
 function decorateQuote(quote) {
+  var km = ((quote.distanceM || 0) / 1000).toFixed(1)
+  var estimated = quote.distanceSource === 'ESTIMATED'
   return Object.assign({}, quote, {
-    distanceText: ((quote.distanceM || 0) / 1000).toFixed(1),
+    distanceText: km,
+    distanceLabel: estimated ? ('约 ' + km + ' km（估算）') : ('距门店 ' + km + ' km'),
     feeText: formatPrice(quote.fee || 0),
     arrivalTime: formatArrival(quote.estimatedMinutes),
   })
@@ -154,29 +157,37 @@ Page({
           quotedAt: Date.now(),
           headNotice: notice.text,
           headBlocking: notice.blocking,
-          payAmount: self.data.subtotal + (quote.fee || 0),
           quoteError: '',
         }
         // 服务端的状态结论优先级：未开通/暂停 > 打烊 > 超范围 > 未达起送。
+        // m5: blockReason 生效时不保留可支付合计，避免底部展示收不到的金额。
         if (!quote.enabled) {
           patch.blockReason = '同城配送暂未开通'
           patch.quoteToken = null
+          patch.payAmount = null
         } else if (quote.paused) {
           patch.blockReason = '暂停接单' + (quote.paused.reason ? '：' + quote.paused.reason : '')
           patch.quoteToken = null
+          patch.payAmount = null
         } else if (!quote.isOpen) {
           patch.blockReason = quote.nextOpenText || '当前非营业时间'
           patch.quoteToken = null
+          patch.payAmount = null
         } else if (!quote.inRange) {
           patch.blockReason = '超出配送范围（约 ' + (quote.distanceM / 1000).toFixed(1) + ' km）'
           patch.quoteToken = null
+          patch.payAmount = null
         } else if (quote.belowMin) {
           patch.blockReason = '还差 ¥' + formatPrice(quote.minOrderAmount - self.data.subtotal) + ' 起送'
           patch.quoteToken = null
+          patch.payAmount = null
         } else {
           patch.blockReason = ''
           patch.quoteToken = quote.quoteToken
+          patch.payAmount = self.data.subtotal + (quote.fee || 0)
         }
+        // m1: 报价成功后复位，后续 42901 仍可自动重试一次
+        self._retriedRateLimit = false
         self.setData(patch)
       })
       .catch(function(err) {
@@ -194,6 +205,7 @@ Page({
         self.setData({
           quoting: false,
           quoteToken: null,
+          payAmount: null,
           quoteError: rateLimited ? '操作太频繁，请稍后再试' : '运费获取失败',
         })
         if (rateLimited && !self._retriedRateLimit) {
@@ -317,6 +329,10 @@ Page({
       return
     }
     wx.makePhoneCall({ phoneNumber: phone })
+  },
+
+  onRetryQuote: function() {
+    this.refreshQuote('retry')
   },
 
   onSubmit: function() {

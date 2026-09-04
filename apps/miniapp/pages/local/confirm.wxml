@@ -25,10 +25,10 @@
     <view wx:if="{{quoting}}" class="delivery-loading">正在计算配送费…</view>
     <view wx:elif="{{quoteError}}" class="delivery-error">
       <text>{{quoteError}}</text>
-      <view class="retry-inline" bindtap="onSubmit">重新获取运费</view>
+      <view class="retry-inline" bindtap="onRetryQuote">重新获取运费</view>
     </view>
     <view wx:elif="{{quote}}" class="delivery-info {{feeFlash ? 'fee-flash' : ''}}">
-      <text>距门店 {{quote.distanceText}} km</text>
+      <text>{{quote.distanceLabel}}</text>
       <text wx:if="{{quote.fee > 0}}">配送费 ¥{{pricefmt.fen(quote.fee)}}</text>
       <text wx:else>免运费</text>
       <text>预计 {{quote.estimatedMinutes}} 分钟 · {{quote.arrivalTime}} 送达</text>
@@ -90,10 +90,16 @@
   <view class="bottom-main">
     <view class="bottom-total-wrap">
       <text class="bottom-total-label">合计</text>
-      <block wx:if="{{quote && !quoting}}">
+      <block wx:if="{{quoteError}}">
+        <text class="bottom-calculating">待重新计算</text>
+      </block>
+      <block wx:elif="{{quote && !quoting && payAmount != null && !blockReason}}">
         <text class="price-symbol">¥</text>
         <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(payAmount))}}</text>
         <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
+      </block>
+      <block wx:elif="{{quote && !quoting && blockReason}}">
+        <text class="bottom-calculating">待重新计算</text>
       </block>
       <text wx:else class="bottom-calculating">运费计算中</text>
     </view>

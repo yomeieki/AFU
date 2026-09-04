@@ -32,7 +32,7 @@
         <text>{{order.receiverFullAddress}}</text>
       </view>
     </view>
-    <view class="info-row">
+    <view class="info-row" wx:if="{{order.distanceText}}">
       <text class="info-label">配送距离</text>
       <text class="info-value">距门店 {{order.distanceText}} km</text>
     </view>
@@ -76,7 +76,8 @@
     <view class="local-cancel-submitted" wx:if="{{order.cancelRequestedAt}}">取消申请已提交，商家会尽快处理</view>
     <view wx:elif="{{order.canRequestCancel}}">
       <text class="local-cancel-title">可申请取消</text>
-      <text class="local-cancel-copy">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.localCancelDeadlineText}}）</text>
+      <text class="local-cancel-copy" wx:if="{{graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.localCancelDeadlineText}}）</text>
+      <text class="local-cancel-copy" wx:elif="{{order.localCancelDeadlineText}}">可申请取消截止 {{order.localCancelDeadlineText}}</text>
     </view>
     <view class="local-cancel-unavailable" wx:else>订单已开始制作，如有问题请联系商家</view>
   </view>
