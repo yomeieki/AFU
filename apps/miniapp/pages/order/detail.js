@@ -393,6 +393,16 @@ Page({
           self.setData({ courierLoc: r.location || null })
         })
         .catch(function() {})
+      getOrderDetail(self._orderId)
+        .then(function(order) {
+          self.setData({
+            order: decorateOrder(order),
+            countdown: order.status === 'PENDING_PAYMENT' ? countdownText(order.payExpireAt) : '',
+          })
+          var delivery = order.delivery
+          if (!delivery || COURIER_LIVE_STATUSES.indexOf(delivery.status) === -1) self.stopCourierPoll()
+        })
+        .catch(function() {})
     }
     tick()
     this._courierTimer = setInterval(tick, 30 * 1000)

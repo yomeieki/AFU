@@ -15,6 +15,23 @@ function getStraightDistanceKm(fromLatE6, fromLngE6, toLatE6, toLngE6) {
   return earthRadiusKm * c
 }
 
+function decorateLocalAddresses(list, meta) {
+  var store = meta && meta.store
+  // 没有门店坐标时，不能把 null 当作 0 从赤道起算；直接不显示辅助距离标签。
+  if (!store || store.latE6 == null || store.lngE6 == null) return list
+  return list.map(function(address) {
+    if (address.latE6 === null || address.latE6 === undefined || address.lngE6 === null || address.lngE6 === undefined) {
+      return Object.assign({}, address, { localStatus: 'missing', localDistanceText: '需补充定位' })
+    }
+    var km = getStraightDistanceKm(store.latE6, store.lngE6, address.latE6, address.lngE6)
+    var inRange = km <= meta.radiusStraightKm
+    return Object.assign({}, address, {
+      localStatus: inRange ? 'near' : 'far',
+      localDistanceText: '直线约 ' + km.toFixed(1) + ' km' + (inRange ? '' : ' · 可能超范围'),
+    })
+  })
+}
+
 Page({
   data: {
     addresses: [],
@@ -48,18 +65,10 @@ Page({
           // batchPrice（有连接占用），二是服务端限流 30 次/分钟，五六个地址就能把顾客
           // 后面的正经报价挤掉。所以文案一律带「直线约」，且「可能超范围」不禁用选择：
           // 真正的 42220 由确认页拿服务端结论来判，前端不替服务端下结论。
-          var addresses = list.map(function(address) {
-            if (address.latE6 === null || address.latE6 === undefined || address.lngE6 === null || address.lngE6 === undefined) {
-              return Object.assign({}, address, { localStatus: 'missing', localDistanceText: '需补充定位' })
-            }
-            var km = getStraightDistanceKm(meta.store.latE6, meta.store.lngE6, address.latE6, address.lngE6)
-            var inRange = km <= meta.radiusStraightKm
-            return Object.assign({}, address, {
-              localStatus: inRange ? 'near' : 'far',
-              localDistanceText: '直线约 ' + km.toFixed(1) + ' km' + (inRange ? '' : ' · 可能超范围'),
-            })
-          })
-          self.setData({ addresses: addresses, loading: false })
+          self.setData({ addresses: decorateLocalAddresses(list, meta), loading: false })
+        }).catch(function() {
+          // 距离标签只是辅助信息，拿不到就不显示；地址本身必须照常渲染。
+          self.setData({ addresses: list, loading: false })
         })
       })
       .catch(function() {

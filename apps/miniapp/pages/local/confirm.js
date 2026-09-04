@@ -124,6 +124,7 @@ Page({
 
   refreshQuote: function(reason) {
     var self = this
+    var seq = (this._quoteSeq = (this._quoteSeq || 0) + 1)
     var address = this.data.address
     if (this._quoteTimer) {
       clearTimeout(this._quoteTimer)
@@ -144,6 +145,7 @@ Page({
     this.setData({ quoting: true, quoteToken: null, quoteError: '' })
     quoteLocal(address.id, this.data.subtotal)
       .then(function(rawQuote) {
+        if (seq !== self._quoteSeq) return
         var quote = decorateQuote(rawQuote)
         var notice = getHeadNotice(quote)
         var patch = {
@@ -178,6 +180,7 @@ Page({
         self.setData(patch)
       })
       .catch(function(err) {
+        if (seq !== self._quoteSeq) return
         if (err.code === 42223) {
           self.setData({ quoting: false, quoteToken: null, quoteError: '', blockReason: err.message || '该地址缺少定位，请补充后再下单' })
           return
@@ -203,6 +206,9 @@ Page({
   scheduleQuote: function() {
     var self = this
     if (this._quoteTimer) clearTimeout(this._quoteTimer)
+    // 小计一变，旧凭证与旧金额立刻作废：debounce 的 500ms 里不能提交旧报价。
+    this._quoteSeq = (this._quoteSeq || 0) + 1
+    this.setData({ quoting: true, quoteToken: null })
     this._quoteTimer = setTimeout(function() { self.refreshQuote('subtotal') }, 500)
   },
 
