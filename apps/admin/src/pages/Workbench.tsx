@@ -538,9 +538,9 @@ function Card({ card, now, onOpen, onHandleCancel }: {
 // ─────────────────────────────────────────────────────────
 // 顶栏（§8）
 // ─────────────────────────────────────────────────────────
-function TopBar({ snap, shopName, targetTheme, onToggleTheme, focus, onFullscreen, onExit, onResetCircuit, circuitBusy }: {
+function TopBar({ snap, shopName, targetTheme, onToggleTheme, focus, isFullscreen, onFullscreen, onExit, onResetCircuit, circuitBusy }: {
   snap: WorkbenchSnapshot | null; shopName: string; targetTheme: 'light' | 'dark'
-  onToggleTheme: () => void; focus: boolean; onFullscreen: () => void; onExit: () => void
+  onToggleTheme: () => void; focus: boolean; isFullscreen: boolean; onFullscreen: () => void; onExit: () => void
   onResetCircuit: () => void; circuitBusy: boolean
 }) {
   const today = new Date()
@@ -573,8 +573,10 @@ function TopBar({ snap, shopName, targetTheme, onToggleTheme, focus, onFullscree
             {targetTheme === 'dark' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             {targetTheme === 'dark' ? '深色' : '浅色'}
           </button>
+          {/* 三个状态互不相同：真全屏 / 退化的专注模式 / 普通。按钮必须说出「再点会发生什么」，
+              而 focus 只代表专注模式——用它当全屏指示，真全屏时按钮会永远停在「全屏」（§8） */}
           <button className="wb__iconbtn" onClick={onFullscreen}>
-            <Maximize className="w-4 h-4" />{focus ? '退出专注' : '全屏'}
+            <Maximize className="w-4 h-4" />{isFullscreen ? '退出全屏' : focus ? '退出专注' : '全屏'}
           </button>
           <button className="wb__iconbtn" onClick={onExit}><LogOut className="w-4 h-4" />退出工作台</button>
         </div>
@@ -626,6 +628,7 @@ export default function Workbench() {
   const [settings, setSettings] = useState<LocalDeliverySettings | null>(null)
   const [theme, setTheme] = useState<'light' | 'dark' | null>(readTheme)
   const [focus, setFocus] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const [drawer, setDrawer] = useState<{ card: WorkbenchCard; colKey: ColKey } | null>(null)
   const [detail, setDetail] = useState<{ order: Order; delivery: DeliveryInfo | null; events: DeliveryEventInfo[] } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -682,8 +685,14 @@ export default function Workbench() {
 
   // 用户按 Esc/F11 原生退出真全屏时，document.fullscreenElement 会变 null——若 focus 这时仍是
   // true（理论上不该发生，见 toggleFullscreen 的注释），在这里兜底复位，避免卡在专注模式要再点一次
+  // 真全屏状态只能问浏览器要：用户按 Esc/F11 原生退出时不会经过我们的按钮，
+  // 自己记一个布尔值早晚会和现实脱节。
   useEffect(() => {
-    const onFsChange = () => { if (!document.fullscreenElement) setFocus(false) }
+    const onFsChange = () => {
+      const on = !!document.fullscreenElement
+      setIsFullscreen(on)
+      if (!on) setFocus(false)
+    }
     document.addEventListener('fullscreenchange', onFsChange)
     return () => document.removeEventListener('fullscreenchange', onFsChange)
   }, [])
@@ -1097,7 +1106,7 @@ export default function Workbench() {
     <div className={`wb ${focus ? 'wb--focus' : ''}`} data-theme={theme ?? undefined} ref={rootRef}>
       <TopBar
         snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
-        focus={focus} onFullscreen={toggleFullscreen} onExit={() => void exitWorkbench()}
+        focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={() => void exitWorkbench()}
         onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy}
       />
 
