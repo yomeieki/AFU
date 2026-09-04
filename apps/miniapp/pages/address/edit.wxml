@@ -94,3 +94,5 @@
     <text>{{saving ? '保存中...' : '保存地址'}}</text>
   </view>
 </view>
+
+<privacy-popup id="privacy-popup" />

@@ -16,6 +16,8 @@ App({
     pendingCategoryAll: false,
     // Stores address selected in address list for order confirm page
     selectedAddress: null,
+    // 当前待决的官方隐私授权回调，由挂载的 privacy-popup 消费
+    privacyResolve: null,
   },
   onLaunch() {
     const token = wx.getStorageSync('token')
@@ -26,6 +28,17 @@ App({
     this._tryLogin()
       .then(function() { self.updateCartCount() })
       .catch(function(err) { console.warn('[app] wechatLogin failed', err) })
+    if (wx.onNeedPrivacyAuthorization) {
+      wx.onNeedPrivacyAuthorization(function(resolve) {
+        // 小程序没有全局事件机制；同一时刻只可能有一个待决的授权请求。
+        getApp().globalData.privacyResolve = resolve
+        var pages = getCurrentPages()
+        var cur = pages[pages.length - 1]
+        var popup = cur && cur.selectComponent && cur.selectComponent('#privacy-popup')
+        if (popup) popup.show()
+        else resolve({ event: 'disagree' })
+      })
+    }
   },
   // 登录（返回 Promise；并发调用共享同一次登录，避免重复 wx.login）
   _tryLogin() {

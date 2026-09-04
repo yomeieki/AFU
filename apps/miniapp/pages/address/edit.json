@@ -1,3 +1,6 @@
 {
-  "navigationBarTitleText": "编辑地址"
+  "navigationBarTitleText": "编辑地址",
+  "usingComponents": {
+    "privacy-popup": "/components/privacy-popup/index"
+  }
 }

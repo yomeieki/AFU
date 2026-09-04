@@ -1,0 +1,62 @@
+.privacy-mask {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.5);
+}
+.privacy-panel {
+  box-sizing: border-box;
+  min-height: 50vh;
+  padding: 44rpx 36rpx 28rpx;
+  background: var(--card, #ffffff);
+  border-radius: var(--radius-xl, 24rpx) var(--radius-xl, 24rpx) 0 0;
+  animation: privacy-slide-up 0.24s ease-out;
+}
+@keyframes privacy-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.privacy-title {
+  display: block;
+  color: var(--text-1, #1a1a1a);
+  font-size: 36rpx;
+  font-weight: 600;
+  text-align: center;
+}
+.privacy-content {
+  margin-top: 28rpx;
+  color: var(--text-2, #666666);
+  font-size: 28rpx;
+  line-height: 1.75;
+}
+.privacy-link {
+  color: var(--brand, #e5441e);
+}
+.privacy-actions {
+  display: flex;
+  gap: 20rpx;
+  margin-top: 40rpx;
+}
+.privacy-disagree,
+.privacy-agree {
+  flex: 1;
+  height: 84rpx;
+  border-radius: 999rpx;
+  font-size: 30rpx;
+  font-weight: 600;
+  line-height: 84rpx;
+}
+.privacy-disagree {
+  color: var(--text-2, #666666);
+  background: var(--bg, #f5f6f7);
+}
+.privacy-agree {
+  color: #ffffff;
+  background: var(--brand-gradient, #e5441e);
+}

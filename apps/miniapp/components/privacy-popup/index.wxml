@@ -1,0 +1,14 @@
+<view wx:if="{{visible}}" class="privacy-mask" catchtouchmove="noop">
+  <view class="privacy-panel safe-bottom">
+    <text class="privacy-title">隐私保护指引</text>
+    <view class="privacy-content">
+      <text>在使用本小程序前，请阅读并同意</text>
+      <text class="privacy-link" bindtap="openPrivacyContract">《阿福凉菜隐私保护指引》</text>
+      <text>。我们仅在您主动选择收货位置时获取位置信息，不会在后台获取。</text>
+    </view>
+    <view class="privacy-actions">
+      <button class="privacy-disagree" bindtap="onDisagree">拒绝</button>
+      <button class="privacy-agree" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="onAgree">同意并继续</button>
+    </view>
+  </view>
+</view>

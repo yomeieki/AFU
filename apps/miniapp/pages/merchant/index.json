@@ -1,4 +1,7 @@
 {
   "navigationBarTitleText": "商家管理",
-  "enablePullDownRefresh": true
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "privacy-popup": "/components/privacy-popup/index"
+  }
 }

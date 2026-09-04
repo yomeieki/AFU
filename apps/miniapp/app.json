@@ -1,4 +1,5 @@
 {
+  "__usePrivacyCheck__": true,
   "pages": [
     "pages/index/index",
     "pages/product/list",
