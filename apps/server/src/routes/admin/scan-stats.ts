@@ -48,7 +48,14 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
         SELECT COUNT(DISTINCT openid) uniq FROM scan_logs
         WHERE created_at >= ${start} AND created_at < ${endExclusive} AND openid IS NOT NULL`,
       prisma.scanLog.count({ where: { createdAt: { gte: today } } }),
-      // 转化（从简，不做严格归因）：区间内扫过码的用户在区间内创建的非取消订单数
+      // 转化（从简，不做严格归因）：区间内扫过码的用户在区间内创建的非取消订单数。
+      //
+      // ⚠ 分子分母不同源，这是本指标的已知偏差：分子这里排除了测试单（REAL_ORDERS 口径），
+      // 而分母 totalScans 来自 scan_logs，那张表没有测试标记，联调时扫的码照样计入。
+      // 后果：若联调账号在同一区间内既扫过码又下过测试单，转化率会偏低。
+      // 仍然选择排除测试单——一笔联调单本来就不是真实转化，把它算进分子只会让指标更假。
+      // 要彻底干净得连扫码侧一起标（ScanLog 已有 source 字段，e2e 就在传 source:"e2e"），
+      // 留待需要时再做；在此之前请按 docs/ops-test-orders.md 里的说明理解联调日的这个数。
       prisma.$queryRaw<{ cnt: bigint }[]>`
         SELECT COUNT(DISTINCT o.id) cnt FROM orders o
         WHERE o.created_at >= ${start} AND o.created_at < ${endExclusive}

@@ -37,7 +37,8 @@ function generateOrderNo(): string {
  *    联调时用的还是真实小程序账号和真实支付，那一单对顾客而言就是普通订单。
  * **任何返回订单行（或订单行展开）的顾客接口都必须经过这里**——之前漏过一处
  * （PUT /:id/confirm 直接 success(res, updated)），说明「记数字」靠不住；
- * 新增出口时请重新数一遍本文件里所有 success(res, ...) 调用，逐个确认是否携带订单行。
+ * 新增出口时请重新数一遍本文件里所有 success(res, ...) **与 paginate(res, ...)** 调用，逐个确认是否携带订单行。
+ * （列表出口走的是 paginate 而不是 success——只搜 success 会漏掉本文件最主要的那个订单行出口。）
  * 现存携带订单行的出口共 4 处：GET /（列表）、GET /:id、PUT /:id/confirm、PUT /:id/cancel（两个分支）。
  */
 function withPayExpire<T extends { status: string; createdAt: Date }>(
