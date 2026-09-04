@@ -10,15 +10,26 @@
 
 ---
 
+## 现状快照 2026-09-04 晚
+
+- **F1–F4**：已合入（`055c57d` + `22633d3`）；静态 VERIFY 过，F1/F3/F4 开发者工具/真机终判仍折入 Task 6。
+- **F5/F6**：已关（`55a20a2`）+ 同城配送入口提前隐私（`c99ecb8` / `b5496c9` / `54386ab` 等）+ **PO DevTools 签收**。
+- **F7**：已关（`81a003b`）。
+- **F8**：脚本侧 AS1 / 全角括号修复（`e96ef3b` + `1714889`）；§34 曾绿；全量套件**非幂等**（第二轮 496/32、另一次崩溃）——**挂起 / open**，不阻塞 M4 文档任务；**禁止**把 spec §10 写成双绿 ✅。
+- **封面页**：仍属 **PO 桌面轨**（见 `docs/superpowers/briefs/2026-09-04-cover-page.md`），**不在本 M4 计划范围内**。
+- **本文件角色**：规划文档同步前置现实；Goal / Non-goals 不变。执行 Task 时以本表为准，勿按「写计划时」的 open 假设重做 F5–F7。
+
+---
+
 ## Prerequisites（M3 Exit Criteria —— 必须先确认，未确认的先去确认，不要带着假设进 Task）
 
-| # | 条件 | 现状（写计划时核实） | 未满足时怎么办 |
+| # | 条件 | 现状（2026-09-04 晚核实） | 未满足时怎么办 |
 |---|---|---|---|
 | P1 | M3 Critical/Major F1–F4 已修复 | ✅ 已合入：`055c57d`（F1–F4 首轮）+ `22633d3`（F1 残留）。`docs/superpowers/reviews/2026-09-04-m3-F1-F4-VERIFY.md` 给出 F2/F3/F4 静态 PASS，F1 首轮 PARTIAL、残留已在 `22633d3` 补上 | 若执行时发现残留未合，先补齐再继续，不要绕过 |
-| P2 | F1/F3/F4 的**开发者工具/真机验证**从未跑过 | VERIFY 文档明写「F1/F3/F4 三条最终判定必须在开发者工具里跑一遍；本文件只完成了代码路径与服务端契约的静态核对」 | 折入本计划 **Task 6**（真机联调）的验收清单第一批，不单独起任务 |
-| P3 | F5–F8 仍 open | REVIEW 原文「Major #4/#5 可与真机验收合并处理」「F5–F8 不在（VERIFY）本次范围内，仍未修」 | 本计划 **Task 1** |
-| P4 | Task 0 地图探针（`<map>` 模拟器/真机可用性）从未真正执行 | `docs/superpowers/notes/2026-09-04-map-probe.md` 两行仍是「待补测」，Task 7 暂定走 `cover-view` | 本计划 **Task 2**，且**必须先于 Task 1 的 F6** 做，因为 F6 的修法取决于探针结论 |
-| P5 | e2e 第 34 段（顾客端字段契约锁）从未跑绿 | spec §10：「本次 e2e 在既有 §13 的 `AS1` 未绑定变量处中止，未执行到本段」 | 本计划 **Task 3** |
+| P2 | F1/F3/F4 的**开发者工具/真机验证** | 静态 VERIFY 已过；F1/F3/F4 三条最终判定仍应按 VERIFY 原文在开发者工具/真机再跑一遍（与 F5/F6 的 PO DevTools 签收分开记） | 折入本计划 **Task 6**（真机联调）的验收清单第一批，不单独起任务 |
+| P3 | F5–F8 | ✅ **F5/F6 已关**：`55a20a2`（隐私 `buttonId` + 骑手卡距离语义）+ 同城入口提前隐私门（`c99ecb8` / `b5496c9` / `54386ab` 等）+ **PO DevTools 签收**；✅ **F7 已关**：`81a003b`；⚠️ **F8 挂起**（见 P5 / Task 3）——不阻塞 M4 文档类任务 | F5–F7 勿再重做；F8 留在 **Task 3**，未双绿前不要改 spec §10 |
+| P4 | Task 0 地图探针（`<map>` 模拟器/真机可用性） | `docs/superpowers/notes/2026-09-04-map-probe.md` 两行仍是「待补测」。**F6 静态方案已先落地**（删误导距离 / `cover-view`→`view`），不再阻塞 F6；探针结论只决定是否升级为真 `<map>` | 本计划 **Task 2**；不再写「必须先于 F6」——可选升级路径 |
+| P5 | e2e 第 34 段（顾客端字段契约锁）+ 全量幂等（F8） | 脚本 AS1 / 全角括号修复已合入：`e96ef3b` + `1714889`；**§34 曾跑绿**；全量套件**非幂等**（第二轮约 496/32，另一次崩溃）——**F8 仍 open/挂起**。**不要**声称 §10 双绿 ✅ | 本计划 **Task 3**；挂起不阻塞 Task 7–11 文档同步；未两轮全绿前 **spec §10 保持诚实标注，勿改 ✅** |
 | P6 | 快递100 已开户、认证、充值、`KD100_KEY/SECRET` 已配置（spec §11 用户侧待办 #1） | 需执行前向用户确认；这是 **Task 6 真机真钱联调的硬前提**，没有它整个 M4 的核心任务无法开始 | 若未完成，Task 6 全程阻塞，其余文档类任务（Task 7–11）可以先做 |
 | P7 | 公众平台位置接口权限、隐私保护指引已生效（`docs/miniapp-release-checklist.md` 2.4 已勾选） | ✅ 已确认（checklist 第 71/79/80 行） | — |
 | P8 | 「配送通知」（310 配送中）订阅模板已获批并在生产可用 | 需向用户确认（spec §11.4 是 M0 待办，M2 已按此模板落地推送逻辑） | 若未获批，Task 6 里验证 310 推送这一步会失败，需先处理，不影响其余任务 |
@@ -36,17 +47,19 @@
 - Modify: `apps/miniapp/pages/order/detail.{js,wxml}`（F6）
 - Modify: `apps/miniapp/pages/local/confirm.js`、`apps/miniapp/pages/local/index.js`、`apps/miniapp/pages/order/detail.js`（F7 minor 打包）
 
-**依赖**：F6 的具体修法依赖 **Task 2**（地图探针）的结论，执行顺序上 Task 2 要先跑完，或至少先跑完 Task 2 Step 1–3 再回来做 F6。
+**状态（2026-09-04 晚）**：F5/F6/F7 **已完成并合入**（见下方各 Step 注记）；本 Task 顾客端代码收口项已关。F8（e2e §34 + 全量幂等）归 **Task 3**，仍挂起。标题保留「F5–F8」仅对应 REVIEW 编号，勿再按未做项重跑 F5–F7。
 
-- [ ] **Step 1（F5）：隐私弹窗补 `buttonId`**
+**依赖（历史）**：原计划写「F6 依赖 Task 2 地图探针」。实际执行时 F6 已按本计划静态方案先落地（`55a20a2`）；Task 2 剩下变为「是否升级真 `<map>`」，不再回改已关的 F6 Done 判据。
+
+- [x] **Step 1（F5）：隐私弹窗补 `buttonId`** ✅ 已合入 `55a20a2`；同城入口提前隐私门另见 `c99ecb8` / `b5496c9` / `54386ab` 等；**PO DevTools 已签收**
 
 对应 REVIEW `M4`/Fix Task `F5`。`apps/miniapp/components/privacy-popup/index.wxml` 的同意按钮加 `id="privacy-agree-btn"`；`index.js` 的 `onAgree` 改为 `resolve({ event: 'agree', buttonId: 'privacy-agree-btn' })`，`onDisagree` 保持 `{ event: 'disagree' }`。同时处理两个边界（REVIEW 原文指出的悬空 Promise 风险）：
 1. 弹层可见时页面被 `onUnload` —— 卸载前若 `privacyResolve` 仍未决，调用 `resolve({ event: 'disagree' })` 再清空。
 2. 第二个授权请求到来时覆盖了未决的 `privacyResolve` —— 覆盖前同样先 `resolve({ event: 'disagree' })`。
 
-**Done**：`node --check apps/miniapp/components/privacy-popup/index.js` 无输出；真机验证挪到 Task 6（这条必须在开发者工具里跑，读代码不能收，见 REVIEW F5 原文）。
+**Done（已满足）**：代码已合入；PO 已在开发者工具签收。Task 6 真机联调仍可把隐私全链路再过一遍作回归，但不再当作 F5 未完成阻塞项。
 
-- [ ] **Step 2（F6）：骑手卡距离语义 + `cover-view` 标签**
+- [x] **Step 2（F6）：骑手卡距离语义 + `cover-view` 标签** ✅ 已合入 `55a20a2`（静态方案：去掉误导性距离文案；未等地图探针、未升真 `<map>`）
 
 对应 REVIEW `M5`/Fix Task `F6`，同时回答 REVIEW **Open Question 2**：
 
@@ -70,9 +83,9 @@
 
 **若 Task 2 的地图探针证明真机 `<map>` 可用**：把这张卡片从「三点示意图」升级为真 `<map>`（markers：门店/收货点/骑手，`latitude/longitude` 取骑手点，无骑手点取收货点），删除示意图相关 wxss；此时 `cover-view` 问题自动消失（`<map>` 上叠 `cover-view` 才是官方定义用法，但本方案不需要在地图上叠加任何东西，用原生 `markers` 即可）。
 
-**Done**：`node --check apps/miniapp/pages/order/detail.js` 无输出；真机验证挪到 Task 6（`210`/`310` mock 状态下卡片不再显示误导性的常量距离）。
+**Done（已满足）**：静态方案已合入 `55a20a2`。若 Task 2 探针后升级真 `<map>`，另开提交；不回滚本 Step。Task 6 可再验 `210`/`310` 卡片文案。
 
-- [ ] **Step 3（F7）：Minor 打包修复**
+- [x] **Step 3（F7）：Minor 打包修复** ✅ 已合入 `81a003b`
 
 对应 REVIEW Fix Task `F7`，一次提交，逐条列出（执行前先重新 diff 一遍确认状态，`22633d3` 已经顺手改了地址列表空胶囊那条，不要重复改）：
 
@@ -88,9 +101,9 @@
 
 **不在本次打包范围**：m2/m6（`/local/meta` 失败地址列表空白、`distanceSource` 未使用）已被 F3 修复覆盖；m11/m12/m13 是防御性/测试覆盖类问题，分别归入 Task 3（m12，e2e §34）与本表之外的技术债，若顺手可修但不是 Done 判据。
 
-**Done**：`node --check apps/miniapp/pages/local/confirm.js apps/miniapp/pages/local/index.js apps/miniapp/pages/order/detail.js` 无输出；逐条对照上表代码走查通过。
+**Done（已满足）**：`81a003b` 打包合入；勿重复改已修项（含 `22633d3` 已覆盖的地址列表空胶囊）。
 
-- [ ] **Step 4：提交**
+- [x] **Step 4：提交** ✅ 实际提交拆为 `55a20a2`（F5/F6）+ `81a003b`（F7）及隐私门相关提交；下方原 commit 文案仅作历史模板，勿再照抄重提
 
 ```bash
 git add apps/miniapp/components/privacy-popup apps/miniapp/pages/order/detail.js apps/miniapp/pages/order/detail.wxml apps/miniapp/pages/local/confirm.js apps/miniapp/pages/local/index.js
@@ -103,7 +116,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ### Task 2：地图能力真机探针 + `<map>` 方案定稿
 
-**必须先于 Task 1 Step 2（F6）执行**，理由见 Task 1 Step 2 开头。
+**状态更新（2026-09-04 晚）**：原「必须先于 F6」约束已过时——F6 静态方案已落地。本 Task 现在只决定是否把骑手卡**升级**为真 `<map>`；探针未完成前保持现状示意图即可。
 
 **Files:**
 - Modify: `docs/superpowers/notes/2026-09-04-map-probe.md`
@@ -140,7 +153,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-### Task 3：e2e §13 `AS1` 根因修复 + 第 34 段（顾客端字段契约锁）双轮验证
+### Task 3：e2e §13 `AS1` 根因修复 + 第 34 段（顾客端字段契约锁）双轮验证（= REVIEW **F8**）
+
+**状态（2026-09-04 晚）**：AS1 / 全角括号脚本修复已合入（`e96ef3b` + `1714889`）；**§34 曾跑绿**；全量套件**尚未幂等**（第二轮约 496/32，另一次崩溃）——**F8 挂起 / open**。不阻塞 Task 7–11 文档任务；**在两轮全绿之前，禁止把 spec §10 改成 ✅，也不要对外声称 dual-green**。下列 Step 仍是收口清单（已完成的脚本修复可勾选，双轮幂等未过则 Done 不算）。
 
 对应 REVIEW **Open Question 3**：「e2e §13 的 `AS1` 中止是本轮引入的还是既有的？spec §10 写的是『既有 §13』。若是既有问题，第 34 段会一直是死代码。」
 
@@ -148,15 +163,15 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Modify: `scripts/e2e.sh`（定位并修复 §13 `AS1` 中止原因；不改第 34 段的断言逻辑本身，除非跑起来后发现断言本身有 bug——REVIEW m12 提示 `jq .data.delivery` 在 `delivery` 为 `null` 时 `has()` 会报错而非返回 `false`，顺手核实）
 - Modify: `docs/superpowers/specs/2026-09-03-local-delivery-design.md`（§10 表格 §34 行状态）
 
-- [ ] **Step 1：定位 §13 `AS1` 中止原因**
+- [x] **Step 1：定位 §13 `AS1` 中止原因** ✅ 已定位（macOS bash 3.2 + `set -u` 下全角括号吞进变量名；另有 `#$AS1` / delivery null 等）
 
 `bash scripts/e2e.sh` 完整跑一遍，定位到 §13 具体在哪一行、因为什么变量未绑定而中止（`set -u` 下常见于前置步骤的响应字段名对不上、或某个变量在条件分支里没有被赋值就被引用）。**先确认这是不是本计划 Task 1 的改动引入的新问题**——如果 Task 1 没碰服务端或 e2e 脚本，理论上不会是新引入的，但仍要跑一遍确认。
 
-- [ ] **Step 2：修复**
+- [x] **Step 2：修复** ✅ 已合入 `e96ef3b` + `1714889`
 
 按定位到的根因改。如果根因是"某个前置断言假设了一个在当前数据状态下不成立的字段"，优先修数据准备步骤而不是放宽断言。
 
-- [ ] **Step 3：核实第 34 段断言本身**
+- [x] **Step 3：核实第 34 段断言本身** ✅ delivery 非 null 防御已合入；§34 曾单轮跑绿
 
 对照 REVIEW m12：`for k in ...; do assert_eq "delivery.$k 存在" "$(jq -r "has(\"$k\")" <<<"$(jq .data.delivery <<<"$R")")" "true"; done` 这类写法在 `data.delivery` 本身为 `null` 时，`jq .data.delivery` 输出 `null`，再 `jq -r 'has(...)'` 对 `null` 调用 `has` 会报错退出，而不是返回 `false`。第 34 段测的是 **LOCAL 订单**（`$LOCAL_ORDER_ID`），只要该订单在测试流程里已经产生了配送单（`delivery` 非 null），这条就不会触发；但为稳妥起见，在 §34 段落顶部加一行防御性检查：
 ```bash
@@ -165,7 +180,7 @@ if [ "$D" = "null" ]; then echo "FAIL: LOCAL_ORDER_ID 的 delivery 为空，前�
 ```
 让失败原因在这里就报清楚，而不是让 `jq has` 的报错信息把人导向错误的排查方向。
 
-- [ ] **Step 4：连跑两轮验证幂等**
+- [ ] **Step 4：连跑两轮验证幂等** ⚠️ **未通过 / F8 挂起**
 
 ```bash
 bash scripts/e2e.sh
@@ -174,9 +189,9 @@ bash scripts/e2e.sh
 ```
 Expected：两轮全绿，总断言数 = 原有 + 第 34 段新增条数，两轮结果一致。
 
-- [ ] **Step 5：spec 回填**
+**实测（2026-09-04）**：§34 曾绿，但全量第二轮约 **496/32**，另一次崩溃——**非幂等**。本 Step 保持 open；修好前不要勾选，也不要推进 Step 5 的 §10 ✅。
 
-`docs/superpowers/specs/2026-09-03-local-delivery-design.md` §10 表格里「顾客端字段契约锁」那一行的 `⬜ 待补测` 改为 `✅`，段号列保持 `§34`，去掉「本次 e2e 在既有 §13 的 AS1 未绑定变量处中止」这句话。
+- [ ] **Step 5：spec 回填** ⛔ **禁止提前**：在 Step 4 两轮全绿之前，**不要**把 §10 改成 ✅，也不要对外声称 dual-green。可如实注明「AS1 脚本已修、§34 曾单轮绿、全量幂等未过」。
 
 - [ ] **Step 6：提交**
 
