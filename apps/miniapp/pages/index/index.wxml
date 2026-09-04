@@ -1,13 +1,19 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
 
-  <!-- 回首页（= 封面分流页）。本页是 tabBar 页，原生导航栏左上角没有返回箭头
-       也加不了，所以放在内容区最顶。用 reLaunch 而不是 navigateTo——封面是
-       pages[0] 且非 tabBar 页，语义是「回到起点重新选渠道」，不该在栈里叠一层。 -->
-  <view class="back-cover" hover-class="back-cover-hover" hover-stay-time="60" bindtap="goCover">
-    <view class="back-cover-icon"></view>
-    <text class="back-cover-text">首页</text>
+  <!-- 自绘导航栏。本页是 tabBar 页，微信不会给它原生返回箭头，
+       只有改 navigationStyle:custom 自己画，才能把返回键放到与同城页
+       原生箭头完全相同的位置。高度与箭头中线按胶囊按钮实测值对齐，见 index.js:computeNavBar。
+       fixed 定位：本页开着下拉刷新，不 fixed 的话导航栏会跟着被拉下去。 -->
+  <view class="navbar" style="height:{{navTotal}}px;padding-top:{{statusBarHeight}}px">
+    <view class="navbar-inner" style="height:{{navContent}}px">
+      <view class="navbar-back" hover-class="navbar-back-hover" hover-stay-time="60" bindtap="goCover">
+        <view class="navbar-back-icon"></view>
+      </view>
+      <text class="navbar-title">阿福凉菜</text>
+    </view>
   </view>
+  <view style="height:{{navTotal}}px"></view>
 
   <!-- Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
   <swiper

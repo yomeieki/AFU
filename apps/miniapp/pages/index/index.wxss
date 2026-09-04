@@ -241,26 +241,46 @@
   margin-left: 4rpx;
 }
 
-/* 回首页=封面（本页专用；tabBar 页拿不到原生返回箭头，只能放内容区顶部） */
-.back-cover {
-  display: inline-flex;
-  align-items: center;
-  gap: 6rpx;
-  margin: 16rpx 0 4rpx 24rpx;
-  padding: 10rpx 24rpx 10rpx 16rpx;
-  border-radius: 999rpx;
-  background: rgba(0, 0, 0, 0.04);
+
+/* 自绘导航栏（本页专用；tabBar 页拿不到原生返回箭头） */
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  box-sizing: border-box;
+  background: var(--card, #ffffff);
 }
-.back-cover-hover { background: rgba(0, 0, 0, 0.10); }
-.back-cover-icon {
-  width: 32rpx;
-  height: 32rpx;
+.navbar-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 触控区 88rpx=44px，与 iOS 原生返回键一致；箭头本身靠左对齐到 24rpx */
+.navbar-back {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 24rpx;
+  width: 88rpx;
+  box-sizing: border-box;
+}
+.navbar-back-hover { opacity: 0.45; }
+.navbar-back-icon {
+  width: 40rpx;
+  height: 40rpx;
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
-  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxwYXRoIGQ9Ik0xNSA2IGwtNiA2IDYgNiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNjY2NjY2IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPiA8L3N2Zz4=");
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+IDxwYXRoIGQ9Ik0xNS41IDUgbC03IDcgNyA3IiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMi4yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4gPC9zdmc+");
 }
-.back-cover-text {
-  color: var(--text-2, #666666);
-  font-size: 26rpx;
+.navbar-title {
+  color: var(--text-1, #1a1a1a);
+  font-size: 32rpx;
+  font-weight: 500;
 }

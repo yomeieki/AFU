@@ -1,4 +1,5 @@
 {
+  "navigationStyle": "custom",
   "navigationBarTitleText": "阿福凉菜",
   "enablePullDownRefresh": true,
   "backgroundTextStyle": "dark",

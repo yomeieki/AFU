@@ -10,6 +10,16 @@
 <div class="mp-page">
   <div class="page">
 
+    <!-- 自绘导航栏。真机上 statusBarHeight/navContent/navTotal 由 index.js:computeNavBar
+         按胶囊按钮实测值算出；预览台不跑 JS，这里硬编码 iPhone 15 Pro 的一组（54 / 42 / 96）。 -->
+    <div class="navbar" style="height:96px;padding-top:54px">
+      <div class="navbar-inner" style="height:42px">
+        <div class="navbar-back"><div class="navbar-back-icon"></div></div>
+        <span class="navbar-title">阿福凉菜</span>
+      </div>
+    </div>
+    <div style="height:96px"></div>
+
     <!-- 注：真实小程序在后台配置了 Banner 时渲染 swiper 轮播（banner-swiper），此处镜像无配置回退态 -->
     <div class="banner">
       <div class="banner-deco banner-deco-1"></div>
