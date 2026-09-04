@@ -14,7 +14,7 @@ function friendlyMessage(statusCode, body) {
   return '请求失败，请稍后再试'
 }
 
-function doRequest({ url, method = 'GET', data = {} }, retried) {
+function doRequest({ url, method = 'GET', data = {}, silent = false }, retried) {
   return new Promise((resolve, reject) => {
     const token = wx.getStorageSync('token')
     wx.request({
@@ -39,25 +39,32 @@ function doRequest({ url, method = 'GET', data = {} }, retried) {
             app
               ._tryLogin()
               .then(function() {
-                return doRequest({ url, method, data }, true)
+                return doRequest({ url, method, data, silent }, true)
               })
               .then(resolve)
               .catch(function(err) {
-                wx.showToast({ title: '登录已过期，请重试', icon: 'none', duration: 2000 })
+                if (!silent) wx.showToast({ title: '登录已过期，请重试', icon: 'none', duration: 2000 })
                 reject(err)
               })
             return
           }
         }
         const msg = friendlyMessage(res.statusCode, body)
-        wx.showToast({ title: msg, icon: 'none', duration: 2000 })
-        reject(new Error(msg))
+        if (!silent) wx.showToast({ title: msg, icon: 'none', duration: 2000 })
+        const err = new Error(msg)
+        // 业务码透出给调用方分流（42227/42239/42220…）；网络层失败没有业务码，置 null。
+        // silent 只关掉 toast，不影响 code —— 「谁来提示」是页面的事，「出了什么事」是这里的事。
+        err.code = body && typeof body.code === 'number' ? body.code : null
+        err.data = body && body.data ? body.data : null
+        reject(err)
       },
       fail(err) {
         const isTimeout = err && err.errMsg && err.errMsg.indexOf('timeout') !== -1
         const msg = isTimeout ? '网络超时，请检查网络后重试' : '网络错误，请稍后重试'
-        wx.showToast({ title: msg, icon: 'none', duration: 2000 })
-        reject(new Error(msg))
+        if (!silent) wx.showToast({ title: msg, icon: 'none', duration: 2000 })
+        const requestErr = new Error(msg)
+        requestErr.code = null
+        reject(requestErr)
       },
     })
   })

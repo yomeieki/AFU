@@ -1,7 +1,8 @@
 const { request } = require('../utils/request')
 
-function getCart() {
-  return request({ url: '/cart' })
+// channel 省略 = EXPRESS（服务端默认），保持既有调用零改动
+function getCart(channel) {
+  return request({ url: '/cart' + (channel === 'LOCAL' ? '?channel=LOCAL' : '') })
 }
 
 function addToCart(productId, quantity, skuId) {

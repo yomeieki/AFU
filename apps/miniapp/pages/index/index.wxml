@@ -32,6 +32,18 @@
     </view>
   </view>
 
+  <!-- 临时入口：封面落地后整块删除（M3 计划 §临时入口决定） -->
+  <view class="channel-entry" wx:if="{{localEntry}}">
+    <view class="channel-card channel-card-local {{localEntry.clickable ? '' : 'channel-card-off'}}" bindtap="goLocal">
+      <text class="channel-title">同城配送</text>
+      <text class="channel-sub">{{localEntry.sub}}</text>
+    </view>
+    <view class="channel-card" bindtap="goToAllProducts">
+      <text class="channel-title">全国邮寄</text>
+      <text class="channel-sub">冷链发货 · 全国可达</text>
+    </view>
+  </view>
+
   <!-- Categories -->
   <view class="section" wx:if="{{categories.length > 0}}">
     <view class="section-header">

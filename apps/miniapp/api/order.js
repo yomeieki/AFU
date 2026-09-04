@@ -34,6 +34,16 @@ function cancelOrder(id) {
   return request({ url: '/orders/' + id + '/cancel', method: 'PUT' })
 }
 
+// 同城：接单后宽限期内申请取消（订单状态不变，店员确认后全额退）
+function requestCancelOrder(id, note) {
+  return request({ url: '/orders/' + id + '/cancel-request', method: 'POST', silent: true, data: note ? { note: note } : {} })
+}
+
+// 同城：骑手位置（非在途或查不到时 data.location 为 null，不是错误）
+function getCourierLocation(id) {
+  return request({ url: '/orders/' + id + '/courier', silent: true })
+}
+
 // 售后申请（已发货/已完成订单）：{ reason, description, images: [url] }
 function applyAfterSale(orderId, data) {
   return request({ url: '/orders/' + orderId + '/after-sale', method: 'POST', data: data })
@@ -77,6 +87,8 @@ module.exports = {
   getOrderDetail,
   confirmOrder,
   cancelOrder,
+  requestCancelOrder,
+  getCourierLocation,
   applyAfterSale,
   uploadImage,
 }

@@ -67,6 +67,50 @@
   letter-spacing: 2rpx;
 }
 
+/* 临时双渠道入口（封面落地后整块删除） */
+.channel-entry {
+  display: flex;
+  gap: 16rpx;
+  margin: 20rpx 24rpx 0;
+}
+.channel-card {
+  flex: 1;
+  min-width: 0;
+  padding: 24rpx;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+.channel-card-local {
+  background: var(--brand-gradient);
+}
+.channel-card-off {
+  opacity: 0.55;
+}
+.channel-title,
+.channel-sub {
+  display: block;
+}
+.channel-title {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: var(--text-1);
+}
+.channel-card-local .channel-title {
+  color: #fff;
+}
+.channel-sub {
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-card-local .channel-sub {
+  color: rgba(255, 255, 255, 0.9);
+}
+
 /* Section */
 .section {
   background-color: var(--card);

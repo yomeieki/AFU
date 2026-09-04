@@ -60,7 +60,9 @@ App({
   // 刷新购物车数量并更新 tabBar 角标（登录成功、加购、购物车变更、下单后调用）
   updateCartCount() {
     var self = this
-    getCart()
+    // tabBar 角标只统计邮寄购物车——同城购物车的件数由 pages/local/index 底部条自己显示。
+    // 两个渠道的件数加在一个角标上，顾客点进购物车会发现数字对不上。
+    getCart('EXPRESS')
       .then(function(data) {
         var items = (data && data.items) || []
         var count = items.reduce(function(sum, item) {

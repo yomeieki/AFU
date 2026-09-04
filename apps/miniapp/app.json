@@ -15,7 +15,9 @@
     "pages/merchant/index",
     "pages/merchant/webview",
     "pages/about/index",
-    "pages/legal/index"
+    "pages/legal/index",
+    "pages/local/index",
+    "pages/local/confirm"
   ],
   "tabBar": {
     "color": "#999999",
