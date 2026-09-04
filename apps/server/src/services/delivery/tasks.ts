@@ -145,7 +145,12 @@ export async function autoCallRiders(delayMin?: number): Promise<number> {
   let n = 0
   for (const o of orders) {
     try { await callRider({ orderId: o.id, operator: 'scheduler', source: 'SCHEDULER' }); n++ }
-    catch { /* callRider 内部已按失败类型落库+告警；这里继续处理下一单 */ }
+    catch (e) {
+      // callRider 内部已按失败类型落库+告警，这里继续处理下一单；但吞掉异常本身不能是无声的——
+      // 这里也会兜住第二层守卫抛出的 42204（候选查询和 callRider 内部复核之间的竞态）等任何未预期的问题，
+      // 不打日志就是「可诊断」与「不可诊断」事故之间的差别。
+      console.warn('[autoCallRiders] 呼叫订单', o.id, '失败，跳过:', (e as Error)?.message ?? e)
+    }
   }
   return n
 }

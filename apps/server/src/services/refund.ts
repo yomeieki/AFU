@@ -96,15 +96,30 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   // 事务 A：（全额）状态流转 + 库存回滚 + 创建退款记录（不含外呼）
   const refund = await prisma.$transaction(async (tx) => {
     if (isFull && !fromRefunding) {
+      // where 里加 deliveries:{none:{activeOrderId:{not:null}}}：这是 callRider 那侧原子复核的另一半。
+      // :82-87 的 42221 检查只是这段事务之外的快照，几毫秒内可能被 callRider 的 delivery.create 抢先——
+      // 那笔创建会立刻占住 activeOrderId，让这里的 updateMany 天然匹配不上，两侧不可能同时得手。
       const moved = await tx.order.updateMany({
-        where: { id: orderId, status: { in: [...REFUNDABLE_STATUSES] } },
+        where: {
+          id: orderId, status: { in: [...REFUNDABLE_STATUSES] },
+          deliveries: { none: { activeOrderId: { not: null } } },
+        },
         data: {
           status: 'REFUNDING',
           cancelledAt: new Date(),
           cancelReason: reason || '商家退款',
         },
       })
-      if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
+      if (moved.count === 0) {
+        // count 为 0 有两种原因，对店员的下一步动作完全不同，必须分辨清楚：
+        // 状态已经变了（正常并发），或者有在途配送单刚刚抢先落库（呼叫骑手/自己送）。
+        // 后一种情况文案要照抄 :85 的 42221 语义——引导店员先去取消配送，而不是简单地「刷新重试」。
+        const activeDelivery = await tx.delivery.findFirst({ where: { activeOrderId: orderId }, select: { status: true } })
+        if (activeDelivery) {
+          throw new AppError(42221, `该订单有在途配送单（${DELIVERY_STATUS_LABEL[activeDelivery.status] ?? activeDelivery.status}），请先取消配送再退款`)
+        }
+        throw new AppError(42204, '订单状态已变化，请刷新后重试')
+      }
       // 未出库（待接单/备餐中）才回滚库存；已发货/已完成货已出
       if (order.status === 'PAID' || order.status === 'PREPARING') {
         await rollbackOrderStock(tx, order.items)

@@ -28,8 +28,12 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
   }
   const parsed = getDeliveryProvider().verifyAndParseCallback(body, delivery.callbackSalt)
   if (!parsed.ok) {
+    // 不落 rawPayload：这条路由未鉴权（安全性只靠 per-单 salt），deliveryNo=D<orderId>-<seq> 易猜，
+    // 验签失败又不去重同一条 body（dedupeKey=md5(rawBody)，body 一变就是新行），谁都能用它当免费写入点，
+    // 单条 body 最大能塞进 express.urlencoded 的 100KB 上限。告警才是这里真正要的信号，
+    // payload 留不留都不影响止损；不留能把每次失败的落地成本从「~100KB」砍到「一行小事件」。
     try {
-      await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, 'BAD', null, rawBody), source: 'CALLBACK', statusDesc: parsed.reason === 'SIGN_MISMATCH' ? '回调验签失败' : '回调格式异常', rawPayload: body })
+      await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, 'BAD', null, rawBody), source: 'CALLBACK', statusDesc: parsed.reason === 'SIGN_MISMATCH' ? '回调验签失败' : '回调格式异常' })
     } catch { /* 留痕失败不升级：这不是业务事件丢失 */ }
     notifySystemAlert('快递100 回调验签失败', [`deliveryNo=${deliveryNo}`], { key: `kd-cb-sign:${deliveryNo}` })
     return { http: 200 }
@@ -88,7 +92,21 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
         const r = await tx.delivery.updateMany({ where: { id: delivery.id, status: { notIn: [...TERMINAL] } }, data: { status: mapped.status, ...courierData } })
         moved = r.count
       }
-      if (moved === 0) return   // 乱序迟到包：事件已留痕，不动状态、不联动订单
+      if (moved === 0) {
+        // moved===0 盖住两件性质完全不同的事：良性的迟到/乱序包，以及「运力方仍有一张活单，
+        // 而我们已经把它一笔勾销」。后者恰恰是文件头写的「回调是唯一事实来源」最该抓住的信号：
+        // 本地行是 FAILED（从未在运力方那头取消过——不是我们主动 cancel，也不是运力方推的 720），
+        // 而回调却说 rank>=20（真有骑手接了单/取货/送达），说明误作废后又被重呼，第二个骑手来了。
+        // 不对 CANCELLED 告警：那是我们主动取消，尾随回调本就预期之内。
+        if (delivery.status === 'FAILED' && mapped.type === 'rank' && mapped.rank >= 20) {
+          after.push(() => notifySystemAlert('已作废的配送单收到运力方在途回调', [
+            `deliveryNo=${deliveryNo}（订单 ${delivery.orderNo}）`,
+            `回调状态=${p.providerStatus}（${p.statusDesc ?? ''}），说明运力方那头其实仍有一张活单`,
+            '本地已判定作废（人工作废/落库失败释放等），大概率已重呼产生第二个骑手，请立即人工核对',
+          ], { key: `kd-cb-ghost-active:${delivery.id}` }))
+        }
+        return   // 乱序迟到包：事件已留痕，不动状态、不联动订单
+      }
       // —— Order 联动（一律 LOCAL + 白名单 updateMany）——
       // 注：Order 无 shippedAt 列（LOCAL 单不写 Shipment 行），SHIPPED/回退 PREPARING 仅切换 status
       if (p.providerStatus === '310') {
@@ -100,7 +118,16 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       } else if (p.providerStatus === '720') {
         // 取货后被取消：SHIPPED 回退 PREPARING。
         // 与主动取消共用同一个实现（orchestrator.rollbackOrderAfterCancel），护栏只写一处
-        await rollbackOrderAfterCancel(tx, delivery.orderId)
+        const rolled = await rollbackOrderAfterCancel(tx, delivery.orderId)
+        if (rolled === 0) {
+          // 假成功的另一半（照 cancelDelivery 的先例）：配送单已经真的 CANCELLED，
+          // 但订单没能回退（多半是有在途退款/售后挡住）。不告警的话订单会静默停在 SHIPPED
+          // 且无在途配送单，谁都不知道要去核对。
+          after.push(() => notifySystemAlert('配送单取消回调到达但订单未回退', [
+            `订单 ${delivery.orderNo}（${deliveryNo}）`,
+            '运力方已取消配送，但订单未能回退到备餐中（可能存在在途退款/售后），请人工核对订单状态',
+          ], { key: `dlv-cb-720-order-stuck:${delivery.id}` }))
+        }
         after.push(() => notifyLocalDeliveryAlert('配送单被取消', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '运力方取消', '请重新呼叫骑手或改自己送']))
       }
       if (p.providerStatus === '510') after.push(() => notifyLocalDeliveryAlert('配送异常', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '', '请联系骑手/顾客确认']))

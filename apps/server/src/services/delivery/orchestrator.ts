@@ -62,6 +62,17 @@ export async function callRider(input: CallRiderInput) {
     throw e
   }
 
+  // 原子复核：:34 读到的是占位创建前的快照，纯 JS 判断挡不住之后几毫秒内插进来的退款/取消——
+  // 那笔事务可能在我们创建占位之后、外呼之前才提交。占位已经拿到 activeOrderId 唯一索引，
+  // 此刻再读一次订单当前状态，不行就照 :105 落库失败的形状释放占位，绝不能带着这单去外呼。
+  const stillValid = await prisma.order.count({ where: { id: orderId, status: 'PREPARING', cancelRequestedAt: null } })
+  if (stillValid === 0) {
+    await prisma.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
+      status: 'FAILED', activeOrderId: null, errorCode: 'RACE', failReason: '占位后发现订单状态已变化（可能正在退款/取消），呼叫已取消',
+    } })
+    throw new AppError(42204, '订单状态已变化（可能正在退款/取消），呼叫骑手已取消')
+  }
+
   const totalItems = order.items.reduce((n, it) => n + it.quantity, 0)
   const weightKg = order.items.reduce((w, it) => w + ((it.product?.netWeightG ?? s.kd100.defaultItemWeightG) * it.quantity) / 1000, 0)
   const req: CreateDeliveryOrderInput = {
@@ -91,11 +102,18 @@ export async function callRider(input: CallRiderInput) {
   if (result) {
     try {
       await prisma.$transaction(async (tx) => {
-        await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
+        const landed = await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
           status: 'CALLING', statusRank: 10, calledAt: new Date(),
           providerTaskId: trunc(result!.taskId, 64), providerOrderId: trunc(result!.providerOrderId, 64),
           quotedFee: result!.quotedFeeFen, providerDistanceM: result!.distanceM,
         } })
+        if (landed.count === 0) {
+          // where 里的 status:'PENDING' 本身已经保护了不变量（不会覆盖占位被挪去的其它状态），
+          // 但结果就此静默丢弃：运力方已经真的下了单，本地却谁都不知道。今天只有 10 分钟陈旧
+          // PENDING 清扫能抢走这一行，实践中够不到；一旦够到，必须有人去核对，不能悄悄过去。
+          notifySystemAlert('呼叫骑手成功但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, `taskId=${result!.taskId ?? ''}`, '请到快递100 后台核对，必要时人工登记'], { key: `kd100-landing-race:${orderId}` })
+          return
+        }
         await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: '已向运力方下单（并呼抢单中）', operator })
       })
     } catch (e) {
@@ -116,7 +134,11 @@ export async function callRider(input: CallRiderInput) {
   if (err.kind === 'TIMEOUT') {
     // 下单可能已成功：UNKNOWN 占位、不释放，等回调按 URL 认领或人工作废（决策见 spec §5.4）
     await prisma.$transaction(async (tx) => {
-      await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: { status: 'UNKNOWN', calledAt: new Date(), errorCode: trunc(err.code, 16), failReason: trunc(err.message, 255) } })
+      const landed = await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: { status: 'UNKNOWN', calledAt: new Date(), errorCode: trunc(err.code, 16), failReason: trunc(err.message, 255) } })
+      if (landed.count === 0) {
+        notifySystemAlert('下单响应超时但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, '本地占位行已被其它流程改动，超时未能落库为 UNKNOWN，请人工核对'], { key: `kd100-landing-race-timeout:${orderId}` })
+        return
+      }
       await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: `下单响应超时，等待回调认领：${err.message}`, operator })
     })
     notifySystemAlert('快递100 下单响应超时', [`订单 ${order.orderNo}（${deliveryNo}）`, '请到快递100 后台核对是否已产生真实单；回调到达会自动认领，确认没单可在看板作废'], { key: `kd100-timeout:${orderId}` })
@@ -126,9 +148,13 @@ export async function callRider(input: CallRiderInput) {
   // 明确失败：FAILED + 释放（先落库再抛，照抄 refund 范式）
   const firstTrip = err.kind === 'BALANCE' ? tripCircuit(err.code) : false
   await prisma.$transaction(async (tx) => {
-    await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
+    const landed = await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
       status: 'FAILED', activeOrderId: null, errorCode: trunc(err.code, 16), failReason: trunc(err.message, 255),
     } })
+    if (landed.count === 0) {
+      notifySystemAlert('呼叫失败但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, `${err.code}: ${err.message}`, '本地占位行已被其它流程改动，请人工核对'], { key: `kd100-landing-race-fail:${orderId}` })
+      return
+    }
     await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: `呼叫失败(${err.code})：${err.message}`, operator })
   })
   if (err.kind === 'CONFIG') notifySystemAlert('快递100 配置类错误', [`订单 ${order.orderNo}：${err.code} ${err.message}`], { key: `kd100-config:${err.code}` })
@@ -160,12 +186,14 @@ async function requireActive(orderId: number) {
  * 三重护栏全部写进 where：先读后写会在读与写之间放进一笔部分退款（部分退款不改订单状态，
  * 因此 status 白名单挡不住它），那正是护栏要防的事。
  */
-export async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number) {
-  await tx.order.updateMany({ where: {
+/** @returns 实际回退的订单行数（0 或 1）。三重护栏挡住时返回 0——调用方必须据此告警，不能假装成功。 */
+export async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number): Promise<number> {
+  const moved = await tx.order.updateMany({ where: {
     id: orderId, deliveryType: 'LOCAL', status: 'SHIPPED', completedAt: null,
     refunds: { none: { status: { in: [...ACTIVE_REFUND_STATUSES] } } },
     afterSales: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
   }, data: { status: 'PREPARING' } })
+  return moved.count
 }
 
 export async function precancelDelivery(orderId: number): Promise<{ cancelFeeFen: number | null }> {
@@ -188,9 +216,30 @@ export async function cancelDelivery(input: { orderId: number; operator: string;
   }
   await prisma.$transaction(async (tx) => {
     const moved = await tx.delivery.updateMany({ where: { id: d.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(input.reason, 255) ?? '商家取消', cancelFee: cancelFeeFen ?? 0 } })
-    if (moved.count === 0) throw new AppError(42237, '配送单状态已变化，请刷新')
-    await rollbackOrderAfterCancel(tx, input.orderId)
-    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）`, operator: input.operator })
+    if (moved.count === 0) {
+      // 外呼（取消费的扣费）在事务外已经发生；这里写入没命中，说明配送单在 8 秒外呼期间
+      // 被别的路径抢先终态化（例如店员双击、或回调抢先到达）。钱已经真花给运力方了，
+      // 本地却没有任何记录能对上账——照 addTip 对同样处境的先例，先告警再抛，且告诉店员
+      // 「勿直接重试」：第二次点击会通过 requireActive 再调一次 cancelOrder，等于再花一次钱。
+      notifySystemAlert('取消已扣费但未记账', [
+        `配送单 ${d.deliveryNo}（订单 ${d.orderNo}）`,
+        `取消费 ¥${((cancelFeeFen ?? 0) / 100).toFixed(2)} 已提交运力方，但本地写入未命中（配送单状态已变化）`,
+        '请到快递100 后台核对实际扣费，勿直接重试（会产生第二笔取消费）',
+      ], { key: `dlv-cancel-lost:${d.id}` })
+      throw new AppError(42237, '配送单状态已变化，请刷新。取消费可能已在运力方生效，请先核对再决定是否重试')
+    }
+    const rolled = await rollbackOrderAfterCancel(tx, input.orderId)
+    if (rolled === 0) {
+      // 假成功的另一半：配送单已经真的 CANCELLED、取消费也真扣了，但订单没能回退到 PREPARING
+      // （三重护栏之一挡住：多半是有在途退款/售后）。店员会收到 code:0，以为订单已经能重新走流程，
+      // 实际它停在 SHIPPED 且无在途配送单——call/self-deliver 要 PREPARING、delivered 要在途单，
+      // 全都会拒绝，只能等 autoCompleteLocalDelivered 或一笔退款自愈。必须当场告诉人，不能装没事。
+      notifySystemAlert('取消配送成功但订单未回退', [
+        `配送单 ${d.deliveryNo}（订单 ${d.orderNo}）已置为已取消`,
+        '订单未能回退到备餐中（可能存在在途退款/售后），订单会停留在 SHIPPED 且无在途配送单，请人工核对',
+      ], { key: `dlv-cancel-order-stuck:${d.id}` })
+    }
+    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）${rolled === 0 ? '【订单未回退，请核对】' : ''}`, operator: input.operator })
   })
   return { cancelFeeFen }
 }

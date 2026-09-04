@@ -1,9 +1,10 @@
 /** 快递100 状态回调。公开路由（安全性来自 per-单 salt 验签），body 为 x-www-form-urlencoded */
 import express, { Router, Request, Response } from 'express'
 import { handleKdCallback } from '../services/delivery/callback'
+import { kdCallbackLimiter } from '../middlewares/rate-limit'
 
 const router = Router()
-router.post('/:deliveryNo', express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
+router.post('/:deliveryNo', kdCallbackLimiter, express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
   let http: 200 | 500 = 200
   try {
     http = (await handleKdCallback(String(req.params.deliveryNo), (req.body ?? {}) as Record<string, string>)).http

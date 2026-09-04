@@ -32,3 +32,21 @@ export const payLimiter = rateLimit({
   legacyHeaders: false,
   message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
 })
+
+/**
+ * 快递100 回调限流：/api/kd/:deliveryNo 未鉴权（安全性只靠 per-单 salt 验签），
+ * deliveryNo=D<orderId>-<seq> 易猜，需要防有人拿它当灌爆事件表的免费写入点。
+ *
+ * 阈值定得比正常业务宽：一张配送单全程约 6 个状态回调，快递100 失败还会重推——
+ * 宁可宽一点也不能挡掉真回调（挡掉的后果是丢失唯一的事实来源，比慢一点严重得多）。
+ * statusCode 强制 200：回调应答语义与其它接口相反（N5），限流命中也不能例外，
+ * 否则会被快递100 当成异常触发重推风暴。
+ */
+export const kdCallbackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(120, 2000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  statusCode: 200,
+  message: { result: true, returnCode: '200', message: '请求过于频繁，请稍后再试' },
+})
