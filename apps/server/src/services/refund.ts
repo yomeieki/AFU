@@ -29,8 +29,12 @@ export function remainingRefundable(order: { actualAmount: number; refundedAmoun
   return Math.max(0, order.actualAmount - order.refundedAmount)
 }
 
+/** 未出库态：全额退款时要把库存加回去 */
+const STOCK_HELD_STATUSES = ['PAID', 'PREPARING'] as const
+/** 已出库态：全额退款不回滚库存（货已交快递/已签收） */
+const STOCK_RELEASED_STATUSES = ['SHIPPED', 'COMPLETED'] as const
 /** 全额退款可进入的订单状态（REFUNDING 仅允许全额重试） */
-const REFUNDABLE_STATUSES = ['PAID', 'PREPARING', 'SHIPPED', 'COMPLETED'] as const
+const REFUNDABLE_STATUSES = [...STOCK_HELD_STATUSES, ...STOCK_RELEASED_STATUSES] as const
 
 export interface InitiateRefundInput {
   orderId: number
@@ -99,17 +103,22 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       // where 里加 deliveries:{none:{activeOrderId:{not:null}}}：这是 callRider 那侧原子复核的另一半。
       // :82-87 的 42221 检查只是这段事务之外的快照，几毫秒内可能被 callRider 的 delivery.create 抢先——
       // 那笔创建会立刻占住 activeOrderId，让这里的 updateMany 天然匹配不上，两侧不可能同时得手。
-      const moved = await tx.order.updateMany({
-        where: {
-          id: orderId, status: { in: [...REFUNDABLE_STATUSES] },
-          deliveries: { none: { activeOrderId: { not: null } } },
-        },
-        data: {
-          status: 'REFUNDING',
-          cancelledAt: new Date(),
-          cancelReason: reason || '商家退款',
-        },
-      })
+      const guard = { id: orderId, deliveries: { none: { activeOrderId: { not: null } } } }
+      const toRefunding: Prisma.OrderUpdateManyMutationInput = {
+        status: 'REFUNDING',
+        cancelledAt: new Date(),
+        cancelReason: reason || '商家退款',
+      }
+      // 「要不要回滚库存」的判据必须来自这次 updateMany 真正命中的状态，而不是 :59 事务外读到的
+      // order.status——那只是快照，另一位店员在这几十毫秒里点了发货，SHIPPED 照样落在白名单里被改成
+      // REFUNDING，拿旧快照判断就会把已经交给快递的货再加回库存，后面按虚增库存接单就是超卖。
+      // 所以分两步条件写：先按未出库态试，命中才回滚；没命中再按已出库态试，命中就不回滚。
+      let moved = await tx.order.updateMany({ where: { ...guard, status: { in: [...STOCK_HELD_STATUSES] } }, data: toRefunding })
+      if (moved.count === 1) {
+        await rollbackOrderStock(tx, order.items)
+      } else {
+        moved = await tx.order.updateMany({ where: { ...guard, status: { in: [...STOCK_RELEASED_STATUSES] } }, data: toRefunding })
+      }
       if (moved.count === 0) {
         // count 为 0 有两种原因，对店员的下一步动作完全不同，必须分辨清楚：
         // 状态已经变了（正常并发），或者有在途配送单刚刚抢先落库（呼叫骑手/自己送）。
@@ -119,10 +128,6 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
           throw new AppError(42221, `该订单有在途配送单（${DELIVERY_STATUS_LABEL[activeDelivery.status] ?? activeDelivery.status}），请先取消配送再退款`)
         }
         throw new AppError(42204, '订单状态已变化，请刷新后重试')
-      }
-      // 未出库（待接单/备餐中）才回滚库存；已发货/已完成货已出
-      if (order.status === 'PAID' || order.status === 'PREPARING') {
-        await rollbackOrderStock(tx, order.items)
       }
     }
     try {
