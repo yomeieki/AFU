@@ -104,6 +104,13 @@
   `calcEarn` = `Math.floor(Math.max(0, actual − refunded) / 100) × rate`；退款扣回上限函数 `calcRefundDeduct(refundAmount, rate, earned, alreadyDeducted, balance)` 取三者最小值且不小于 0。在 `selftest-member.ts` 里覆盖边界：金额 0、金额 99 分（得 0）、金额 100 分、已退款超过实付、扣回三重上限各自触顶、余额为 0。**先跑通自测再写下面的 DB 逻辑。**
 - [ ] **Step 2: `consumePoints`（FIFO 扣减）**
   按 spec §5.4：取入账行 `expiresAt ASC, id ASC`，逐行条件扣减判 count；被并发抢走则重取一次，两轮仍不足抛 `AppError(42250)`。成功后写一条负 delta 流水（`balanceAfter` 取扣减后的余额）+ `User.pointsBalance decrement`。**必须在调用方传入的事务 `tx` 内执行**，不自开事务。
+  **返回 `{ minExpiresAt: Date | null }`**（2026-09-05 回填）= 本次实际扣到的那些入账行里最早的 `expiresAt`。
+  理由：spec §5.5 要求赠品释放时写的 `GIFT_REVERT` 行 `expiresAt = 被扣行里最早的到期时间`，
+  否则退回的积分会拿到一个凭空生成的到期日，顾客可能凭空多得或少得有效期。
+  这个日期只有 `consumePoints` 内部知道，扣完就没处查了，**必须当场返回**。
+  调用方（M2 的 `applyOrderBenefits`）把它写进那条 GIFT 出账行已有的可空 `expiresAt` 列——
+  不加新列。相应地 schema 里该列注释从「仅 EARN」改为
+  「EARN/GIFT_REVERT = 到期日；GIFT = 被扣行最早到期日，供释放时继承」。
 - [ ] **Step 3: `settlePoints(orderId)`**
   严格按 spec §5.4 的五条前置与两个分支（`earn <= 0` 只写标记；`earn > 0` 写流水 + 标记 + 余额）。P2002 视为已发过，补写标记后正常返回。函数自身 try/catch 全包，**永不向调用方抛错**（调用点都是 fire-and-forget）。
 - [ ] **Step 4: `expirePointsBatch`**
@@ -191,12 +198,26 @@
 
 - [ ] **Step 1: 三个只读端点**
   `GET /member/summary`、`GET /member/points/ledger?page=&pageSize=`、`GET /member/coupons?status=available|used|expired`。全部走用户鉴权中间件。
+- [ ] **Step 1b: 两个写端点**（2026-09-05 回填，见本 Task 末尾「为什么加这两个」）
+  `POST /member/points/redeem`（body `{ templateId }`）→ 调 Task 4 Step 2 的 `redeemByPoints(userId, templateId)`；
+  `POST /member/coupons/claim`（body `{ templateId }`）→ 调 Task 4 Step 3 的 `claimCampaign(userId, templateId)`。
+  两者都只做「取 userId、校验 body、转调、把 `AppError` 的码原样透出」，**不含业务逻辑**——
+  逻辑全在 Task 4 的服务函数里，路由层是薄壳。错误码沿用既有约定：
+  42250 积分不足 / 42253 超出限领或已领完 / 42254 模板已停用。
+  限流比只读端点更严（写操作 + 会消耗限量库存），单独一个桶。
 - [ ] **Step 2: 输出白名单**
   券对象只返回 `id, code, name, amount, threshold, channel, status, source, expiresAt, usedAt`；**不返回** `issuedBy / remark / sourceRef / templateId`。流水只返回 `type 文案, delta, refType, refId, remark, createdAt`。
 - [ ] **Step 3: 限流**
   复用 `rate-limit.ts` 的写法给这三个端点加宽松限流（含 `ipKeyGenerator` 兜底）。
 
-**Acceptance:** 三个端点返回正确；A 用户查不到 B 的数据；未登录 401。
+**Acceptance:** 五个端点返回正确；A 用户查不到 B 的数据；未登录 401；两个写端点在积分不足 / 超限 / 模板停用三种情形下分别返回 42250 / 42253 / 42254。
+
+> **为什么加这两个**（2026-09-05 回填）：原计划 Task 7 只做 3 个只读端点，但 Task 8 Step 2
+> 要求 e2e 覆盖「余额不足 42250」「限量券并发不超发」「每人限领」「新客券不重复」。
+> `e2e.sh` 是走 HTTP 的（curl + assert_eq），没有写端点这几条**根本跑不起来**——
+> 也就是说 M1 严格照原计划做完，它自己的 Task 8 验收会失败。
+> 服务函数（`redeemByPoints` / `claimCampaign`）Task 4 本来就要写，这里只是把它们暴露出去。
+> M4 小程序需要全部 8 个 `/member/*` 端点，剩余 3 个在 M2/M4 补。
 
 ---
 
