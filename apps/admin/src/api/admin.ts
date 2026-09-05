@@ -95,7 +95,8 @@ export const shipOrder = (id: number, data: { expressCompany: string; expressNo:
   client.post<ApiResponse<{ shipment: Shipment; order: Order }>>(`/admin/orders/${id}/ship`, data)
 
 // 退款：amount（分）可为部分或全额，服务端校验 0 < amount <= 可退余额
-export const refundOrder = (id: number, data: { amount: number; reason?: string }) =>
+// idempotencyKey 可选：由服务端派生确定性 outRefundNo，重试落回同一笔退款；不传时行为不变（如 CancelAndRefundModal）
+export const refundOrder = (id: number, data: { amount: number; reason?: string; idempotencyKey?: string }) =>
   client.post<ApiResponse<{ order: Order; refund: RefundSummary; mode: 'mock' | 'wechat'; isFull: boolean }>>(
     `/admin/orders/${id}/refund`,
     data
@@ -108,7 +109,8 @@ export const completeOrder = (id: number) =>
 // 售后
 export const getAfterSales = (params?: { page?: number; pageSize?: number; status?: string }) =>
   client.get<ApiResponse<PaginatedData<AfterSale>>>('/admin/after-sales', { params })
-export const approveAfterSale = (id: number, data: { amount: number; reply?: string }) =>
+// idempotencyKey 可选：与 refundOrder 同一套幂等机制
+export const approveAfterSale = (id: number, data: { amount: number; reply?: string; idempotencyKey?: string }) =>
   client.post<ApiResponse<{ afterSale: AfterSale; refund: RefundSummary; mode: 'mock' | 'wechat' }>>(
     `/admin/after-sales/${id}/approve`,
     data
