@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Sun, X } from 'lucide-react'
+import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
   Channel, DeliveryEventInfo, DeliveryInfo, LocalDeliverySettings, Order, OrderItem, RejectReason,
@@ -34,6 +34,14 @@ const COLUMNS: { key: ColKey; title: string }[] = [
 
 /** 配送单已结束（不再是「在途」）的三个终态 */
 const TERMINAL_DELIVERY = ['DELIVERED', 'CANCELLED', 'FAILED']
+
+/** 顶栏打印机状态灯：四态归并口径见服务端 workbench.ts 的 summarizePrinterStatus */
+const PRINTER_STATUS_TEXT: Record<WorkbenchSnapshot['printer']['status'], string> = {
+  NOT_CONNECTED: '未接入', ONLINE: '正常', ABNORMAL: '异常', OFFLINE: '离线',
+}
+const PRINTER_DOT_CLS: Record<WorkbenchSnapshot['printer']['status'], string> = {
+  NOT_CONNECTED: '', ONLINE: 'wb__dot--ok', ABNORMAL: 'wb__dot--warn', OFFLINE: 'wb__dot--danger',
+}
 const EXPRESS_COMPANIES = ['顺丰速运', '京东物流', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政 EMS', '德邦快递']
 const TIP_STEPS = [200, 500, 1000, 2000]
 const OTHER_COMPANY = '__other__'
@@ -588,10 +596,16 @@ function TopBar({
           <span className="wb__shop">{shopName}</span>
           <span className="wb__meta">{today.getMonth() + 1} 月 {today.getDate()} 日</span>
           <span className="wb__meta"><i className={`wb__dot ${openState.cls}`} />{openState.text}</span>
-          {/* 打印机芯片先藏起来：M2b 接飞鹅前它恒显示「未接入」，一个永远不变的灰点只会让店员以为
-              哪里坏了。接入后按 snap.printer.status 放出来。
-          <span className="wb__meta"><Printer className="w-3.5 h-3.5" /><i className="wb__dot" />打印机 未接入</span>
-          */}
+          {/* 打印机状态灯：接飞鹅后 snap.printer.status 是真实健康检测结果，四态归并口径见服务端
+              workbench.ts 的 summarizePrinterStatus——多台打印机取「最差」。NOT_CONNECTED（未启用/
+              未绑定任何打印机）沿用旧灰点 + 「未接入」文案，不算异常，不用告警色。 */}
+          {snap && (
+            <span className="wb__meta">
+              <Printer className="w-3.5 h-3.5" />
+              <i className={`wb__dot ${PRINTER_DOT_CLS[snap.printer.status]}`} />
+              打印机 {PRINTER_STATUS_TEXT[snap.printer.status]}
+            </span>
+          )}
           <span className={`wb__alerts ${alerts > 0 ? 'wb__alerts--on' : ''}`}>
             <Bell className="w-3.5 h-3.5" />待处理告警 {alerts}
           </span>

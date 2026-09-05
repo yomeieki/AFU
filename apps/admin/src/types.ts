@@ -395,8 +395,11 @@ export interface WorkbenchSnapshot {
   localEnabled: boolean
   localOpenNow: boolean
   paused: { reason: string; until: string | null } | null
-  /** M2b 接飞鹅打印机后替换 */
-  printer: { status: 'NOT_CONNECTED' }
+  /** 多台打印机取「最差」状态归并（见服务端 workbench.ts 的 summarizePrinterStatus） */
+  printer: {
+    status: 'NOT_CONNECTED' | 'ONLINE' | 'ABNORMAL' | 'OFFLINE'
+    printers: { sn: string; name: string; state: string }[]
+  }
   /** 未处理取消申请 + ABNORMAL/UNKNOWN 在途配送单 + 熔断(1) */
   pendingAlerts: number
   now: string
