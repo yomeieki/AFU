@@ -153,16 +153,60 @@ if ! npm run db:migrate:deploy; then
   # 有的表），下次 migrate deploy 重跑该迁移会在 CREATE TABLE 撞 1050，Prisma 写入一条
   # finished_at IS NULL 的失败记录，此后每次部署都直接 P3009 退出——所以恢复必须三步都做。
   #
-  # B2：新表探测直接读本次迁移文件里的 CREATE TABLE 语句，不再对比 SHOW TABLES 与备份——
-  # 旧写法对比「库里有、备份里没有」的表，前提是迁移已经建出新表；但迁移的前几条语句完全
-  # 可能是 ALTER TABLE，任一条失败时库里可能一张新表都没有，这种「探测出空」与「本次迁移
-  # 压根不建表」两种情况从对比结果上无法区分——之前的兜底是在探测为空时打印上一批次硬编码
-  # 的表名（连同它们的 DROP 命令），运维照做会把探测为空但其实有真实数据的表一起删掉。
-  # 直接读迁移文件本身没有这个歧义：CREATE TABLE 语句要么在文件里要么不在，与迁移实际执行
-  # 到哪一步、库里当前有没有这张表都无关。
+  # B2：新表探测直接读迁移文件里的 CREATE TABLE 语句，不再对比 SHOW TABLES 与备份——旧写法
+  # 对比「库里有、备份里没有」的表，前提是迁移已经建出新表；但迁移的前几条语句完全可能是
+  # ALTER TABLE，任一条失败时库里可能一张新表都没有，这种「探测出空」与「本次迁移压根不
+  # 建表」两种情况从对比结果上无法区分——之前的兜底是在探测为空时打印上一批次硬编码的表名
+  # （连同它们的 DROP 命令），运维照做会把探测为空但其实有真实数据的表一起删掉。直接读迁移
+  # 文件本身没有这个歧义：CREATE TABLE 语句要么在文件里要么不在，与迁移实际执行到哪一步、
+  # 库里当前有没有这张表都无关。
+  #
+  # R2（第二轮复核）：只探测「最后一个迁移目录」不够——生产落后多个版本时，本次会一次性
+  # 应用好几个从未跑过的迁移，失败点可能落在中间那一个，`tail -1` 拿到的最后一个目录读出
+  # 空毫无意义（甚至可能压根不是失败那个）。改成探测「本次全部 pending 迁移」：用
+  # `_prisma_migrations` 里已成功完成（`finished_at IS NOT NULL`）的最大 migration_name
+  # 做下界（目录名是时间戳前缀，字符串排序等价于时间先后），把晚于它的迁移文件全部纳入
+  # CREATE TABLE 探测范围。查不到数据库（mysql 客户端缺失，或连接/查询失败）时不能瞎猜——
+  # 猜错下界要么漏报真实新表要么把旧表当新表，都会导致运维删错东西；此时唯一安全的做法是
+  # 明确告诉运维「探测不完整，需要自己核对」，而不是像旧版那样打印一批硬编码的表名（那正是
+  # B2 要消灭的东西）。
+  LAST_APPLIED=""
+  MYSQL_QUERY_OK=0
+  if command -v mysql >/dev/null 2>&1; then
+    if LAST_APPLIED=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASS}" -N -e \
+        "SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL ORDER BY migration_name DESC LIMIT 1" \
+        "${DB_NAME}" 2>/dev/null); then
+      MYSQL_QUERY_OK=1
+    fi
+  fi
+  PENDING_MIG_DIRS=()
+  DEGRADED_PROBE=0
+  if [[ "${MYSQL_QUERY_OK}" == "1" ]]; then
+    # LAST_APPLIED 为空是合法结果（首次部署、_prisma_migrations 还没有任何成功记录）——
+    # 此时全部迁移目录都算 pending，不当成查询失败处理。
+    for d in prisma/migrations/*/; do
+      name="$(basename "${d}")"
+      if [[ -z "${LAST_APPLIED}" || "${name}" > "${LAST_APPLIED}" ]]; then
+        PENDING_MIG_DIRS+=("${d}")
+      fi
+    done
+  else
+    # 降级：连不上库/没有 mysql 客户端，没法确定「本次 pending 迁移」的下界。退化为只看
+    # 最后一个目录（旧行为的探测范围，不是旧行为「编造表名」的做法），并在提示里明说这是
+    # 降级模式、探测范围可能不全，运维需要自己核对 prisma/migrations 下本次实际新增的目录。
+    DEGRADED_PROBE=1
+    PENDING_MIG_DIRS=("$(ls -d prisma/migrations/*/ | sort | tail -1)")
+  fi
   MYSQL_CLI="mysql -h ${DB_HOST} -P ${DB_PORT} -u ${DB_USER} -p ${DB_NAME}"
-  LATEST_MIG=$(ls -d prisma/migrations/*/ | sort | tail -1)
-  NEW_TABLES=$(grep -o 'CREATE TABLE `[^`]*`' "${LATEST_MIG}migration.sql" | sed 's/CREATE TABLE //' | paste -sd, -)
+  NEW_TABLES=""
+  if [[ ${#PENDING_MIG_DIRS[@]} -gt 0 ]]; then
+    # grep 在全部文件都无 CREATE TABLE 命中时返回 1；pipefail 下会让整条管道判失败——这正是
+    # R1 的坑：本次要恢复的迁移一条 CREATE TABLE 都没有是必然会发生的情况，不能让这里的探测
+    # 失败反过来炸掉下面的恢复指引输出（备份路径、③ 清失败记录的命令）。`|| true` 兜底。
+    NEW_TABLES=$(grep -ho 'CREATE TABLE `[^`]*`' "${PENDING_MIG_DIRS[@]/%/migration.sql}" 2>/dev/null \
+      | sed 's/CREATE TABLE //' | paste -sd, - || true)
+  fi
+  PENDING_MIG_LIST="${PENDING_MIG_DIRS[*]}"
   restore_artifacts
   echo "=========================================="
   echo " ERROR: 迁移失败！服务未重启，旧进程仍在跑旧代码；磁盘上的 dist/ 与 Prisma Client 已还原为部署前版本。"
@@ -170,10 +214,14 @@ if ! npm run db:migrate:deploy; then
   echo "   ① 灌回迁移前备份："
   echo "      gunzip < ${PRE_BACKUP} | ${MYSQL_CLI}"
   if [[ -n "${NEW_TABLES}" ]]; then
-    echo "   ② 删掉本次迁移新建的表（读自 ${LATEST_MIG}migration.sql 的 CREATE TABLE）：${NEW_TABLES}"
+    echo "   ② 删掉本次迁移新建的表（读自 ${PENDING_MIG_LIST} 的 CREATE TABLE）：${NEW_TABLES}"
     echo "      ${MYSQL_CLI} -e 'SET FOREIGN_KEY_CHECKS=0; DROP TABLE IF EXISTS ${NEW_TABLES}; SET FOREIGN_KEY_CHECKS=1;'"
+  elif [[ "${DEGRADED_PROBE}" == "1" ]]; then
+    echo "   ② 无法连接数据库确定本次全部 pending 迁移（mysql 客户端缺失或连接失败），只探测了"
+    echo "      最后一个迁移目录（${PENDING_MIG_LIST}）且未发现建表语句——这不代表本次一定不建表。"
+    echo "      请人工核对 ${BEFORE}..${AFTER} 之间 prisma/migrations 下新增的全部目录，确认是否有表要删。"
   else
-    echo "   ② 本次迁移（${LATEST_MIG}migration.sql）不建表，跳过——①已经灌回备份，没有新表要删。"
+    echo "   ② 本次 pending 迁移（${PENDING_MIG_LIST}）均不建表，跳过——①已经灌回备份，没有新表要删。"
   fi
   echo "   ③ 清掉 Prisma 的失败记录（① 恢复了 _prisma_migrations 时此步为空操作，照跑无害）："
   echo "      ${MYSQL_CLI} -e 'DELETE FROM _prisma_migrations WHERE finished_at IS NULL'"
