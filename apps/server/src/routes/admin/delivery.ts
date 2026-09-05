@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
@@ -9,6 +10,24 @@ import {
 import { refreshOrderQuote, kickOffQuote, isQuoteStale } from '../../services/delivery/quote'
 
 const router = Router()
+
+// B6-05：管理端可见的 Delivery 字段白名单——明确剔除 callbackSalt。
+// callbackSalt 是 /api/kd/:deliveryNo（未鉴权路由）验签的唯一防线，一旦随整行下发给前端，
+// 泄漏面等同于该配送单的回调伪造密钥。参照顾客侧 orders.ts 的 customerDeliveryView：
+// 新增字段前先想一遍是不是也该进白名单，而不是让 select 退化成整行 include。
+const ADMIN_DELIVERY_SELECT = {
+  id: true, orderId: true, orderNo: true, deliveryNo: true, activeOrderId: true,
+  provider: true, status: true, statusRank: true, providerStatus: true, statusDesc: true,
+  providerTaskId: true, providerOrderId: true,
+  courierCompany: true, courierName: true, courierMobile: true,
+  quotedFee: true, actualFee: true, quoteSnapshot: true, quotedAt: true, calledProviders: true,
+  tipFee: true, cancelFee: true, providerDistanceM: true,
+  errorCode: true, failReason: true,
+  calledAt: true, acceptedAt: true, pickedUpAt: true, deliveredAt: true, cancelledAt: true, cancelReason: true,
+  lastCallbackAt: true,
+  callTimeoutRemindedAt: true, acceptedStuckRemindedAt: true, deliveringRemindedAt: true, unknownRemindedAt: true,
+  operator: true, createdAt: true, updatedAt: true,
+} satisfies Prisma.DeliverySelect
 
 async function doAccept(id: number) {
   const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true } })
@@ -114,7 +133,7 @@ router.get('/:id/delivery', async (req: Request, res: Response, next: NextFuncti
       prisma.delivery.findFirst({
         where: { orderId: id },
         orderBy: { id: 'desc' },
-        include: { events: { orderBy: { id: 'asc' } } },
+        select: { ...ADMIN_DELIVERY_SELECT, events: { orderBy: { id: 'asc' } } },
       }),
       prisma.order.findUnique({ where: { id }, select: { quoteSnapshot: true, quotedAt: true } }),
     ])
