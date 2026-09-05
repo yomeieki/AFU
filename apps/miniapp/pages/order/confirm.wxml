@@ -90,7 +90,11 @@
     <text>和</text>
     <text class="agree-link" bindtap="goLegal" data-type="privacy">《隐私政策》</text>
   </view>
-  <view wx:if="{{belowMinOrder}}" class="min-order-tip">{{minOrderTip}}</view>
+  <view wx:if="{{metaFailed}}" class="min-order-tip">
+    <text>运费信息加载失败，无法计算合计　</text>
+    <text class="agree-link" bindtap="onRetryMeta">重新加载</text>
+  </view>
+  <view wx:elif="{{belowMinOrder}}" class="min-order-tip">{{minOrderTip}}</view>
   <view class="bottom-main">
     <view class="bottom-total-wrap">
       <text class="bottom-total-label">合计</text>
@@ -99,7 +103,7 @@
       <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
     </view>
     <view
-      class="submit-btn btn-primary {{submitting || belowMinOrder ? 'btn-disabled' : ''}}"
+      class="submit-btn btn-primary {{submitting || belowMinOrder || metaFailed ? 'btn-disabled' : ''}}"
       bindtap="onSubmit"
     >
       <text>{{submitting ? '提交中...' : '提交订单'}}</text>

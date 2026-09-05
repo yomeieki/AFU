@@ -72,6 +72,12 @@ Page({
       })
   },
 
+  // 失败提示行上的「重新加载」按钮绑这个，直接复用 loadMeta——不需要额外的加载态字段，
+  // metaFailed 本身在 loadMeta 里会被清掉或再次置位。
+  onRetryMeta() {
+    this.loadMeta()
+  },
+
   onShow() {
     // Check if user selected a new address from address/list
     if (app.globalData.selectedAddress) {
@@ -86,15 +92,15 @@ Page({
     var s = this.data.shipping || {}
     var subtotal = this.data.totalAmount
 
-    // 运费规则没拉到就别装作「免运费」。这里借 belowMinOrder 把提交按钮置灰并挂出提示行：
-    // confirm.wxml 不在本次可改文件范围，而它在模板里的实际语义正是「不可提交 + 显示 minOrderTip」；
-    // 失败的真实原因单独记在 metaFailed，onSubmit 据此弹重试，两个标记不混用。
+    // 运费规则没拉到就别装作「免运费」。metaFailed 有自己的一套绑定（confirm.wxml 的
+    // meta-failed 提示行 + 「重新加载」按钮，走 onRetryMeta），不再借用 belowMinOrder/
+    // minOrderTip——那两个字段只表示「未达起送门槛」，两个完全不同的失败状态不能混用同一套绑定。
     if (this.data.metaFailed) {
       this.setData({
         shippingFee: 0,
         payAmount: subtotal,
-        belowMinOrder: true,
-        minOrderTip: '运费信息加载失败，点「提交订单」重新加载',
+        belowMinOrder: false,
+        minOrderTip: '',
       })
       return
     }
