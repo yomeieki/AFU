@@ -21,10 +21,28 @@
 - 打印机本身还有独立的 `SN`（编号）+ `KEY`（打印机密钥），印在设备标签上，用于把打印机"绑定"进开发者账号（见 `Open_printerAddlist`）**[已确认]**
 - 一台打印机最多可被 3 个开发者账号绑定，换绑前需要原账号先解绑 **[已确认，来自官方文档抓取摘要]**
 
-### 1.3 API Base URL
-- HTTP：`http://api.de.feieyun.com/Api/Open/` **[已确认]**
-- HTTPS：`https://api.de.feieyun.com:443/Api/Open/` **[已确认]**
+### 1.3 API Base URL —— 国内站 / 国际站是两套独立账号体系
+
+本调研初版只记了国际站地址，导致 2026-09-05 联调时对着国际站打了半天，全部返回
+`ret=1002 "Printer Sn and User do not match"`。**这个错误码不区分「SN 写错」和「账号根本
+不在这个站」**，所以它看起来像设备问题，实际是站点问题——账号在哪个站注册，就只能打哪个站。
+
+| 站点 | 后台域名 | API Base | 备注 |
+|---|---|---|---|
+| **国内站** | `admin.feieyun.com` | `https://api.feieyun.cn`（`http://` 同样可用） | **本项目账号在这里** |
+| 国际站 / 亚太 | `developer.de.feieyun.com` | `https://api.de.feieyun.com` | 初版调研误记为唯一地址 |
+
+注意 `api.feieyun.com`（.com）**没有 A 记录**，不是笔误的可用别名，国内站必须用 `.cn`。
+
+**2026-09-05 实测**（SN `222601993`，同一 USER/UKEY）：
+
+```
+https://api.feieyun.cn/Api/Open/     Open_queryPrinterStatus → ret=0  "在线，工作状态正常。"
+https://api.de.feieyun.com/Api/Open/ Open_queryPrinterStatus → ret=1002
+```
+
 - 请求方式：POST/GET 均可，表单方式提交，`Content-Type: application/x-www-form-urlencoded` **[已确认]**
+- 代码里 `FEIE_API_BASE` 存**根地址**（不含 `/Api/Open/`），由 `feie.ts` 拼接。
 
 ### 1.4 签名方案
 ```
