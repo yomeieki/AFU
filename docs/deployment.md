@@ -177,6 +177,32 @@ PUBLIC_BASE_URL="https://api.yourdomain.com"
 > ```
 > 脚本先上传再改库、可重复执行；跑完后 nginx 的 `/uploads/` 与 `express.static` 保留一个部署周期做兜底，之后可删。
 
+### 飞鹅云打印相关变量（H10）
+
+生产 `.env` 里还需要飞鹅云打印开放平台的账号级密钥，`.env.example` 已给出模板，用 `set-env.sh` 逐项填（**不要**整段复制 `.env.example`，做法与上面 KD100 一致）：
+
+```bash
+bash /www/food-shop/scripts/set-env.sh FEIE_USER    # 输入不回显
+bash /www/food-shop/scripts/set-env.sh FEIE_UKEY
+bash /www/food-shop/scripts/set-env.sh FEIE_API_BASE --show   # 非敏感，可回显核对
+```
+
+```env
+FEIE_USER="飞鹅开放平台账号"
+FEIE_UKEY="飞鹅开放平台密钥"
+# 国内站，2026-09-05 已用真机核实（SN 222601993）：api.feieyun.cn 返回 ret=0，
+# 国际站 api.de.feieyun.com 对同一 SN 返回 ret=1002。本项目账号注册在国内站
+# （后台 admin.feieyun.com），FEIE_API_BASE 必须是前者，不能抄网上教程常见的国际站地址。
+FEIE_API_BASE="https://api.feieyun.cn"
+```
+
+- **懒校验，缺失不阻塞启动**：`config.ts:validateFeieConfig` 只在出票前才检查（与 KD100 同一模式，`PRINTER_PROVIDER_MOCK=true` 的 mock 模式下不校验）。这意味着**打印功能一旦在后台被打开，三个键缺任何一个，每一张票都会立刻变成 `CONFIG:MISSING_CONFIG` 并直接 `FAILED`**（不占重试次数），且被 `retryRecoveredPrinterJobs` 的 `lastError` 前缀过滤**永久排除在补打之外**——不是「打印慢」，是「这张票再也不会自动出」。
+- **绑定打印机会先报错，但报错文案会误导**：`POST /admin/printers/bind` 在密钥缺失时返回 `42240`（「打印机未配置」），看起来像是打印机 SN/绑定密钥填错，实际是服务器 env 没填三个 `FEIE_*` 键——遇到 42240 先用上面的 `--list` 确认这三个键是否已填，再去查打印机侧的 SN/KEY。
+- **站点选错也报错，但报错码相同**：`FEIE_API_BASE` 填成国际站 `api.de.feieyun.com`，账号密钥本身没错，但飞鹅认为「SN 与 USER 不匹配」，统一返回 `ret=1002`——现象和「SN 真的填错了」完全一样，唯一能分辨的办法是核对 `FEIE_API_BASE` 是否等于本项目实际注册的国内站地址。
+- 打印机型号/联数（copies）/渠道/重复播报参数等运营设置在后台「打印机」页配置，不进 env（跟同城运费一样，改一次不该要重启服务）；打印机本身的 SN + 绑定密钥在绑定页录入，同样不进 env、不落库明文。
+
+> **常见误解，需要在文档里明确否定一次**：打印机断电离线时，飞鹅云端会把已下发的票排进 `waiting` 队列，通电恢复后自动补吐（2026-09-05 真机实测：断电 31 秒判定离线，此时 `Open_printMsg` 仍返回 `ret=0`；通电 74 秒后在线，那张票自动打出）。**离线期间打印不会失败**，`CONFIG:MISSING_CONFIG` 是密钥缺失的错误，和打印机是否在线是两回事，不要把两类故障混着排查。
+
 ### 安全修改生产 .env
 
 生产 `.env` 不要手动 vim —— 漏引号、键名写错、写出重复键（dotenv 只认最后一条，症状极难排查）都很常见。用配套脚本：
@@ -283,6 +309,12 @@ deploy.sh 会自动完成：**预检（生产环境缺 COS 配置会在动服务
 > 迁移失败时磁盘上仍是旧产物是刻意的：老进程虽然还在内存里跑，但 PM2 之后任何一次自发重启（`max_memory_restart`、机器重启）都会从磁盘重新加载；若 `dist/` 已是新代码就会拿新代码打老库，全站 500 而 `/health` 照样绿。
 
 > ⚠️ 首次部署本版本前，务必先在 `apps/server/.env` 填好 `COS_SECRET_ID/KEY/BUCKET/REGION`，否则预检会直接拒绝部署（这是有意的：新版图片上传只走 COS，配置缺失时启动即失败）。
+
+### 本次部署（含 `20260907000000_review_fixes` 迁移）前置清单
+
+- [ ] **第 0 步，先于 `git bundle` 那一套**：`scripts/deploy.sh` 本轮改了迁移失败时的恢复指引（B2：else 分支不再硬编码上一批次的表名，改成从 `prisma/migrations` 最新目录动态读 `CREATE TABLE`），**必须把新版 `scripts/deploy.sh` 一起传到生产机 `/home/ubuntu/deploy.sh`**（`scp` 命令见上面「⚠️ 前置」小节的第 ② 步，已经包含这一步，不要漏）。生产机上跑的是部署前那一版旧脚本，旧脚本的恢复指引仍会在探测为空时打印「本轮同城上线」与 `delivery_events`/`deliveries`/`print_jobs` 的 DROP 命令——本次迁移只有两条 `ALTER TABLE`（不建表），旧脚本探测到的「新表」正好也是空，会误触发这条危险分支。
+- [ ] 打印功能若要在本次部署后打开，先按上面「飞鹅云打印相关变量」一节用 `set-env.sh` 填好 `FEIE_USER`/`FEIE_UKEY`/`FEIE_API_BASE`（H10）；不打开打印开关则可以先跳过，等需要时再补。
+- [ ] 本次迁移只有 ALTER TABLE、不建表：迁移失败时的恢复只有 ①（灌回备份）③（清 `_prisma_migrations` 失败记录）两步，②（删新表）会被脚本判定为「不建表，跳过」——这是预期行为，不是脚本坏了。
 
 ---
 

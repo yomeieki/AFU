@@ -1178,16 +1178,13 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 
 | 事件 | 位置 | 说明 |
 |---|---|---|
-| 付款成功 | `routes/orders.ts`（mock 支付）、`routes/wechat-notify.ts`（真实微信支付回调） | `enqueueOrderTicket(orderId,'NEW_ORDER')`，fire-and-forget，与 `notifyOrderPaid` 并列，绝不阻塞回调应答 |
+| 付款成功 | `routes/orders.ts`（mock 支付）、`routes/wechat-notify.ts`（真实微信支付回调） | `enqueueOrderTicket(orderId,'NEW_ORDER')`，fire-and-forget，与 `notifyOrderPaid` 并列，绝不阻塞回调应答；出票单独起一条 promise 链，不依赖同一处理函数里其它同步 void 通知函数是否抛出（H3） |
 | 顾客申请取消（D6②） | `POST /api/orders/:id/cancel-request` | `printCancel=true` 时出 `CANCEL` 提醒票 |
 | 顾客自助秒退（D6①） | `PUT /api/orders/:id/cancel`（`PAID` 且未接单分支） | 决定取消即出票，不等退款请求/回调确认完成 |
-| 微信退款成功回调 | `routes/wechat-notify.ts`（`REFUND.SUCCESS`） | 仅当订单累计退完全款（转 `REFUNDED`）才出 `CANCEL` 票，覆盖走异步退款到账的场景（如后台退款/售后同意）；不改 `services/refund.ts` |
+| 退款成功、订单累计退完全款 | `services/refund.ts` 的 `finalizeRefundSuccess`（事务提交后，`flippedToRefunded` 时） | 覆盖**全部**退款入口——后台一键退款（含 mock 同步 SUCCESS）、售后同意、顾客自助取消触发的退款、微信异步退款回调，各入口不必各自记得补一次；部分退款不出票；`CANCEL` 的 `dedupeKey` 固定 `seq=0`，同一单被多个入口重复推进只会真出一张 |
+| 商家拒单 / 人工标记退款完成 | `routes/admin/orders.ts` 的 `reject` / `refund-complete` | 只在「付过款、店里理论上已经知道这单」时补票；未付款单从没出过接单票，不需要补取消票（详见 `cb27694`） |
 | 店员手动重打 | `POST /api/admin/orders/:id/reprint` | `enqueueOrderTicket(orderId,'REPRINT')`，每次都新开一条记录，不做幂等 |
 | 后台打印测试页 | `POST /api/admin/printers/:sn/test` | `orderId=0`、`orderNo='TEST'` |
-
-已知缺口：`admin/orders.ts` 的「拒单」与管理端手动退款、mock 支付模式下的管理端退款（`initiateRefund`
-内部同步调用 `finalizeRefundSuccess`，不经真实微信 webhook）暂未产生 `CANCEL` 票——这些路径不在本里程碑
-「允许触碰」的文件范围内。
 
 ### scheduler 新增三任务
 
@@ -1259,15 +1256,25 @@ pointsCost`（M1 未使用）。字段定义与枚举取值见 spec §4。
 | 事件 | 位置 |
 |---|---|
 | 顾客确认收货 | `PUT /api/orders/:id/confirm` |
-| 发货超时自动确认收货 | `scheduler.autoCompleteShippedOrders` |
 | 同城骑手送达（520 回调） | `services/delivery/callback.ts`，事务提交后触发（塞进已有的 `after[]` 数组） |
 | 同城店员标记已送达 | `services/delivery/orchestrator.ts` 的 `markDelivered` |
-| 兜底（漏挂钩子） | `scheduler.settleMissedPoints`，每分钟扫 `COMPLETED && pointsSettledAt IS NULL && isTest=false && completedAt ∈ [now-7d, now-2min]` |
-| 退款扣回 | `services/refund.ts` 的 `finalizeRefundSuccess` 事务末尾（同一事务内，退款成功但扣回失败会一起回滚，靠微信回调重试机制补） |
+| 兜底（漏挂钩子，含发货超时自动确认收货） | `scheduler.settleMissedPoints`，每分钟扫 `COMPLETED && pointsSettledAt IS NULL && isTest=false && completedAt ∈ [now-7d, now-2min]` |
+| 退款扣回 | `services/refund.ts` 的 `finalizeRefundSuccess` 事务末尾（同一事务内，扣回失败整笔回滚并抛错） |
 | 新客券 | `routes/auth.ts` 的 `wechat-login`，新建 `User` 分支之后 |
 
 以上全部 fire-and-forget（退款扣回除外——那个必须在同一事务内，见上表），失败不影响主流程，
 由 `settleMissedPoints` 兜底任务补。
+
+> `scheduler.autoCompleteShippedOrders`（发货超时自动确认收货）**不是**发分钩子：它只把订单
+> 状态从 `SHIPPED` 推到 `COMPLETED`，不调用 `settlePoints`。这批订单的积分完全靠上面「兜底」
+> 那一行的 `settleMissedPoints` 扫描结算，不存在专门的确认收货钩子。
+>
+> `finalizeRefundSuccess` 里的扣回失败**不是**「靠微信回调重试补」——那只对走真实微信异步
+> 退款回调（`wechat-refund-notify`）的路径成立（`finalizeRefundSuccess` 抛错时该 handler
+> `replyFail`，微信按其重试策略重新投递通知）。`routes/admin/orders.ts` 的 `refund-complete`
+> 人工兜底路径（确认商户平台已退款但系统未收到回调时用）没有任何微信重试：这条路径存在的
+> 前提正是「不会再有回调」，`finalizeRefundSuccess` 在这里抛错只会让本次 HTTP 请求 500，
+> 需要店员人工重新点击重试，不会有第二次机会自动补上。
 
 ### scheduler 新增三任务
 
@@ -1277,8 +1284,11 @@ pointsCost`（M1 未使用）。字段定义与枚举取值见 spec §4。
 | `expirePoints` | 每日一次：`type IN ('EARN','GIFT_REVERT') && remaining>0 && expiresAt<now`，批 200，`remaining→0` + 写 `EXPIRE` 流水 + 余额同步 |
 | `expireCoupons` | 每日一次：`UserCoupon(status='UNUSED', expiresAt<now)` 批量置 `EXPIRED` |
 
-`run-scheduler` 的 overrides 新增 `settleMissedPointsAfterMin`（下界降到 0，e2e 用）与
-`forceDailyMemberTasks`（绕过日切判定，e2e 用）。
+`run-scheduler` 的 overrides 新增 `settleMissedPointsAfterMin`（下界降到 0，e2e 用）、
+`forceDailyMemberTasks`（绕过日切判定，e2e 用）与 `dailyTaskBatchLimit`（H9：`expirePoints`/
+`expireCoupons` 每批处理的行数，默认 200；两个任务现在会循环调用直到某轮返回值 < 该批量才
+收工——不再是「跑一批 200 就记账」，一次到期行数超过 200 的账户不会被拖到次日，e2e 传小值
+复现「一大批」场景不用真插 200+ 行）。
 
 ### 接口
 
