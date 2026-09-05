@@ -244,10 +244,17 @@ const DAILY_TASK_MAX_ROUNDS = 50
 /**
  * expirePoints / expireCoupons 共用的「每日一次」执行判定：上次记录的执行日与今天不同才跑，
  * 全部批次跑完才记录本次时间（不是跑一批就记）。force=true（e2e）时无视日切直接跑。
+ *
+ * R6：退出条件必须按 scanned（候选条数）跟 limit 比，不能按 processed（真正处理成功条数）——
+ * expirePointsBatch/expireCouponsBatch 对单行的 CAS 失手（M13 的 expiresAt 复核命中「被
+ * extendLivePoints 续期救回来」）、remaining<=0、单行抛错被 catch，都会让 processed < scanned
+ * 而候选其实已经扫满一批。旧写法按 result(=processed) < limit 判断，600 行候选里哪怕只有 1 个
+ * 用户在任务运行期间下单触发续期，这一轮就会算出 199 < 200 提前 break，把剩下 400 行留到明天，
+ * H9 想解决的「一天只清一批」问题原样保留。
  */
 async function runMemberDailyTask(
   field: 'lastExpirePointsAt' | 'lastExpireCouponsAt',
-  fn: (limit: number) => Promise<number>,
+  fn: (limit: number) => Promise<{ scanned: number; processed: number }>,
   force = false,
   batchLimit?: number
 ): Promise<number> {
@@ -260,9 +267,9 @@ async function runMemberDailyTask(
   const limit = batchLimit && batchLimit > 0 ? batchLimit : DEFAULT_DAILY_TASK_BATCH_LIMIT
   let total = 0
   for (let round = 0; round < DAILY_TASK_MAX_ROUNDS; round++) {
-    const result = await fn(limit)
-    total += result
-    if (result < limit) break // 这一轮没扫满一批，说明候选已经处理完
+    const { scanned, processed } = await fn(limit)
+    total += processed
+    if (scanned < limit) break // 候选没扫满一批，说明候选已经处理完（不是「处理成功条数」<limit）
   }
   await patchCronState({ [field]: now.toISOString() })
   return total

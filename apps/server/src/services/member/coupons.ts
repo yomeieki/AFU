@@ -204,18 +204,25 @@ export async function issueNewcomerCoupon(userId: number): Promise<void> {
 // 过期
 // ─────────────────────────────────────────────────────────
 
-export async function expireCouponsBatch(limit = 200): Promise<number> {
+/**
+ * R6：返回形状与 expirePointsBatch 对齐（{ scanned, processed }），供 scheduler.ts 的
+ * runMemberDailyTask 用 scanned（候选条数）而非 processed（真正改动条数）判断「这一轮
+ * 有没有扫满一批」——本函数的 moved.count 理论上总等于 candidates.length（这里没有
+ * expirePointsBatch 那种「续期救回」式的并发豁免，CAS 只是防御性的），但形状统一，
+ * 调用方不用为两个批处理函数分别写判断逻辑。
+ */
+export async function expireCouponsBatch(limit = 200): Promise<{ scanned: number; processed: number }> {
   const candidates = await prisma.userCoupon.findMany({
     where: { status: 'UNUSED', expiresAt: { lt: new Date() } },
     take: limit,
     select: { id: true },
   })
-  if (candidates.length === 0) return 0
+  if (candidates.length === 0) return { scanned: 0, processed: 0 }
   const moved = await prisma.userCoupon.updateMany({
     where: { id: { in: candidates.map((c) => c.id) }, status: 'UNUSED' },
     data: { status: 'EXPIRED' },
   })
-  return moved.count
+  return { scanned: candidates.length, processed: moved.count }
 }
 
 // ─────────────────────────────────────────────────────────

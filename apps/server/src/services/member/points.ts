@@ -302,8 +302,17 @@ export async function settlePoints(orderId: number): Promise<void> {
 // 过期
 // ─────────────────────────────────────────────────────────
 
-/** 扫过期入账行，批量置 remaining=0 + 写 EXPIRE 流水 + 余额同步。返回处理条数。 */
-export async function expirePointsBatch(limit = 200): Promise<number> {
+/**
+ * 扫过期入账行，批量置 remaining=0 + 写 EXPIRE 流水 + 余额同步。
+ *
+ * R6：返回值必须区分「候选条数」（scanned）与「真正处理成功条数」（processed）——调用方
+ * runMemberDailyTask 判断「这一轮是否扫满一批、还要不要再来一轮」只能依据前者。CAS
+ * `count===0`（M13 的 `expiresAt: { lt: now }` 补充条件命中「被 extendLivePoints 续期救回来」）、
+ * `remaining<=0`、单行抛错被 catch，这三种情况都会让 processed < scanned，但候选本身已经
+ * 扫到了 limit 条——若拿 processed 去跟 limit 比较，一批 200 条里哪怕只有 1 条因为续期被跳过，
+ * 就会误判「这一轮没扫满」提前收工，把其余候选留到明天（H9 想解决的问题原样保留）。
+ */
+export async function expirePointsBatch(limit = 200): Promise<{ scanned: number; processed: number }> {
   const candidates = await prisma.pointsLedger.findMany({
     where: { type: { in: ['EARN', 'GIFT_REVERT'] }, remaining: { gt: 0 }, expiresAt: { lt: new Date() } },
     orderBy: { id: 'asc' },
@@ -311,10 +320,10 @@ export async function expirePointsBatch(limit = 200): Promise<number> {
     select: { id: true },
   })
 
-  let count = 0
+  let processed = 0
   for (const { id } of candidates) {
     try {
-      const processed = await prisma.$transaction(async (tx) => {
+      const done = await prisma.$transaction(async (tx) => {
         // 重新在事务内读一次当前 remaining：批量候选列表是事务外的快照，
         // 拿它当扣减量会在并发消耗后把 pointsBalance 多扣——这里必须用当场读到的值。
         const row = await tx.pointsLedger.findUnique({ where: { id }, select: { remaining: true, userId: true } })
@@ -341,12 +350,12 @@ export async function expirePointsBatch(limit = 200): Promise<number> {
         }
         return true
       })
-      if (processed) count++
+      if (done) processed++
     } catch (e) {
       console.error('[member/points] expirePointsBatch 处理流水行失败:', id, e)
     }
   }
-  return count
+  return { scanned: candidates.length, processed }
 }
 
 // ─────────────────────────────────────────────────────────
