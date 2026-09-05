@@ -255,12 +255,13 @@ COS_BUCKET=yuegui-booking-backup-1342627167 COS_REGION=ap-shanghai COS_BACKUP_PA
 
 ```bash
 # 查看提交历史
-git log --oneline -10
+cd /www/food-shop && git log --oneline -10
 
-# 回滚到指定 commit
-git checkout <commit-hash>
-bash scripts/deploy.sh  # 重新编译 + 重启
+# 回滚到指定 commit：必须用 DEPLOY_REF，脚本会跳过 fetch 并 reset 到该提交
+DEPLOY_REF=<commit-hash> bash scripts/deploy.sh  # 重新编译 + 迁移（已应用的会跳过）+ 重启
 ```
+
+> ⚠️ **不要**先 `git checkout <commit-hash>` / `git reset --hard <commit-hash>` 再裸跑 `bash scripts/deploy.sh`：脚本 [2/9] 会无条件 `reset --hard origin/main`，把刚回滚掉的版本原样装回去，等于没回滚（还会留下 detached HEAD）。每次部署结束脚本都会打印带 `DEPLOY_REF=<部署前 sha>` 的回滚命令，直接复制即可。
 
 ### 数据库回滚
 

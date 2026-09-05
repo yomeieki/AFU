@@ -63,15 +63,27 @@ fi
 # 此时可从一台能连 GitHub 的机器把 ref 推过来：
 #   git push ubuntu@<服务器>:/www/food-shop <sha>:refs/remotes/origin/main
 # 然后 SKIP_FETCH=1 bash scripts/deploy.sh
+#
+# DEPLOY_REF=<sha>：部署指定提交（回滚专用），不 fetch、不看 origin/main。
+# 以前的回滚提示是「git reset --hard <旧版> && bash deploy.sh」——但这一步无条件
+# reset 到 origin/main，会把刚回滚掉的坏版本原样装回去，回滚等于空操作。
 echo "[2/9] 拉取最新代码..."
 cd "${REPO_DIR}"
-if [[ "${SKIP_FETCH:-0}" == "1" ]]; then
-  echo "  SKIP_FETCH=1，跳过 git fetch，使用本地 origin/main"
+if [[ -n "${DEPLOY_REF:-}" ]]; then
+  git rev-parse --verify --quiet "${DEPLOY_REF}^{commit}" >/dev/null \
+    || { echo "ERROR: DEPLOY_REF=${DEPLOY_REF} 不是本仓库已有的提交（先 git fetch 或从别的机器 push 过来）"; exit 1; }
+  TARGET_REF="${DEPLOY_REF}"
+  echo "  DEPLOY_REF=${DEPLOY_REF}，跳过 git fetch，部署该提交"
 else
-  git fetch origin
+  TARGET_REF="origin/main"
+  if [[ "${SKIP_FETCH:-0}" == "1" ]]; then
+    echo "  SKIP_FETCH=1，跳过 git fetch，使用本地 origin/main"
+  else
+    git fetch origin
+  fi
 fi
 BEFORE=$(git rev-parse --short HEAD)
-git reset --hard origin/main
+git reset --hard "${TARGET_REF}"
 AFTER=$(git rev-parse --short HEAD)
 echo "  ${BEFORE} → ${AFTER}"
 if [[ "${BEFORE}" == "${AFTER}" ]]; then
@@ -194,6 +206,6 @@ echo ""
 echo "=========================================="
 echo " 部署完成 $(date '+%Y-%m-%d %H:%M:%S')  版本：${AFTER}"
 echo " 后端日志：pm2 logs food-shop-server"
-echo " 回滚代码：cd ${REPO_DIR} && git reset --hard ${BEFORE} && bash scripts/deploy.sh"
+echo " 回滚代码：cd ${REPO_DIR} && DEPLOY_REF=${BEFORE} bash scripts/deploy.sh"
 echo " 恢复数据库：gunzip < ${PRE_BACKUP} | mysql -u ${DB_USER} -p ${DB_NAME}"
 echo "=========================================="
