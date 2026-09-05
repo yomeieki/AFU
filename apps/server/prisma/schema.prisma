@@ -19,8 +19,9 @@ model User {
   phone       String?   @db.VarChar(20)
   status      Int       @default(1) @db.TinyInt
   lastLoginAt DateTime? @map("last_login_at")
-  // 冗余 = 未过期入账行（EARN/GIFT_REVERT）remaining 之和；权威来源仍是 PointsLedger，
-  // 见 scripts/check-points-consistency.mjs 的只读校验
+  // 冗余缓存 == Σ 入账行（EARN/GIFT_REVERT）remaining（**不带**到期过滤；到期行由
+  // expirePoints 清零 remaining 时同事务等量 decrement 本列，恒等式不含 expiresAt 条件）。
+  // 权威来源仍是 PointsLedger，见 scripts/check-points-consistency.mjs 的只读校验
   pointsBalance Int     @default(0) @map("points_balance")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -289,6 +290,10 @@ model Order {
   // 积分结算的唯一「已处理」标记：非空 = settlePoints 已处理过（无论是否发出流水），
   // 不得用 pointsEarned === 0 判断（spec §5.4）——否则 earn=0 的订单会被兜底任务永远重扫
   pointsSettledAt DateTime? @map("points_settled_at")
+  // 结算时用于算分的基数 = actualAmount − refundedAmount(结算时刻)；退款扣回按
+  // pointsEarned × 退款额 / pointsBase 摊，与 earnRatePerYuan 无关。
+  // null = 该单在本列上线前结算（退化用 actualAmount）
+  pointsBase      Int?      @map("points_base")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
@@ -597,18 +602,20 @@ model PrintJob {
   id            Int       @id @default(autoincrement())
   orderId       Int       @map("order_id")
   orderNo       String    @map("order_no") @db.VarChar(32)
-  // NEW_ORDER | REPEAT | CANCEL | REPRINT | TEST
+  // NEW_ORDER | REPEAT | CANCEL | REPRINT | TEST | CANCEL_REQUEST | RESUME
   kind          String    @db.VarChar(16)
   // FEIE | MOCK
   provider      String    @db.VarChar(16)
   printerSn     String    @map("printer_sn") @db.VarChar(32)
-  // PENDING | SENT | PRINTED | FAILED | SKIPPED
+  // PENDING | SENDING | SENT | PRINTED | FAILED | SKIPPED
   status        String    @db.VarChar(16)
   providerJobId String?   @map("provider_job_id") @db.VarChar(64)
   attempts      Int       @default(0)
   lastError     String?   @map("last_error") @db.VarChar(255)
   content       String    @db.Text
   dedupeKey     String    @unique @map("dedupe_key") @db.VarChar(64)
+  // 入队时从 PrinterEntry.copies 快照，重试/补打/手动重试一律读本列
+  copies        Int       @default(1)
   sentAt        DateTime? @map("sent_at")
   printedAt     DateTime? @map("printed_at")
   createdAt     DateTime  @default(now()) @map("created_at")
