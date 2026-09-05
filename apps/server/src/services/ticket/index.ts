@@ -92,6 +92,15 @@ const SEND_INTERVAL_MS = 300
 /** 打印机恢复在线后自动补打 FAILED 作业的回溯窗口：超过这个时长的旧单不再补打（规格 §8b，避免离线
  *  半天后恢复时一次吐一堆过期小票）*/
 const RECOVER_BACKFILL_MS = 30 * 60 * 1000
+/** R5：`offlineSince` 是我们的健康检测**观测到**打印机变坏的那一刻，不是打印机**实际**开始离线
+ *  的那一刻——两者之间天然差着最多一个轮询周期的检测延迟（生产是 60s 的 scheduler 心跳）。
+ *  用 `offlineSince` 原值去卡 `sentAt >= offlineSince` 会把「确实是这次离线期间发出、但恰好
+ *  赶在我们这次轮询探测到状态变坏之前」的行误判成"离线之前就发的"而漏掉重发/确认，最坏情况是
+ *  一张已经被 clearQueue 丢弃、又没资格补发的票再也没人管，orderId 对应的顾客永远收不到接单票。
+ *  回退这一点点缓冲，把判定边界往前推——代价是极少数「确实是离线前发的」行被多判一次
+ *  queryJob（不会导致重复打印，因为重发前有 R5 的 queryJob 前置检查），换来的是不会漏掉
+ *  真正该处理的行。 */
+const RECENT_SENT_BUFFER_MS = 5 * 1000
 
 function activeProviderName(settings: PrinterSettings): PrinterProviderName {
   if (config.mock.printer) return 'MOCK'
@@ -790,9 +799,29 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
  *    追」，不是「打印机出了新故障」，不该占用告警配额）。
  * `clearQueue` 失败不阻断后续补发——两害相权：宁可小概率因飞鹅那边残留而重复出一张，也不能让
  * 恢复补打这条路径卡死，参照 D 组 M1/M14 一贯的「防御性 try/catch，坏一条不连累全部」风格。
+ *
+ * R5（复核第二轮）：原来的「窗口内行」筛选只按 `createdAt` 圈 30 分钟，不区分「离线期间才排进
+ * 云端队列的票」与「离线之前就已经正常打印、只是 SENT→PRINTED 确认还没到 3 分钟窗口的票」——
+ * 后者被一起当成「可能没打印成功」重发一遍，厨房会拿到重复接单票。改用 `offlineSince`（调用方
+ * 传入，取自 `healthTrack` 里这次离线开始的时间点）圈定：SENT 行只挑 `sentAt >= offlineSince`
+ * 的（PENDING 行本来就没发出去过，不受这条限制）。另外，重发前对带 `providerJobId` 的行先
+ * `queryJob` 一次——哪怕 `waiting` 汇报的是「还没吐出来」，飞鹅那边也可能恰好在我们
+ * `queryQueueInfo`/`clearQueue` 这两次外呼之间的空档就把它吐出去了（R7：真机 74s 自动吐出 vs
+ * 我们 60s 轮询，多数情况下我们观测到 waiting>0 时其实已经开始在吐），`printed:true` 就直接判
+ * PRINTED 跳过，不再无条件调 `attemptSend` 打第二遍。
+ *
+ * R8（复核第二轮）：「超过 30 分钟不再补打」的 `stale` 排除掉 `lastError='CONFIRM:GAVE_UP'`——
+ * 这是 M4 留下的僵尸行专属标记（SENT 超过 24h 还查不到结果时打上，M4 的注释明确写「不知道
+ * 有没有打印成功，不能武断改判」）；这里如果不排除，恢复检测会把它们当成"这次离线造成的旧单"
+ * 武断改判成 `FAILED + STALE:DROPPED`，店员点「失败重试」就会重印一张几小时/几天前的接单票。
+ * 没有再叠加 `createdAt >= offlineSince` 下界——那个更严格的版本会把「这次离线期间下单、
+ * 但订单本身是老库存补单」之类边缘场景也排除掉过头（且 offlineSince 只在我们的健康检测轮询
+ * 观测到状态变坏那一刻才落地，跟打印机实际开始离线的真实时刻之间天然有最长一个轮询周期的
+ * 检测延迟——用它卡 `stale` 的下界，会把「确实是这次离线期间发出、但赶在我们观测到之前」的
+ * 行也误伤成"跟这次离线无关"）。`lastError` 排除已经精确覆盖了复核指出的具体案例。
  */
 export async function recoverFromOfflineQueue(
-  sn: string, providerName: PrinterProviderName
+  sn: string, providerName: PrinterProviderName, offlineSince: number
 ): Promise<{ backfilled: number; dropped: number }> {
   let waiting = 0
   try {
@@ -811,10 +840,21 @@ export async function recoverFromOfflineQueue(
   }
 
   const cutoff = new Date(Date.now() - RECOVER_BACKFILL_MS)
+  const offlineSinceDate = new Date(offlineSince - RECENT_SENT_BUFFER_MS)
 
-  // 超过 30 分钟窗口的旧单：不再补打，标 STALE:DROPPED（不是新故障，不告警）
+  // 超过 30 分钟窗口的旧单：不再补打，标 STALE:DROPPED（不是新故障，不告警）。
+  // R8：排除掉 lastError='CONFIRM:GAVE_UP'（M4 的僵尸行，见上面函数注释）。
+  // 注意：不能写成 `NOT: { lastError: 'CONFIRM:GAVE_UP' }`——Prisma 把它翻成 SQL 的
+  // `lastError <> 'CONFIRM:GAVE_UP'`，而 `NULL <> 任何值` 在 SQL 里结果是 NULL（不是 TRUE），
+  // 会把 lastError 本来就是 NULL 的正常行也一并挡在 WHERE 外面（本地起服务实测验证过这个坑：
+  // 一条 lastError=NULL 的行用这个条件查出来是 0 条）。显式 OR 上 `lastError: null` 保证空值
+  // 不被误伤。
   const stale = await prisma.printJob.findMany({
-    where: { printerSn: sn, status: { in: ['PENDING', 'SENT'] }, createdAt: { lt: cutoff } },
+    where: {
+      printerSn: sn, status: { in: ['PENDING', 'SENT'] },
+      createdAt: { lt: cutoff },
+      OR: [{ lastError: null }, { lastError: { not: 'CONFIRM:GAVE_UP' } }],
+    },
     orderBy: { createdAt: 'asc' },
     take: BATCH,
   })
@@ -827,14 +867,40 @@ export async function recoverFromOfflineQueue(
     dropped += moved.count
   }
 
-  // 窗口内的行：重置为 PENDING 后走正常的 attemptSend 认领链路重新发送一次
+  // 窗口内的行：PENDING 本来就没发出去过，直接重置重发；SENT 只挑 sentAt>=offlineSince
+  // （R5：排除掉离线之前就已经正常打印、只是还没确认的行）。
   const recent = await prisma.printJob.findMany({
-    where: { printerSn: sn, status: { in: ['PENDING', 'SENT'] }, createdAt: { gte: cutoff } },
+    where: {
+      printerSn: sn,
+      createdAt: { gte: cutoff },
+      OR: [
+        { status: 'PENDING' },
+        { status: 'SENT', sentAt: { gte: offlineSinceDate } },
+      ],
+    },
     orderBy: { createdAt: 'asc' },
     take: BATCH,
   })
   let backfilled = 0
   for (const job of recent) {
+    // R5：重发前先问一次飞鹅这条到底打没打——万一在我们 queryQueueInfo/clearQueue 这两次外呼
+    // 之间的空档，飞鹅自己已经把它吐出来了（R7 的竞速），直接确认 PRINTED，不再调 attemptSend
+    // 打第二遍。查询本身失败不影响后续正常补发（按「还不确定」处理，跟原来的行为一致）。
+    if (job.status === 'SENT' && job.providerJobId) {
+      try {
+        const provider = getProvider(job.provider as PrinterProviderName)
+        const result = await provider.queryJob(job.providerJobId)
+        if (result.printed) {
+          const moved = await prisma.printJob.updateMany({
+            where: { id: job.id, status: 'SENT' },
+            data: { status: 'PRINTED', printedAt: new Date() },
+          })
+          if (moved.count > 0) continue
+        }
+      } catch (e) {
+        console.warn(`[ticket] 离线恢复补发前查询打印状态失败 job=${job.id}（按需要补发继续处理）:`, (e as Error).message)
+      }
+    }
     const moved = await prisma.printJob.updateMany({
       where: { id: job.id, status: job.status },
       data: { status: 'PENDING', attempts: 0, lastError: null },
@@ -906,7 +972,8 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
       // 恢复时都要查一次 waiting，决定要不要清云端队列 + 从本地记录补发。
       if (track.wasOffline) {
         try {
-          const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName)
+          // R5：把这次离线开始的时间点传给 recoverFromOfflineQueue，用来圈定"这次离线期间"的行。
+          const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName, track.offlineSince ?? now)
           backfilled += n
         } catch (err) {
           console.warn(`[ticket] 离线恢复清队列/补发异常 sn=${e.sn}:`, (err as Error).message)
