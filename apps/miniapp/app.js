@@ -26,6 +26,12 @@ App({
     if (token) {
       this.globalData.token = token
     }
+    // pages/user/index 要 token 与 userInfo 同时在才算已登录；
+    // 冷启动只恢复 token 的话，「我的」页在静默登录回来前（或离线时）会闪回未登录态
+    var userInfo = wx.getStorageSync('userInfo')
+    if (userInfo && typeof userInfo === 'object') {
+      this.globalData.userInfo = userInfo
+    }
     var self = this
     this._tryLogin()
       .then(function() { self.updateCartCount() })
@@ -65,6 +71,7 @@ App({
                 avatarUrl: data.avatarUrl,
               }
               wx.setStorageSync('token', data.token)
+              wx.setStorageSync('userInfo', self.globalData.userInfo)
               resolve(data)
             })
             .catch(reject)
