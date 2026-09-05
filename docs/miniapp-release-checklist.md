@@ -80,6 +80,20 @@
 - 隐私政策全文（`config/legal.js`）已于 2026-09-03 补具名第三方共享条款：快递100 及其运力方、飞鹅云打印。
   微信的指引表单里没有「向第三方提供」的填写位，而其第 7.1 条要求共享须取得单独同意，故必须写在自有隐私政策中。
 
+### 2.4b 隐私与位置能力一致性检查
+
+2.4 节的内容分散在好几处(公众平台勾选项、代码里的隐私弹窗、`legal.js` 条款文案),容易出现"某一处改了、其余几处没跟着改"。上线前(以及日后任何改动位置相关代码之后)按下表一次性核对完:
+
+| 检查项 | 怎么核对 | 当前状态(2026-09 核实) |
+|---|---|---|
+| `__usePrivacyCheck__` 是否开启 | `apps/miniapp/app.json` 顶层字段 | ✅ `true` |
+| `requiredPrivateInfos` 是否**只有** `chooseLocation` | `apps/miniapp/app.json` | ✅ `["chooseLocation"]`——**不能悄悄多出** `getLocation`。一旦代码里加了 `wx.getLocation` 调用却没有同步在这里申请、也没有回 2.4 补勾"位置信息",小程序会在真机上直接报权限错误，而不是提审被打回——这个坑比审核打回更隐蔽 |
+| 隐私弹窗 `buttonId` | `apps/miniapp/components/privacy-popup/index.wxml` 的同意按钮是否有 `id="privacy-agree-btn"`,`index.js` 的 `onAgree` 是否把 `buttonId` 一起传给 `resolve` | ✅ 已修复(M4 计划 F5,`55a20a2`),弹层被卸载/被新请求覆盖时的悬空 Promise 也已处理 |
+| `config/legal.js` 的位置信息条款 | 隐私政策全文是否明确写了"同城配送需要在地图上选择收货位置/门店位置"这类条款,且与 2.4 表格里"选择的位置信息"一行的勾选状态一致 | ✅ 一致——都是"地图选点"语义(`wx.chooseLocation`),不涉及自动定位 |
+| 实现方式是"选点"还是"自动定位" | 搜索代码里所有 `wx.chooseLocation`/`wx.getLocation` 调用点 | ✅ 全部是 `wx.chooseLocation`(顾客端地址编辑页、商家端"门店位置")；全仓库没有 `wx.getLocation` 调用，与 `requiredPrivateInfos` 只含 `chooseLocation` 互相印证 |
+
+**改动检查提示**：任何改动 `pages/address/edit`、`pages/merchant/index`、`pages/local/confirm` 里位置接口调用的 PR，都要重新走一遍这张表——这是本节存在的意义，不是走一次流程就完事。尤其是"新加了 `wx.getLocation`"这种改动，**必须同步**改 `app.json` 的 `requiredPrivateInfos`、公众平台 2.4 的勾选、以及 `config/legal.js` 的条款文案三处，漏一处都会导致真机上位置功能报错或隐私合规不完整。
+
 ### 2.5 客服(功能 → 客服)
 - 本小程序采用**拨打电话**方式,不需要配置微信客服人员;审核备注里写明「客服方式:小程序内「联系商家」直拨 xxx」即可
 
@@ -194,6 +208,6 @@
 | 场景 | 操作 |
 |---|---|
 | 小程序线上版本有严重问题 | 公众平台 → 版本管理 → 线上版本 → 「版本回退」(可回退到上一个已发布版本) |
-| 后端部署出问题 | 服务器 `bash scripts/deploy.sh` 结尾打印的回滚命令:`git reset --hard <上一版>` 后重跑 deploy |
-| 数据库迁移出问题 | deploy.sh 在迁移前自动备份到 `/www/backups/pre-deploy/`,按打印的 `gunzip | mysql` 命令恢复 |
+| 后端部署出问题 | `DEPLOY_REF=<部署前 sha> bash scripts/deploy.sh`(每次部署结束脚本会打印这条带具体 sha 的命令,直接复制即可)。**不要**先手动 `git reset --hard <上一版>` 再裸跑 `bash scripts/deploy.sh`——脚本第 2 步会无条件 `git reset --hard` 到 `origin/main`(或 `DEPLOY_REF`),手动 reset 会被这一步原样覆盖掉,等于没回滚 |
+| 数据库迁移出问题 | deploy.sh 在迁移前自动备份到 `/www/backups/pre-deploy/`,按打印的 `gunzip | mysql` 命令恢复。恢复流程本身已经实测演练过一次(见 `docs/ops-restore-drill.md`:18 张表逐项对齐、金额校验一致、全程未碰生产库),不是纸面流程 |
 | 支付/退款回调异常 | 企微告警群会收到「金额不一致」「退款异常」;订单页可「手动标记完成」兜底,勿直接改数据库 |
