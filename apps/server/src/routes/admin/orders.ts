@@ -217,6 +217,17 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
 
     const shippedAt = new Date()
     const result = await prisma.$transaction(async (tx) => {
+      // 先做带状态守卫的 updateMany 再写 shipment：:214 的状态检查只是事务外快照，
+      // 无守卫的 update({where:{id}}) 会把这几十毫秒里刚落库的 REFUNDING/REFUNDED 强行改回 SHIPPED——
+      // 钱已经退出去了，单子却显示已发货，货再发一次就是白送。与 accept/complete 两个兄弟端点保持同一范式。
+      const moved = await tx.order.updateMany({
+        where: { id, status: { in: ['PAID', 'PREPARING'] } },
+        data: { status: 'SHIPPED' },
+      })
+      if (moved.count === 0) {
+        const current = await tx.order.findUnique({ where: { id }, select: { status: true } })
+        throw new AppError(42204, `订单状态为 ${current?.status ?? '未知'}，仅待接单/备餐中订单可发货`)
+      }
       const shipment = await tx.shipment.upsert({
         where: { orderId: id },
         update: { expressCompany, expressNo, remark, shippedAt },
@@ -230,7 +241,7 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
           shippedAt,
         },
       })
-      const updated = await tx.order.update({ where: { id }, data: { status: 'SHIPPED' } })
+      const updated = await tx.order.findUniqueOrThrow({ where: { id } })
       return { shipment, order: updated }
     })
 
