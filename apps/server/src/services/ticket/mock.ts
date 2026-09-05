@@ -16,6 +16,8 @@ const jobs = new Map<string, MockJob>()
 /** e2e 可写：sn → 强制在线状态 或 强制下一次 print 抛出的错误 */
 const forcedState = new Map<string, PrinterOnlineState>()
 const forcedPrintError = new Map<string, { kind: 'CONFIG' | 'CAPACITY' | 'BUSINESS' | 'TIMEOUT'; message: string }>()
+/** e2e 可写：sn → print() 人为延迟毫秒数，用于复现「立即发送」与「定时兜扫」的无锁竞争（B6） */
+const forcedDelayMs = new Map<string, number>()
 let seq = 0
 
 /** 仅测试/e2e 用：清空 mock 内部状态，避免跨用例串味 */
@@ -23,7 +25,15 @@ export function _resetMockPrinter(): void {
   jobs.clear()
   forcedState.clear()
   forcedPrintError.clear()
+  forcedDelayMs.clear()
   seq = 0
+}
+
+/** 仅测试/e2e 用：让该 sn 的下一次（及之后每一次，直到被覆盖/重置）print() 调用先睡 ms 毫秒再返回，
+ *  用于把「入队后立即发送」与「定时兜扫」两条路径的时间窗拉大到 e2e 能稳定命中的程度（B6 复现）。 */
+export function _setMockPrintDelay(sn: string, ms: number): void {
+  if (ms > 0) forcedDelayMs.set(sn, ms)
+  else forcedDelayMs.delete(sn)
 }
 
 /** 仅测试/e2e 用：把某台打印机标记为固定在线状态（ONLINE/ABNORMAL/OFFLINE/UNKNOWN） */
@@ -46,6 +56,8 @@ export const mockPrinterProvider: PrinterProvider = {
   name: 'MOCK',
 
   async print(job: PrintTicketInput): Promise<PrintTicketResult> {
+    const delay = forcedDelayMs.get(job.sn)
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
     const forced = forcedPrintError.get(job.sn)
     if (forced) {
       forcedPrintError.delete(job.sn)

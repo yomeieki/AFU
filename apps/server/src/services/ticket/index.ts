@@ -42,6 +42,12 @@ export function _resetRetryDelaysMsForTest(): void {
 }
 /** SENT 状态超过这个时长仍未被回调/查询确认为 PRINTED，就主动查一次平台状态（规格 §8b 兜扫） */
 const SENT_CONFIRM_AFTER_MS = 3 * 60 * 1000
+/** SENDING 超过这个时长还没转出（成功→SENT、失败→PENDING/FAILED），判定是进程在发送途中被杀死留下的
+ *  孤儿行——比 feie.ts 的 fetch 超时（10s）多留 5s 缓冲，不会跟正常发送中的行打架（B6 孤儿回收） */
+const SENDING_ORPHAN_AFTER_MS = 15 * 1000
+/** 同一台打印机连续两次发送之间的最短间隔（规格 §8b「同 SN 串行发送、间隔 ≥300ms」）。
+ *  只对 FEIE 生效——mock 模式下拖慢没有意义，只会拖慢 e2e。 */
+const SEND_INTERVAL_MS = 300
 /** 打印机恢复在线后自动补打 FAILED 作业的回溯窗口：超过这个时长的旧单不再补打（规格 §8b，避免离线
  *  半天后恢复时一次吐一堆过期小票）*/
 const RECOVER_BACKFILL_MS = 30 * 60 * 1000
@@ -199,15 +205,47 @@ function isDuplicateKeyError(e: unknown): boolean {
   return typeof e === 'object' && e !== null && 'code' in e && (e as { code?: unknown }).code === 'P2002'
 }
 
-/** 单次发送尝试：更新 PrintJob 状态、必要时告警。被 enqueueOrderTicket（首次）与 processQueue（重试/兜扫）共用 */
+// ── 同 SN 串行发送（规格 §8b：同 SN 串行、间隔 ≥300ms）───────────────────
+// 每台打印机一条进程内 Promise 链，attemptSend 对同 SN 的调用排队执行；链上前一个任务失败/被拒
+// 不能卡住后面的（.catch 吞掉，交由各自的 handleSendFailure 处理）。这条链天然覆盖
+// enqueueOrderTicket（首次发）、processQueue（重试/兜扫）、retryPrintJob、enqueuePrinterTestJob、
+// retryRecoveredPrinterJobs 五处调用——它们全部经 attemptSend 出口，不用各自改。
+const snSendQueues = new Map<string, Promise<void>>()
+
+function serializePerSn(sn: string, providerName: PrinterProviderName, task: () => Promise<void>): Promise<void> {
+  const prev = snSendQueues.get(sn) ?? Promise.resolve()
+  const interval = providerName === 'FEIE' ? SEND_INTERVAL_MS : 0
+  const next = prev.catch(() => undefined).then(async () => {
+    await task()
+    if (interval > 0) await new Promise((resolve) => setTimeout(resolve, interval))
+  })
+  snSendQueues.set(sn, next)
+  return next
+}
+
+/** 单次发送尝试：更新 PrintJob 状态、必要时告警。被 enqueueOrderTicket（首次）与 processQueue（重试/兜扫）
+ *  等共用。B6：入队后立即发送与定时兜扫无锁竞争会让同一行被 print() 两次（厨房做两份）——开头先用
+ *  `status:'PENDING'→'SENDING'` 的条件 updateMany 认领，认领不到（count===0）说明另一个调用已经在发
+ *  或这行已经不是可发状态，直接返回，不会真的调用 provider.print() 第二次。 */
 async function attemptSend(
   jobId: number, providerName: PrinterProviderName, sn: string, content: string, copies: number
 ): Promise<void> {
+  await serializePerSn(sn, providerName, () => attemptSendOnce(jobId, providerName, sn, content, copies))
+}
+
+async function attemptSendOnce(
+  jobId: number, providerName: PrinterProviderName, sn: string, content: string, copies: number
+): Promise<void> {
+  const claimed = await prisma.printJob.updateMany({
+    where: { id: jobId, status: 'PENDING' },
+    data: { status: 'SENDING' },
+  })
+  if (claimed.count === 0) return // 已被并发的另一次调用认领在发，或该行已不是 PENDING（幂等退出）
   const provider = getProvider(providerName)
   try {
     const result = await provider.print({ sn, content, copies })
     await prisma.printJob.updateMany({
-      where: { id: jobId, status: 'PENDING' },
+      where: { id: jobId, status: 'SENDING' },
       data: { status: 'SENT', providerJobId: result.providerJobId, sentAt: new Date(), lastError: null },
     })
   } catch (e) {
@@ -218,14 +256,16 @@ async function attemptSend(
 
 async function handleSendFailure(jobId: number, err: PrinterError): Promise<void> {
   const job = await prisma.printJob.findUnique({ where: { id: jobId }, select: { attempts: true, orderNo: true, status: true } })
-  if (!job || job.status !== 'PENDING') return
+  if (!job || job.status !== 'SENDING') return
   const lastError = `${err.kind}:${err.code} ${err.message}`.slice(0, 255)
   // CONFIG 类错误（账号/密钥/打印机未绑定）重试没有意义，直接 FAILED，不占重试次数
-  const attempts = job.attempts + 1
-  const shouldFail = err.kind === 'CONFIG' || attempts >= MAX_ATTEMPTS()
+  const nextAttempts = job.attempts + 1
+  const shouldFail = err.kind === 'CONFIG' || nextAttempts >= MAX_ATTEMPTS()
   await prisma.printJob.updateMany({
-    where: { id: jobId, status: 'PENDING' },
-    data: { attempts, lastError, status: shouldFail ? 'FAILED' : 'PENDING' },
+    where: { id: jobId, status: 'SENDING' },
+    // M14：绝对值读-改-写窗口本来就已经被 SENDING 认领关闭了（同一行只有认领者本人在改），
+    // 这里仍然改用 increment——认领态失败回写的窗口更短，没有理由不用更安全的写法。
+    data: { attempts: { increment: 1 }, lastError, status: shouldFail ? 'FAILED' : 'PENDING' },
   })
   if (shouldFail) {
     notifySystemAlert('打印失败', [`订单 ${job.orderNo}`, lastError, '打印机故障期间请留意工作台/推送，人工确认是否已接单'], {
@@ -245,6 +285,15 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
   let confirmed = 0
 
   const now = Date.now()
+
+  // 孤儿回收：进程在 SENDING 认领之后、写回 SENT/PENDING/FAILED 之前被杀（部署重启/崩溃），
+  // 这一行会永远停在 SENDING、再也不被任何查询选中。超过「provider 超时 + 5s 缓冲」还没转出，
+  // 按「这次发送大概率没有真正完成」处理，退回 PENDING 重新进入正常重试路径。
+  await prisma.printJob.updateMany({
+    where: { status: 'SENDING', updatedAt: { lt: new Date(now - SENDING_ORPHAN_AFTER_MS) } },
+    data: { status: 'PENDING', lastError: 'SENDING:ORPHANED' },
+  })
+
   const pending = await prisma.printJob.findMany({
     where: { status: 'PENDING' },
     orderBy: { createdAt: 'asc' },

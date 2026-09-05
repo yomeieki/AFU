@@ -27,7 +27,7 @@ import {
 } from '../../services/ticket'
 import { PrinterError, PrinterOnlineState } from '../../services/ticket/printer'
 import {
-  _resetMockPrinter, _setMockPrinterState, _setMockPrintFailure, _listMockJobs,
+  _resetMockPrinter, _setMockPrinterState, _setMockPrintFailure, _listMockJobs, _setMockPrintDelay,
 } from '../../services/ticket/mock'
 
 const router = Router()
@@ -219,6 +219,16 @@ printerMockRouter.post('/fail', async (req: Request, res: Response, next: NextFu
 printerMockRouter.get('/jobs', async (req: Request, res: Response) => {
   const sn = typeof req.query.sn === 'string' ? req.query.sn : undefined
   success(res, _listMockJobs(sn))
+})
+
+// B6 复现用：让某台打印机的 print() 人为变慢，撑大「入队后立即发送」与「定时兜扫」的竞争窗口
+const delaySchema = z.object({ sn: z.string().trim().min(1), ms: z.number().int().min(0).max(10_000) })
+printerMockRouter.post('/delay', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { sn, ms } = delaySchema.parse(req.body ?? {})
+    _setMockPrintDelay(sn, ms)
+    success(res, { ok: true })
+  } catch (e) { next(e) }
 })
 
 // 覆盖退避重试等待时长，秒级验证「重试耗尽→FAILED」而不必真等 5s+30s+2min
