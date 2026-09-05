@@ -50,6 +50,14 @@ const SENT_CONFIRM_AFTER_MS = 3 * 60 * 1000
  *  最坏能拖到 1000s，而 scheduler 的 `running` 标志整轮持有，期间同城呼叫骑手/待付款超时取消/
  *  退款兜底全部停摆（M4）。20 条封顶把最坏情况压到 200s 量级。 */
 const SENT_CONFIRM_BATCH = 20
+/** M4（复核第二轮，只修了一半）：批量上限只挡住了「一次能选多少条」，挡不住「每条外呼本身要多久」——
+ *  PENDING 重试循环仍是最多 100 条串行外呼，每条最坏能到 ~20s（print 超时 10s + handleSendFailure
+ *  里 TIMEOUT 分支再查一次 queryStatus 10s，见 R4），最坏一轮可以拖到 ~2000s；scheduler 的 `running`
+ *  标志在同一轮 tick 内整段持有，拖得比下一次心跳（TICK_MS=60s）还长，等于同城呼叫骑手/待付款
+ *  超时取消这些排在后面的任务全部要等这一轮出票兜扫收工才能跑下一轮。改成整轮墙钟预算：无论
+ *  PENDING/SENT 候选还剩多少，单轮总耗时一超过预算就提前收工，剩下的留到下一次 tick，
+ *  换来的是「兜扫可能要跑好几轮才处理完一次网络劣化的大批量」，但至少不会把整个调度器卡死。 */
+const PROCESS_QUEUE_BUDGET_MS = 30 * 1000
 /** SENT 超过这个时长还查不到「已打印」，放弃继续主动查询（M4）：飞鹅对久远 providerJobId 会
  *  返回「订单不存在」（ret=1001），这类行会永远停在 SENT、越攒越多，把后续新 SENT 行挤出批次；
  *  24h 后不再查，只把 lastError 标成 CONFIRM:GAVE_UP（状态仍留 SENT——我们并不知道它到底有没有
@@ -488,6 +496,7 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
   let confirmed = 0
 
   const now = Date.now()
+  const roundStartedAt = Date.now()
   const orphanAfterMs = sendingOrphanAfterMsOverride ?? SENDING_ORPHAN_AFTER_MS
 
   // 孤儿回收：进程在 SENDING 认领之后、写回 SENT/PENDING/FAILED 之前被杀（部署重启/崩溃），
@@ -505,6 +514,10 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
     take: BATCH,
   })
   for (const job of pending) {
+    // M4（复核第二轮）：单条外呼最坏能拖到 ~20s（见 PROCESS_QUEUE_BUDGET_MS 的注释），100 条
+    // 顶格会拖垮整个调度器——整轮墙钟预算一到就提前收工，没处理到的留到下一次 tick 的 PENDING
+    // 扫描自然会重新选中（这里没有改任何 DB 状态，跳出循环不会丢单）。
+    if (Date.now() - roundStartedAt > PROCESS_QUEUE_BUDGET_MS) break
     // M2：第一次失败后 job.attempts=1，意味着"已经失败过 1 次"，接下来这次是第 1 次重试，
     // 应该按 retryDelaysMs[0]（5s）等待——用 attempts（而不是 attempts-1... 等等，反过来）
     // 原来的 `retryDelaysMs[min(attempts, len-1)]` 在 attempts=1 时取到 delays[1]（30s），
@@ -535,6 +548,9 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
     take: SENT_CONFIRM_BATCH,
   })
   for (const job of sent) {
+    // M4：同一个整轮预算，PENDING 循环用剩的时间才轮到 SENT 确认——两段合起来才是这一次
+    // processQueue() 总共可能占用调度器的时长上限。
+    if (Date.now() - roundStartedAt > PROCESS_QUEUE_BUDGET_MS) break
     if (!job.providerJobId) continue
     const staleForTooLong = job.sentAt !== null && now - job.sentAt.getTime() > SENT_GIVE_UP_AFTER_MS
     try {
