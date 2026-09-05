@@ -28,7 +28,7 @@ import {
 import { PrinterError, PrinterOnlineState } from '../../services/ticket/printer'
 import {
   _resetMockPrinter, _setMockPrinterState, _setMockPrintFailure, _listMockJobs, _setMockPrintDelay,
-  _mockQueueWaiting,
+  _mockQueueWaiting, _markMockCloudJobPrinted,
 } from '../../services/ticket/mock'
 
 const router = Router()
@@ -281,6 +281,24 @@ printerMockRouter.post('/health-track', async (req: Request, res: Response, next
       offlineSince: offlineSinceMsAgo === null ? null : Date.now() - offlineSinceMsAgo,
       alerted,
     })
+    success(res, { ok: true })
+  } catch (e) { next(e) }
+})
+
+// R7 复核第二轮：e2e 用来模拟「打印机在我们 queryQueueInfo/clearQueue 这两次外呼之间的空档，
+// 已经自己把某张票吐出去了」这个竞态窗口（见 services/ticket/mock.ts 的
+// `_markMockCloudJobPrinted` 注释）——不这样模拟的话，「离线恢复后物理只印 1 次」这类断言测不出
+// recoverFromOfflineQueue 重发前的 queryJob-before-resend 检查（R5/R7）到底生效没有：mock 不会
+// 自己制造第二次 print()，断言在这条检查缺失时也照样通过。
+// 注意：不要用「恢复即整队列吐出」（_setMockAutoFlushOnRecover）来测这条——那个开关会在状态
+// 切换的同时把 cloudQueue 整个清空，recoverFromOfflineQueue 一进来看到 waiting===0 就直接提前
+// return 了，根本走不到 queryJob-before-resend 那段代码，测不出东西。这里用的是「waiting 依然
+// >0（还没被我们观测到清零），但这一条具体的作业其实已经被物理打印」这个更精确的竞态。
+const markPrintedSchema = z.object({ providerJobId: z.string().trim().min(1) })
+printerMockRouter.post('/mark-cloud-job-printed', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { providerJobId } = markPrintedSchema.parse(req.body ?? {})
+    _markMockCloudJobPrinted(providerJobId)
     success(res, { ok: true })
   } catch (e) { next(e) }
 })

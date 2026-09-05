@@ -5,25 +5,46 @@ echo "== 45. 离线语义（D2：H5/H5b/M11，取代原 H5 修法）=="
 # 变量全部加 D45_ 前缀，避免跟 e2e.sh 主体或其它分片的全局变量撞车（前面有组在这里踩过 R1/R2
 # 撞车导致收尾 rm -f 报 "File name too long" 的坑）。
 
-echo "-- A：离线期间下单不推 FAILED，票进 mock 云端队列；恢复且 waiting>0 → clearQueue + 从本地表补发，物理只印 1 次 --"
+echo "-- A：离线期间下单不推 FAILED，票进 mock 云端队列；恢复且 waiting>0 → clearQueue + 从本地表补发 --"
+# 第二轮复核点名：「物理只收到 1 次 print」这条断言原来能过，纯粹因为 mock 自己永远不会凭空
+# 制造第二次 print()——哪怕 recoverFromOfflineQueue 少了 R5/R7 的 queryJob-before-resend 检查，
+# 物理也只会收到 1 次，断言测不出这条检查到底存在不存在。
+# 这里改用 mock 的 `_markMockCloudJobPrinted`（见 mock.ts 注释）模拟 R7 的真实竞态：打印机在我们
+# queryQueueInfo/clearQueue 这两次外呼之间的空档，已经自己把这张票物理吐出去了——cloudQueue 里
+# waiting 依然汇报 >0（我们还没观测到清零），但这条具体的作业其实已经打印完成。
+# 踩过的坑：一开始想用「恢复即整队列吐出」（_setMockAutoFlushOnRecover）测这条，但那个开关会在
+# 状态切换的同时把 cloudQueue 整个清空——recoverFromOfflineQueue 一进来看到 waiting===0 就直接
+# return 了（见 index.ts:860），根本走不到 queryJob-before-resend 那段代码，测出来的是「没触发
+# 补发」而不是「触发了补发但被 queryJob 拦下来」，测不出东西；revert 掉 R5/R7 检查重跑一遍
+# 断言照样是绿的（因为压根没走到那段代码），才发现这条路子是死的。改用只标记单条作业「已打印」、
+# 不清空 cloudQueue 的 `_markMockCloudJobPrinted`，才能让 recoverFromOfflineQueue 真正跑到
+# queryJob 那一步。
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D45-A","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
 req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"D45-A","state":"OFFLINE"}' >/dev/null
 D45_A_OID=$(pay_new_order "$PID" "$ADDR")
 sleep 0.2
-assert_eq "A：离线期间下发的作业不是 FAILED（修复前 H5 字面修法会推成 FAILED）" \
+# 这条断言只区分「新旧 mock」，不区分「新旧应用代码」——旧应用代码在新 mock（OFFLINE 不再抛
+# CAPACITY，而是入队返回成功）下同样会得到 SENT，不代表旧代码当年真的不会把这单推成 FAILED
+# （那是针对旧 mock 抛 CAPACITY 时的行为）。留着当回归护栏：以后如果谁把「打印机离线」重新
+# 当成同步失败处理，这条会挂。
+assert_eq "A：离线期间下发的作业不是 FAILED（回归护栏，非旧代码 bug 复现——理由见上方注释）" \
   "$(PJOBS "$D45_A_OID" | jq -r '.data.list[0].status')" "SENT"
 assert_eq "A：mock 云端队列里堆了 1 条（票排进了飞鹅队列，不在我们表里能挑）" \
   "$(req GET '/api/admin/system/printer-mock/queue?sn=D45-A' "$AT" | jq -r .data.waiting)" "1"
+D45_A_PJID=$(PJOBS "$D45_A_OID" | jq -r '.data.list[0].providerJobId')
+[[ -n "$D45_A_PJID" && "$D45_A_PJID" != "null" ]] && ok "A：拿到本地记录的 providerJobId=$D45_A_PJID" || fail "A：没拿到 providerJobId"
 req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 仍离线，只是建立 healthTrack（不触发恢复）
+# 模拟 R7 竞态：飞鹅那边已经把这张票物理吐出去了，但 waiting 依然汇报 >0（我们还没观测到清零）
+req POST /api/admin/system/printer-mock/mark-cloud-job-printed "$AT" "{\"providerJobId\":\"$D45_A_PJID\"}" >/dev/null
 req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"D45-A","state":"ONLINE"}' >/dev/null
-req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 恢复：应清空云端队列 + 从本地记录补发
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 恢复：waiting 仍 >0，会走到补发逻辑；应先 queryJob 确认已打印，跳过重发
 sleep 0.2
 assert_eq "A：恢复后 mock 云端队列清空（clearQueue 已调用）" \
   "$(req GET '/api/admin/system/printer-mock/queue?sn=D45-A' "$AT" | jq -r .data.waiting)" "0"
-assert_eq "A：该单最终仍是 SENT（等待下一轮确认，没被判失败）" \
-  "$(PJOBS "$D45_A_OID" | jq -r '.data.list[0].status')" "SENT"
-assert_eq "A：打印机物理只收到 1 次真正的 print()（云端排队的旧项被 clearQueue 丢弃，不是又多印一次）" \
+assert_eq "A：queryJob 前置检查确认已打印，该单改判 PRINTED（不是又重新走一遍 attemptSend 得到 SENT）" \
+  "$(PJOBS "$D45_A_OID" | jq -r '.data.list[0].status')" "PRINTED"
+assert_eq "A：打印机物理只收到 1 次真正的 print()（那 1 次是打印机自己吐出来的，不是 attemptSend 重发的；缺 queryJob 前置检查会因为无条件重发而变成 2 次）" \
   "$(req GET "/api/admin/system/printer-mock/jobs?sn=D45-A" "$AT" | jq -r '.data | length')" "1"
 
 echo "-- B：30 分钟前的旧单，恢复时不补打，标 FAILED/STALE:DROPPED，且始终没被真正打印过 --"
