@@ -21,7 +21,10 @@ router.get('/summary', memberReadLimiter, async (req: Request, res: Response, ne
   try {
     const userId = req.userId!
     const [points, availableCoupons] = await Promise.all([getPointsSummary(userId), countAvailable(userId)])
-    success(res, { pointsBalance: points.balance, expiringSoon: points.expiringSoon, availableCoupons })
+    // M16：docs/member-terms-copy.md 的常驻文案「若 1 年内无消费，您的 {balance} 分将于
+    // {expiresAt} 全部过期」需要 pointsExpireAt 渲染——getPointsSummary 早已算出这个值
+    // （PointsSummary.pointsExpireAt），只是这里漏透传，前端拿到的字段一直是 undefined。
+    success(res, { pointsBalance: points.balance, expiringSoon: points.expiringSoon, pointsExpireAt: points.pointsExpireAt, availableCoupons })
   } catch (e) {
     next(e)
   }
