@@ -77,6 +77,15 @@ const envSchema = z.object({
   KD100_RETRY_DELAYS_MS: z.string().optional(),
   // 同城运力 mock（生产开启拒绝启动）
   LOCAL_DELIVERY_PROVIDER_MOCK: z.string().optional(),
+
+  // 飞鹅云打印开放平台（懒校验：出票前 validateFeieConfig 再查缺项；硬件是带语音播报的云喇叭款，
+  // 软件侧只管出票，播报由固件自动触发，见 services/ticket/feie.ts）
+  FEIE_USER: z.string().optional(),
+  FEIE_UKEY: z.string().optional(),
+  // 端点根地址（不含 /Api/Open/），以飞鹅开发者后台显示为准，见 services/ticket/feie.ts
+  FEIE_API_BASE: z.string().optional(),
+  // 打印机 mock（生产开启拒绝启动）
+  PRINTER_PROVIDER_MOCK: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)
@@ -104,6 +113,7 @@ if (isProduction) {
       ['WECHAT_LOGIN_MOCK', env.WECHAT_LOGIN_MOCK],
       ['WECHAT_QRCODE_MOCK', env.WECHAT_QRCODE_MOCK],
       ['LOCAL_DELIVERY_PROVIDER_MOCK', env.LOCAL_DELIVERY_PROVIDER_MOCK],
+      ['PRINTER_PROVIDER_MOCK', env.PRINTER_PROVIDER_MOCK],
     ] as const
   ).filter(([, v]) => v === 'true')
   if (enabledMocks.length > 0) {
@@ -152,6 +162,7 @@ export const config = {
     login: env.WECHAT_LOGIN_MOCK === 'true',
     qrcode: env.WECHAT_QRCODE_MOCK === 'true',
     delivery: env.LOCAL_DELIVERY_PROVIDER_MOCK === 'true',
+    printer: env.PRINTER_PROVIDER_MOCK === 'true',
   },
   order: {
     payTimeoutMin: env.PAY_TIMEOUT_MIN,
@@ -182,6 +193,11 @@ export const config = {
     retryDelaysMs: (env.KD100_RETRY_DELAYS_MS ?? '1000,3000')
       .split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n >= 0),
   },
+  feie: {
+    user: env.FEIE_USER ?? '',
+    ukey: env.FEIE_UKEY ?? '',
+    apiBase: (env.FEIE_API_BASE ?? '').replace(/\/+$/, ''),
+  },
 }
 
 /** 呼叫骑手前的懒校验：mock 模式不需要真密钥 */
@@ -189,5 +205,13 @@ export function validateKd100Config(): void {
   if (config.mock.delivery) return
   if (!config.kd100.key || !config.kd100.secret) {
     throw new Error('Missing required env var: KD100_KEY / KD100_SECRET')
+  }
+}
+
+/** 出票前的懒校验：mock 模式不需要真密钥 */
+export function validateFeieConfig(): void {
+  if (config.mock.printer) return
+  if (!config.feie.user || !config.feie.ukey || !config.feie.apiBase) {
+    throw new Error('Missing required env var: FEIE_USER / FEIE_UKEY / FEIE_API_BASE')
   }
 }
