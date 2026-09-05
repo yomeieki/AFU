@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
+import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
   Channel, DeliveryEventInfo, DeliveryInfo, LocalDeliverySettings, Order, OrderItem, RejectReason,
@@ -585,8 +585,10 @@ function TopBar({
           <span className="wb__shop">{shopName}</span>
           <span className="wb__meta">{today.getMonth() + 1} 月 {today.getDate()} 日</span>
           <span className="wb__meta"><i className={`wb__dot ${openState.cls}`} />{openState.text}</span>
-          {/* 打印机：M2b 接飞鹅前恒为占位 */}
+          {/* 打印机芯片先藏起来：M2b 接飞鹅前它恒显示「未接入」，一个永远不变的灰点只会让店员以为
+              哪里坏了。接入后按 snap.printer.status 放出来。
           <span className="wb__meta"><Printer className="w-3.5 h-3.5" /><i className="wb__dot" />打印机 未接入</span>
+          */}
           <span className={`wb__alerts ${alerts > 0 ? 'wb__alerts--on' : ''}`}>
             <Bell className="w-3.5 h-3.5" />待处理告警 {alerts}
           </span>
