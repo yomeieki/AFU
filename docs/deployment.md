@@ -274,10 +274,16 @@ fatal: could not read Username for 'https://github.com': No such device or addre
 （2026-09-05 首次跑通，180 个提交 / 5.8MB）：
 
 ```bash
-# ① 本地：打增量包（<生产当前 SHA>..<要部署的 SHA>），先建个分支名给 bundle 用
-git branch -f deploy-batch1 <要部署的 SHA>
-git bundle create /tmp/afu.bundle <生产当前 SHA>..deploy-batch1
-git bundle verify /tmp/afu.bundle          # 会列出前置提交，确认生产机都有
+# ⓪ 先取生产当前 SHA（下面两处都要用它，别凭记忆填）
+ssh ubuntu@162.14.114.95 'cd /www/food-shop && git rev-parse HEAD'
+
+# ① 本地：打增量包。分支名带日期，**不要复用固定名**——
+#    生产侧 `git fetch <bundle> X:refs/heads/X` 在 X 已存在且新旧不是快进关系时会失败
+#    （回滚之后再往前推就是这种情况）。带日期的一次性名字规避掉整类问题。
+BR=deploy-$(date +%Y%m%d-%H%M)
+git branch -f "$BR" <要部署的 SHA>
+git bundle create /tmp/afu.bundle <生产当前 SHA>.."$BR"
+git bundle verify /tmp/afu.bundle          # 会列出前置提交，下面第 ③ 步要逐个验
 
 # ② 传上去（deploy.sh 一并传：生产上那份可能是旧版，不支持 DEPLOY_REF）
 scp /tmp/afu.bundle scripts/deploy.sh ubuntu@162.14.114.95:/home/ubuntu/
@@ -285,7 +291,8 @@ scp /tmp/afu.bundle scripts/deploy.sh ubuntu@162.14.114.95:/home/ubuntu/
 # ③ 生产：只 fetch 进一个独立 ref，不动 HEAD，确认无误再部署
 ssh ubuntu@162.14.114.95
 cd /www/food-shop
-git fetch /home/ubuntu/afu.bundle deploy-batch1:refs/heads/deploy-batch1
+git status --porcelain -uno                  # 先看未提交改动！reset --hard 会抹掉（见下方要点）
+git fetch /home/ubuntu/afu.bundle <上面那个 BR>:refs/heads/<上面那个 BR>
 git log --oneline -1                        # HEAD 应仍是旧版
 DEPLOY_REF=<要部署的 SHA> bash /home/ubuntu/deploy.sh
 ```
@@ -295,8 +302,13 @@ DEPLOY_REF=<要部署的 SHA> bash /home/ubuntu/deploy.sh
 - **从 `/home/ubuntu/deploy.sh` 跑，不要从仓库里跑**。`deploy.sh` 第 2 步会
   `git reset --hard`，把正在执行的脚本文件本身换掉；从仓库外执行可以完全避开这个问题。
   另外生产上那份 `scripts/deploy.sh` 是部署前那一版，**旧版没有 `DEPLOY_REF`**。
-- `git bundle verify` 列出的前置提交，生产机必须**全部**有（用 `git cat-file -e <sha>^{commit}` 逐个验），
-  否则 fetch 会失败。做增量包时前置通常就是生产当前 HEAD 及其合并基。
+- `git bundle verify` 列出的前置提交，生产机必须**全部**有，**在生产机上验**（本地当然全有，
+  在本地跑等于没验）：
+  ```bash
+  ssh ubuntu@162.14.114.95 'cd /www/food-shop && for c in <verify 列出的每个 sha>; do
+    git cat-file -e "$c^{commit}" 2>/dev/null && echo "✔ $c" || echo "✘ 缺 $c"; done'
+  ```
+  做增量包时前置通常就是生产当前 HEAD 及其合并基。
 - 部署前查一次 `git status --porcelain -uno`：`reset --hard` 会抹掉已跟踪文件的未提交改动。
   本项目实测只有 `package-lock.json` 因 npm 版本差异有 `libc` 字段增删，抹掉无害；
   **但每次都要看一眼**，别默认它一定无害。
