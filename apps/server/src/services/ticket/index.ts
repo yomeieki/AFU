@@ -26,7 +26,8 @@ import {
 
 const BATCH = 100
 /**
- * 失败重试退避：第 1/2/3 次失败后分别等待 5s/30s/2min 再重试，第 3 次仍失败转 FAILED（规格 §8b）。
+ * 失败重试退避：首发失败后第 1/2/3 次重试分别等待 5s/30s/2min，第 3 次重试（总共 4 次发送）
+ * 仍失败转 FAILED（规格 §8b「失败按 5s/30s/2min 重试 3 次后 FAILED」= 首发 + 3 次重试）。
  * 用可变数组而非常量，是为了给 `_setRetryDelaysMsForTest` 留口子——e2e 要验证「重试耗尽→FAILED」
  * 这条路径，真等 5s+30s+2min≈2.5 分钟会把整跑拖慢一个数量级；测试口子只在 PRINTER_PROVIDER_MOCK
  * 模式下通过 admin/printer.ts 的 mock 控制路由暴露，生产环境代码路径不可达。
@@ -208,6 +209,9 @@ export async function enqueueOrderTicket(
         data: {
           orderId: order.id, orderNo: order.orderNo, kind, provider: providerName,
           printerSn: printer.sn, status: 'PENDING', content, dedupeKey,
+          // M1：入队时从 PrinterEntry.copies 快照；重试/补打/手动重试一律读这一列，
+          // 不再各自硬编码 1（否则同城 2 联配置在重试路径上会丢失骑手联）。
+          copies: printer.copies,
         },
       })
     } catch (e) {
@@ -288,7 +292,11 @@ async function handleSendFailure(jobId: number, err: PrinterError): Promise<void
   const lastError = `${err.kind}:${err.code} ${err.message}`.slice(0, 255)
   // CONFIG 类错误（账号/密钥/打印机未绑定）重试没有意义，直接 FAILED，不占重试次数
   const nextAttempts = job.attempts + 1
-  const shouldFail = err.kind === 'CONFIG' || nextAttempts >= MAX_ATTEMPTS()
+  // M2：规格 §8b 是「失败按 5s/30s/2min 重试 3 次后 FAILED」= 首发 + 3 次重试 = 最多 4 次发送。
+  // retryDelaysMs.length===3 对应「还能再重试 3 次」，所以终止条件是 nextAttempts 严格大于它
+  // （nextAttempts=4 时才判定重试耗尽），而不是 >=（原来 nextAttempts=3 就终止，总共只发了
+  // 3 次，比规格少一次）。
+  const shouldFail = err.kind === 'CONFIG' || nextAttempts > MAX_ATTEMPTS()
   await prisma.printJob.updateMany({
     where: { id: jobId, status: 'SENDING' },
     // M14：绝对值读-改-写窗口本来就已经被 SENDING 认领关闭了（同一行只有认领者本人在改），
@@ -328,14 +336,21 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
     take: BATCH,
   })
   for (const job of pending) {
-    const delay = retryDelaysMs[Math.min(job.attempts, retryDelaysMs.length - 1)]
+    // M2：第一次失败后 job.attempts=1，意味着"已经失败过 1 次"，接下来这次是第 1 次重试，
+    // 应该按 retryDelaysMs[0]（5s）等待——用 attempts（而不是 attempts-1... 等等，反过来）
+    // 原来的 `retryDelaysMs[min(attempts, len-1)]` 在 attempts=1 时取到 delays[1]（30s），
+    // 把「首次重试该等 5s」错发成等 30s。正确下标是 attempts-1（第 N 次失败后，下一次是第 N
+    // 次重试，用 delays[N-1]）；attempts=0（从未失败过，比如孤儿回收刚重置回 PENDING 之外的
+    // 全新行）不会走到这个分支，下面的 `job.attempts > 0` 守卫已经短路掉了。
+    const delay = job.attempts > 0 ? retryDelaysMs[Math.min(job.attempts - 1, retryDelaysMs.length - 1)] : 0
     if (job.attempts > 0 && now - job.updatedAt.getTime() < delay) continue
     try {
       // H4：单条脏行（比如 provider 字段被更早版本写成了不认识的值）不能把这一轮剩下的所有作业
       // 都拖死——attemptSend 内部已经把 getProvider() 挪进了 try（会被 handleSendFailure 正常
       // 转成 FAILED），这里再包一层是防御性的：万一 claim 那一步的 prisma 调用本身抛出（比如
       // DB 抖动），也只丢这一条，不影响同一轮里的其它作业。
-      await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, 1)
+      // M1：读该行自己的 copies（入队时从 PrinterEntry.copies 快照），不再硬编码 1。
+      await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, job.copies)
       retried++
     } catch (e) {
       console.warn(`[ticket] 重试发送异常 job=${job.id}:`, (e as Error).message)
@@ -545,13 +560,12 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
     })
     if (moved.count === 0) continue
     try {
-      // attemptSend 内部对「打印失败」这类错误自己兜底，但 getProvider() 那一行本身在 try 之外
-      // （只在收到未实现的 provider 名字时才会抛，正常路径不会走到）；这里补一层，让恢复补打这个
-      // 批处理循环里，单条历史脏数据（比如 provider 字段被更早版本写成了不认识的值）不会把整个
-      // printerHealthTask 拖垮——那样会导致 scheduler 的这一轮 stats 里连 printerHealth 这个键
-      // 都不出现，调用方（工作台/e2e）拿到的是 undefined 而不是一个数字，对照 processQueue() 里
-      // SENT 确认循环同样的 try/catch 写法。
-      await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, 1)
+      // getProvider() 已经挪进了 attemptSend 内部的 try（H4），单条历史脏数据不会把整个
+      // printerHealthTask 拖垮；这里仍然包一层，防的是 attemptSend 之外的意外抛出（比如
+      // claim 那一步 prisma 调用本身失败），让恢复补打这个批处理循环里一条坏行不连累其它行——
+      // 对照 processQueue() 里 SENT 确认循环同样的 try/catch 写法。
+      // M1：读该行自己入队时快照的 copies（同城 2 联等配置），不再硬编码 1。
+      await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, job.copies)
       count++
     } catch (e) {
       console.warn(`[ticket] 恢复补打失败 job=${job.id}:`, (e as Error).message)
@@ -672,7 +686,8 @@ export async function retryPrintJob(jobId: number): Promise<RetryPrintJobResult>
     data: { status: 'PENDING', attempts: 0, lastError: null },
   })
   if (moved.count === 0) return { ok: false, reason: 'CONCURRENT' }
-  await attemptSend(jobId, job.provider as PrinterProviderName, job.printerSn, job.content, 1)
+  // M1：读该行自己的 copies（入队时从 PrinterEntry.copies 快照），不再硬编码 1。
+  await attemptSend(jobId, job.provider as PrinterProviderName, job.printerSn, job.content, job.copies)
   const updated = await prisma.printJob.findUnique({ where: { id: jobId }, select: { status: true } })
   return { ok: true, status: updated?.status ?? 'PENDING' }
 }
