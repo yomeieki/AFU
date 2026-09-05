@@ -46,12 +46,21 @@ export function _mapFeieError(ret: number | string | undefined, msg: string): Pr
   const m = msg || ''
   // M10：CONFIG 是这套启发式唯一承重的分界——判成 CONFIG 直接 FAILED 且被永久排除在补打之外
   // （retryRecoveredPrinterJobs 明确跳过 `lastError` 以 `CONFIG:` 开头的行）。原来的关键字里
-  // 「签名/USER/UKEY/账号」对应的是 sig 校验失败，而 2026-09-05 已确认服务器时钟漂移会让
+  // 「签名/USER/UKEY」对应的是 sig 校验失败，而 2026-09-05 已确认服务器时钟漂移会让
   // `stime` 超出飞鹅的校验窗口、返回一条同样含"签名"字样的错误——NTP 一修好这些请求立刻能
   // 重新发出去，属于会自愈的 BUSINESS/CAPACITY 类，判成 CONFIG 会让这些行永久失去补打资格，
-  // NTP 修好后仍需店主逐条手点重试。这里收窄到确定不会自愈的关键字：打印机压根没绑定/不存在，
-  // 或用户名本身就填错——这些不会随时间自己变好。
-  if (/不存在|未绑定|未添加|用户名|not match/i.test(m)) return 'CONFIG'
+  // NTP 修好后仍需店主逐条手点重试。这里排除掉「签名/USER/UKEY」这几个跟 sig 校验强相关、
+  // 会被时钟漂移污染的词。
+  //
+  // 复核第二轮（M10 收窄过头）：上一版把「账号」也一并删了，但飞鹅账号本身被禁用/异常
+  // （比如欠费、被封）返回的「账号异常」类文案，跟"时钟漂移导致签名超窗口"是两回事——
+  // 已确认的时钟漂移错误文案只含"签名"字样，不含"账号"；"账号异常"不会随时间自己变好，
+  // 误判成 BUSINESS 会让每张票白烧 4 次×10s 外呼才落到 FAILED，且下次"打印机恢复"时还会被
+  // retryRecoveredPrinterJobs 反复重试（它只排除 CONFIG: 开头的行）。没有更细的官方 ret 码表
+  // 可用来做比关键字更精确的判据（这是本项目从飞鹅原始文档抓取里能拿到的唯一确定信息，
+  // 见文件头注释与调研文档 §1.9），所以仍是关键字匹配，只是把「账号」放回来、继续排除
+  // 「签名/USER/UKEY」。
+  if (/不存在|未绑定|未添加|用户名|账号|not match/i.test(m)) return 'CONFIG'
   if (/离线|不在线|缺纸|开盖|异常|队列已满|通信失败/.test(m)) return 'CAPACITY'
   return 'BUSINESS'
 }
