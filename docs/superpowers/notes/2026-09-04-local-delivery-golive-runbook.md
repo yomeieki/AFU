@@ -174,7 +174,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://api.yuegui-hotel.online/api/loc
 
 ### E1. 迁移失败（`deploy.sh [6/9]` 中止）
 
-脚本已保护：不重启服务、直接 `exit 1`，旧进程还在跑旧代码，并打印完整的三步恢复命令（含自动探测出的「本次新建的表」）。
+脚本已保护：不重启服务、直接 `exit 1`，旧进程还在跑旧代码，磁盘上的 `dist/` 与 Prisma Client 也已还原为部署前版本（PM2 之后自发重启不会拿新代码打老库），并打印完整的三步恢复命令（含自动探测出的「本次新建的表」）。
 
 **不要只灌 dump 就重跑部署。** MySQL 的 DDL 不可回滚，`20260904000000_local_delivery` 是一个迁移里 4 段 `ALTER` + 3 个 `CREATE TABLE` + 2 个 `CREATE INDEX` + 2 个 `ADD FOREIGN KEY` 的独立语句；失败点在建表之后（索引重名、锁等待、磁盘满）时 `deliveries` / `delivery_events` / `print_jobs` 已经落库。`mysqldump` 的输出只 `DROP/CREATE` 备份里有的表，三张新表会原样留下；再跑 `deploy.sh` → 重跑该迁移 → `CREATE TABLE deliveries` 撞 **1050 already exists** → Prisma 写入一条 `finished_at IS NULL` 的失败记录 → 此后每次 `prisma migrate deploy` 都直接 **P3009 found failed migrations** 退出，部署管线卡死。
 

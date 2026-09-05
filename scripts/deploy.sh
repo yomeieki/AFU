@@ -15,7 +15,22 @@ if [[ "${DEPLOY_SELF_COPY:-}" != "1" ]]; then
   chmod +x "${_self}"
   DEPLOY_SELF_COPY=1 exec "${_self}" "$@"
 fi
-trap 'rm -f "$0"' EXIT
+# 没走到「迁移成功、换上新产物」就退出（预检失败、build 失败、迁移失败），磁盘上必须还是
+# 部署前的 dist/ + Prisma Client：旧进程虽然还在内存里跑旧代码，但 PM2 之后任何一次自发
+# 重启（max_memory_restart、机器重启、pm2 resurrect）都会从磁盘重新加载——新代码打老库，
+# 所有带新列的查询 Unknown column，全站 500 且 /health（只 SELECT 1）照样绿。
+ARTIFACTS_SWAPPED=0
+restore_artifacts() {
+  [[ -n "${SERVER_DIR:-}" ]] && rm -rf "${SERVER_DIR}/dist.next"
+  if [[ -n "${PRISMA_CLIENT_BAK:-}" && -d "${PRISMA_CLIENT_BAK}" ]]; then
+    rm -rf "${PRISMA_CLIENT_DIR}"
+    mkdir -p "${PRISMA_CLIENT_DIR}"
+    cp -a "${PRISMA_CLIENT_BAK}/." "${PRISMA_CLIENT_DIR}/"
+    rm -rf "${PRISMA_CLIENT_BAK}"
+  fi
+  return 0
+}
+trap 'rm -f "$0"; [[ "${ARTIFACTS_SWAPPED}" == "1" ]] || restore_artifacts' EXIT
 
 SEED="${1:-}"
 REPO_DIR="/www/food-shop"
@@ -112,11 +127,23 @@ echo "  备份完成：${PRE_BACKUP} ($(du -sh "${PRE_BACKUP}" | cut -f1))"
 ls -t "${BACKUP_DIR}"/pre_deploy_*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
 
 # ── [5/9] 构建后端（先 generate 再 build，顺序不可反）─────────────────────────
+# 产物不直接写 dist/：编译到 dist.next/，[6/9] 迁移成功后再换上；Prisma Client 是
+# prisma generate 原地覆盖的，没法指定输出目录，所以先快照、失败时拷回。
 echo "[5/9] 构建后端..."
 cd "${SERVER_DIR}"
+PRISMA_CLIENT_DIR="$(node -p "require('path').dirname(require.resolve('.prisma/client/index.js'))" 2>/dev/null || true)"
+PRISMA_CLIENT_BAK=""
+if [[ -n "${PRISMA_CLIENT_DIR}" && -d "${PRISMA_CLIENT_DIR}" ]]; then
+  PRISMA_CLIENT_BAK="$(mktemp -d)"
+  cp -a "${PRISMA_CLIENT_DIR}/." "${PRISMA_CLIENT_BAK}/"
+else
+  echo "  （未找到已生成的 Prisma Client，应为首次部署，跳过快照）"
+fi
 npx prisma generate
-npm run build
-echo "  dist/app.js: $(du -sh dist/app.js | cut -f1)"
+rm -rf dist.next
+# package.json 的 build 就是 tsc；tsconfig 的 outDir 是 dist，这里用命令行覆盖到 dist.next
+npm run build -- --outDir dist.next
+echo "  dist.next/app.js: $(du -sh dist.next/app.js | cut -f1)（迁移成功后换到 dist/）"
 
 # ── [6/9] 数据库迁移 ─────────────────────────────────────────────────────────
 echo "[6/9] 执行数据库迁移..."
@@ -133,8 +160,9 @@ if ! npm run db:migrate:deploy; then
       zgrep -q "CREATE TABLE \`${t}\`" "${PRE_BACKUP}" || NEW_TABLES="${NEW_TABLES}${NEW_TABLES:+, }\`${t}\`"
     done
   fi
+  restore_artifacts
   echo "=========================================="
-  echo " ERROR: 迁移失败！服务未重启，旧进程仍在跑旧代码。"
+  echo " ERROR: 迁移失败！服务未重启，旧进程仍在跑旧代码；磁盘上的 dist/ 与 Prisma Client 已还原为部署前版本。"
   echo " 恢复数据库请按顺序做完三步（少做 ②③ 下次部署会 P3009 卡死）："
   echo "   ① 灌回迁移前备份："
   echo "      gunzip < ${PRE_BACKUP} | ${MYSQL_CLI}"
@@ -153,6 +181,16 @@ if ! npm run db:migrate:deploy; then
   exit 1
 fi
 echo "  迁移完成"
+# 迁移成功，换上新产物。用 rename 而不是 rm -rf dist && mv：不留「dist 不存在」的窗口。
+rm -rf dist.prev
+[[ -d dist ]] && mv dist dist.prev
+mv dist.next dist
+rm -rf dist.prev
+if [[ -n "${PRISMA_CLIENT_BAK}" ]]; then
+  rm -rf "${PRISMA_CLIENT_BAK}"
+fi
+ARTIFACTS_SWAPPED=1
+echo "  dist/app.js: $(du -sh dist/app.js | cut -f1)"
 if [[ "${SEED}" == "--seed" ]]; then
   echo "[6b] 导入初始数据（seed）..."
   npm run db:seed
