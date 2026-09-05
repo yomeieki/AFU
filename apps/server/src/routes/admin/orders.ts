@@ -7,6 +7,7 @@ import { rollbackOrderStock } from '../../utils/order-stock'
 import { ACTIVE_REFUND_STATUSES, finalizeRefundSuccess, initiateRefund, remainingRefundable } from '../../services/refund'
 import { sendShipSubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
+import { enqueueOrderTicket } from '../../services/ticket'
 import { LOW_STOCK_THRESHOLD } from '../../utils/constants'
 
 const router = Router()
@@ -338,6 +339,24 @@ router.post('/:id/reject', async (req: Request, res: Response, next: NextFunctio
       refund = await initiateRefund({ orderId: id, amount: remainingRefundable(order), reason: cancelReason, operator: req.adminUsername ?? 'admin' })
       await prisma.order.update({ where: { id }, data: { cancelReason } })
     }
+    // 出票（规格 §8b「订单被取消」）：**只有已付款单**要出。付款那一刻已经出过 NEW_ORDER 票、
+    // 厨房很可能正在备餐，店员在后台点下拒单后必须当场让后厨收到「别做了」，否则这单会一直做完。
+    // 待付款单从没出过接单票，厨房压根不知道有这单，补一张取消票只会让人对着没见过的单号发懵——
+    // 所以判断依据是订单状态（用状态推进前的快照 order.status），不是「拒单」这个动作本身。
+    //
+    // 不等微信退款回调（wechat-notify.ts:312 那条 CANCEL）：回调慢则几分钟、丢了就永远不来，
+    // 而「这单不用做了」在拒单落库那一刻就已经成立，与退款到没到账无关——与 orders.ts:622
+    // 顾客自助取消同一取舍。回调后来真到了也不会重复出票：CANCEL 的 dedupeKey 固定 seq=0，
+    // 第二次落库撞唯一索引被跳过（services/ticket/index.ts:128 注释）。
+    //
+    // fire-and-forget：打印是旁路。printCancel 关掉、打印机离线、飞鹅云超时，都不该让拒单接口
+    // 本身失败——钱已经退了、状态已经翻了，为一张票把 500 抛给店员只会让人以为拒单没成功。
+    // printCancel 开关由 enqueueOrderTicket 内部判断（CANCEL_TICKET_DISABLED），这里不重复判。
+    if (order.status !== 'PENDING_PAYMENT') {
+      enqueueOrderTicket(id, 'CANCEL').catch((err) => {
+        console.error('[admin/orders] enqueueOrderTicket 失败（商家拒单）:', (err as Error).message)
+      })
+    }
     // 售罄联动下架：独立小事务。退款已是既成事实，这里失败只告警不回滚——
     // 不下架的话下一位顾客照样点得到，同样的单会再来一遍（UI 规格 §7）。
     let offShelfCount = 0
@@ -421,6 +440,16 @@ router.post('/:id/refund-complete', async (req: Request, res: Response, next: Ne
         await tx.payment.updateMany({ where: { orderId: id }, data: { status: 'REFUNDED' } })
       })
     }
+    // 出票：这条路能走到这里，说明订单原本是 REFUNDING，即一定付过款、出过 NEW_ORDER 票。
+    // 该不该补 CANCEL，取决于「店里到底被通知过没有」，而这恰好由 dedupeKey 自动答对：
+    //  · 顾客自助取消、商家拒单进来的：CANCEL 早在决定那一刻就出过了，这里撞唯一索引直接跳过；
+    //  · 后台 /refund 发起退款进来的：那条路只在微信退款回调里出 CANCEL，而本接口存在的前提
+    //    正是「回调丢了」——不补的话，这单从头到尾没有任何一张纸告诉厨房它被退了。
+    // 所以真正会打出来的，只有确实没通知过的那一类；其余全是 no-op，不存在重复出票。
+    // 时效性上它确实可能晚（对账通常隔一段时间才做），但一张迟到的取消票也好过没有。
+    enqueueOrderTicket(id, 'CANCEL').catch((err) => {
+      console.error('[admin/orders] enqueueOrderTicket 失败（人工标记退款完成）:', (err as Error).message)
+    })
     success(res, await prisma.order.findUnique({ where: { id } }))
   } catch (e) {
     next(e)

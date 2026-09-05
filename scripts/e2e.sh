@@ -1354,6 +1354,26 @@ R=$(req PUT "/api/orders/$CO2/cancel" "$UT"); assert_eq "自助取消成功" "$(
 sleep 0.3
 assert_eq "自助取消(全额退款) → CANCEL 已出票" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(PJOBS "$CO2")")" "1"
 
+echo "-- CANCEL 触发：商家后台拒单 --"
+# 已付款单被拒：付款那一刻已经出过 NEW_ORDER 票、厨房可能正在备餐，拒单必须当场出 CANCEL。
+# 光靠微信退款回调那条链路（wechat-notify.ts:312）不够——它慢则几分钟、丢了就永远不来，
+# 而「这单不用做了」在店员点下拒单那一刻就成立，与退款到没到账无关（同 orders.ts 自助取消的取舍）。
+CO3=$(pay_new_order "$PID" "$ADDR")
+R=$(req POST "/api/admin/orders/$CO3/reject" "$AT" '{"reason":"CUSTOMER_CANCEL"}')
+assert_eq "已付款拒单 code 0" "$(code "$R")" "0"
+sleep 0.3
+assert_eq "已付款被拒单 → CANCEL 已出票" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(PJOBS "$CO3")")" "1"
+
+# 待付款单从没打过 NEW_ORDER 票，厨房压根不知道有这单；再补一张「取消」只会让店员对着
+# 一个没见过的单号发懵。出不出票看的是订单状态，不是「拒单」这个动作本身。
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR}")
+CO4=$(jq -r '.data.orderId // .data.id // empty' <<<"$R")
+R=$(req POST "/api/admin/orders/$CO4/reject" "$AT" '{"reason":"PAST_ACCEPT_TIME"}')
+assert_eq "待付款拒单 code 0" "$(code "$R")" "0"
+assert_eq "待付款拒单 → CANCELLED" "$(req GET "/api/admin/orders/$CO4" "$AT" | jq -r .data.status)" "CANCELLED"
+sleep 0.3
+assert_eq "待付款被拒单 → 不出任何票" "$(jq -r '.data.total' <<<"$(PJOBS "$CO4")")" "0"
+
 echo "-- 未接单重复播报 --"
 # repeatAnnounce() 按 paidAt 升序只扫最老的 100 条（生产下合理——真攒到 100 张单等接单说明店已经
 # 瘫了，不该无界扫描）。本机开发库是持久化 MySQL、经年累月跑 e2e 会攒下大量早年遗留的 PAID 未接单
