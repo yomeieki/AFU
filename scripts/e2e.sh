@@ -1312,7 +1312,11 @@ assert_eq "首次尝试失败仍是 PENDING(attempts=1)" "$(jq -r '.data.list[0]
 sleep 0.6; req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
 assert_eq "第 2 次尝试失败仍是 PENDING(attempts=2)" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "PENDING:2"
 sleep 0.6; req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
-assert_eq "第 3 次尝试失败 → FAILED" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "FAILED:3"
+# M2：规格是「失败按 5s/30s/2min 重试 3 次后 FAILED」= 首发 + 3 次重试 = 4 次发送才耗尽
+# （原实现 3 次发送即 FAILED，比规格少一次），这里要多等一轮才到终态。
+assert_eq "第 3 次尝试失败仍是 PENDING(attempts=3)" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "PENDING:3"
+sleep 0.6; req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
+assert_eq "第 4 次尝试失败 → FAILED" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "FAILED:4"
 PJID5=$(jq -r '.data.list[0].id' <<<"$(PJOBS "$PO5")")
 # 离线告警：直接注入「已离线超过 offlineAlertMin」，不真等 5 分钟（阈值下限是 1 分钟，调不到 0）
 req POST /api/admin/system/printer-mock/health-track "$AT" '{"sn":"E2E-P1","offlineSinceMsAgo":600000,"alerted":false}' >/dev/null
@@ -1352,7 +1356,10 @@ echo "-- CANCEL 触发：顾客申请取消 / 自助取消 --"
 CO1=$(mk_local_paid); req POST "/api/admin/local/orders/$CO1/accept" "$AT" >/dev/null
 R=$(req POST "/api/orders/$CO1/cancel-request" "$UT" '{"note":"打印机 e2e"}'); assert_eq "cancel-request 成功" "$(code "$R")" "0"
 sleep 0.3
-assert_eq "顾客申请取消 → CANCEL 已出票" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(PJOBS "$CO1")")" "1"
+# H6：申请取消是独立的 CANCEL_REQUEST kind（不是 CANCEL）——这只是挂起申请，店员还可能驳回，
+# 真正的 CANCEL 要等店员同意退款那一刻才出（走 B1 的 finalizeRefundSuccess 路径）。
+assert_eq "顾客申请取消 → CANCEL_REQUEST 已出票" "$(jq -r '[.data.list[] | select(.kind=="CANCEL_REQUEST")] | length' <<<"$(PJOBS "$CO1")")" "1"
+assert_eq "申请取消阶段还不是真正的 CANCEL" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(PJOBS "$CO1")")" "0"
 
 CO2=$(pay_new_order "$PID" "$ADDR")
 R=$(req PUT "/api/orders/$CO2/cancel" "$UT"); assert_eq "自助取消成功" "$(jq -r '.data.status' <<<"$R")" "REFUNDED"

@@ -1,0 +1,83 @@
+echo "== 44. 出票核心（D 组：H2/B6/M1/H6）=="
+# 复用 §35 定义的 PJOBS()/pay_new_order()、§36 定义的 sql()（同一个 shell，本文件在 e2e.sh
+# 尾部被 source 进来，函数与变量仍在作用域内）；变量全部加 D44_ 前缀，避免跟 e2e.sh 主体或
+# 其它分片的全局变量撞车（前一组在这里踩过 R1/R2 撞车导致收尾 rm 报 "File name too long" 的坑）。
+ORIG_PRINTER_SETTINGS_44=$(req GET /api/admin/settings/printer "$AT" | jq -c .data)
+
+echo "-- H2：备注含 <CUT>/<QR> 的订单，票面不含控制标签，且只剩末尾一个 <CUT> --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D44-H2","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR,\"remark\":\"<CUT>前置切纸<QR>x</QR>\"}")
+D44_H2_OID=$(jq -r '.data.orderId // .data.id // empty' <<<"$R")
+[[ -n "$D44_H2_OID" ]] && ok "H2：下单成功 #$D44_H2_OID" || fail "H2：下单失败" "$R"
+req POST "/api/orders/$D44_H2_OID/pay" "$UT" >/dev/null
+sleep 0.3
+D44_H2_CONTENT=$(PJOBS "$D44_H2_OID" | jq -r '.data.list[0].content')
+D44_H2_CUTCOUNT=$(grep -o '<CUT>' <<<"$D44_H2_CONTENT" | wc -l | tr -d ' ')
+assert_eq "H2：票面只剩末尾一个 <CUT>（备注注入的提前切纸已被剥掉）" "$D44_H2_CUTCOUNT" "1"
+[[ "$D44_H2_CONTENT" != *"<QR>"* ]] && ok "H2：票面不含 <QR> 控制标签" || fail "H2：票面仍含 <QR>" "$D44_H2_CONTENT"
+# esc() 只剥 <>，标签名本身作为普通文字保留（<CUT>→CUT、<QR>x</QR>→QRx/QR），
+# 所以原始备注 "<CUT>前置切纸<QR>x</QR>" 剥完是 "CUT前置切纸QRx/QR"——断言含有意义的原文，
+# 不要求标签名字也消失（那是转义的语义，不是本次要做的"剥除"）。
+[[ "$D44_H2_CONTENT" == *"前置切纸"* ]] && ok "H2：备注文字本身保留（只剥尖括号不删内容）" || fail "H2：备注内容丢失" "$D44_H2_CONTENT"
+
+echo "-- B6：立即发送与定时兜扫的竞争，同一 PrintJob 只应被物理发送一次 --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D44-B6","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/printer-mock/delay "$AT" '{"sn":"D44-B6","ms":1200}' >/dev/null
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR}")
+D44_B6_OID=$(jq -r '.data.orderId // .data.id // empty' <<<"$R")
+[[ -n "$D44_B6_OID" ]] && ok "B6：下单成功 #$D44_B6_OID" || fail "B6：下单失败" "$R"
+req POST "/api/orders/$D44_B6_OID/pay" "$UT" >/dev/null   # 触发 enqueueOrderTicket 立即发送，mock print() 会睡 1.2s
+sleep 0.3
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 旧实现：此时行仍是 PENDING，兜扫会再发一次；新实现：行已被认领成 SENDING，兜扫查不到它
+sleep 1.5
+D44_B6_JOBCOUNT=$(req GET "/api/admin/print-jobs?orderId=$D44_B6_OID" "$AT" | jq -r '.data.list | length')
+D44_B6_MOCKCOUNT=$(req GET "/api/admin/system/printer-mock/jobs?sn=D44-B6" "$AT" | jq -r '.data | length')
+assert_eq "B6：只有 1 条 PrintJob 记录" "$D44_B6_JOBCOUNT" "1"
+assert_eq "B6：打印机物理只收到 1 次 print()（修复前这里是 2，厨房会做两份）" "$D44_B6_MOCKCOUNT" "1"
+req POST /api/admin/system/printer-mock/delay "$AT" '{"sn":"D44-B6","ms":0}' >/dev/null
+
+echo "-- M1：copies=2 的打印机，作业失败重试后仍然是 2 联 --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D44-M1","channels":["LOCAL","EXPRESS"],"copies":2}],"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/printer-mock/retry-delays "$AT" '{"delays":[50,50,50]}' >/dev/null
+req POST /api/admin/system/printer-mock/fail "$AT" '{"sn":"D44-M1","kind":"CAPACITY","message":"D44 mock 首发强制失败一次"}' >/dev/null
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR}")
+D44_M1_OID=$(jq -r '.data.orderId // .data.id // empty' <<<"$R")
+[[ -n "$D44_M1_OID" ]] && ok "M1：下单成功 #$D44_M1_OID" || fail "M1：下单失败" "$R"
+req POST "/api/orders/$D44_M1_OID/pay" "$UT" >/dev/null
+sleep 0.2
+assert_eq "M1：首发被强制失败，PENDING(attempts=1)" "$(PJOBS "$D44_M1_OID" | jq -r '.data.list[0] | "\(.status):\(.attempts)"')" "PENDING:1"
+sleep 0.3; req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
+sleep 0.3
+D44_M1_ROW=$(PJOBS "$D44_M1_OID" | jq -c '.data.list[0]')
+assert_eq "M1：重试成功后 status=SENT" "$(jq -r .status <<<"$D44_M1_ROW")" "SENT"
+assert_eq "M1：PrintJob.copies 仍是 2（不是硬编码的 1）" "$(jq -r .copies <<<"$D44_M1_ROW")" "2"
+assert_eq "M1：mock 实际收到的打印份数也是 2" "$(req GET "/api/admin/system/printer-mock/jobs?sn=D44-M1" "$AT" | jq -r '.data[0].copies')" "2"
+req POST /api/admin/system/printer-mock/retry-delays "$AT" '{"delays":[5000,30000,120000]}' >/dev/null
+
+echo "-- H6：申请取消 → 驳回 → 再申请，第二次仍能出票 --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D44-H6","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+D44_H6_OID=$(mk_local_paid)
+[[ -n "$D44_H6_OID" ]] && ok "H6：造一笔同城已支付单 #$D44_H6_OID" || fail "H6：造单失败（mk_local_paid 返回空）"
+req POST "/api/admin/local/orders/$D44_H6_OID/accept" "$AT" >/dev/null
+R=$(req POST "/api/orders/$D44_H6_OID/cancel-request" "$UT" '{"note":"D44 第一次申请"}')
+assert_eq "H6：第一次申请取消 code 0" "$(code "$R")" "0"
+sleep 0.3
+R=$(req POST "/api/admin/local/orders/$D44_H6_OID/cancel-request/reject" "$AT")
+assert_eq "H6：驳回 code 0" "$(code "$R")" "0"
+sleep 0.3
+R=$(req POST "/api/orders/$D44_H6_OID/cancel-request" "$UT" '{"note":"D44 第二次申请"}')
+assert_eq "H6：驳回后可再次申请，code 0" "$(code "$R")" "0"
+sleep 0.3
+D44_H6_JOBS=$(PJOBS "$D44_H6_OID")
+# 修复前：两次申请都是固定 seq=0 的 CANCEL，第二次会被 dedupe 吞掉，这里应为 1（漏出一张）
+assert_eq "H6：两次申请各出一张 CANCEL_REQUEST（不被 dedupe 吞掉）" "$(jq -r '[.data.list[] | select(.kind=="CANCEL_REQUEST")] | length' <<<"$D44_H6_JOBS")" "2"
+assert_eq "H6：驳回出一张 RESUME" "$(jq -r '[.data.list[] | select(.kind=="RESUME")] | length' <<<"$D44_H6_JOBS")" "1"
+assert_eq "H6：全程还没有真正的 CANCEL（没同意退款）" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$D44_H6_JOBS")" "0"
+
+# 复位：不让本段状态影响下一轮重跑时其它段（尤其是 §35 自己）的前置假设
+req PUT /api/admin/settings/printer "$AT" "$ORIG_PRINTER_SETTINGS_44" >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
