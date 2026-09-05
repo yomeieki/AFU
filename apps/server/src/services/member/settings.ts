@@ -29,7 +29,7 @@ export interface MemberSettings {
 }
 
 export const DEFAULT_MEMBER_SETTINGS: MemberSettings = {
-  points: { enabled: true, earnRatePerYuan: 1, validDays: 365 },
+  points: { enabled: true, earnRatePerYuan: 100, validDays: 365 },
   newcomer: { templateId: null },
   rulesText: '',
 }
