@@ -80,6 +80,13 @@ function padRightWidth(s: string, width: number): string {
   return w >= width ? s : s + ' '.repeat(width - w)
 }
 
+// 顾客/商家可控字段（remark、收件信息、商品名/规格、打印机备注名）在拼进票面前一律先剥掉尖括号。
+// 飞鹅票面用 <TAG> 做控制指令（<CUT> 切纸、<CB>/<B> 加粗、<BR> 换行等，见 assemble()），顾客能自填的
+// 字段一旦原样带过 `<` `>`，就能在商品明细之前插入一次 <CUT>（金额/明细被切到下一段，极易被漏看）、
+// 或塞进飞鹅内容校验不认识的标签把整单送不出去。直接剥字符而不是转义/替换成全角——票面本就没有
+// 反向解析的需求，剥比转义更简单也更不容易被绕过（转义字符本身还是可能被拼接出新的 `<`/`>`）。
+const esc = (s: string) => s.replace(/[<>]/g, '')
+
 const yuan = (fen: number) => `¥${(fen / 100).toFixed(2)}`
 
 const SH_TZ = 'Asia/Shanghai'
@@ -98,8 +105,8 @@ function formatItemLine(item: TicketItemInput, width = LINE_WIDTH): string {
   const qtyAmt = ` x${item.quantity} ${yuan(item.subtotal)}`
   const qtyAmtWidth = strWidth(qtyAmt)
   const nameWidth = Math.max(2, width - qtyAmtWidth)
-  const spec = item.specText ? `(${item.specText})` : ''
-  const name = truncWidth(item.productName + spec, nameWidth)
+  const spec = item.specText ? `(${esc(item.specText)})` : ''
+  const name = truncWidth(esc(item.productName) + spec, nameWidth)
   return padRightWidth(name, nameWidth) + qtyAmt
 }
 
@@ -130,20 +137,23 @@ export function renderOrderTicket(o: TicketOrderInput): string {
 
   const receiverBlock: string[] = isLocal
     ? [
-        `收货人：${o.receiverName}　电话：${o.receiverPhone}`,
+        `收货人：${esc(o.receiverName)}　电话：${esc(o.receiverPhone)}`,
         // 同城单省市恒为门店所在地，对厨房是纯噪音；58mm 只有 32 列，
         // 砍掉这 6 个字等于多出小半行给楼栋门牌。区不能省——配送范围可能跨区。
-        `地址：${[o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' ')}`,
+        `地址：${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}`,
         ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
         ...(o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
       ]
     : [
-        `收件人：${o.receiverName}　电话：${o.receiverPhone}`,
-        `地址：${o.receiverFullAddress}`,
+        `收件人：${esc(o.receiverName)}　电话：${esc(o.receiverPhone)}`,
+        `地址：${esc(o.receiverFullAddress)}`,
       ]
   // 备注要突出：<CB> 居中放大加粗。规格 §8b 提到的「餐具标记」目前 Order 无对应字段
   // （精细餐具选项是 §12 明确的二期项），先不渲染，等那个字段落地后在这里补一行。
-  const remarkBlock: string[] = o.remark ? [`<CB>备注：${o.remark}</CB>`] : []
+  // remark 是顾客自填的自由文本（上限 255 字符），必须先 esc 再拼进票面——不然顾客填一个
+  // <CUT> 就能在商品明细之前提前切纸（金额/明细落到第二段），填 <QR> 之类飞鹅不认识的标签
+  // 会让内容校验失败、整单一张纸都不出（H2）。
+  const remarkBlock: string[] = o.remark ? [`<CB>备注：${esc(o.remark)}</CB>`] : []
 
   const footer: string[] = [
     `合计：${yuan(o.totalAmount)}`,
@@ -178,7 +188,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
       const over = fixedBytes - TICKET_BYTE_LIMIT
       if (over > 0 && o.remark) {
         const shrink = Math.max(0, o.remark.length - Math.ceil(over / 2))
-        remarkBlock[0] = `<CB>备注：${truncWidth(o.remark, shrink)}…</CB>`
+        remarkBlock[0] = `<CB>备注：${truncWidth(esc(o.remark), shrink)}…</CB>`
       }
     }
   }
@@ -212,7 +222,7 @@ export function renderCancelTicket(input: { orderNo: string; channel: TicketChan
 export function renderTestTicket(printerName?: string): string {
   const lines: string[] = [
     '<CB>打印测试页</CB>',
-    ...(printerName ? [`打印机：${printerName}`] : []),
+    ...(printerName ? [`打印机：${esc(printerName)}`] : []),
     `时间：${fmtDateTime(new Date())}`,
     '若能正常出纸即打印链路正常',
   ]
