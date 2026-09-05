@@ -121,6 +121,10 @@ assert_eq "订单仍 PREPARING" "$(order_status $O2B)" "PREPARING"
 echo "== 8. 并发双击退款：一成一败 =="
 O3=$(make_paid_order); [[ -n "$O3" ]] && ok "订单 #$O3 已支付" || { fail "下单/支付"; exit 1; }
 AMT3=$(req GET "/api/admin/orders/$O3" "$AT" | jq -r .data.actualAmount)
+# R1/R2 是这两个 mktemp 出来的临时文件路径，直到脚本尾部（第 1703 行附近）`rm -f "$R1" "$R2"`
+# 才清理——第二轮复核抓到过后面几处 e2e.d 分片和本文件自己都把 R2 当普通响应体变量复用，
+# 覆盖掉这里的文件路径，导致收尾的 rm -f 打不中真正的临时文件、每跑一次泄漏一个 mktemp
+# 文件（已在别处改用带前缀的变量名修掉）。这两个名字在整个脚本剩余部分都是保留名，不要复用。
 R1=$(mktemp); R2=$(mktemp)
 req POST "/api/admin/orders/$O3/refund" "$AT" "{\"amount\":$AMT3}" > "$R1" &
 req POST "/api/admin/orders/$O3/refund" "$AT" "{\"amount\":$AMT3}" > "$R2" &
@@ -1585,8 +1589,8 @@ R=$(req GET "/api/member/coupons?status=available" "$M1C")
 assert_eq "新用户首次登录发一张 NEWCOMER 券" "$(jq -r '[.data.list[] | select(.source=="NEWCOMER")] | length' <<<"$R")" "1"
 IFS=$'\t' read -r M1C_2 M1C_2_UID < <(m1_login "a${M1_TAG}C_member3")
 assert_eq "二次登录是同一个用户（userId 相同）" "$M1C_2_UID" "$M1C_UID"
-R2=$(req GET "/api/member/coupons?status=available" "$M1C_2")
-assert_eq "新客券二次登录不重复发放" "$(jq -r '[.data.list[] | select(.source=="NEWCOMER")] | length' <<<"$R2")" "1"
+R_NC2=$(req GET "/api/member/coupons?status=available" "$M1C_2")
+assert_eq "新客券二次登录不重复发放" "$(jq -r '[.data.list[] | select(.source=="NEWCOMER")] | length' <<<"$R_NC2")" "1"
 
 R=$(req GET "/api/member/coupons?status=available" "$M1A")
 assert_eq "积分兑换（POINTS）来源的券确实发出来了" "$(jq -r '[.data.list[] | select(.source=="POINTS")] | length > 0' <<<"$R")" "true"
@@ -1619,8 +1623,8 @@ UC_ID=$(sql "SELECT id FROM user_coupons WHERE user_id=$M1B_UID AND status='UNUS
 sql "UPDATE user_coupons SET expires_at='2020-01-01 00:00:00' WHERE id=$UC_ID;"
 R=$(req GET "/api/member/coupons?status=available" "$M1B")
 assert_eq "过期券不出现在 available 列表" "$(jq -r --argjson id "$UC_ID" '[.data.list[] | select(.id==$id)] | length' <<<"$R")" "0"
-R2=$(req GET "/api/member/coupons?status=expired" "$M1B")
-assert_eq "过期券出现在 expired 列表" "$(jq -r --argjson id "$UC_ID" '[.data.list[] | select(.id==$id)] | length' <<<"$R2")" "1"
+R_EXP=$(req GET "/api/member/coupons?status=expired" "$M1B")
+assert_eq "过期券出现在 expired 列表" "$(jq -r --argjson id "$UC_ID" '[.data.list[] | select(.id==$id)] | length' <<<"$R_EXP")" "1"
 
 echo "-- 越权/未登录 --"
 R=$(curl -s "$BASE/api/member/summary")

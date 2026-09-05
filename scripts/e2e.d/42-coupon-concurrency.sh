@@ -75,8 +75,8 @@ TPL_M7=$(sql "SELECT id FROM coupon_templates WHERE name='E2E总量限量POINTS'
 [[ -n "$TPL_M7" ]] && ok "M7-1 模板造数据完成（totalLimit=1）" || fail "M7-1 模板造数据失败"
 R=$(req POST /api/member/points/redeem "$C4_E" "{\"templateId\":$TPL_M7}")
 assert_eq "M7-1：第一个用户兑换成功" "$(code "$R")" "0"
-R2=$(req POST /api/member/points/redeem "$C4_F" "{\"templateId\":$TPL_M7}")
-assert_eq "M7-1：第二个用户被挡（totalLimit 已用完，42253）" "$(code "$R2")" "42253"
+C4_R2=$(req POST /api/member/points/redeem "$C4_F" "{\"templateId\":$TPL_M7}")
+assert_eq "M7-1：第二个用户被挡（totalLimit 已用完，42253）" "$(code "$C4_R2")" "42253"
 M7_ISSUED=$(sql "SELECT issued_count FROM coupon_templates WHERE id=$TPL_M7;")
 assert_eq "M7-1：issuedCount 精确等于 1（未超发）" "$M7_ISSUED" "1"
 
@@ -90,10 +90,10 @@ assert_eq "M6-1：claim 响应不含 issuedBy/remark/sourceRef/templateId/userId
 
 sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, points_cost, status, created_at, updated_at) VALUES ('E2E白名单校验POINTS', 100, 0, 'ALL', 30, 'POINTS', 10, 'ON', NOW(), NOW());"
 TPL_M6_POINTS=$(sql "SELECT id FROM coupon_templates WHERE name='E2E白名单校验POINTS' ORDER BY id DESC LIMIT 1;")
-R2=$(req POST /api/member/points/redeem "$C4_F" "{\"templateId\":$TPL_M6_POINTS}")
-assert_eq "M6-1：兑换成功（供响应白名单检查）" "$(code "$R2")" "0"
+C4_R2B=$(req POST /api/member/points/redeem "$C4_F" "{\"templateId\":$TPL_M6_POINTS}")
+assert_eq "M6-1：兑换成功（供响应白名单检查）" "$(code "$C4_R2B")" "0"
 assert_eq "M6-1：redeem 响应不含 issuedBy/remark/sourceRef/templateId/userId" \
-  "$(jq -r '(.data|has("issuedBy")) or (.data|has("remark")) or (.data|has("sourceRef")) or (.data|has("templateId")) or (.data|has("userId"))' <<<"$R2")" "false"
+  "$(jq -r '(.data|has("issuedBy")) or (.data|has("remark")) or (.data|has("sourceRef")) or (.data|has("templateId")) or (.data|has("userId"))' <<<"$C4_R2B")" "false"
 
 req DELETE "/api/addresses/$C4_E_ADDR" "$C4_E" >/dev/null
 req DELETE "/api/addresses/$C4_F_ADDR" "$C4_F" >/dev/null
