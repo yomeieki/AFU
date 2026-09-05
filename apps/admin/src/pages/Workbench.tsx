@@ -17,7 +17,7 @@ import type {
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip, callRider, cancelDelivery,
   getLocalSettings, getOrder, getOrderDelivery, getWorkbenchSnapshot, markOrderDelivered, precancelDelivery,
-  rejectOrder, resetKd100Circuit, selfDeliverOrder, shipOrder, voidUnknownDelivery,
+  rejectOrder, reprintOrder, resetKd100Circuit, selfDeliverOrder, shipOrder, voidUnknownDelivery,
 } from '../api/admin'
 import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
@@ -698,6 +698,7 @@ export default function Workbench() {
   /** 最近一次轮询成功的时间 + 连续失败拍数：区分「没有新单」和「已经断线五分钟」（I1） */
   const [lastOkAt, setLastOkAt] = useState<number | null>(null)
   const [pollFailCount, setPollFailCount] = useState(0)
+  const [reprinting, setReprinting] = useState(false)
 
   const load = useCallback(async (fresh = false) => {
     const seq = ++loadSeqRef.current
@@ -1148,6 +1149,31 @@ export default function Workbench() {
 
           <div className="wb__drawer-foot">
             <div className="wb__actions">{renderActions()}</div>
+            {/* 重打小票：同城才是最需要它的地方 —— 票是 2 联（厨房 + 骑手），
+                丢一张骑手就没地址。放抽屉不放卡片，是因为它低频且会真出纸，
+                跟拒单同一个取向（§7：低频操作放抽屉，卡片上容易误点）。
+                不弹确认框：多打一张纸不是危险操作，而票丢了店员是急着要的。 */}
+            <button
+              className="wb__reject"
+              style={{ borderColor: '#d4d4d8', color: '#52525b' }}
+              disabled={reprinting}
+              title="重打该单小票（票卡纸 / 被撕坏 / 没看见时用）"
+              onClick={async () => {
+                setReprinting(true)
+                try {
+                  const r = await reprintOrder(card.orderId)
+                  toast[r.enqueued ? 'success' : 'error'](
+                    r.enqueued
+                      ? '已发送重打'
+                      : { PRINTER_DISABLED: '打印机功能未启用', NO_PRINTER_CONFIGURED: '该单所属渠道尚未配置打印机' }[r.reason ?? ''] ?? '重打失败'
+                  )
+                } catch (err: unknown) {
+                  toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '重打失败')
+                } finally {
+                  setReprinting(false)
+                }
+              }}
+            >{reprinting ? '发送中…' : '重打小票'}</button>
             {/* 拒单入口只在抽屉底部（§7）：低频但要退款，放卡片上容易误点 */}
             {canReject && (
               <button className="wb__reject" onClick={() => setModal({ kind: 'reject' })}>拒单并全额退款</button>
