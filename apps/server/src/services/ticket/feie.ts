@@ -127,10 +127,13 @@ export const feieProvider: PrinterProvider = {
 
   async queryJob(providerJobId: string): Promise<QueryJobResult> {
     const data = await post('Open_queryOrderState', { orderid: providerJobId })
-    // 官方文档未给出该接口精确返回结构 [推断/待核实]；按约定俗成理解为 data 里带已打印标记，
-    // 常见形式是字符串状态（如「已打印」）或 0/1，两种都兼容判一次。
+    // 2026-09-05 真机实测（SN 222601993，国内站）：data 是 **JSON 布尔**，不是字符串也不是 0/1——
+    //   下发后立即查 → {"ret":0,"data":false}   打印完成后再查 → {"ret":0,"data":true}
+    // false→true 的翻转就是 PrintJob 从 SENT 走到 PRINTED 的判据。
+    // orderid 写错时返回 ret=1001「参数错误 : 订单ID错误.」，由 post() 抛错，不会走到这里。
+    // 其余分支保留为向后兼容（飞鹅历史文档出现过字符串态），实测未见。
     const raw = data.data
-    const printed = raw === '1' || raw === 1 || raw === true || (typeof raw === 'string' && raw.includes('已打印'))
+    const printed = raw === true || raw === '1' || raw === 1 || (typeof raw === 'string' && raw.includes('已打印'))
     return { printed, raw }
   },
 
