@@ -190,24 +190,34 @@ export async function autoCallRiders(delayMin?: number): Promise<number> {
 /**
  * LOCAL 单的自动确认收货兜底：既有 autoCompleteShippedOrders 走 shipment.shippedAt，
  * 而 LOCAL 单永不写 Shipment 行，所以它永远命中不了同城单。若 520 回调丢失，
- * 同城单会永久停在 SHIPPED 无人收尾。这里补一条：SHIPPED 且其配送单已取货超过 N 天 →
- * 订单置 COMPLETED，仍占位的配送单一并置 DELIVERED + 释放。
+ * 同城单会永久停在 SHIPPED 无人收尾。这里补两条（任一命中即收尾）：
+ *  1) 配送单已取货超过 N 天（与邮寄单同一口径，纯按 pickedUpAt）；
+ *  2) 配送单仍在 DELIVERING、且骑手接单已超过 deliveringTimeoutMin×3（兜底 6 小时）——
+ *     同城一单顶多一两个小时，接单 6 小时还挂在「配送中」只可能是 520 丢了，等 N 天没有意义：
+ *     期间配送单一直占着 activeOrderId，退款被 42221 挡住，顾客端也一直显示「配送中」。
+ * 命中后订单置 COMPLETED，仍占位的配送单一并置 DELIVERED + 释放。
  */
 export async function autoCompleteLocalDelivered(days?: number): Promise<number> {
   const d = days ?? config.order.autoCompleteDays
   const deadline = ago(d * 24 * 60)
+  const s = await getLocalSettings()
+  const stuckMin = Number.isFinite(s.deliveringTimeoutMin) && s.deliveringTimeoutMin > 0 ? s.deliveringTimeoutMin * 3 : 6 * 60
+  const stuckDeadline = ago(stuckMin)
   const orders = await prisma.order.findMany({
     where: { deliveryType: 'LOCAL', status: 'SHIPPED' },
     select: {
       id: true,
-      deliveries: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, pickedUpAt: true, activeOrderId: true } },
+      deliveries: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, status: true, pickedUpAt: true, acceptedAt: true, activeOrderId: true } },
     },
     take: BATCH,
   })
   let n = 0
   for (const o of orders) {
     const dlv = o.deliveries[0]
-    if (!dlv || !dlv.pickedUpAt || dlv.pickedUpAt >= deadline) continue
+    if (!dlv) continue
+    const byDays = !!dlv.pickedUpAt && dlv.pickedUpAt < deadline
+    const byStuck = dlv.status === 'DELIVERING' && !!dlv.acceptedAt && dlv.acceptedAt < stuckDeadline
+    if (!byDays && !byStuck) continue
     const moved = await prisma.order.updateMany({ where: { id: o.id, status: 'SHIPPED' }, data: { status: 'COMPLETED', completedAt: new Date() } })
     if (moved.count === 0) continue
     if (dlv.activeOrderId !== null) {
