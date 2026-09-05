@@ -71,6 +71,23 @@ export const localQuoteLimiter = rateLimit({
 })
 
 /**
+ * 扫码日志限流：POST /scan-logs 是全仓唯一「匿名可写库且零校验」的接口
+ * （optionalUserAuth，只要 scene 对上一个在售商品就 INSERT 一行）。
+ * 不限流的话任何人循环 POST 就能把 scan_logs 灌到几十万行，后台「扫码统计」的
+ * 转化率分母被抬高到接近 0，店主会据此误判「包装二维码没人扫」。
+ *
+ * 阈值：真人扫码一次一条，同一出口 IP（店内 Wi-Fi）一分钟里几十个顾客扫码已经是极端情况，
+ * 30/分钟/IP 只挡脚本。小程序侧 api/scan.js 本来就吞掉这个请求的错误，限流命中对顾客无感。
+ */
+export const scanLogLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(30, 500),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
+})
+
+/**
  * 快递100 回调限流：/api/kd/:deliveryNo 未鉴权（安全性只靠 per-单 salt 验签），
  * deliveryNo=D<orderId>-<seq> 易猜，需要防有人拿它当灌爆事件表的免费写入点。
  *
