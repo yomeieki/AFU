@@ -8,7 +8,7 @@
 
 **Goal:** 顾客下单时能带一张券和若干随单赠品，服务端按 spec §5.1 的固定顺序算出 `actualAmount`，把券核销、积分扣减、赠品行落库与真实库存扣减全部放进同一个下单事务；未支付取消（顾客手点 / 后台取消待付款 / 15 分钟超时）把券与积分释放回去；已支付后的任何退款**不动券、不退赠品积分**（P7），退款上限公式保持 `actualAmount − refundedAmount` 不变；订单的顾客端与管理端接口都返回优惠字段；接单工作台的金额明细与商品清单能看到「优惠券 −¥X」与「赠」标。做完 M2，顾客用 curl 已经能走通完整优惠链路，但小程序与后台页面还看不到（那是 M3/M4）。
 
-**Non-goals（详见文末《明确不做》）：** 不做任何 React 管理页（工作台金额明细那几行除外）；不做小程序；不做多券叠加、折扣券；不改 `quoteToken` 的签发与校验；不改退款上限公式；不做云打印小票模板（本分支打印机状态是 `NOT_CONNECTED`，见 Task 9）。
+**Non-goals（详见文末《明确不做》）：** 不做任何 React 管理页（工作台金额明细那几行除外）；不做小程序；不做多券叠加、折扣券；不改 `quoteToken` 的签发与校验；不改退款上限公式；小票只改**渲染器一处**（`services/ticket/content.ts`，Task 9），不接打印机、不改出票编排（那是打印机分支的事，写稿当天它正在本分支上并行落地）。
 
 ---
 
@@ -58,6 +58,7 @@
 | `apps/server/src/services/scheduler.ts` | **Modify**。`cancelExpiredOrders` 接释放 |
 | `apps/server/src/services/order-notify.ts` | **Modify**。新订单推送带「优惠 −¥X」「赠品」标 |
 | `apps/server/src/routes/admin/workbench.ts` | **Modify**。卡片 `items.first` 里赠品行带「赠」前缀 |
+| `apps/server/src/services/ticket/content.ts` | **Modify**。`TicketOrderInput`/`TicketItemInput` 加优惠与赠品字段，`renderOrderTicket` 票面打「优惠券 −¥X」与赠品「赠」行 |
 | `apps/admin/src/pages/Workbench.tsx` + `apps/admin/src/types.ts` | **Modify**。详情抽屉「金额明细」与「商品清单」显示优惠与赠品（本计划唯一的前端改动） |
 | `apps/server/scripts/selftest-member.ts` | **Modify**。追加计价矩阵自测 |
 | `scripts/e2e.sh` | **Modify**。新增用例段 + §34 契约锁补字段 |
@@ -286,14 +287,15 @@
 
 ---
 
-### Task 9: 接单工作台显示优惠与赠品（本计划唯一前端改动）
+### Task 9: 接单工作台与小票显示优惠与赠品（本计划唯一前端改动）
 
 **Files:**
 - Modify: `apps/server/src/routes/admin/workbench.ts`（`toCard` 的 `items.first`）
+- Modify: `apps/server/src/services/ticket/content.ts`（`renderOrderTicket` 及其两个输入类型）
 - Modify: `apps/admin/src/types.ts`（`Order` 加 `discountAmount/pointsUsed/pointsEarned/couponId`、`OrderItem` 加 `isGift/pointsCost`）
 - Modify: `apps/admin/src/pages/Workbench.tsx`（详情抽屉「商品清单」「金额明细」）
 
-**现状事实**：本分支没有任何云打印/小票代码——`workbench.ts:119` 的 `printer: { status: 'NOT_CONNECTED' }` 是占位，`Workbench.tsx:592` 注释写着「接入后按 snap.printer.status 放出来」。spec §8 的「同城票面显示优惠」在本分支**没有落点**。
+**现状事实（2026-09-05 写稿当天核过两次，中途变了）**：飞鹅云打印代码在写稿期间落到了本分支——`services/ticket/{printer,feie,mock,content,index}.ts`（`63d3a5b`…`b417747`）。其中 `content.ts` 的 `renderOrderTicket(o: TicketOrderInput)` 是票面的**唯一渲染点**：`items: TicketItemInput[]{ productName, quantity, subtotal }`，页脚三行 `合计 / 运费 / <B>实付</B>`（`:142-144`），`formatItemLine` 把每行渲染成 `名称 x数量 金额`。但 `enqueueOrderTicket` 目前**没有任何调用方**（只在 `index.ts` 内部），`workbench.ts:119` 仍是 `printer: { status: 'NOT_CONNECTED' }` 占位——出票编排与工作台接线是打印机分支的后续，**不在本计划范围**。执行 M2 时先 `git log --oneline -5 -- apps/server/src/services/ticket/` 看那边走到哪了，再决定 Step 4 是改渲染器还是只留交接。
 
 - [ ] **Step 1: 卡片摘要**
   `toCard` 的 `items.first` 里赠品行渲染成 `赠·夫妻肺片 ×1`（`loadOrders` 的 `items.select` 加 `isGift`）。卡片 `amountFen` 仍是 `actualAmount`（店员看的是实收）。
@@ -301,8 +303,9 @@
   `isGift` 行名称前加一个「赠」小标（沿用 `wb__item-spec` 的样式类），金额列显示 `积分 N`（`pointsCost × quantity`）而不是 `¥0.00`——显示 ¥0 会让店员以为漏收钱。
 - [ ] **Step 3: 详情抽屉「金额明细」**
   在「商品小计」与「配送费/运费」之间插一行 `优惠券 −¥X`（`discountAmount > 0` 才显示）；「顾客实付」不变；`pointsUsed > 0` 时加一行 `积分抵扣赠品 N 分`（无金额）。
-- [ ] **Step 4: 小票模板——交接项**
-  在 `docs/superpowers/notes/` 或 PR 描述里记一条交接：将来云打印落地时，票面必须打「优惠券 −¥X」与赠品行「赠」标，否则打包员按票面数不出赠品。**本计划不建打印模板文件。**
+- [ ] **Step 4: 小票渲染器（只改 `content.ts` 一处）**
+  `TicketOrderInput` 加 `discountAmount: number`、`pointsUsed: number`；`TicketItemInput` 加 `isGift?: boolean`、`pointsCost?: number`。`formatItemLine`：`isGift` 行名称前加 `[赠]`、金额位打 `积分N`（打包员按票面数货，¥0.00 会被当成漏收）。页脚在「合计」与「运费」之间插 `优惠券：-¥X`（`discountAmount > 0` 才打），`pointsUsed > 0` 时「实付」下一行 `赠品抵扣：N积分`。**32 列对齐与 5000 字节截断逻辑不动**——新增的两行进 `footer` 数组即可被 `fits()` 一起计量。给 `apps/server/scripts/selftest-*` 里若已有小票自测（打印机分支可能建了）追加一个用券+赠品的用例，没有就在 `selftest-member.ts` 里加一段直接 `renderOrderTicket` 断言输出含 `[赠]` 与 `优惠券：`。
+  **凡是把 `Order` 喂给 `enqueueOrderTicket` 的调用方**（写稿时还没有；打印机分支接线后会出现在 `workbench.ts` 或支付回调），必须把 `discountAmount/pointsUsed` 与 `items[].isGift/pointsCost` 一并传入——在 `TicketOrderInput` 的注释里写明，并在 PR 描述里给打印机分支留一条交接。
 - [ ] **Step 5: `tsc` 与浏览器目测**
   `cd apps/admin && npx tsc --noEmit` 零错误；起 `admin` + `api-3100`，用 Task 4 的券单看工作台详情抽屉。
 
@@ -361,7 +364,7 @@
 3. 不做多券叠加、折扣券、商品券、券与积分互抵（spec §12）。
 4. 不改 `quoteToken` 的载荷、签名、TTL，不改 `/local/quote`。
 5. 不改退款上限公式、不在退款路径里加任何释放逻辑（P7）。
-6. 不建云打印小票模板——本分支无打印代码，只留交接项（Task 9 Step 4）。
+6. 不接打印机、不改出票编排（`services/ticket/index.ts`）、不把 `enqueueOrderTicket` 接进工作台或支付回调——那是打印机分支的事；本计划只改渲染器 `content.ts`（Task 9 Step 4），并给接线方留交接。
 7. 不做「下单幂等键」（同城 M4 计划 Task 4 的事，若那边已落地，本计划的 `couponId` 天然进入幂等键的请求体比对，不需要额外处理）。
 8. 不做后台「订单列表按是否用券筛选」之类的报表需求。
 
