@@ -12,6 +12,9 @@
 
 const ALERT_WINDOW_MS = 5 * 60 * 1000
 const MAX_TRACKED_KEYS = 500
+// A9：企微/PushPlus 出站请求之前裸 fetch 无超时——这两个通道本身还兼着系统告警出口，
+// 对端不响应时悬挂的请求会越攒越多；8s 超时后走既有的「5 秒后重试一次」逻辑，不新增分支。
+const NOTIFY_TIMEOUT_MS = 8000
 
 interface AlertRecord {
   lastSentAt: number
@@ -46,6 +49,7 @@ export async function postJson(url: string, body: unknown, label: string, retrie
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     assertBusinessOk(await resp.text())

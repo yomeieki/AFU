@@ -217,6 +217,17 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
 
     const shippedAt = new Date()
     const result = await prisma.$transaction(async (tx) => {
+      // 先做带状态守卫的 updateMany 再写 shipment：:214 的状态检查只是事务外快照，
+      // 无守卫的 update({where:{id}}) 会把这几十毫秒里刚落库的 REFUNDING/REFUNDED 强行改回 SHIPPED——
+      // 钱已经退出去了，单子却显示已发货，货再发一次就是白送。与 accept/complete 两个兄弟端点保持同一范式。
+      const moved = await tx.order.updateMany({
+        where: { id, status: { in: ['PAID', 'PREPARING'] } },
+        data: { status: 'SHIPPED' },
+      })
+      if (moved.count === 0) {
+        const current = await tx.order.findUnique({ where: { id }, select: { status: true } })
+        throw new AppError(42204, `订单状态为 ${current?.status ?? '未知'}，仅待接单/备餐中订单可发货`)
+      }
       const shipment = await tx.shipment.upsert({
         where: { orderId: id },
         update: { expressCompany, expressNo, remark, shippedAt },
@@ -230,7 +241,7 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
           shippedAt,
         },
       })
-      const updated = await tx.order.update({ where: { id }, data: { status: 'SHIPPED' } })
+      const updated = await tx.order.findUniqueOrThrow({ where: { id } })
       return { shipment, order: updated }
     })
 
@@ -269,14 +280,57 @@ router.post('/:id/complete', async (req: Request, res: Response, next: NextFunct
 const refundSchema = z.object({
   amount: z.number().int().positive(),
   reason: z.string().trim().max(80).optional(),
+  // 前端一个退款弹窗实例只生成一次、重试复用（见 admin/src/components/RefundDialog.tsx）
+  idempotencyKey: z.string().trim().min(8).max(64).optional(),
 })
+
+// ─────────────────────────────────────────────────────────
+// 退款幂等注册表
+//
+// 后台 axios 超时 10 秒，而服务端调微信退款的 fetch 没有超时。微信慢于 10 秒时前端已经报错，
+// 店员照直觉再点一次——若第一次最终以网络异常收场（markRefundFailed 会释放在途占位、
+// activeOrderId 唯一索引不再拦人），第二次就会带着一个全新的 outRefundNo 真的再打一笔同额退款。
+//
+// 理想解是把幂等键透传进 initiateRefund，由它派生 outRefundNo，让重试撞上 Refund.outRefundNo
+// 的唯一索引、落到微信侧同一笔退款上；但 services/refund.ts 不在本次可改文件范围内，
+// 所以退一步在路由层拦：同一 (订单, 金额, 幂等键) 的重试直接复用第一次那个 Promise——
+// 第二次请求等的就是第一次那通微信调用的结果，压根不会发出第二笔。
+// PM2 是单实例 fork，进程内 Map 覆盖全部流量；进程重启会丢，但重启同样会掐断在途请求。
+// 不带幂等键的调用（e2e 的并发双击、脚本）行为完全不变，仍由 activeOrderId 唯一索引兜底。
+// ─────────────────────────────────────────────────────────
+type RefundAttemptResult = Awaited<ReturnType<typeof initiateRefund>>
+const REFUND_ATTEMPT_TTL_MS = 10 * 60 * 1000
+const refundAttempts = new Map<string, { at: number; task: Promise<RefundAttemptResult> }>()
+
+function purgeRefundAttempts() {
+  const deadline = Date.now() - REFUND_ATTEMPT_TTL_MS
+  for (const [key, entry] of refundAttempts) {
+    if (entry.at < deadline) refundAttempts.delete(key)
+  }
+}
 
 router.post('/:id/refund', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const { amount, reason } = refundSchema.parse(req.body ?? {})
-    const result = await initiateRefund({ orderId: id, amount, reason, operator: req.adminUsername ?? undefined })
-    success(res, result)
+    const { amount, reason, idempotencyKey } = refundSchema.parse(req.body ?? {})
+    const start = () => initiateRefund({ orderId: id, amount, reason, operator: req.adminUsername ?? undefined })
+    if (!idempotencyKey) return success(res, await start())
+
+    purgeRefundAttempts()
+    // 金额进键：店员改了金额再提交就是另一笔退款，不该被上一次的结果顶掉
+    const attemptKey = `${id}:${amount}:${idempotencyKey}`
+    let entry = refundAttempts.get(attemptKey)
+    if (!entry) {
+      entry = { at: Date.now(), task: start() }
+      refundAttempts.set(attemptKey, entry)
+      // 校验类失败（金额超余额、状态不允许退…）在调微信之前就抛了，钱一定没动过：
+      // 让出坑位，店员改完能立刻重提。5xx/未知异常保留——那种情况下微信到底扣没扣钱不可知，
+      // 重试原样拿回同一个错误，宁可让店员去商户平台核对，也不许它变成第二笔真退款。
+      entry.task.catch((e) => {
+        if (e instanceof AppError && e.httpStatus < 500) refundAttempts.delete(attemptKey)
+      })
+    }
+    success(res, await entry.task)
   } catch (e) {
     next(e)
   }
@@ -349,14 +403,61 @@ router.post('/:id/refund-complete', async (req: Request, res: Response, next: Ne
     if (active) {
       await finalizeRefundSuccess({ refundId: active.id, operator: `manual:${req.adminUsername ?? ''}` })
     } else {
-      // 无在途退款单（如用户自助取消后员工在商户平台手动打款）：直接把剩余款项记为已退
-      const remaining = remainingRefundable(order)
-      const moved = await prisma.order.updateMany({
-        where: { id, status: 'REFUNDING' },
-        data: { status: 'REFUNDED', refundedAt: new Date(), refundedAmount: { increment: remaining } },
+      // 无在途退款单（如用户自助取消后员工在商户平台手动打款）：直接把剩余款项记为已退。
+      //
+      // 整段包进事务，并且钱的写法从「事务外算 remaining + increment」改成「事务内 CAS + 写绝对值」：
+      // 老写法的 remaining 来自 :343 那次事务外快照，微信退款回调若插在读与写之间先 increment 了一次，
+      // 这里再 increment 一遍，refundedAmount 就越过 actualAmount，可退余额变负、对账永远差一笔。
+      //  · 写绝对值 actualAmount 而不是 increment：天然以实付封顶，重复执行也不会超额；
+      //  · where 里带上读到的 refundedAmount 做 CAS：回调若抢先落库，这里 count=0，让店员刷新后再看，
+      //    不猜「到底谁退的」——与 refund.ts:251 事务内条件写 + 判 count 同一范式。
+      const now = new Date()
+      await prisma.$transaction(async (tx) => {
+        const fresh = await tx.order.findUnique({
+          where: { id },
+          select: {
+            orderNo: true,
+            actualAmount: true,
+            refundedAmount: true,
+            payment: { select: { outTradeNo: true } },
+          },
+        })
+        if (!fresh) throw new AppError(40401, '订单不存在', 404)
+        const remaining = remainingRefundable(fresh)
+        const moved = await tx.order.updateMany({
+          where: { id, status: 'REFUNDING', refundedAmount: fresh.refundedAmount },
+          // remaining === 0（钱其实已经退完，只剩状态没翻）时不碰金额，只把状态收尾
+          data: { status: 'REFUNDED', refundedAt: now, ...(remaining > 0 ? { refundedAmount: fresh.actualAmount } : {}) },
+        })
+        if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
+        if (remaining > 0) {
+          // 补建 Refund 行：这条路以前只改 order.refundedAmount 不建退款单，
+          // sum(refunds.amount) 与 order.refundedAmount 从此永久对不上，退款明细里也查不到这笔钱去哪了。
+          // 来源全部用现有字段表达（不加迁移）：
+          //  · outRefundNo 用 manual_ 前缀，与 buildOutRefundNo 的 refund_ 前缀区分开——
+          //    这个号从未发给微信，别让人拿它去商户平台查单；唯一索引顺带挡住重复补记。
+          //  · operator 沿用 :350 的 manual: 前缀，reason 写明是人工补记。
+          //  · activeOrderId 置 null：这是终态，不能占住在途位挡掉以后的退款。
+          await tx.refund.create({
+            data: {
+              orderId: id,
+              orderNo: fresh.orderNo,
+              outTradeNo: fresh.payment?.outTradeNo ?? null,
+              outRefundNo: `manual_${id}_${now.getTime()}`,
+              amount: remaining,
+              totalAmount: fresh.actualAmount,
+              status: 'SUCCESS',
+              // 钱确实是在微信商户平台退的，只是不是本系统发起的；「人工」由 operator/reason/单号前缀承载
+              mode: 'WECHAT',
+              reason: '人工补记：商户平台已退款，系统未收到回调',
+              operator: `manual:${req.adminUsername ?? ''}`,
+              successTime: now,
+              activeOrderId: null,
+            },
+          })
+        }
+        await tx.payment.updateMany({ where: { orderId: id }, data: { status: 'REFUNDED' } })
       })
-      if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
-      await prisma.payment.updateMany({ where: { orderId: id }, data: { status: 'REFUNDED' } })
     }
     success(res, await prisma.order.findUnique({ where: { id } }))
   } catch (e) {

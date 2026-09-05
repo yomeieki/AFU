@@ -236,14 +236,25 @@ async function requireActive(orderId: number) {
  * 而不是 status ∈ {PAID, PREPARING}。这条规则的落点在 services/refund.ts（initiateRefund），
  * 这里只负责把「PREPARING 可能是回退来的」这个事实说清楚，不在此处伪装成未出库。
  */
-/** @returns 实际回退的订单行数（0 或 1）。三重护栏挡住时返回 0——调用方必须据此告警，不能假装成功。 */
-export async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number): Promise<number> {
+/**
+ * @returns { rolled, wasShipped }：rolled 是实际回退的订单行数（0 或 1）；wasShipped 是**调用前**
+ * 订单是否处于 SHIPPED（货已出门）。
+ *
+ * B3-02/B3-03：rolled===0 本身不能当异常——「取消呼叫」（配送单还在 CALLING、订单还在 PREPARING，
+ * 货压根没出门）是最常见的正常路径，此时订单从来就不是 SHIPPED，三重护栏里的 status:'SHIPPED'
+ * 恒不命中，rolled 必然是 0。只有调用前 wasShipped 为真、却仍 rolled===0（被「在途退款/售后」
+ * 这两条真正的护栏挡住）才是需要人工核对的异常。调用方必须用 `wasShipped && rolled === 0`
+ * 判定异常，不能只看 rolled === 0。
+ */
+export async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number): Promise<{ rolled: number; wasShipped: boolean }> {
+  const before = await tx.order.findUnique({ where: { id: orderId }, select: { status: true } })
+  const wasShipped = before?.status === 'SHIPPED'
   const moved = await tx.order.updateMany({ where: {
     id: orderId, deliveryType: 'LOCAL', status: 'SHIPPED', completedAt: null,
     refunds: { none: { status: { in: [...ACTIVE_REFUND_STATUSES] } } },
     afterSales: { none: { status: { in: ['PENDING', 'APPROVED'] } } },
   }, data: { status: 'PREPARING' } })
-  return moved.count
+  return { rolled: moved.count, wasShipped }
 }
 
 export async function precancelDelivery(orderId: number): Promise<{ cancelFeeFen: number | null }> {
@@ -278,8 +289,12 @@ export async function cancelDelivery(input: { orderId: number; operator: string;
       ], { key: `dlv-cancel-lost:${d.id}` })
       throw new AppError(42237, '配送单状态已变化，请刷新。取消费可能已在运力方生效，请先核对再决定是否重试')
     }
-    const rolled = await rollbackOrderAfterCancel(tx, input.orderId)
-    if (rolled === 0) {
+    const { rolled, wasShipped } = await rollbackOrderAfterCancel(tx, input.orderId)
+    // B3-02：「取消呼叫」（骑手还没取货，订单还在 PREPARING）是最常见的正常路径——此时订单
+    // 从来就不是 SHIPPED，回退 0 行是预期之内，不算异常。只有调用前订单确实是 SHIPPED（货已
+    // 出门）却仍回退不了，才是三重护栏之一（多半是在途退款/售后）挡住的真异常。
+    const rollbackStuck = wasShipped && rolled === 0
+    if (rollbackStuck) {
       // 假成功的另一半：配送单已经真的 CANCELLED、取消费也真扣了，但订单没能回退到 PREPARING
       // （三重护栏之一挡住：多半是有在途退款/售后）。店员会收到 code:0，以为订单已经能重新走流程，
       // 实际它停在 SHIPPED 且无在途配送单——call/self-deliver 要 PREPARING、delivered 要在途单，
@@ -289,7 +304,7 @@ export async function cancelDelivery(input: { orderId: number; operator: string;
         '订单未能回退到备餐中（可能存在在途退款/售后），订单会停留在 SHIPPED 且无在途配送单，请人工核对',
       ], { key: `dlv-cancel-order-stuck:${d.id}` })
     }
-    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）${rolled === 0 ? '【订单未回退，请核对】' : ''}`, operator: input.operator })
+    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）${rollbackStuck ? '【订单未回退，请核对】' : ''}`, operator: input.operator })
   })
   return { cancelFeeFen }
 }

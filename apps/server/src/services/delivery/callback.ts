@@ -25,7 +25,12 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
     } } },
   })
   if (!delivery) {
-    notifySystemAlert('快递100 回调查不到配送单', [`deliveryNo=${deliveryNo}`, '若此前有下单超时，可能是占位落库失败的孤儿单，请到快递100 后台核对'], { key: `kd-cb-miss:${deliveryNo}` })
+    // B6-02：这条路由未鉴权（安全性只靠 per-单 salt），deliveryNo 又是 D<orderId>-<seq>
+    // 这种易猜的格式——键里若带 deliveryNo，任何人构造一批互不相同的 deliveryNo 就能让
+    // 每个键各自躲过 5 分钟同键抑制，把告警刷爆、淹没真实告警。改成固定键，同一窗口内
+    // 无论访问多少个不同 deliveryNo 都只发一条；notifySystemAlert 自带的「期间抑制 N 次」
+    // 已经是本窗口内的计数，不用再自己维护一份。
+    notifySystemAlert('快递100 回调查不到配送单', [`deliveryNo=${deliveryNo}`, '若此前有下单超时，可能是占位落库失败的孤儿单，请到快递100 后台核对'], { key: 'kd:unknown-delivery' })
     return { http: 200 }
   }
   const parsed = getDeliveryProvider().verifyAndParseCallback(body, delivery.callbackSalt)
@@ -137,8 +142,11 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       } else if (p.providerStatus === '720') {
         // 取货后被取消：SHIPPED 回退 PREPARING。
         // 与主动取消共用同一个实现（orchestrator.rollbackOrderAfterCancel），护栏只写一处
-        const rolled = await rollbackOrderAfterCancel(tx, delivery.orderId)
-        if (rolled === 0) {
+        const { rolled, wasShipped } = await rollbackOrderAfterCancel(tx, delivery.orderId)
+        // B3-03：并呼撤单/呼叫阶段就取消等路径下，订单调用前本就不是 SHIPPED（货没出门），
+        // 此时回退 0 行是正常路径，不告警。只有调用前确实 SHIPPED 却仍回退不了（多半是
+        // 在途退款/售后挡住）才是需要人工核对的真异常——同 cancelDelivery 的判定口径。
+        if (wasShipped && rolled === 0) {
           // 假成功的另一半（照 cancelDelivery 的先例）：配送单已经真的 CANCELLED，
           // 但订单没能回退（多半是有在途退款/售后挡住）。不告警的话订单会静默停在 SHIPPED
           // 且无在途配送单，谁都不知道要去核对。

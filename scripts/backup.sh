@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# coscli 装在 /usr/local/bin，cron 默认 PATH 不含该路径，需显式设置
+PATH=/usr/local/bin:/usr/bin:/bin
+
 # ── 配置（环境变量可覆盖）────────────────────────────────────────────────────
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-3306}"
@@ -112,7 +115,13 @@ fi
 # coscli 安装：https://cloud.tencent.com/document/product/436/63143
 CURRENT_STEP="cos-upload"
 COS_RESULT="skip"
-if command -v coscli &>/dev/null && [[ -n "${COS_BUCKET}" ]]; then
+if [[ -n "${COS_BUCKET}" ]]; then
+  # COS_BUCKET 已设置，必须成功上传
+  if ! command -v coscli &>/dev/null; then
+    log "ERROR: COS_BUCKET is set but coscli not found in PATH"
+    alert "❌ 异地备份未执行：coscli 未在系统 PATH 中找到。请安装 coscli 或检查 PATH 配置。"
+    exit 1
+  fi
   UPLOAD_OK=true
   COS_RESULT="ok"
   for f in "${DB_FILE}" ${UPLOADS_FILE:+"${UPLOADS_FILE}"}; do
@@ -130,7 +139,7 @@ if command -v coscli &>/dev/null && [[ -n "${COS_BUCKET}" ]]; then
     alert "⚠️ COS 上传失败（本地副本已保留于 ${BACKUP_DIR}），请检查 coscli 配置"
   fi
 else
-  log "WARN: coscli not found or COS_BUCKET not set, 仅保留本地备份"
+  log "INFO: COS_BUCKET not set, 仅保留本地备份"
 fi
 
 # ── 4. 本地保留策略：清理超过 N 天的备份 ─────────────────────────────────────

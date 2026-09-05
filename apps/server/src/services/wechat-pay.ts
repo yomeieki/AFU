@@ -21,6 +21,29 @@ function getTimestamp(): string {
   return String(Math.floor(Date.now() / 1000))
 }
 
+// A9：全仓出站 HTTP 里，之前只有 kd100.ts 加了超时（其注释自陈「全仓其它 fetch 都没有超时」）。
+// 微信支付这三个接口（下单/关单/退款）裸 fetch，对端不响应时请求会一直挂着，把处理该请求的
+// 那次事件循环 tick 占住，直到 Node/反向代理自己的默认超时（往往几分钟起）才released。
+const WECHAT_PAY_TIMEOUT_MS = 15000
+
+/**
+ * 给微信支付出站请求统一加超时。超时/中止时 fetch 会 reject 一个 DOMException
+ * （name: 'TimeoutError'/'AbortError'），虽然它本身也 instanceof Error，但换成
+ * 普通 Error + 中文说明更贴合本文件其余分支「throw new Error(...)」的既有形状，
+ * 调用方原有的 `(e as Error).message` / `instanceof WechatRefundError` 判断不用改。
+ */
+async function fetchWechatPay(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(WECHAT_PAY_TIMEOUT_MS) })
+  } catch (e) {
+    const err = e as Error
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      throw new Error(`微信支付请求超时（${WECHAT_PAY_TIMEOUT_MS}ms）: ${err.message}`)
+    }
+    throw err
+  }
+}
+
 export function generateWxPayAuthorization(
   method: string,
   url: string,
@@ -78,7 +101,7 @@ export async function createJsapiOrder(params: JsapiOrderParams): Promise<string
 
   const authorization = generateWxPayAuthorization('POST', apiUrl, body)
 
-  const resp = await fetch(apiUrl, {
+  const resp = await fetchWechatPay(apiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -110,7 +133,7 @@ export async function closeOrder(outTradeNo: string): Promise<boolean> {
   const body = JSON.stringify({ mchid: mchId })
   try {
     const authorization = generateWxPayAuthorization('POST', apiUrl, body)
-    const resp = await fetch(apiUrl, {
+    const resp = await fetchWechatPay(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: authorization },
       body,
@@ -199,7 +222,7 @@ export async function createRefund(params: RefundParams): Promise<RefundResult> 
     amount: { refund: params.amount, total: params.total, currency: 'CNY' },
   })
   const authorization = generateWxPayAuthorization('POST', apiUrl, body)
-  const resp = await fetch(apiUrl, {
+  const resp = await fetchWechatPay(apiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -59,15 +59,29 @@ function buildData(values: Record<string, string>, fields: FieldMap): Record<str
   return Object.keys(data).length > 0 ? data : null
 }
 
+// A9：全部 fire-and-forget，本来就不该让一条卡住的请求占着连接——之前裸 fetch 无超时，
+// 对端不响应时会一直挂着（虽然不影响主流程，但每挂一条就多攒一个悬空 socket）。
+const SUBSCRIBE_TIMEOUT_MS = 10000
+
 async function send(openid: string, templateId: string, page: string, data: Record<string, { value: string }>, label: string) {
   if (!isWechatApiConfigured()) return
   try {
     const token = await getAccessToken()
-    const resp = await fetch(`https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=${token}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ touser: openid, template_id: templateId, page, data, miniprogram_state: 'formal', lang: 'zh_CN' }),
-    })
+    let resp: Response
+    try {
+      resp = await fetch(`https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ touser: openid, template_id: templateId, page, data, miniprogram_state: 'formal', lang: 'zh_CN' }),
+        signal: AbortSignal.timeout(SUBSCRIBE_TIMEOUT_MS),
+      })
+    } catch (e) {
+      const err = e as Error
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw new Error(`订阅消息请求超时（${SUBSCRIBE_TIMEOUT_MS}ms）: ${err.message}`)
+      }
+      throw err
+    }
     const body = (await resp.json()) as { errcode?: number; errmsg?: string }
     if (body.errcode && body.errcode !== 0) {
       if ([40001, 40014, 42001].includes(body.errcode)) invalidateAccessToken()

@@ -23,7 +23,11 @@ Page({
     belowMinOrder: false,
     minOrderTip: '',
     submitting: false,
+    // 商品/地址（loadData）加载失败
     loadFailed: false,
+    // 运费规则（/orders/meta）加载失败 —— 与 loadFailed 是两回事，别合并：
+    // 商品能列出来但运费未知时，页面显示的合计就是错的，同样不能让顾客提交。
+    metaFailed: false,
     subscribeTemplateIds: [],
     payTimeoutMin: 15,
   },
@@ -43,17 +47,29 @@ Page({
       this.setData({ cartItemIds: ids })
     }
     this.loadData()
+    this.loadMeta()
+  },
+
+  // 运费规则拉取。失败必须留痕：以前这里是个空 catch，shipping 就停在初始的
+  // {fee:0,...} 上，页面照样渲染「免运费」和一个不含运费的合计，提交按钮也照样能点——
+  // 服务端下单时按真实运费收款，顾客看到的合计和微信扣款对不上，是实打实的价格欺诈观感。
+  // 现在失败就置 metaFailed，由 applyShipping 把提交拦住（request 已经 toast 过一次网络错误）。
+  loadMeta() {
     var self = this
-    getOrderMeta()
+    return getOrderMeta()
       .then(function(meta) {
         self.setData({
+          metaFailed: false,
           subscribeTemplateIds: (meta && meta.subscribeTemplateIds) || [],
           payTimeoutMin: (meta && meta.payTimeoutMin) || 15,
           shipping: (meta && meta.shipping) || { fee: 0, freeThreshold: 0, minOrderAmount: 0 },
         })
         self.applyShipping()
       })
-      .catch(function() {})
+      .catch(function() {
+        self.setData({ metaFailed: true })
+        self.applyShipping()
+      })
   },
 
   onShow() {
@@ -69,6 +85,20 @@ Page({
   applyShipping() {
     var s = this.data.shipping || {}
     var subtotal = this.data.totalAmount
+
+    // 运费规则没拉到就别装作「免运费」。这里借 belowMinOrder 把提交按钮置灰并挂出提示行：
+    // confirm.wxml 不在本次可改文件范围，而它在模板里的实际语义正是「不可提交 + 显示 minOrderTip」；
+    // 失败的真实原因单独记在 metaFailed，onSubmit 据此弹重试，两个标记不混用。
+    if (this.data.metaFailed) {
+      this.setData({
+        shippingFee: 0,
+        payAmount: subtotal,
+        belowMinOrder: true,
+        minOrderTip: '运费信息加载失败，点「提交订单」重新加载',
+      })
+      return
+    }
+
     var fee = Number(s.fee) || 0
     var threshold = Number(s.freeThreshold) || 0
     var min = Number(s.minOrderAmount) || 0
@@ -152,6 +182,21 @@ Page({
   onSubmit() {
     if (this.data.loadFailed) {
       wx.showToast({ title: '商品信息加载失败，请返回重试', icon: 'none' })
+      return
+    }
+    // 运费未知：不放行，同时给一个能当场解决问题的出口（重新拉 /orders/meta），
+    // 不让顾客卡在一个只会置灰的按钮上。
+    if (this.data.metaFailed) {
+      var page = this
+      wx.showModal({
+        title: '运费信息加载失败',
+        content: '暂时算不出准确的合计金额，重新加载后再提交。',
+        confirmText: '重新加载',
+        cancelText: '取消',
+        success: function(res) {
+          if (res.confirm) page.loadMeta()
+        },
+      })
       return
     }
     if (!this.data.address) {
