@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import Modal from './ui/Modal'
 import Button from './ui/Button'
@@ -49,6 +49,10 @@ export default function RefundDialog({ order, afterSaleId, defaultReply, deliver
   const [confirmInput, setConfirmInput] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // 幂等键：一个弹窗实例只生成一次，重试原样复用（useRef 而非 useState——它不参与渲染，
+  // 也绝不能因为某次 setState 重新生成）。服务端拿它 + 订单 + 金额去重，
+  // 让「超时后再点一次」落回第一次那笔退款，而不是真的再打一笔出去。
+  const idempotencyKeyRef = useRef(`ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
 
   const remaining = order.remainingRefundable ?? Math.max(0, order.actualAmount - (order.refundedAmount ?? 0))
   const amountFen = parseYuan(amountInput)
@@ -79,14 +83,25 @@ export default function RefundDialog({ order, afterSaleId, defaultReply, deliver
         const { mode, refund } = res.data.data
         toast.success(mode === 'mock' || refund.status === 'SUCCESS' ? `已退款 ¥${yuan(amountFen)}` : '已发起退款，等待微信处理')
       } else {
-        const res = await refundOrder(order.id, { amount: amountFen, reason: reason || undefined })
+        // 幂等键放在变量里传：refundOrder 的入参类型声明在 api/admin.ts（不在本次改动范围），
+        // 直接写对象字面量会触发 TS 的多余属性检查。服务端 refundSchema 已接住 idempotencyKey。
+        const payload: { amount: number; reason?: string; idempotencyKey: string } = {
+          amount: amountFen,
+          reason: reason || undefined,
+          idempotencyKey: idempotencyKeyRef.current,
+        }
+        const res = await refundOrder(order.id, payload)
         const { mode, refund } = res.data.data
         toast.success(mode === 'mock' || refund.status === 'SUCCESS' ? `已退款 ¥${yuan(amountFen)}` : '已发起退款，等待微信处理（到账后自动更新状态）')
       }
       onDone()
     } catch (err: unknown) {
+      const serverMessage = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
       setError(
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '退款失败，请稍后重试'
+        serverMessage ??
+          // 没拿到 response = axios 10 秒超时或断网，微信那笔退款很可能还在路上，结果未知。
+          // 这里绝不能再写「退款失败，请稍后重试」——店员照着提示重点一次，以前就是实打实的第二笔同额退款。
+          '正在确认结果，请勿重复提交。稍后刷新订单查看退款状态；若长时间不更新，请到微信商户平台核对。'
       )
       setStep(1)
     } finally {
