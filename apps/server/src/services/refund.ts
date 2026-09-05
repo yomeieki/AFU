@@ -291,10 +291,12 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void>
     if (moved.count === 0) return { refund, alreadyDone: true }
     const updated = await tx.refund.findUniqueOrThrow({ where: { id: refund.id } })
 
-    const order = await tx.order.update({
-      where: { id: refund.orderId },
-      data: { refundedAmount: { increment: refund.amount } },
-    })
+    // increment 但以 actualAmount 封顶：事前校验（initiateRefund）本应保证不会超，但这里不依赖它单独兜底——
+    // LEAST(...) 是一条原子语句，比「事务内重读 + CAS + 写绝对值」更简单，也没有那套方案在
+    // increment 语义下会引入的重试循环（人工补记路径写的是绝对值，语义不同，不能照抄）。
+    // 用 tx.$executeRaw 而非 prisma.$executeRaw，否则会脱离当前事务。
+    await tx.$executeRaw`UPDATE orders SET refunded_amount = LEAST(refunded_amount + ${refund.amount}, actual_amount) WHERE id = ${refund.orderId}`
+    const order = await tx.order.findUniqueOrThrow({ where: { id: refund.orderId } })
     if (order.refundedAmount >= order.actualAmount) {
       await tx.order.updateMany({
         where: { id: refund.orderId, status: 'REFUNDING' },
