@@ -23,11 +23,12 @@ import {
 import {
   bindPrinterToAccount, unbindPrinter, enqueuePrinterTestJob, healthCheck, retryPrintJob,
   enqueueOrderTicket, _setRetryDelaysMsForTest, _resetRetryDelaysMsForTest, _resetPrinterHealthTrack,
-  _setPrinterHealthTrackForTest, _setRepeatAnnounceMinWaitMsForTest,
+  _setPrinterHealthTrackForTest, _setRepeatAnnounceMinWaitMsForTest, clearPrinterQueue,
 } from '../../services/ticket'
 import { PrinterError, PrinterOnlineState } from '../../services/ticket/printer'
 import {
   _resetMockPrinter, _setMockPrinterState, _setMockPrintFailure, _listMockJobs, _setMockPrintDelay,
+  _mockQueueWaiting,
 } from '../../services/ticket/mock'
 
 const router = Router()
@@ -63,6 +64,19 @@ router.post('/printers/bind', async (req: Request, res: Response, next: NextFunc
   try {
     const input = bindSchema.parse(req.body ?? {})
     success(res, await bindPrinterToAccount(input))
+  } catch (e) {
+    next(mapPrinterError(e))
+  }
+})
+
+// D2（H5b）：手动清空该打印机云端待打印队列（飞鹅 Open_delPrinterSqs）。清空整个队列、不能按单删，
+// 正常情况下由 printerHealthTask 在检测到「从离线恢复且 waiting>0」时自动调用，这里是给店主的手动入口。
+router.post('/printers/:sn/clear-queue', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sn = String(req.params.sn || '').trim()
+    if (!sn) throw new AppError(40001, '打印机编号不能为空')
+    await clearPrinterQueue(sn)
+    success(res, { ok: true })
   } catch (e) {
     next(mapPrinterError(e))
   }
@@ -219,6 +233,16 @@ printerMockRouter.post('/fail', async (req: Request, res: Response, next: NextFu
 printerMockRouter.get('/jobs', async (req: Request, res: Response) => {
   const sn = typeof req.query.sn === 'string' ? req.query.sn : undefined
   success(res, _listMockJobs(sn))
+})
+
+// D2：e2e 用来断言「离线时下发的作业已经进了 mock 的云端队列（waiting>0）」，不依赖真实调用
+// Open_printerInfo（那是 feie.ts 的事），只读 mock 自己的内部状态。
+printerMockRouter.get('/queue', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sn = String(req.query.sn || '').trim()
+    if (!sn) throw new AppError(40001, '打印机编号不能为空')
+    success(res, { waiting: _mockQueueWaiting(sn) })
+  } catch (e) { next(e) }
 })
 
 // B6 复现用：让某台打印机的 print() 人为变慢，撑大「入队后立即发送」与「定时兜扫」的竞争窗口

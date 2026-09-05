@@ -649,7 +649,9 @@ export async function enqueuePrinterTestJob(sn: string): Promise<EnqueueResult> 
 // scheduler.ts 自己的 `lastLowStockPushAt`（同样是进程内状态、同样不持久化、进程重启即重新计时）
 // 是同一类做法，不是新引入的模式。**代价**：多实例部署或进程重启会丢失"已持续离线多久"的计时，
 // 相当于该次重启后重新起算——PM2 单实例 fork 前提下可接受（与 lastLowStockPushAt 的既有取舍一致）。
-interface PrinterHealthTrack { offlineSince: number | null; alerted: boolean }
+/** D2（H5b）：`wasOffline` 独立于 `alerted` 跟踪——云端排队从打印机一断线就开始堆积，不等
+ *  `offlineAlertMin` 阈值。哪怕这次离线短到没触发告警，恢复时也要检查 waiting 决定要不要清队列。 */
+interface PrinterHealthTrack { offlineSince: number | null; alerted: boolean; wasOffline: boolean }
 const healthTrack = new Map<string, PrinterHealthTrack>()
 let lastHealthSnapshot: { at: number; entries: PrinterHealthEntry[] } | null = null
 /** workbench 快照复用这份缓存的最长时效：略大于 scheduler 的 60s 心跳，容忍一次心跳延迟/失败 */
@@ -667,8 +669,10 @@ export function _resetPrinterHealthTrack(): void {
  * 来秒级触发告警；这里改用「直接把 offlineSince 设成足够早的过去时间点」来达到同样的测试目的，
  * 不去动生产配置本身的校验下限。
  */
-export function _setPrinterHealthTrackForTest(sn: string, track: { offlineSince: number | null; alerted: boolean }): void {
-  healthTrack.set(sn, track)
+export function _setPrinterHealthTrackForTest(
+  sn: string, track: { offlineSince: number | null; alerted: boolean; wasOffline?: boolean }
+): void {
+  healthTrack.set(sn, { offlineSince: track.offlineSince, alerted: track.alerted, wasOffline: track.wasOffline ?? false })
 }
 
 /**
@@ -706,6 +710,80 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
   return count
 }
 
+/**
+ * D2（H5/H5b，取代原 H5 修法）：2026-09-05 真机实验证实打印机离线时 `Open_printMsg` 仍返回成功，
+ * 票排进飞鹅云端队列——不是失败，`PrintJob` 走的是正常的 SENT 路径，永远不会因为离线走到 FAILED，
+ * 所以「补打 FAILED」在这条路上无的放矢。真正的风险是：恢复瞬间飞鹅会把队列**全部自动吐出**，
+ * 我们既无法从中挑选，也不知道里面有没有几小时前的陈年旧单。应对分两步：
+ * 1. 查 `waiting`——队列里有积压才值得动，没有就什么都不用做（避免每次「随便一次离线又恢复」
+ *    都无谓地清队列）。
+ * 2. `waiting > 0`：先 `clearQueue` 丢弃飞鹅那边可能还没来得及吐出的陈旧积压，再改由我们自己
+ *    权威的 `PrintJob` 表决定补发谁——30 分钟内的 PENDING/SENT-未确认行重新走一次 `attemptSend`
+ *    （不管当时是通过 print() 真正排队还是刚好还没来得及发都一并处理）；超过 30 分钟的旧单不再
+ *    补打（规格 §8b 明确要求），改标 FAILED + `lastError='STALE:DROPPED'`，不告警（这只是「不再
+ *    追」，不是「打印机出了新故障」，不该占用告警配额）。
+ * `clearQueue` 失败不阻断后续补发——两害相权：宁可小概率因飞鹅那边残留而重复出一张，也不能让
+ * 恢复补打这条路径卡死，参照 D 组 M1/M14 一贯的「防御性 try/catch，坏一条不连累全部」风格。
+ */
+export async function recoverFromOfflineQueue(
+  sn: string, providerName: PrinterProviderName
+): Promise<{ backfilled: number; dropped: number }> {
+  let waiting = 0
+  try {
+    const provider = getProvider(providerName)
+    waiting = (await provider.queryQueueInfo(sn)).waiting
+  } catch (e) {
+    console.warn(`[ticket] 查询打印机云端队列积压失败 sn=${sn}（跳过本轮清队列/补发）:`, (e as Error).message)
+    return { backfilled: 0, dropped: 0 }
+  }
+  if (waiting <= 0) return { backfilled: 0, dropped: 0 }
+
+  try {
+    await getProvider(providerName).clearQueue(sn)
+  } catch (e) {
+    console.warn(`[ticket] 清空打印机云端队列失败 sn=${sn}（继续尝试从本地记录补发，接受极小概率的重复打印风险）:`, (e as Error).message)
+  }
+
+  const cutoff = new Date(Date.now() - RECOVER_BACKFILL_MS)
+
+  // 超过 30 分钟窗口的旧单：不再补打，标 STALE:DROPPED（不是新故障，不告警）
+  const stale = await prisma.printJob.findMany({
+    where: { printerSn: sn, status: { in: ['PENDING', 'SENT'] }, createdAt: { lt: cutoff } },
+    orderBy: { createdAt: 'asc' },
+    take: BATCH,
+  })
+  let dropped = 0
+  for (const job of stale) {
+    const moved = await prisma.printJob.updateMany({
+      where: { id: job.id, status: job.status },
+      data: { status: 'FAILED', lastError: 'STALE:DROPPED' },
+    })
+    dropped += moved.count
+  }
+
+  // 窗口内的行：重置为 PENDING 后走正常的 attemptSend 认领链路重新发送一次
+  const recent = await prisma.printJob.findMany({
+    where: { printerSn: sn, status: { in: ['PENDING', 'SENT'] }, createdAt: { gte: cutoff } },
+    orderBy: { createdAt: 'asc' },
+    take: BATCH,
+  })
+  let backfilled = 0
+  for (const job of recent) {
+    const moved = await prisma.printJob.updateMany({
+      where: { id: job.id, status: job.status },
+      data: { status: 'PENDING', attempts: 0, lastError: null },
+    })
+    if (moved.count === 0) continue
+    try {
+      await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, job.copies)
+      backfilled++
+    } catch (e) {
+      console.warn(`[ticket] 离线恢复补发失败 job=${job.id}:`, (e as Error).message)
+    }
+  }
+  return { backfilled, dropped }
+}
+
 export interface PrinterHealthTaskResult { checked: number; alerted: number; recovered: number; backfilled: number }
 
 /**
@@ -731,13 +809,14 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
   const now = Date.now()
   const knownSns = new Set(entries.map((e) => e.sn))
   for (const sn of healthTrack.keys()) if (!knownSns.has(sn)) healthTrack.delete(sn)
+  const providerName = activeProviderName(settings)
 
   let alerted = 0
   let recovered = 0
   let backfilled = 0
   for (const e of entries) {
     const bad = e.state === 'OFFLINE' || e.state === 'ABNORMAL' || e.state === 'ERROR'
-    const track = healthTrack.get(e.sn) ?? { offlineSince: null, alerted: false }
+    const track = healthTrack.get(e.sn) ?? { offlineSince: null, alerted: false, wasOffline: false }
     if (bad) {
       if (track.offlineSince === null) track.offlineSince = now
       const downMin = (now - track.offlineSince) / 60_000
@@ -748,14 +827,28 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
           key: `printer:offline:${e.sn}`,
         })
       }
+      // D2：只在真的是「离线」（网络/电源断开）时才置位——ABNORMAL（卡纸/开盖）走的是
+      // print() 直接失败 + FAILED 补打的老路，不会有云端队列积压。
+      if (e.state === 'OFFLINE') track.wasOffline = true
     } else {
       if (track.alerted) {
         recovered++
         notifySystemAlert('打印机已恢复', [`打印机 ${e.name}（${e.sn}）`], { key: `printer:recovered:${e.sn}` })
         backfilled += await retryRecoveredPrinterJobs(e.sn)
       }
+      // D2（H5b）：不依赖 alerted——哪怕这次离线短到没触发告警阈值，只要曾经是 OFFLINE，
+      // 恢复时都要查一次 waiting，决定要不要清云端队列 + 从本地记录补发。
+      if (track.wasOffline) {
+        try {
+          const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName)
+          backfilled += n
+        } catch (err) {
+          console.warn(`[ticket] 离线恢复清队列/补发异常 sn=${e.sn}:`, (err as Error).message)
+        }
+      }
       track.offlineSince = null
       track.alerted = false
+      track.wasOffline = false
     }
     healthTrack.set(e.sn, track)
   }
@@ -802,6 +895,15 @@ export async function bindPrinterToAccount(input: BindPrinterInput): Promise<Pri
 export async function unbindPrinter(sn: string): Promise<PrinterSettings> {
   const settings = await getPrinterSettings()
   return setPrinterSettings({ ...settings, printers: settings.printers.filter((p) => p.sn !== sn) })
+}
+
+/** D2（H5b）：后台手动「清空云端队列」按钮——`printerHealthTask` 恢复检测到 waiting>0 时会自动调用，
+ *  这里额外开放一个手动入口（店主怀疑队列里堆了陈年旧单，不想等下一轮健康检测）。**清空整个队列，
+ *  不能按单删**，调用前请知会店主。 */
+export async function clearPrinterQueue(sn: string): Promise<void> {
+  const settings = await getPrinterSettings()
+  const providerName = activeProviderName(settings)
+  await getProvider(providerName).clearQueue(sn)
 }
 
 export type RetryPrintJobResult =
