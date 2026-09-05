@@ -17,6 +17,7 @@ import {
   Bike,
   LayoutGrid,
   History,
+  Printer,
   LucideIcon,
 } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
@@ -34,6 +35,7 @@ const navItems: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/shop-settings', label: '店铺设置', icon: Store },
   { to: '/local/orders', label: '同城订单', icon: History },
   { to: '/local/settings', label: '同城设置', icon: Bike },
+  { to: '/printer-settings', label: '打印机设置', icon: Printer },
   { to: '/system', label: '系统状态', icon: Settings },
 ]
 

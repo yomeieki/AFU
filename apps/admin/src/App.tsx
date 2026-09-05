@@ -14,6 +14,7 @@ import SystemStatus from './pages/SystemStatus'
 import ShopSettings from './pages/ShopSettings'
 import LocalSettings from './pages/LocalSettings'
 import LocalOrders from './pages/LocalOrders'
+import PrinterSettings from './pages/PrinterSettings'
 import Workbench from './pages/Workbench'
 import { ToastHost } from './components/ui/Toast'
 import { ConfirmDialogHost } from './components/ui/ConfirmDialog'
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="shop-settings" element={<ShopSettings />} />
           <Route path="local/orders" element={<LocalOrders />} />
           <Route path="local/settings" element={<LocalSettings />} />
+          <Route path="printer-settings" element={<PrinterSettings />} />
           <Route path="system" element={<SystemStatus />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
