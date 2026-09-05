@@ -66,6 +66,11 @@ export interface SchedulerOverrides {
   // expirePoints / expireCoupons 两个「每日一次」任务的日切判定，e2e 传 true 绕过，
   // 否则一天之内重复调用 run-scheduler 只有第一次真的会执行。
   forceDailyMemberTasks?: boolean
+  // H9：expirePointsBatch/expireCouponsBatch 每轮最多处理的行数，默认 200。滚动续期让一个用户
+  // 的全部在世行共用同一个到期日，到期那一刻可能一次产生远超 200 行的候选——runMemberDailyTask
+  // 现在会循环调用直到某轮返回 < limit 才收工，e2e 传小值（如 2）来让「一次到期一大批」在几行
+  // 数据上就能复现，不用真的插 200+ 行。
+  dailyTaskBatchLimit?: number
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -97,8 +102,8 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['printerHealth', () => printerHealthTask().then((r) => r.alerted + r.recovered + r.backfilled)],
     // 会员积分/优惠券（M1，见 docs/superpowers/plans/2026-09-04-member-m1-ledger.md Task 6）
     ['settleMissedPoints', () => settleMissedPoints(overrides.settleMissedPointsAfterMin)],
-    ['expirePoints', () => runMemberDailyTask('lastExpirePointsAt', expirePointsBatch, overrides.forceDailyMemberTasks)],
-    ['expireCoupons', () => runMemberDailyTask('lastExpireCouponsAt', expireCouponsBatch, overrides.forceDailyMemberTasks)],
+    ['expirePoints', () => runMemberDailyTask('lastExpirePointsAt', expirePointsBatch, overrides.forceDailyMemberTasks, overrides.dailyTaskBatchLimit)],
+    ['expireCoupons', () => runMemberDailyTask('lastExpireCouponsAt', expireCouponsBatch, overrides.forceDailyMemberTasks, overrides.dailyTaskBatchLimit)],
   ]
   try {
     for (const [name, fn] of tasks) {
@@ -227,14 +232,24 @@ export async function settleMissedPoints(afterMin = SETTLE_MISSED_POINTS_AFTER_M
   return due.length
 }
 
+// H9：滚动续期让一个用户的全部在世行共用同一个到期日——到期那一刻可能一次产生远超单批上限的
+// 候选行，一轮只跑一批就记账收工的话，其余候选要等到明天才轮到，而明天的新到期用户又会占满
+// 当天配额，形成「先到的吃满、后到的排队」。DAILY_TASK_MAX_ROUNDS 只是防止「每轮都选中同一批
+// 处理失败/被并发抢跑的坏行」时空转到死（expirePointsBatch/expireCouponsBatch 对单行异常是
+// catch 后不计入返回值，真坏行会让某轮返回 0 提前退出；这里的上限只兜住「返回值恰好等于
+// limit 但每轮都是同一批」这种更极端的情况，50 轮 × 200/批 = 1 万行，一天封顶足够）。
+const DEFAULT_DAILY_TASK_BATCH_LIMIT = 200
+const DAILY_TASK_MAX_ROUNDS = 50
+
 /**
  * expirePoints / expireCoupons 共用的「每日一次」执行判定：上次记录的执行日与今天不同才跑，
- * 跑完立即记录本次时间。force=true（e2e）时无视日切直接跑。
+ * 全部批次跑完才记录本次时间（不是跑一批就记）。force=true（e2e）时无视日切直接跑。
  */
 async function runMemberDailyTask(
   field: 'lastExpirePointsAt' | 'lastExpireCouponsAt',
-  fn: () => Promise<number>,
-  force = false
+  fn: (limit: number) => Promise<number>,
+  force = false,
+  batchLimit?: number
 ): Promise<number> {
   const now = new Date()
   if (!force) {
@@ -242,7 +257,13 @@ async function runMemberDailyTask(
     const last = state[field]
     if (last && isSameLocalDay(new Date(last), now)) return 0
   }
-  const result = await fn()
+  const limit = batchLimit && batchLimit > 0 ? batchLimit : DEFAULT_DAILY_TASK_BATCH_LIMIT
+  let total = 0
+  for (let round = 0; round < DAILY_TASK_MAX_ROUNDS; round++) {
+    const result = await fn(limit)
+    total += result
+    if (result < limit) break // 这一轮没扫满一批，说明候选已经处理完
+  }
   await patchCronState({ [field]: now.toISOString() })
-  return result
+  return total
 }
