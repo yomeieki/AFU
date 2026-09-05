@@ -356,20 +356,48 @@ async function attemptSendOnce(
   }
 }
 
+/** M11：飞鹅打印接口无幂等 token。TIMEOUT 意味着我们不知道对端到底收没收到——正常错误类别
+ *  「重试到第 4 次才 FAILED」的宽松上限（MAX_ATTEMPTS）不适用于这一类，重试本身就有真的多打
+ *  一张纸的风险，最多只给 1 次重试机会（首发 + 1 次重试 = 2 次发送封顶）。 */
+const TIMEOUT_MAX_ATTEMPTS = 2
+
 async function handleSendFailure(jobId: number, err: PrinterError): Promise<void> {
   const job = await prisma.printJob.findUnique({
     where: { id: jobId },
-    select: { attempts: true, orderNo: true, status: true, kind: true, orderId: true },
+    select: { attempts: true, orderNo: true, status: true, kind: true, orderId: true, printerSn: true, provider: true },
   })
   if (!job || job.status !== 'SENDING') return
   const lastError = `${err.kind}:${err.code} ${err.message}`.slice(0, 255)
-  // CONFIG 类错误（账号/密钥/打印机未绑定）重试没有意义，直接 FAILED，不占重试次数
   const nextAttempts = job.attempts + 1
-  // M2：规格 §8b 是「失败按 5s/30s/2min 重试 3 次后 FAILED」= 首发 + 3 次重试 = 最多 4 次发送。
-  // retryDelaysMs.length===3 对应「还能再重试 3 次」，所以终止条件是 nextAttempts 严格大于它
-  // （nextAttempts=4 时才判定重试耗尽），而不是 >=（原来 nextAttempts=3 就终止，总共只发了
-  // 3 次，比规格少一次）。
-  const shouldFail = err.kind === 'CONFIG' || nextAttempts > MAX_ATTEMPTS()
+
+  let shouldFail: boolean
+  let alertTitle = '打印失败'
+  let alertExtra = '打印机故障期间请留意工作台/推送，人工确认是否已接单'
+  if (err.kind === 'TIMEOUT') {
+    const exhausted = nextAttempts >= TIMEOUT_MAX_ATTEMPTS
+    // D2（M11，乙情况更保守）：不确认打印机当前在线就不安排这唯一的一次重试——飞鹅这次到底
+    // 收没收到本就存疑，再对着一台连状态都查不到/确认离线的机器重试，只是白白多等一轮超时；
+    // 且如果原始请求其实已经进了云端队列，恢复后自己吐出 + 我们的重试各出一次就是真的多打一张。
+    let onlineForRetry = false
+    if (!exhausted) {
+      try {
+        const status = await getProvider(job.provider as PrinterProviderName).queryStatus(job.printerSn)
+        onlineForRetry = status.state === 'ONLINE'
+      } catch { /* 查状态本身也失败，按不在线处理，不安排重试 */ }
+    }
+    shouldFail = exhausted || !onlineForRetry
+    alertTitle = '打印超时'
+    alertExtra = exhausted
+      ? '已达超时重试上限，可能已经打印成功，请查看打印机确认，避免漏单或重复出票'
+      : '当前无法确认打印机在线，为避免重复打印已停止自动重试，请人工核实是否已出票'
+  } else {
+    // CONFIG 类错误（账号/密钥/打印机未绑定）重试没有意义，直接 FAILED，不占重试次数
+    // M2：规格 §8b 是「失败按 5s/30s/2min 重试 3 次后 FAILED」= 首发 + 3 次重试 = 最多 4 次发送。
+    // retryDelaysMs.length===3 对应「还能再重试 3 次」，所以终止条件是 nextAttempts 严格大于它
+    // （nextAttempts=4 时才判定重试耗尽），而不是 >=（原来 nextAttempts=3 就终止，总共只发了
+    // 3 次，比规格少一次）。
+    shouldFail = err.kind === 'CONFIG' || nextAttempts > MAX_ATTEMPTS()
+  }
   await prisma.printJob.updateMany({
     where: { id: jobId, status: 'SENDING' },
     // M14：绝对值读-改-写窗口本来就已经被 SENDING 认领关闭了（同一行只有认领者本人在改），
@@ -377,7 +405,7 @@ async function handleSendFailure(jobId: number, err: PrinterError): Promise<void
     data: { attempts: { increment: 1 }, lastError, status: shouldFail ? 'FAILED' : 'PENDING' },
   })
   if (shouldFail) {
-    notifySystemAlert('打印失败', [`订单 ${job.orderNo}`, lastError, '打印机故障期间请留意工作台/推送，人工确认是否已接单'], {
+    notifySystemAlert(alertTitle, [`订单 ${job.orderNo}`, lastError, alertExtra], {
       key: `print:failed:${jobId}`,
     })
     // M3：打印机是接单流程的单点，NEW_ORDER 票彻底打印失败可能意味着厨房完全不知道有这一单——
