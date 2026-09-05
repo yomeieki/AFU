@@ -28,13 +28,19 @@ export interface MemberSettings {
   rulesText: string
 }
 
+// 上线默认关闭发放（PO 2026-09-05 认可）：顾客端五个会员页面要到 M4 才有，现在发分
+// 顾客完全看不见；且积分价（兑换券/赠品所需分数）尚未按 rate=100 重定，此时放分等于
+// 让顾客攒一个兑换价随时会变的东西。由店主在 M3 设置页显式打开——即使打开，比例也
+// 必须是 100（与 printer 的默认取向一致：新能力默认关，店主自己决定何时开）。
 export const DEFAULT_MEMBER_SETTINGS: MemberSettings = {
-  points: { enabled: true, earnRatePerYuan: 100, validDays: 365 },
+  points: { enabled: false, earnRatePerYuan: 100, validDays: 365 },
   newcomer: { templateId: null },
   rulesText: '',
 }
 
-/** 读失败时的保守兜底：只关掉发放开关，其余字段仍用正常默认值（供 UI 展示） */
+/** 读失败时的保守兜底：只关掉发放开关，其余字段仍用正常默认值（供 UI 展示）。
+ *  与 DEFAULT_MEMBER_SETTINGS 现在同值（都是 enabled:false）——这不是巧合：读取失败时
+ *  「不知道店主有没有打开过开关」，保守起见按未开处理，和默认值取向一致。 */
 const CONSERVATIVE_FALLBACK: MemberSettings = {
   ...DEFAULT_MEMBER_SETTINGS,
   points: { ...DEFAULT_MEMBER_SETTINGS.points, enabled: false },
