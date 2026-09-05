@@ -100,6 +100,7 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
     if (config.isProduction) throw new AppError(40301, '生产环境不允许手动触发', 403)
     const body = (_req.body ?? {}) as Record<string, unknown>
     const num = (v: unknown) => (typeof v === 'number' && v >= 0 ? v : undefined)
+    const bool = (v: unknown) => (typeof v === 'boolean' ? v : undefined)
     success(
       res,
       await runSchedulerTick({
@@ -114,6 +115,8 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         cancelRequestPendingMin: num(body.cancelRequestPendingMin),
         autoCallDelayMin: num(body.autoCallDelayMin),
         quoteRefreshMin: num(body.quoteRefreshMin),
+        settleMissedPointsAfterMin: num(body.settleMissedPointsAfterMin),
+        forceDailyMemberTasks: bool(body.forceDailyMemberTasks),
       })
     )
   } catch (e) {

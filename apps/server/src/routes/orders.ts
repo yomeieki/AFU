@@ -20,6 +20,7 @@ import {
 import { DELIVERY_STATUS_LABEL } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getDeliveryProvider } from '../services/delivery/provider'
+import { settlePoints } from '../services/member/points'
 
 const router = Router()
 
@@ -565,6 +566,8 @@ router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunctio
       data: { status: 'COMPLETED', completedAt: new Date() },
     })
     if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
+    // fire-and-forget：积分发放失败不影响确认收货这次响应，由 settleMissedPoints 兜底任务补发
+    void settlePoints(id)
     const updated = await prisma.order.findUniqueOrThrow({ where: { id } })
     success(res, withPayExpire(updated))
   } catch (e) {

@@ -18,6 +18,7 @@ import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert } from '../order-notify'
 import { TERMINAL } from './state'
 import { ACTIVE_REFUND_STATUSES } from '../refund'
+import { settlePoints } from '../member/points'
 
 export async function getActiveDelivery(orderId: number) {
   return prisma.delivery.findFirst({ where: { activeOrderId: orderId } })
@@ -392,4 +393,6 @@ export async function markDelivered(input: { orderId: number; operator: string }
     await tx.order.updateMany({ where: { id: input.orderId, deliveryType: 'LOCAL', status: { in: ['PREPARING', 'SHIPPED'] } }, data: { status: 'COMPLETED', completedAt: new Date() } })
     await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: '店员标记已送达', operator: input.operator })
   })
+  // 会员积分（M1）：事务提交后才发分，fire-and-forget，失败由 settleMissedPoints 兜底
+  void settlePoints(input.orderId)
 }

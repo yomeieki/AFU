@@ -18,6 +18,7 @@ import { notifyRefundResult } from './order-notify'
 import { notifySystemAlert } from './notify'
 import { sendRefundSubscribeMessage } from './subscribe-message'
 import { DELIVERY_STATUS_LABEL } from './delivery/state'
+import { deductPointsOnRefund } from './member/points'
 
 /** 在途态：占用 activeOrderId，阻止同一订单并发发起 */
 export const ACTIVE_REFUND_STATUSES = ['PENDING', 'PROCESSING', 'ABNORMAL'] as const
@@ -313,6 +314,14 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void>
         data: { status: 'DONE', refundId: refund.id, handledAt: new Date() },
       })
     }
+    // 积分扣回必须在同一事务内：退款成功但扣回失败会留下「钱退了、分没扣」的不一致，
+    // 且这里没有第二次机会重跑（不像 settlePoints 有兜底任务）。用 order（上面刚查出的最新快照，
+    // 已含本次累加后的 refundedAmount）而不是函数入参之外读到的旧订单对象。
+    await deductPointsOnRefund(
+      tx,
+      { id: order.id, userId: order.userId, orderNo: order.orderNo, pointsEarned: order.pointsEarned },
+      { id: refund.id, amount: refund.amount }
+    )
     return { refund: updated, alreadyDone: false }
   })
 
