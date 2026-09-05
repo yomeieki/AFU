@@ -2,6 +2,9 @@ node_modules/
 dist/
 .env
 *.env.local
+# set-env.sh / import-secrets.sh 改 .env 前会留 .env.bak-<时间戳>，里面是完整密钥。
+# 只写 `.env` 匹配不到它们，漏掉就可能被 `git add -A` 连密钥一起提交。
+.env.bak-*
 .DS_Store
 
 # WeChat Pay private key and certificates (never commit)

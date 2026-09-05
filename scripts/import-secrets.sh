@@ -28,6 +28,8 @@ NOTE_ONLY_KEYS="${NOTE_ONLY_KEYS:-API_SECURITY_MODE PUBKEY_DOWNLOADED NOTE REMAR
 
 BACKUP="${ENV_FILE}.bak-$(date +%Y%m%d_%H%M%S)"
 cp "${ENV_FILE}" "${BACKUP}"
+# cp 不保证带过权限位（实测出现过 644），备份与 .env 同样是全量密钥，必须立即收紧
+chmod 600 "${BACKUP}"
 
 IMPORTED=()
 SKIPPED=()
