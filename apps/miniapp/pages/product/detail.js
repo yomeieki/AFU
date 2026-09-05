@@ -7,6 +7,9 @@ Page({
   data: {
     product: null,
     loading: true,
+    // 加载失败改为页内错误态：扫码冷启动时本页是页面栈第一层，navigateBack 必然失败
+    loadError: false,
+    loadErrorText: '',
     // 页面 push 转场约 300ms，转场结束前不渲染 position:fixed 底部栏，
     // 避免固定栏在滑动动画中提前落到屏幕底、盖在前一页上形成「闪现」
     entered: false,
@@ -58,8 +61,12 @@ Page({
 
   loadProduct(id) {
     var self = this
+    this._productId = id
+    this.setData({ loading: true, loadError: false, loadErrorText: '' })
     wx.showLoading({ title: '加载中...' })
-    request({ url: '/products/' + id })
+    // silent：错误信息放进页内错误态展示，不走请求层 toast——
+    // showToast 与 showLoading 共用同一提示实例，hideLoading 会把 toast 一并关掉
+    request({ url: '/products/' + id, silent: true })
       .then(function(product) {
         wx.hideLoading()
         var images = (product.images && product.images.length > 0)
@@ -82,11 +89,19 @@ Page({
         })
         wx.setNavigationBarTitle({ title: product.name })
       })
-      .catch(function() {
+      .catch(function(err) {
         wx.hideLoading()
-        self.setData({ loading: false })
-        setTimeout(function() { wx.navigateBack() }, 1500)
+        self.setData({
+          loading: false,
+          loadError: true,
+          loadErrorText: (err && err.message) || '商品加载失败',
+        })
       })
+  },
+
+  onRetryLoad() {
+    if (this.data.loading || !this._productId) return
+    this.loadProduct(this._productId)
   },
 
   // 底部按钮 / 「已选」行：统一打开规格弹层（无规格商品弹层内只选数量）
