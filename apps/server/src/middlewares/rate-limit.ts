@@ -9,16 +9,36 @@ import { config } from '../config'
  * 也逼着人在两轮之间干等 60 秒。放宽后仍留有限上限，跑飞的循环照样会被拦下。
  *
  * 为什么以 isProduction 为条件而不是以某个 mock 开关为条件：
- * loginLimiter 同时罩着**管理员密码登录**（admin/auth.ts），而 WECHAT_LOGIN_MOCK 说的是顾客侧微信登录 mock，
+ * loginLimiter 罩的是**管理员密码登录**（admin/auth.ts），而 WECHAT_LOGIN_MOCK 说的是顾客侧微信登录 mock，
  * 两者语义无关。用后者做条件，会出现「顾客登录 mock 打开 → 管理员爆破上限从 5/分悄悄变成 200/分」这种
  * 谁也没打算要的耦合。以「这不是生产」为条件，说的才是真正想说的那件事。
  */
 const devCeiling = (production: number, relaxed: number) => (config.isProduction ? production : relaxed)
 
-// 登录接口限流：防暴力破解
+// 管理员登录接口限流：防密码暴力破解（顾客微信登录另用下面的 userLoginLimiter）
 export const loginLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: devCeiling(5, 200),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
+})
+
+/**
+ * 顾客微信登录限流，与管理员的 loginLimiter 分开。
+ *
+ * 为什么不能共用 loginLimiter：那个 5/分钟是为「防管理员密码爆破」定的，按 IP 计数；
+ * 而小程序每次冷启动都无条件调一次 wechat-login（app.js onLaunch，本地有 token 也照发）。
+ * 运营商 CGNAT / 店内 Wi-Fi 下多名顾客共用一个出口 IP，第 6 个人打开小程序就会被 429
+ * 挤成「未登录」，此后 /cart /orders 全 401，request.js 的自动重登也撞同一个桶。
+ * 而且 loginLimiter 是模块级单例，顾客登录风暴还会把同一 IP 下店主的后台密码登录一起挡住。
+ *
+ * 微信登录本身没有密码可爆破（code 一次性、由微信签发），限流只需拦脚本刷 code 换 token
+ * 的滥用，60/分钟/IP 足够宽到容下一家店同时开小程序的顾客数。
+ */
+export const userLoginLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(60, 2000),
   standardHeaders: true,
   legacyHeaders: false,
   message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
