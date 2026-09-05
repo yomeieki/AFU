@@ -13,6 +13,8 @@ import { notifyLocalDeliveryAlert } from '../order-notify'
 import { sendDeliverSubscribeMessage } from '../subscribe-message'
 import { rollbackOrderAfterCancel } from './orchestrator'
 
+const updateTimeIsoOf = (p: { providerUpdateTime: Date | null }) => p.providerUpdateTime ? p.providerUpdateTime.toISOString() : null
+
 export async function handleKdCallback(deliveryNo: string, body: Record<string, string>): Promise<{ http: 200 | 500 }> {
   const rawBody = JSON.stringify(body)
   const delivery = await prisma.delivery.findUnique({
@@ -39,6 +41,23 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
     return { http: 200 }
   }
   const p = parsed.payload
+  // 未认领占位单上的 720：下单超时留下的 UNKNOWN 单 providerTaskId 为 null，下面那条「taskId 不匹配」
+  // 过滤在它身上恒为 false；而并呼时未中标运力也会推 720，此刻根本分不清这是中标方撤单还是输家的
+  // 并呼撤单。终态化的代价是不对称的：判错会把占位单 CANCELLED + 释放，中标骑手后续的 100/310/520
+  // 全部撞 TERMINAL 被静默丢弃，店员再呼一次就是两个骑手两笔配送费。所以这里只留痕 + 告警，
+  // 不改状态、不认领 taskId（用一条撤单事件去认领 taskId 本身就是错的），交给人到快递100 后台核对：
+  // 确无活单 → 看板作废；有活单 → 等其后续回调认领。
+  if (p.providerStatus === '720' && !delivery.providerTaskId) {
+    try {
+      await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, '720@unclaimed', updateTimeIsoOf(p), rawBody), source: 'CALLBACK', providerStatus: 720, statusDesc: `未认领配送单收到撤单（taskId=${p.taskId || '空'}），不终态化，待人工核对`, rawPayload: body })
+    } catch { /* 同上 */ }
+    notifySystemAlert('未认领的配送单收到撤单回调', [
+      `deliveryNo=${deliveryNo}（订单 ${delivery.orderNo}，当前 ${delivery.status}）`,
+      `回调 taskId=${p.taskId || '空'}；本地尚未锁定 taskId，无法分辨是中标方撤单还是并呼中未中标方的撤单`,
+      '未改动配送单状态。请到快递100 后台核对：确无活单则在看板作废重呼；有活单则等其后续回调认领',
+    ], { key: `kd-cb-720-unclaimed:${delivery.id}` })
+    return { http: 200 }
+  }
   // 并呼假撤单过滤：多运力并呼时未中标运力也推 720；已锁定 taskId 且不匹配 → 不得终态化
   if (p.providerStatus === '720' && delivery.providerTaskId && p.taskId && p.taskId !== delivery.providerTaskId) {
     try {
@@ -48,7 +67,7 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
     return { http: 200 }
   }
   const mapped = PROVIDER_STATUS_MAP[p.providerStatus]
-  const updateTimeIso = p.providerUpdateTime ? p.providerUpdateTime.toISOString() : null
+  const updateTimeIso = updateTimeIsoOf(p)
   const dedupeKey = makeCallbackDedupeKey(deliveryNo, p.providerStatus, updateTimeIso, rawBody)
   const n = Number(p.providerStatus)
   const providerStatusNum = Number.isFinite(n) ? n : null
