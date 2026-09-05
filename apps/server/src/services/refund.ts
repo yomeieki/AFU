@@ -273,6 +273,25 @@ interface FinalizeInput {
  */
 export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void> {
   const result = await prisma.$transaction(async (tx) => {
+    // R3：两条锁定读（FOR UPDATE）必须是事务的第一、二句，不能让普通读（如下面注释掉的
+    // `tx.refund.findUnique`）打头。InnoDB RR 隔离下，一个事务里第一条访问该行的语句——
+    // 不论是普通 SELECT 还是 FOR UPDATE——就会创建这个事务的 read view；普通读创建的
+    // read view 看不到「创建之后才提交」的数据，而 FOR UPDATE 是锁定读，不创建 read view，
+    // 之后同一事务里的普通读会自动读到「拿锁那一刻」之后的最新已提交数据。
+    // H1 只在 settlePoints 那侧把 `SELECT ... FOR UPDATE` 放到了第一句，这里（退款侧）当时仍是
+    // `tx.refund.findUnique` 打头——普通读固化了 read view，事务走到几十行之后才靠
+    // `UPDATE orders SET refunded_amount=LEAST(...)` 隐式拿到 orders 行锁，但这时 read view
+    // 已经定格在锁之前。deductPointsOnRefund 里 `tx.user.findUniqueOrThrow` 读到的
+    // pointsBalance 就可能是并发 settlePoints 提交之前的旧快照（典型：settlePoints 前脚发了分
+    // 还没提交，本事务后脚发起），calcRefundDeduct 拿旧余额封顶，算出 0——退款全额退掉、
+    // 积分一分没扣，永久留账；deductFromEarnRows 同理会因为看不到新建的 EARN 行而扣错行。
+    // 修法：把 refunds→orders 两条锁定读提到最前面，加锁顺序与 initiateRefund 里
+    // order（updateMany，隐式行锁）→ refund（create，新建行不持有已有行的锁）不构成反向环，
+    // 不会死锁；也与 settlePoints 的 orders→points_ledgers→users 顺序一致。
+    const locked = await tx.$queryRaw<{ order_id: number }[]>`SELECT order_id FROM refunds WHERE id = ${input.refundId} FOR UPDATE`
+    if (locked.length === 0) return null
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${locked[0].order_id} FOR UPDATE`
+
     const refund = await tx.refund.findUnique({ where: { id: input.refundId } })
     if (!refund) return null
 
