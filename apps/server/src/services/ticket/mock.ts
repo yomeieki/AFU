@@ -22,7 +22,11 @@ const cloudQueue = new Map<string, CloudQueuedJob[]>()
 /** e2e 可写：sn → 强制在线状态 或 强制下一次 print 抛出的错误 */
 const forcedState = new Map<string, PrinterOnlineState>()
 const forcedPrintError = new Map<string, { kind: 'CONFIG' | 'CAPACITY' | 'BUSINESS' | 'TIMEOUT'; message: string }>()
-/** e2e 可写：sn → print() 人为延迟毫秒数，用于复现「立即发送」与「定时兜扫」的无锁竞争（B6） */
+/** e2e 可写：sn → print() 人为延迟毫秒数，用于复现「立即发送」与「定时兜扫」的无锁竞争（B6）。
+ *  R4 复核第二轮：同一个延迟也应用在 queryStatus() 上——真机的 Open_printMsg 与
+ *  Open_queryPrinterStatus 都是独立的 10s 超时外呼，`handleSendFailure` 的 TIMEOUT 分支会在
+ *  print() 超时之后紧接着再查一次 queryStatus()，两者叠加才是 SENDING 状态真实能拖多久的
+ *  上界；只让 print() 慢而 queryStatus() 瞬间返回，测不出这条叠加关系（R4 的孤儿回收窗口）。 */
 const forcedDelayMs = new Map<string, number>()
 let seq = 0
 
@@ -92,6 +96,10 @@ export const mockPrinterProvider: PrinterProvider = {
   },
 
   async queryStatus(sn: string): Promise<PrinterStatusResult> {
+    // R4：跟 print() 共用同一个人为延迟——见 `forcedDelayMs` 的注释，用于复现 handleSendFailure
+    // 的 TIMEOUT 分支里紧接着的这次 queryStatus 也会挂住的场景。
+    const delay = forcedDelayMs.get(sn)
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
     const state = forcedState.get(sn) ?? 'ONLINE'
     return { sn, state, raw: `mock:${state}` }
   },

@@ -56,8 +56,28 @@ const SENT_CONFIRM_BATCH = 20
  *  打印成功，只是放弃继续主动确认，不能武断改判 FAILED/PRINTED 造成误告警或误判）。 */
 const SENT_GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000
 /** SENDING 超过这个时长还没转出（成功→SENT、失败→PENDING/FAILED），判定是进程在发送途中被杀死留下的
- *  孤儿行——比 feie.ts 的 fetch 超时（10s）多留 5s 缓冲，不会跟正常发送中的行打架（B6 孤儿回收） */
-const SENDING_ORPHAN_AFTER_MS = 15 * 1000
+ *  孤儿行，退回 PENDING 重新进入正常重试路径（B6 孤儿回收）。
+ *
+ * R4（复核第二轮）：原值 15s（「比 feie.ts 的 fetch 超时 10s 多留 5s 缓冲」）在 M11 落地后不再成立——
+ * M11 给 handleSendFailure 的 TIMEOUT 分支加了一次 queryStatus（同样 10s 超时），发生在
+ * print() 超时**之后**、这一行**仍是 SENDING** 的时候，两次外呼都挂住时单次 SENDING 生命周期
+ * 最坏能到 ~20s。旧的 15s 窗口会在 [15s,20s] 这个区间把仍在正常处理中的行错误地判成孤儿、
+ * 提前放回 PENDING——而 attempts 此时还是 0（handleSendFailure 还没来得及写回），同一轮 PENDING
+ * 扫描会立刻把它当"全新行"重新发一次；20s 时姗姗来迟的 handleSendFailure 再执行它的
+ * `updateMany({where:{status:'SENDING'}})` 时这一行早已不是 SENDING（已被孤儿回收 + 新一轮
+ * attemptSend 认领走），条件命不中、静默什么都不写——attempts 不涨、不判 FAILED、不告警，
+ * 且下一轮孤儿回收窗口一到又是同一个故事，永不收敛。M11 存在的理由正是"飞鹅无幂等 token，
+ * 超时重试会真的多打一张纸"，这个洞恰好把它的封顶作废。
+ * 改到 ≥ 2×TIMEOUT_MS + 缓冲（60s）：两次 10s 外呼都超时的最坏情况（~20s）离孤儿判定还有
+ * 3 倍富余，不会跟仍在正常处理（哪怕两次都挂满）的行打架；配合下面 handleSendFailure 里
+ * `updateMany` 命中 0 行时的告警，即使这个假设未来又被打破，也不会再静默循环。 */
+const SENDING_ORPHAN_AFTER_MS = 60 * 1000
+/** 仅测试/e2e 用：覆盖 SENDING 孤儿回收窗口（毫秒），验证 R4 的时序关系不用真等 60s。
+ *  生产路径不可达（同 `_setRetryDelaysMsForTest` 的口子风格）。 */
+let sendingOrphanAfterMsOverride: number | null = null
+export function _setSendingOrphanAfterMsForTest(ms: number | null): void {
+  sendingOrphanAfterMsOverride = ms
+}
 /** 同一台打印机连续两次发送之间的最短间隔（规格 §8b「同 SN 串行发送、间隔 ≥300ms」）。
  *  只对 FEIE 生效——mock 模式下拖慢没有意义，只会拖慢 e2e。 */
 const SEND_INTERVAL_MS = 300
@@ -346,10 +366,24 @@ async function attemptSendOnce(
     // 转成 FAILED，而不是直接从 attemptSendOnce 抛出去，把 processQueue 那一整轮兜死。
     const provider = getProvider(providerName)
     const result = await provider.print({ sn, content, copies })
-    await prisma.printJob.updateMany({
+    const written = await prisma.printJob.updateMany({
       where: { id: jobId, status: 'SENDING' },
       data: { status: 'SENT', providerJobId: result.providerJobId, sentAt: new Date(), lastError: null },
     })
+    if (written.count === 0) {
+      // R4：跟 handleSendFailure 里同一处坑对称——print() 已经物理成功了，但这一行在我们回写
+      // SENT 之前已经不是 SENDING 了（唯一已知成因还是孤儿回收窗口比这次发送实际耗时短，行被
+      // 提前收走、被另一轮 attemptSend 抢先认领）。这里更危险：物理上真的印出了一张票，
+      // `providerJobId` 却没能落库——`result.providerJobId` 无处可查，这张票会变成一个孤儿
+      // 打印记录，且这一行大概率会被"看起来还没发过"的另一次尝试再印一遍，造成真正的重复出票。
+      // 不能静默吞掉，必须告警让人工介入核对。
+      console.warn(`[ticket] print() 已物理成功但 SENDING→SENT 回写落空 job=${jobId} providerJobId=${result.providerJobId}：疑似重复打印`)
+      notifySystemAlert('打印状态机异常：疑似重复打印', [
+        `job=${jobId}`,
+        `provider 返回的 providerJobId=${result.providerJobId} 未能落库`,
+        '这张票已经物理打印成功，但系统记录可能会把它当成还没发送过，请人工核实是否重复出票',
+      ], { key: `print:sending-lost:${jobId}` })
+    }
   } catch (e) {
     const err = e instanceof PrinterError ? e : new PrinterError('BUSINESS', 'UNKNOWN', (e as Error).message)
     await handleSendFailure(jobId, err)
@@ -398,12 +432,26 @@ async function handleSendFailure(jobId: number, err: PrinterError): Promise<void
     // 3 次，比规格少一次）。
     shouldFail = err.kind === 'CONFIG' || nextAttempts > MAX_ATTEMPTS()
   }
-  await prisma.printJob.updateMany({
+  const written = await prisma.printJob.updateMany({
     where: { id: jobId, status: 'SENDING' },
     // M14：绝对值读-改-写窗口本来就已经被 SENDING 认领关闭了（同一行只有认领者本人在改），
     // 这里仍然改用 increment——认领态失败回写的窗口更短，没有理由不用更安全的写法。
     data: { attempts: { increment: 1 }, lastError, status: shouldFail ? 'FAILED' : 'PENDING' },
   })
+  if (written.count === 0) {
+    // R4：这一行在我们查完 job 快照（还是 SENDING）之后、真正回写之前，已经不是 SENDING 了——
+    // 唯一已知成因是孤儿回收窗口比这次 handleSendFailure 实际耗时短，把仍在处理中的行提前
+    // 收走、又被同一行新一轮 attemptSend 抢先认领。这条 updateMany 落空意味着 attempts 不会
+    // 递增、不会判 FAILED、不会告警——状态机出现了没人负责的洞，不能静默吞掉，否则同样的
+    // 竞速会无限重复（R4 的原始故障就是这样循环的）。
+    console.warn(`[ticket] handleSendFailure 回写落空 job=${jobId}：该行已不是 SENDING（疑似被孤儿回收提前收走），可能造成无限重发`)
+    notifySystemAlert('打印状态机异常', [
+      `订单 ${job.orderNo}`,
+      `job=${jobId} 的 SENDING→${shouldFail ? 'FAILED' : 'PENDING'} 回写命中 0 行`,
+      '请人工核实该打印作业是否在无限重发，必要时检查 SENDING_ORPHAN_AFTER_MS 是否又短于实际发送耗时',
+    ], { key: `print:sending-lost:${jobId}` })
+    return
+  }
   if (shouldFail) {
     notifySystemAlert(alertTitle, [`订单 ${job.orderNo}`, lastError, alertExtra], {
       key: `print:failed:${jobId}`,
@@ -440,12 +488,14 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
   let confirmed = 0
 
   const now = Date.now()
+  const orphanAfterMs = sendingOrphanAfterMsOverride ?? SENDING_ORPHAN_AFTER_MS
 
   // 孤儿回收：进程在 SENDING 认领之后、写回 SENT/PENDING/FAILED 之前被杀（部署重启/崩溃），
-  // 这一行会永远停在 SENDING、再也不被任何查询选中。超过「provider 超时 + 5s 缓冲」还没转出，
-  // 按「这次发送大概率没有真正完成」处理，退回 PENDING 重新进入正常重试路径。
+  // 这一行会永远停在 SENDING、再也不被任何查询选中。超过「两次 provider 外呼都超时的最坏耗时
+  // + 缓冲」（R4）还没转出，按「这次发送大概率没有真正完成」处理，退回 PENDING 重新进入正常
+  // 重试路径。
   await prisma.printJob.updateMany({
-    where: { status: 'SENDING', updatedAt: { lt: new Date(now - SENDING_ORPHAN_AFTER_MS) } },
+    where: { status: 'SENDING', updatedAt: { lt: new Date(now - orphanAfterMs) } },
     data: { status: 'PENDING', lastError: 'SENDING:ORPHANED' },
   })
 
