@@ -65,21 +65,29 @@ assert_eq "B：lastError=STALE:DROPPED（不是新故障，不占告警配额）
 assert_eq "B：打印机自始至终没有真正收到过这条" \
   "$(req GET "/api/admin/system/printer-mock/jobs?sn=D45-B" "$AT" | jq -r '.data | length')" "0"
 
-echo "-- C：healthTrack 被清空（模拟 pm2 restart，H5 当年的原始 bug 场景）后，恢复仍能正确补打 --"
+echo "-- C：pm2 重启后 healthTrack 对这台打印机完全没有记录、且第一次轮询直接是 ONLINE（R9），恢复仍能正确补打 --"
+# 第二轮复核点名：原来的用例在「模拟重启清空 healthTrack」之后，中间又多跑了一轮「仍离线」的
+# run-scheduler——那一轮会把 track.wasOffline 重新置成 true，等于自己把刚清空的记忆又建了
+# 回去，最终触发恢复靠的是普通的 wasOffline 分支（跟 A 测的是同一条路径），根本没测到 R9 专门
+# 要处理的 isFirstSeen 分支。真实 pm2 restart 场景是：内存里的 healthTrack Map 整个被清空
+# （不是被设成某个中性值——mock 的 /health-track 接口只能 set 不能整条删除某个 sn，没法真的
+# 复现「这个 sn 在 map 里彻底不存在」），且进程重启后对这台打印机的第一次轮询完全可能直接就是
+# ONLINE（打印机自己先恢复了，或者重启期间它一直没坏）。这里改用 /reset（连 healthTrack 一起
+# 整个清空，包括 D45-C 从未被写入过）+ 全程不跑「仍离线」那一轮，让 D45-C 在恢复之后才第一次
+# 被 printerHealthTask 检查到——这才是 R9 的 isFirstSeen 分支真正生效的场景。
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D45-C","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null
-req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null   # 连 healthTrack 一起清空——D45-C 在这之后还没被 printerHealthTask 检查过一次
 req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"D45-C","state":"OFFLINE"}' >/dev/null
 D45_C_OID=$(pay_new_order "$PID" "$ADDR")
 sleep 0.2
-req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 建立 healthTrack（仍离线）
-# 模拟进程重启：healthTrack 被清空，但 mock 打印机自身的在线状态、云端队列都不受影响
-req POST /api/admin/system/printer-mock/health-track "$AT" '{"sn":"D45-C","offlineSinceMsAgo":null,"alerted":false}' >/dev/null
-req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 重启后第一次轮询：仍离线，重新建立起「曾经离线」的记忆
-req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"D45-C","state":"ONLINE"}' >/dev/null
-req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 恢复：即便中途 healthTrack 被清空过，仍应正确补打
+# 刻意不在这里跑 run-scheduler——一旦跑过一次，healthTrack 就会建立起「曾经离线」的记忆，
+# 之后测的就只是普通的「离线又恢复」（跟 A 一样），不是 R9 要防的「healthTrack 里对这台打印机
+# 彻底没有任何记录、第一次轮询就直接是 ONLINE」这个更窄的场景。
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"D45-C","state":"ONLINE"}' >/dev/null   # 重启期间/重启前，打印机已经自行恢复上线
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # D45-C 有史以来第一次被 printerHealthTask 检查到，直接是 ONLINE（R9：isFirstSeen）
 sleep 0.2
-assert_eq "C：healthTrack 清空后恢复仍正确补打，最终 SENT" "$(PJOBS "$D45_C_OID" | jq -r '.data.list[0].status')" "SENT"
-assert_eq "C：打印机物理收到 1 次真正的 print()" \
+assert_eq "C：healthTrack 全无记录、第一次轮询即 ONLINE，仍正确补打，最终 SENT" "$(PJOBS "$D45_C_OID" | jq -r '.data.list[0].status')" "SENT"
+assert_eq "C：打印机物理收到 1 次真正的 print()（旧代码在 isFirstSeen 场景下 wasOffline/alerted 全新落地都是 false，两条恢复路径一条都不触发，物理是 0 次——云端排队的票和本地记录都永远没人再理）" \
   "$(req GET "/api/admin/system/printer-mock/jobs?sn=D45-C" "$AT" | jq -r '.data | length')" "1"
 
 echo "-- D：M11 TIMEOUT 最多重试 1 次（在线才重试），第 2 次仍超时 → FAILED --"
