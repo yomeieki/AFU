@@ -56,15 +56,18 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 })
 
 // POST /api/admin/after-sales/:id/approve {amount, reply?} — 同意并按金额退款（部分或全额）
+// idempotencyKey：同 orders.ts 的 /refund——这是店员最常用的退款入口，同 10 秒超时后再点一次
+// 双退的风险在这里原样存在，走 initiateRefund 里由 idempotencyKey 派生 outRefundNo 那套机制。
 const approveSchema = z.object({
   amount: z.number().int().positive(),
   reply: z.string().trim().max(255).optional(),
+  idempotencyKey: z.string().trim().min(8).max(64).optional(),
 })
 
 router.post('/:id/approve', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const { amount, reply } = approveSchema.parse(req.body ?? {})
+    const { amount, reply, idempotencyKey } = approveSchema.parse(req.body ?? {})
     const afterSale = await prisma.afterSale.findUnique({ where: { id } })
     if (!afterSale) throw new AppError(40401, '售后单不存在', 404)
     if (afterSale.status !== 'PENDING') throw new AppError(42204, `售后单状态为 ${afterSale.status}，仅待处理可同意`)
@@ -76,6 +79,7 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
       reason: `售后退款（${reasonLabel}）`,
       operator: req.adminUsername ?? undefined,
       afterSaleId: id,
+      idempotencyKey,
     })
     // 退款已同步成功（mock / 微信同步 SUCCESS）时 finalizeRefundSuccess 已置 DONE；否则置 APPROVED 等回调
     await prisma.afterSale.updateMany({

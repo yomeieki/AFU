@@ -79,7 +79,15 @@ export default function RefundDialog({ order, afterSaleId, defaultReply, deliver
     setError('')
     try {
       if (afterSaleId) {
-        const res = await approveAfterSale(afterSaleId, { amount: amountFen, reply: reply.trim() || undefined })
+        // 幂等键放在变量里传：approveAfterSale 的入参类型声明在 api/admin.ts（不在本次改动范围），
+        // 直接写对象字面量会触发 TS 的多余属性检查。服务端 approveSchema 已接住 idempotencyKey，
+        // 与 refundOrder 分支同一套道理——这是店员最常用的退款入口，同样的双击双退风险原样存在。
+        const approvePayload: { amount: number; reply?: string; idempotencyKey: string } = {
+          amount: amountFen,
+          reply: reply.trim() || undefined,
+          idempotencyKey: idempotencyKeyRef.current,
+        }
+        const res = await approveAfterSale(afterSaleId, approvePayload)
         const { mode, refund } = res.data.data
         toast.success(mode === 'mock' || refund.status === 'SUCCESS' ? `已退款 ¥${yuan(amountFen)}` : '已发起退款，等待微信处理')
       } else {
