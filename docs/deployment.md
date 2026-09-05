@@ -310,11 +310,13 @@ deploy.sh 会自动完成：**预检（生产环境缺 COS 配置会在动服务
 
 > ⚠️ 首次部署本版本前，务必先在 `apps/server/.env` 填好 `COS_SECRET_ID/KEY/BUCKET/REGION`，否则预检会直接拒绝部署（这是有意的：新版图片上传只走 COS，配置缺失时启动即失败）。
 
-### 本次部署（含 `20260907000000_review_fixes` 迁移）前置清单
+### 本次部署（含 `20260906000000_member_points_coupon`、`20260907000000_review_fixes` 两个迁移）前置清单
 
-- [ ] **第 0 步，先于 `git bundle` 那一套**：`scripts/deploy.sh` 本轮改了迁移失败时的恢复指引（B2：else 分支不再硬编码上一批次的表名，改成从 `prisma/migrations` 最新目录动态读 `CREATE TABLE`），**必须把新版 `scripts/deploy.sh` 一起传到生产机 `/home/ubuntu/deploy.sh`**（`scp` 命令见上面「⚠️ 前置」小节的第 ② 步，已经包含这一步，不要漏）。生产机上跑的是部署前那一版旧脚本，旧脚本的恢复指引仍会在探测为空时打印「本轮同城上线」与 `delivery_events`/`deliveries`/`print_jobs` 的 DROP 命令——本次迁移只有两条 `ALTER TABLE`（不建表），旧脚本探测到的「新表」正好也是空，会误触发这条危险分支。
+- [ ] **第 0 步，先于 `git bundle` 那一套**：`scripts/deploy.sh` 本轮改了迁移失败时的恢复指引，**必须把新版 `scripts/deploy.sh` 一起传到生产机 `/home/ubuntu/deploy.sh`**（`scp` 命令见上面「⚠️ 前置」小节的第 ② 步，已经包含这一步，不要漏）。生产机上跑的是部署前那一版旧脚本，这次改动不只是 B2（else 分支不再硬编码上一批次的表名，改成动态读迁移文件里的 `CREATE TABLE`），第二轮复核又发现旧脚本这版有两个自己的坑，都已在这版修掉：
+  - **R1**：旧脚本在 `set -euo pipefail` 下，`grep -o 'CREATE TABLE ...' | sed | paste` 只要没命中就返回 1，会让整条恢复指引连同**备份文件路径**、**第 ③ 步清 `_prisma_migrations` 失败记录的命令**一起静默不打印，脚本当场退出——而本次两个迁移中 `20260907000000_review_fixes` 恰好一条 `CREATE TABLE` 都没有，触发这个坑是必然的。新脚本给这条探测管道加了 `|| true`。
+  - **R2**：旧脚本只探测「最后一个迁移目录」（`ls | sort | tail -1`），但生产在跑的版本落后了不止一个迁移，本次会一次性应用 `20260906000000_member_points_coupon`（4 张新表）与 `20260907000000_review_fixes`（不建表）两个迁移——如果失败点落在 `20260906`，旧脚本探测「最后一个目录」（`20260907`）会读出空，误判「本次迁移不建表，跳过②」，实际上库里可能残留最多 4 张新表，下次部署会撞 1050 报错、Prisma 写入失败记录、永久 P3009。新脚本改成用 `_prisma_migrations` 里已成功完成的最大 `migration_name` 做下界，把本次全部 pending 的迁移文件都纳入 `CREATE TABLE` 探测范围；连不上数据库时不会瞎猜或打印任何硬编码表名，而是明确提示「探测不完整，需要人工核对」。
 - [ ] 打印功能若要在本次部署后打开，先按上面「飞鹅云打印相关变量」一节用 `set-env.sh` 填好 `FEIE_USER`/`FEIE_UKEY`/`FEIE_API_BASE`（H10）；不打开打印开关则可以先跳过，等需要时再补。
-- [ ] 本次迁移只有 ALTER TABLE、不建表：迁移失败时的恢复只有 ①（灌回备份）③（清 `_prisma_migrations` 失败记录）两步，②（删新表）会被脚本判定为「不建表，跳过」——这是预期行为，不是脚本坏了。
+- [ ] **本次迁移会不会建表、迁移失败时②要不要删表，取决于失败点具体落在哪个迁移里，不能预先断言**：`20260906000000_member_points_coupon` 建了 4 张表（`points_ledgers`/`coupon_templates`/`user_coupons`/`points_goods`），`20260907000000_review_fixes` 只有 `ALTER TABLE`。失败点若在前者，②要删这 4 张表；若前者已成功、失败点只在后者，②确实没有新表要删。新版 `scripts/deploy.sh`（配合上面第 0 步已修的 R1/R2）会在失败时动态探测并把正确结论打印出来——照着当时的实际输出做，不要照搬这份清单预判的结论。
 
 ---
 
