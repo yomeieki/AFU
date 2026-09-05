@@ -361,13 +361,17 @@ async function tryDeduct(tx: Prisma.TransactionClient, rowId: number, remaining:
  * 先扣本订单自己那条 EARN 行，不足再按 FIFO 扣该用户其他 EARN 行，仍不足就扣到 0 为止（用户已经
  * 花掉了，不追）。返回值是「实际」扣掉的量——可能小于目标值 target，用它而不是 target 去减
  * User.pointsBalance，是为了在任何情况下都维持「余额 == Σ 入账行 remaining」这条不变式。
+ *
+ * 两处查询都加 expiresAt > now（M5）：已到期但未被 expirePointsBatch 清扫的行不算「可扣」，
+ * 否则会优先扣掉这些反正马上要被清零的死行，让真正在世的积分逃过退款扣回。
  */
 async function deductFromEarnRows(tx: Prisma.TransactionClient, userId: number, orderId: number, target: number): Promise<number> {
   let need = target
   let deducted = 0
+  const now = new Date()
 
   const own = await tx.pointsLedger.findFirst({
-    where: { userId, type: 'EARN', refType: 'ORDER', refId: String(orderId) },
+    where: { userId, type: 'EARN', refType: 'ORDER', refId: String(orderId), expiresAt: { gt: now } },
     select: { id: true, remaining: true },
   })
   if (own && own.remaining > 0 && need > 0) {
@@ -378,7 +382,7 @@ async function deductFromEarnRows(tx: Prisma.TransactionClient, userId: number, 
 
   if (need > 0) {
     const rows = await tx.pointsLedger.findMany({
-      where: { userId, type: 'EARN', remaining: { gt: 0 } },
+      where: { userId, type: 'EARN', remaining: { gt: 0 }, expiresAt: { gt: now } },
       orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
       select: { id: true, remaining: true },
     })
