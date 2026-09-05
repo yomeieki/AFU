@@ -19,6 +19,7 @@ import { notifySystemAlert } from './notify'
 import { sendRefundSubscribeMessage } from './subscribe-message'
 import { DELIVERY_STATUS_LABEL } from './delivery/state'
 import { deductPointsOnRefund } from './member/points'
+import { enqueueOrderTicket } from './ticket'
 
 /** 在途态：占用 activeOrderId，阻止同一订单并发发起 */
 export const ACTIVE_REFUND_STATUSES = ['PENDING', 'PROCESSING', 'ABNORMAL'] as const
@@ -298,11 +299,16 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void>
     // 用 tx.$executeRaw 而非 prisma.$executeRaw，否则会脱离当前事务。
     await tx.$executeRaw`UPDATE orders SET refunded_amount = LEAST(refunded_amount + ${refund.amount}, actual_amount) WHERE id = ${refund.orderId}`
     const order = await tx.order.findUniqueOrThrow({ where: { id: refund.orderId } })
+    // B1：CANCEL 出票下沉到这里——「翻转成 REFUNDED」这一刻覆盖后台一键退款/售后同意/顾客自助取消/
+    // 拒单等全部入口，不再依赖各调用点各自记得补一次。flippedToRefunded 只在本次 updateMany 真正
+    // 命中时为 true（并发/已经翻转过不算），事务提交后才会真的出票，见函数末尾。
+    let flippedToRefunded = false
     if (order.refundedAmount >= order.actualAmount) {
-      await tx.order.updateMany({
+      const moved = await tx.order.updateMany({
         where: { id: refund.orderId, status: 'REFUNDING' },
         data: { status: 'REFUNDED', refundedAt: successTime },
       })
+      flippedToRefunded = moved.count === 1
       await tx.payment.updateMany({
         where: { orderId: refund.orderId },
         data: { status: 'REFUNDED' },
@@ -319,10 +325,13 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void>
     // 已含本次累加后的 refundedAmount）而不是函数入参之外读到的旧订单对象。
     await deductPointsOnRefund(
       tx,
-      { id: order.id, userId: order.userId, orderNo: order.orderNo, pointsEarned: order.pointsEarned },
+      {
+        id: order.id, userId: order.userId, orderNo: order.orderNo, pointsEarned: order.pointsEarned,
+        pointsBase: order.pointsBase, actualAmount: order.actualAmount, refundedAmount: order.refundedAmount,
+      },
       { id: refund.id, amount: refund.amount }
     )
-    return { refund: updated, alreadyDone: false }
+    return { refund: updated, alreadyDone: false, flippedToRefunded }
   })
 
   if (!result || result.alreadyDone) return
@@ -337,6 +346,18 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void>
       sendRefundSubscribeMessage(order.user.openid, order, result.refund, order.items[0]?.productName)
     })
     .catch(() => undefined)
+
+  // B1：出票必须在事务外——enqueueOrderTicket 用全局 prisma 且会做最长 10s 的外呼（飞鹅），
+  // 放事务内等于抱着 order 行锁打飞鹅，会把 finalizeRefundSuccess 的其它并发调用方（包括
+  // settlePoints 的 SELECT ... FOR UPDATE）一起拖住。fire-and-forget，不影响退款结果——
+  // 钱已经在微信那边退出去了，出票失败只是少一张纸，不该让退款流程感知。
+  // 只在这次真正把订单翻转成 REFUNDED 时出票：部分退款不出（B1-3），已经翻转过的重复调用不再出
+  // （dedupeKey seq=0 天然幂等兜底，这里提前判断只是少发一次无意义的调用）。
+  if (result.flippedToRefunded) {
+    enqueueOrderTicket(result.refund.orderId, 'CANCEL').catch((err) => {
+      console.error('[refund] enqueueOrderTicket 失败（finalizeRefundSuccess 转 REFUNDED）:', (err as Error).message)
+    })
+  }
 }
 
 /** 微信返回 ABNORMAL：退款异常（如用户账户异常），需商户平台手动处理；保留在途占位防重复发起。 */
