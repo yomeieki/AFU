@@ -11,21 +11,26 @@ datasource db {
 // 用户
 // ─────────────────────────────────────────────────────────
 model User {
-  id          Int       @id @default(autoincrement())
-  openid      String    @unique @db.VarChar(64)
-  unionid     String?   @db.VarChar(64)
-  nickname    String?   @db.VarChar(64)
-  avatarUrl   String?   @map("avatar_url") @db.VarChar(500)
-  phone       String?   @db.VarChar(20)
-  status      Int       @default(1) @db.TinyInt
-  lastLoginAt DateTime? @map("last_login_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  id            Int       @id @default(autoincrement())
+  openid        String    @unique @db.VarChar(64)
+  unionid       String?   @db.VarChar(64)
+  nickname      String?   @db.VarChar(64)
+  avatarUrl     String?   @map("avatar_url") @db.VarChar(500)
+  phone         String?   @db.VarChar(20)
+  status        Int       @default(1) @db.TinyInt
+  lastLoginAt   DateTime? @map("last_login_at")
+  // 冗余 = 未过期入账行（EARN/GIFT_REVERT）remaining 之和；权威来源仍是 PointsLedger，
+  // 见 scripts/check-points-consistency.mjs 的只读校验
+  pointsBalance Int       @default(0) @map("points_balance")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  carts     Cart[]
-  addresses Address[]
-  orders    Order[]
-  scanLogs  ScanLog[]
+  carts         Cart[]
+  addresses     Address[]
+  orders        Order[]
+  scanLogs      ScanLog[]
+  pointsLedgers PointsLedger[]
+  userCoupons   UserCoupon[]
 
   @@map("users")
 }
@@ -51,15 +56,15 @@ model Admin {
 // 商品分类
 // ─────────────────────────────────────────────────────────
 model Category {
-  id        Int       @id @default(autoincrement())
-  name      String    @db.VarChar(64)
-  iconUrl   String?   @map("icon_url") @db.VarChar(500)
-  sortOrder Int       @default(0) @map("sort_order")
-  status    Int       @default(1) @db.TinyInt
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(64)
+  iconUrl   String?  @map("icon_url") @db.VarChar(500)
+  sortOrder Int      @default(0) @map("sort_order")
+  status    Int      @default(1) @db.TinyInt
   // 渠道：EXPRESS=全国邮寄 LOCAL=同城配送。一个分类只属于一个渠道，商品随分类归属
-  channel   String    @default("EXPRESS") @db.VarChar(16)
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
+  channel   String   @default("EXPRESS") @db.VarChar(16)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   products Product[]
 
@@ -72,38 +77,38 @@ model Category {
 // 商品
 // ─────────────────────────────────────────────────────────
 model Product {
-  id            Int       @id @default(autoincrement())
-  categoryId    Int       @map("category_id")
-  name          String    @db.VarChar(128)
-  subtitle      String?   @db.VarChar(255)
-  coverImage    String?   @map("cover_image") @db.VarChar(500)
-  price         Int
-  originalPrice Int?      @map("original_price")
-  stock         Int       @default(0)
-  salesCount    Int       @default(0) @map("sales_count")
-  unit          String    @default("份") @db.VarChar(16)
-  weight        String?   @db.VarChar(32)
-  shelfLife     String?   @map("shelf_life") @db.VarChar(64)
-  storageMethod String?   @map("storage_method") @db.VarChar(128)
-  deliveryInfo  String?   @map("delivery_info") @db.Text
-  description   String?   @db.Text
+  id             Int       @id @default(autoincrement())
+  categoryId     Int       @map("category_id")
+  name           String    @db.VarChar(128)
+  subtitle       String?   @db.VarChar(255)
+  coverImage     String?   @map("cover_image") @db.VarChar(500)
+  price          Int
+  originalPrice  Int?      @map("original_price")
+  stock          Int       @default(0)
+  salesCount     Int       @default(0) @map("sales_count")
+  unit           String    @default("份") @db.VarChar(16)
+  weight         String?   @db.VarChar(32)
+  shelfLife      String?   @map("shelf_life") @db.VarChar(64)
+  storageMethod  String?   @map("storage_method") @db.VarChar(128)
+  deliveryInfo   String?   @map("delivery_info") @db.Text
+  description    String?   @db.Text
   // ON_SHELF=上架  OFF_SHELF=下架  DELETED=已删除
-  status        String    @default("ON_SHELF") @db.VarChar(16)
+  status         String    @default("ON_SHELF") @db.VarChar(16)
   // @deprecated 历史列，渠道以 channel 为准；后台不再写入
-  deliveryType  String    @default("EXPRESS") @map("delivery_type") @db.VarChar(64)
+  deliveryType   String    @default("EXPRESS") @map("delivery_type") @db.VarChar(64)
   // 渠道冗余自分类（只在 services/product-channel.ts 写入），列表按渠道过滤不必 join
-  channel       String    @default("EXPRESS") @db.VarChar(16)
+  channel        String    @default("EXPRESS") @db.VarChar(16)
   // 净重（克），同城下单换算快递100 weight(kg)；空则用同城设置的默认值
-  netWeightG    Int?      @map("net_weight_g")
-  isRecommended Int       @default(0) @map("is_recommended") @db.TinyInt
-  qrScene       String?   @map("qr_scene") @db.VarChar(64)
-  qrCodeUrl     String?   @map("qr_code_url") @db.VarChar(500)
-  qrGeneratedAt DateTime? @map("qr_generated_at")
+  netWeightG     Int?      @map("net_weight_g")
+  isRecommended  Int       @default(0) @map("is_recommended") @db.TinyInt
+  qrScene        String?   @map("qr_scene") @db.VarChar(64)
+  qrCodeUrl      String?   @map("qr_code_url") @db.VarChar(500)
+  qrGeneratedAt  DateTime? @map("qr_generated_at")
   // 规格维度定义 [{name:"辣度",values:["微辣","中辣"]},...]；null=无规格商品
-  specDimensions Json?    @map("spec_dimensions")
-  deletedAt     DateTime? @map("deleted_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  specDimensions Json?     @map("spec_dimensions")
+  deletedAt      DateTime? @map("deleted_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   category   Category       @relation(fields: [categoryId], references: [id])
   images     ProductImage[]
@@ -213,68 +218,79 @@ model Address {
 // 订单
 // ─────────────────────────────────────────────────────────
 model Order {
-  id                  Int       @id @default(autoincrement())
-  orderNo             String    @unique @map("order_no") @db.VarChar(32)
-  userId              Int       @map("user_id")
+  id                          Int       @id @default(autoincrement())
+  orderNo                     String    @unique @map("order_no") @db.VarChar(32)
+  userId                      Int       @map("user_id")
   // PENDING_PAYMENT / PAID(待接单) / PREPARING(备餐中) / SHIPPED / COMPLETED / CANCELLED / REFUNDING / REFUNDED
-  status              String    @db.VarChar(32)
-  totalAmount         Int       @map("total_amount")
-  shippingFee         Int       @default(0) @map("shipping_fee")
-  actualAmount        Int       @map("actual_amount")
-  deliveryType        String    @map("delivery_type") @db.VarChar(16)
-  remark              String?   @db.VarChar(255)
+  status                      String    @db.VarChar(32)
+  totalAmount                 Int       @map("total_amount")
+  shippingFee                 Int       @default(0) @map("shipping_fee")
+  actualAmount                Int       @map("actual_amount")
+  deliveryType                String    @map("delivery_type") @db.VarChar(16)
+  remark                      String?   @db.VarChar(255)
   // 收货地址快照
-  receiverName        String    @map("receiver_name") @db.VarChar(64)
-  receiverPhone       String    @map("receiver_phone") @db.VarChar(20)
-  receiverProvince    String    @map("receiver_province") @db.VarChar(32)
-  receiverCity        String    @map("receiver_city") @db.VarChar(32)
-  receiverDistrict    String    @map("receiver_district") @db.VarChar(32)
-  receiverDetail      String    @map("receiver_detail") @db.VarChar(255)
-  receiverFullAddress String    @map("receiver_full_address") @db.VarChar(500)
-  paidAt              DateTime? @map("paid_at")
+  receiverName                String    @map("receiver_name") @db.VarChar(64)
+  receiverPhone               String    @map("receiver_phone") @db.VarChar(20)
+  receiverProvince            String    @map("receiver_province") @db.VarChar(32)
+  receiverCity                String    @map("receiver_city") @db.VarChar(32)
+  receiverDistrict            String    @map("receiver_district") @db.VarChar(32)
+  receiverDetail              String    @map("receiver_detail") @db.VarChar(255)
+  receiverFullAddress         String    @map("receiver_full_address") @db.VarChar(500)
+  paidAt                      DateTime? @map("paid_at")
   // 商家接单时间（PAID → PREPARING）
-  acceptedAt          DateTime? @map("accepted_at")
+  acceptedAt                  DateTime? @map("accepted_at")
   // 完成时间（确认收货）
-  completedAt         DateTime? @map("completed_at")
+  completedAt                 DateTime? @map("completed_at")
   // 退款完成时间（REFUNDING → REFUNDED，仅全额退完时写）
-  refundedAt          DateTime? @map("refunded_at")
+  refundedAt                  DateTime? @map("refunded_at")
   // 已成功退款累计金额（分），部分退款多次累加；== actualAmount 即全额退完
-  refundedAmount      Int       @default(0) @map("refunded_amount")
+  refundedAmount              Int       @default(0) @map("refunded_amount")
   // 付款后超时未接单的催单已推送时间（定时任务只催一次）
-  acceptRemindedAt    DateTime? @map("accept_reminded_at")
-  cancelledAt         DateTime? @map("cancelled_at")
-  cancelReason        String?   @map("cancel_reason") @db.VarChar(255)
+  acceptRemindedAt            DateTime? @map("accept_reminded_at")
+  cancelledAt                 DateTime? @map("cancelled_at")
+  cancelReason                String?   @map("cancel_reason") @db.VarChar(255)
   // ── 同城配送快照（deliveryType=LOCAL 时写入）──
-  receiverLatE6       Int?      @map("receiver_lat_e6")
-  receiverLngE6       Int?      @map("receiver_lng_e6")
-  receiverPoiName     String?   @map("receiver_poi_name") @db.VarChar(128)
+  receiverLatE6               Int?      @map("receiver_lat_e6")
+  receiverLngE6               Int?      @map("receiver_lng_e6")
+  receiverPoiName             String?   @map("receiver_poi_name") @db.VarChar(128)
   // 计费距离（米）：运力方 batchPrice 返回的真实道路距离，查价失败时退回直线 × detourFactor 估算
-  distanceM           Int?      @map("distance_m")
+  distanceM                   Int?      @map("distance_m")
   // 上面这段距离是实测（MEASURED）还是估算（ESTIMATED）——随行审计信息，不参与任何计费/作废判断，
   // 见 services/local-settings.ts 的 QuotePayload.distanceSource 注释。查价失败按估算价成交的单，
   // 事后靠这一列直接查得出来，不用去关联别的表推断。
-  distanceSource      String?   @map("distance_source") @db.VarChar(16)
-  estimatedDeliveryAt DateTime? @map("estimated_delivery_at")
+  distanceSource              String?   @map("distance_source") @db.VarChar(16)
+  estimatedDeliveryAt         DateTime? @map("estimated_delivery_at")
   // 顾客在接单后宽限期内申请取消（D6 ②）；快照当时有效配送单状态，NONE=无单
-  cancelRequestedAt   DateTime? @map("cancel_requested_at")
-  cancelRequestNote   String?   @map("cancel_request_note") @db.VarChar(255)
-  cancelRequestDeliveryStatus String? @map("cancel_request_delivery_status") @db.VarChar(16)
+  cancelRequestedAt           DateTime? @map("cancel_requested_at")
+  cancelRequestNote           String?   @map("cancel_request_note") @db.VarChar(255)
+  cancelRequestDeliveryStatus String?   @map("cancel_request_delivery_status") @db.VarChar(16)
   // 未接单重复播报（M2b）
-  announceCount       Int       @default(0) @map("announce_count")
-  lastAnnouncedAt     DateTime? @map("last_announced_at")
+  announceCount               Int       @default(0) @map("announce_count")
+  lastAnnouncedAt             DateTime? @map("last_announced_at")
   // M2 定时任务「每单只提醒一次」标记（备餐超时未呼叫 / 顾客取消申请未处理）
-  localUncalledRemindedAt  DateTime? @map("local_uncalled_reminded_at")
-  cancelRequestRemindedAt  DateTime? @map("cancel_request_reminded_at")
+  localUncalledRemindedAt     DateTime? @map("local_uncalled_reminded_at")
+  cancelRequestRemindedAt     DateTime? @map("cancel_request_reminded_at")
   // 最近一次六家运力报价快照（结构见 services/delivery/quote.ts）。放在 Order 上是因为
   // 接单转备餐的那一刻就要查价，而 Delivery 行要等呼叫时才创建；呼叫时再复制到 Delivery。
-  quoteSnapshot       Json?     @map("quote_snapshot")
-  quotedAt            DateTime? @map("quoted_at")
+  quoteSnapshot               Json?     @map("quote_snapshot")
+  quotedAt                    DateTime? @map("quoted_at")
   // 联调/回归留在正式库里的测试单。所有经营统计都排除它（口径见 utils/stats-scope.ts 的
   // REAL_ORDERS），顾客端不下发（routes/orders.ts 的 withPayExpire 会剥掉）。
   // 注意它挡不住热销榜：那读的是 Product.salesCount 冗余列，隔离办法见 docs/ops-test-orders.md。
-  isTest              Boolean   @default(false) @map("is_test")
-  createdAt           DateTime  @default(now()) @map("created_at")
-  updatedAt           DateTime  @updatedAt @map("updated_at")
+  isTest                      Boolean   @default(false) @map("is_test")
+  // ── 会员积分/优惠券（M1 账本层，见 docs/superpowers/plans/2026-09-04-member-m1-ledger.md）──
+  // 普通 Int 列，不建关系字段（与 Refund/Delivery.activeOrderId 同款处理）
+  couponId                    Int?      @map("coupon_id")
+  discountAmount              Int       @default(0) @map("discount_amount")
+  // 赠品消耗的积分（M2 结算链路写入，M1 恒为 0）
+  pointsUsed                  Int       @default(0) @map("points_used")
+  // 本单实际发放的积分，可能为 0（小额单/已全额退款）
+  pointsEarned                Int       @default(0) @map("points_earned")
+  // 积分结算的唯一「已处理」标记：非空 = settlePoints 已处理过（无论是否发出流水），
+  // 不得用 pointsEarned === 0 代替判断（spec §5.4）——否则 earn=0 的订单会被兜底任务永远重扫
+  pointsSettledAt             DateTime? @map("points_settled_at")
+  createdAt                   DateTime  @default(now()) @map("created_at")
+  updatedAt                   DateTime  @updatedAt @map("updated_at")
 
   user       User        @relation(fields: [userId], references: [id])
   items      OrderItem[]
@@ -286,6 +302,7 @@ model Order {
 
   @@index([userId, status])
   @@index([status, createdAt])
+  @@index([status, pointsSettledAt, completedAt])
   @@map("orders")
 }
 
@@ -304,6 +321,9 @@ model OrderItem {
   productPrice Int      @map("product_price")
   quantity     Int
   subtotal     Int
+  // 赠品行：productPrice/subtotal = 0，不进小计与门槛判定（M2 结算链路写入，M1 不产生赠品行）
+  isGift       Boolean  @default(false) @map("is_gift")
+  pointsCost   Int      @default(0) @map("points_cost")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -491,54 +511,54 @@ model Setting {
 // activeOrderId 有效时 = orderId，终态置 NULL，与 Refund.activeOrderId 同款并发防线。
 // ─────────────────────────────────────────────────────────
 model Delivery {
-  id                Int       @id @default(autoincrement())
-  orderId           Int       @map("order_id")
-  orderNo           String    @map("order_no") @db.VarChar(32)
+  id                      Int       @id @default(autoincrement())
+  orderId                 Int       @map("order_id")
+  orderNo                 String    @map("order_no") @db.VarChar(32)
   // 商户单号 D<orderId>-<seq>，传给运力方，回调回退查找键
-  deliveryNo        String    @unique @map("delivery_no") @db.VarChar(32)
+  deliveryNo              String    @unique @map("delivery_no") @db.VarChar(32)
   // 普通 Int 列（非关系字段）：有效单 = orderId，终态 NULL
-  activeOrderId     Int?      @unique @map("active_order_id")
+  activeOrderId           Int?      @unique @map("active_order_id")
   // KD100 | SELF | MOCK
-  provider          String    @db.VarChar(16)
+  provider                String    @db.VarChar(16)
   // PENDING CALLING ACCEPTED ARRIVING ARRIVED DELIVERING REASSIGNING ABNORMAL DELIVERED CANCELLED FAILED UNKNOWN
-  status            String    @db.VarChar(16)
-  statusRank        Int       @default(0) @map("status_rank")
-  providerStatus    Int?      @map("provider_status")
-  statusDesc        String?   @map("status_desc") @db.VarChar(255)
-  providerTaskId    String?   @unique @map("provider_task_id") @db.VarChar(64)
-  providerOrderId   String?   @map("provider_order_id") @db.VarChar(64)
-  courierCompany    String?   @map("courier_company") @db.VarChar(32)
-  courierName       String?   @map("courier_name") @db.VarChar(64)
-  courierMobile     String?   @map("courier_mobile") @db.VarChar(20)
-  callbackSalt      String    @map("callback_salt") @db.VarChar(20)
-  quotedFee         Int?      @map("quoted_fee")
-  actualFee         Int?      @map("actual_fee")
+  status                  String    @db.VarChar(16)
+  statusRank              Int       @default(0) @map("status_rank")
+  providerStatus          Int?      @map("provider_status")
+  statusDesc              String?   @map("status_desc") @db.VarChar(255)
+  providerTaskId          String?   @unique @map("provider_task_id") @db.VarChar(64)
+  providerOrderId         String?   @map("provider_order_id") @db.VarChar(64)
+  courierCompany          String?   @map("courier_company") @db.VarChar(32)
+  courierName             String?   @map("courier_name") @db.VarChar(64)
+  courierMobile           String?   @map("courier_mobile") @db.VarChar(20)
+  callbackSalt            String    @map("callback_salt") @db.VarChar(20)
+  quotedFee               Int?      @map("quoted_fee")
+  actualFee               Int?      @map("actual_fee")
   // 呼叫当次的六家报价快照（从 Order 复制，结构见 services/delivery/quote.ts）+ 查询时间。
   // 对账依据：中标运力（courierCompany）在快照里的报价 vs 实扣（quotedFee/actualFee）。
-  quoteSnapshot     Json?     @map("quote_snapshot")
-  quotedAt          DateTime? @map("quoted_at")
+  quoteSnapshot           Json?     @map("quote_snapshot")
+  quotedAt                DateTime? @map("quoted_at")
   // 本单实际呼了哪些运力（kuaidicom 编码字符串数组）。规格 §10：将来做「指定单家运力」时，
   // 费用差异来自哪几家必须看得出来，所以记具名列表而不是一个 oneToOne 布尔值。
-  calledProviders   Json?     @map("called_providers")
-  tipFee            Int       @default(0) @map("tip_fee")
-  cancelFee         Int       @default(0) @map("cancel_fee")
-  providerDistanceM Int?      @map("provider_distance_m")
-  errorCode         String?   @map("error_code") @db.VarChar(16)
-  failReason        String?   @map("fail_reason") @db.VarChar(255)
-  calledAt          DateTime? @map("called_at")
-  acceptedAt        DateTime? @map("accepted_at")
-  pickedUpAt        DateTime? @map("picked_up_at")
-  deliveredAt       DateTime? @map("delivered_at")
-  cancelledAt       DateTime? @map("cancelled_at")
-  cancelReason      String?   @map("cancel_reason") @db.VarChar(255)
-  lastCallbackAt    DateTime? @map("last_callback_at")
+  calledProviders         Json?     @map("called_providers")
+  tipFee                  Int       @default(0) @map("tip_fee")
+  cancelFee               Int       @default(0) @map("cancel_fee")
+  providerDistanceM       Int?      @map("provider_distance_m")
+  errorCode               String?   @map("error_code") @db.VarChar(16)
+  failReason              String?   @map("fail_reason") @db.VarChar(255)
+  calledAt                DateTime? @map("called_at")
+  acceptedAt              DateTime? @map("accepted_at")
+  pickedUpAt              DateTime? @map("picked_up_at")
+  deliveredAt             DateTime? @map("delivered_at")
+  cancelledAt             DateTime? @map("cancelled_at")
+  cancelReason            String?   @map("cancel_reason") @db.VarChar(255)
+  lastCallbackAt          DateTime? @map("last_callback_at")
   callTimeoutRemindedAt   DateTime? @map("call_timeout_reminded_at")
   acceptedStuckRemindedAt DateTime? @map("accepted_stuck_reminded_at")
   deliveringRemindedAt    DateTime? @map("delivering_reminded_at")
   unknownRemindedAt       DateTime? @map("unknown_reminded_at")
-  operator          String?   @db.VarChar(64)
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  operator                String?   @db.VarChar(64)
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
 
   order  Order           @relation(fields: [orderId], references: [id])
   events DeliveryEvent[]
@@ -597,4 +617,112 @@ model PrintJob {
   @@index([status, createdAt])
   @@index([orderId])
   @@map("print_jobs")
+}
+
+// ─────────────────────────────────────────────────────────
+// 会员积分 + 优惠券（M1 账本层，M2 起接入下单计价）。
+// 设计依据 docs/superpowers/specs/2026-09-04-member-points-coupon-design.md §4。
+// ─────────────────────────────────────────────────────────
+
+// 积分流水。User.pointsBalance 是冗余缓存，真正的余额永远可由本表 remaining 重算，
+// 出账必留痕（不允许直接改余额不记流水）。
+model PointsLedger {
+  id           Int       @id @default(autoincrement())
+  userId       Int       @map("user_id")
+  // EARN 消费得分 | REDEEM 兑换券 | GIFT 随单赠品 | GIFT_REVERT 未支付取消退回
+  // | REFUND_DEDUCT 退款扣回 | EXPIRE 过期 | ADMIN 手动调整（预留，本轮无入口）
+  type         String    @db.VarChar(16)
+  delta        Int // 正=入账 负=出账
+  balanceAfter Int       @map("balance_after")
+  remaining    Int       @default(0) // 仅入账行有意义：该笔尚未被消耗/过期的余量
+  refType      String    @map("ref_type") @db.VarChar(16) // ORDER | COUPON | REFUND | LEDGER
+  refId        String    @map("ref_id") @db.VarChar(32)
+  remark       String?   @db.VarChar(255)
+  // EARN/GIFT_REVERT = 到期日；GIFT = 被扣行里最早的到期日，供 GIFT_REVERT 释放时继承
+  // （2026-09-05 回填：见 services/member/points.ts 的 consumePoints 与 M1 计划 Task 3 Step 2）
+  expiresAt    DateTime? @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([type, refType, refId]) // 幂等防线：同一来源只能记一次账
+  @@index([userId, createdAt])
+  @@index([userId, type, expiresAt]) // FIFO 扣减与过期扫描
+  @@map("points_ledgers")
+}
+
+// 券模板：店员定义的券种
+model CouponTemplate {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(64)
+  description  String?  @db.VarChar(255)
+  amount       Int // 减免金额（分）
+  threshold    Int      @default(0) // 满多少可用（分），0 = 代金券
+  channel      String   @default("ALL") @db.VarChar(16) // ALL | LOCAL | EXPRESS
+  validDays    Int      @map("valid_days") // 领取后 N 天有效
+  source       String   @db.VarChar(16) // ADMIN | POINTS | CAMPAIGN | NEWCOMER
+  pointsCost   Int?     @map("points_cost") // source=POINTS 必填
+  totalLimit   Int?     @map("total_limit") // source=CAMPAIGN 可选总量
+  perUserLimit Int?     @map("per_user_limit")
+  issuedCount  Int      @default(0) @map("issued_count")
+  status       String   @default("ON") @db.VarChar(16) // ON | OFF
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  coupons UserCoupon[]
+
+  @@index([source, status, sortOrder])
+  @@map("coupon_templates")
+}
+
+// 发到某个人手里的一张券。面额等字段快照自模板，模板停用/改价不影响已发券
+model UserCoupon {
+  id         Int       @id @default(autoincrement())
+  userId     Int       @map("user_id")
+  templateId Int       @map("template_id")
+  code       String    @unique @db.VarChar(32) // 展示与客服核对用
+  name       String    @db.VarChar(64) // ↓ 四个快照字段，模板改价/停用不影响已发券
+  amount     Int
+  threshold  Int       @default(0)
+  channel    String    @default("ALL") @db.VarChar(16)
+  status     String    @default("UNUSED") @db.VarChar(16) // UNUSED | USED | EXPIRED
+  source     String    @db.VarChar(16) // 同模板 source
+  sourceRef  String?   @map("source_ref") @db.VarChar(64) // 赔偿时 = 关联订单号
+  issuedBy   String?   @map("issued_by") @db.VarChar(64) // 赔偿时 = 操作管理员
+  remark     String?   @db.VarChar(255) // 赔偿原因
+  expiresAt  DateTime  @map("expires_at")
+  usedAt     DateTime? @map("used_at")
+  // 普通 Int 列，不建关系字段（与 Order.couponId 同款处理，避免双向强关联）
+  orderId    Int?      @map("order_id")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user     User           @relation(fields: [userId], references: [id])
+  template CouponTemplate @relation(fields: [templateId], references: [id])
+
+  @@index([userId, status, expiresAt])
+  @@index([orderId])
+  @@index([status, expiresAt]) // 过期扫描
+  @@map("user_coupons")
+}
+
+// 可用积分加购的随单赠品（M2 起接入下单结算，M1 只建表不使用）
+model PointsGood {
+  id            Int      @id @default(autoincrement())
+  productId     Int      @map("product_id")
+  skuId         Int?     @map("sku_id")
+  pointsCost    Int      @map("points_cost")
+  perOrderLimit Int      @default(1) @map("per_order_limit")
+  stockLimit    Int?     @map("stock_limit") // 可选总量，NULL = 不限
+  issuedCount   Int      @default(0) @map("issued_count")
+  status        String   @default("ON") @db.VarChar(16)
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // 注意：MySQL 唯一索引不约束 NULL，无 SKU 商品的重复校验需在代码里先 findFirst 再插
+  // （与 Cart 表 @@unique([userId, productId, skuId]) 同款处理）
+  @@unique([productId, skuId])
+  @@index([status, sortOrder])
+  @@map("points_goods")
 }
