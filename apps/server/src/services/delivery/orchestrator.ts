@@ -46,7 +46,8 @@ export async function callRider(input: CallRiderInput) {
   if (!order) throw new AppError(40401, '订单不存在', 404)
   if (order.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单可呼叫骑手')
   if (order.status !== 'PREPARING') throw new AppError(42204, `订单状态为 ${order.status}，仅备餐中订单可呼叫骑手`)
-  if (order.cancelRequestedAt) throw new AppError(42204, '顾客已申请取消，请先处理取消申请再决定是否呼叫')
+  // 「处理」= 同意（取消配送+退款）或驳回（POST /admin/local/orders/:id/cancel-request/reject 清标记），二者之一做完才放行
+  if (order.cancelRequestedAt) throw new AppError(42204, '顾客有待处理的取消申请，请先处理')
   if (order.receiverLatE6 === null || order.receiverLngE6 === null) throw new AppError(42223, '订单缺少收货坐标，无法呼叫骑手')
 
   const s = await getLocalSettings()
