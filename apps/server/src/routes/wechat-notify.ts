@@ -7,6 +7,7 @@ import { notifySystemAlert } from '../services/notify'
 import { finalizeRefundSuccess, initiateRefund, markRefundAbnormal, markRefundClosed } from '../services/refund'
 import { config } from '../config'
 import { sendPaidSubscribeMessage } from '../services/subscribe-message'
+import { enqueueOrderTicket } from '../services/ticket'
 
 interface NotifyBody {
   event_type?: string
@@ -230,6 +231,12 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
             },
             paid.items
           )
+          // 出票（规格 §8b）：真实微信支付回调的付款成功触发点，与 notifyOrderPaid 并列 fire-and-forget。
+          // 打印异常绝不能冒泡到这条回调的应答——微信回调失败会重推，但整个 wechatPayNotifyHandler
+          // 早已决定要对本次回调回 SUCCESS（见函数尾 replyOk），出票是回调应答之外的旁路副作用。
+          enqueueOrderTicket(orderId, 'NEW_ORDER').catch((err) => {
+            console.error('[wechat-notify] enqueueOrderTicket 失败:', (err as Error).message)
+          })
         }
       })
       .catch(() => undefined)
@@ -293,6 +300,18 @@ export async function wechatRefundNotifyHandler(req: Request, res: Response): Pr
         rawData: rawBody,
         rawField: 'wxNotifyData',
       })
+      // 出票（规格 §8b「全额退款成功」）：finalizeRefundSuccess 只在累计退款打满 actualAmount 时才把
+      // 订单转 REFUNDED（services/refund.ts 内部逻辑，本文件不碰该文件，只在这里读一次结果状态判断要
+      // 不要出票）——部分退款不出 CANCEL 票，避免店员把「退了一部分」误读成「这单不用做了」。
+      // 这条路径主要覆盖走真实微信退款异步到账的场景（admin 后台退款/售后同意等）；mock 支付下
+      // initiateRefund 同步调用 finalizeRefundSuccess、不经这个 webhook，那部分场景已由
+      // routes/orders.ts 的自助取消分支在决定取消的当下直接出票覆盖（不必等回调）。
+      prisma.order
+        .findUnique({ where: { id: refund.orderId }, select: { id: true, status: true } })
+        .then((order) => {
+          if (order?.status === 'REFUNDED') return enqueueOrderTicket(order.id, 'CANCEL')
+        })
+        .catch((err) => console.error('[wechat-refund-notify] enqueueOrderTicket 失败:', (err as Error).message))
     } else if (event === 'REFUND.ABNORMAL') {
       await markRefundAbnormal(refund.id, rawBody)
     } else if (event === 'REFUND.CLOSED') {

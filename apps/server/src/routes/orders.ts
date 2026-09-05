@@ -18,6 +18,7 @@ import {
   getLocalSettings, isOpenNow, isPaused, nextOpenText, calcLocalFee, estimateMinutes, verifyQuote,
 } from '../services/local-settings'
 import { DELIVERY_STATUS_LABEL } from '../services/delivery/state'
+import { enqueueOrderTicket } from '../services/ticket'
 import { getDeliveryProvider } from '../services/delivery/provider'
 
 const router = Router()
@@ -532,6 +533,11 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     // 真并发兜底：两个请求同时读到 cancelRequestedAt=null，只有一个能写入
     if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')
     notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note })
+    // 出票（规格 §8b「顾客申请取消」）：这一步只是挂起申请、订单状态未变，但厨房该立刻知道「先别做了」，
+    // 不必等店员处理完才收到消息——CANCEL 票是给店内看的物理提醒，与走推送通知的 notifyCancelRequest 并列。
+    enqueueOrderTicket(id, 'CANCEL').catch((err) => {
+      console.error('[orders] enqueueOrderTicket 失败（cancel-request）:', (err as Error).message)
+    })
     success(res, { cancelRequestedAt })
   } catch (e) {
     next(e)
@@ -609,6 +615,12 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
         })
         if (moved.count === 0) throw new AppError(42204, '商家已接单备餐，请电话联系商家协商退款')
         await rollbackOrderStock(tx, order.items)
+      })
+      // 出票（规格 §8b「订单被取消」）：付款成功那一刻已经出过 NEW_ORDER 票，厨房可能已经在备料——
+      // 这里的判断是「决定取消」就立刻出 CANCEL 提醒票，不等下面的微信退款请求完成/回调确认。
+      // 退款是否成功不影响「这单不用做了」这个事实，让厨房等退款确认才知道，只会白白多耽误几分钟。
+      enqueueOrderTicket(id, 'CANCEL').catch((err) => {
+        console.error('[orders] enqueueOrderTicket 失败（用户自助取消）:', (err as Error).message)
       })
       // 秒退：走公共退款逻辑（REFUNDING 状态下全额），mock 即时到账，微信一般数秒内回调
       let autoRefunded = false
@@ -737,6 +749,12 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
           if (req.openid) sendPaidSubscribeMessage(req.openid, { ...order, paidAt }, items[0]?.productName)
         })
         .catch(() => undefined)
+      // 出票（规格 §8b）：与 notifyOrderPaid 并列的 fire-and-forget，独立起一条 promise 链而不是塞进
+      // 上面那条——打印失败绝不能通过任何路径影响这个已经在走的 mock 支付响应，也不该等 orderItem
+      // 查询才触发（enqueueOrderTicket 内部自己会重新按 orderId 查订单与商品）。
+      enqueueOrderTicket(orderId, 'NEW_ORDER').catch((err) => {
+        console.error('[orders] enqueueOrderTicket 失败（mock 支付）:', (err as Error).message)
+      })
       return success(res, { mode: 'mock', status: 'PAID', paidAt })
     }
 
