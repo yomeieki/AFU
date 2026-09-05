@@ -152,6 +152,8 @@ export interface Order {
   receiverName: string
   receiverPhone: string
   receiverFullAddress: string
+  /** 同城单为「区+详细地址」，邮寄单同 receiverFullAddress。服务端算好，前端直接显示 */
+  receiverDisplayAddress?: string
   remark?: string | null
   cancelReason?: string | null
   paidAt: string | null
@@ -196,6 +198,7 @@ export interface AfterSale {
     receiverName: string
     receiverPhone: string
     receiverFullAddress: string
+    receiverDisplayAddress?: string
     completedAt: string | null
     items: { productName: string; specText: string | null; quantity: number; subtotal: number }[]
     shipment: { expressCompany: string | null; expressNo: string | null; shippedAt: string | null } | null

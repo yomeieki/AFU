@@ -9,6 +9,7 @@ import { sendShipSubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
 import { enqueueOrderTicket } from '../../services/ticket'
 import { LOW_STOCK_THRESHOLD } from '../../utils/constants'
+import { displayAddress } from '../../utils/address'
 
 const router = Router()
 
@@ -25,6 +26,8 @@ const orderListSelect = {
   receiverName: true,
   receiverPhone: true,
   receiverFullAddress: true,
+  receiverDistrict: true,
+  receiverDetail: true,
   paidAt: true,
   acceptedAt: true,
   completedAt: true,
@@ -93,6 +96,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       res,
       list.map(({ refunds, afterSales, ...o }) => ({
         ...o,
+        // 同城单展示用短地址（省市恒为门店所在地，是噪音）。规则只在服务端实现一处，
+        // 前端直接显示，避免前后端各写一遍后慢慢漂移。receiverFullAddress 保留原样——
+        // 「复制收件信息」要粘到别处用，必须完整。
+        receiverDisplayAddress: displayAddress(o, o.deliveryType === 'LOCAL'),
         latestRefund: refunds[0] ?? null,
         afterSale: afterSales[0] ?? null,
         remainingRefundable: remainingRefundable(o),
@@ -166,7 +173,11 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       },
     })
     if (!order) throw new AppError(40401, '订单不存在', 404)
-    success(res, { ...order, remainingRefundable: remainingRefundable(order) })
+    success(res, {
+      ...order,
+      receiverDisplayAddress: displayAddress(order, order.deliveryType === 'LOCAL'),
+      remainingRefundable: remainingRefundable(order),
+    })
   } catch (e) {
     next(e)
   }

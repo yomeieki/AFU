@@ -256,7 +256,7 @@ export default function Orders() {
   const renderDetailLines = (order: Order) => (
     <>
       <p className="text-xs text-gray-500 flex items-start gap-1">
-        <span className="shrink-0">收货地址：{order.receiverFullAddress}</span>
+        <span className="shrink-0">收货地址：{order.receiverDisplayAddress ?? order.receiverFullAddress}</span>
         <button onClick={() => copyText(`${order.receiverName} ${order.receiverPhone} ${order.receiverFullAddress}`)} className="text-gray-400 hover:text-gray-600 shrink-0" title="复制收件信息" aria-label="复制收件信息">
           <Copy className="w-3 h-3" />
         </button>

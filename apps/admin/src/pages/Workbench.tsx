@@ -1048,7 +1048,7 @@ export default function Workbench() {
                 <span>电话</span>
                 <a className="wb__tel" style={{ color: chColor(card.channel) }} href={`tel:${o?.receiverPhone ?? card.receiver.phone}`}>{o?.receiverPhone ?? card.receiver.phone}</a>
               </div>
-              <div className="wb__line"><span>地址</span><span style={{ textAlign: 'right' }}>{o?.receiverFullAddress ?? '--'}</span></div>
+              <div className="wb__line"><span>地址</span><span style={{ textAlign: 'right' }}>{o?.receiverDisplayAddress ?? o?.receiverFullAddress ?? '--'}</span></div>
               {local ? (
                 <>
                   <div className="wb__line"><span>距离</span><span>{card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : '--'}</span></div>
