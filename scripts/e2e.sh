@@ -37,6 +37,10 @@ echo "== 1. 管理员登录 =="
 R=$(req POST /api/admin/login "" "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}")
 AT=$(jq -r '.data.token // empty' <<<"$R")
 [[ -n "$AT" ]] && ok "admin 登录" || { fail "admin 登录" "$R"; echo "无法继续"; exit 1; }
+# 打印机设置复位到禁用+空列表：本机开发库是持久化 MySQL，跑过一次打印机相关手测/联调后
+# Setting(key=printer) 会一直留着，后面第 31 段「打印机占位」断言（禁用时应为 NOT_CONNECTED）
+# 会被这份残留状态带偏——不是本次改动引入的 bug，是测试前置状态没兜底，这里在最前面挂一次。
+req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null
 
 echo "== 2. 图片上传 =="
 PNG=$(mktemp).png
@@ -1240,6 +1244,122 @@ for k in callbackSalt quotedFee actualFee providerTaskId cancelFee; do
 done
 # 订单列表带 deliveryType（渠道标签靠它）
 assert_eq "orderList[0].deliveryType 存在" "$(jq -r '.data.list[0] | has("deliveryType")' <<<"$(req GET /api/orders "$UT")")" "true"
+
+echo "== 35. 出票与打印机（规格 §8b）=="
+# 每个子测试都用当次新建的订单/打印机编号，不依赖固定 ID：本段要能零间隔连跑两轮。
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+PJOBS() { req GET "/api/admin/print-jobs?orderId=$1" "$AT"; }  # 该订单的打印记录列表（原始响应）
+pay_new_order() {  # productId addressId → echo orderId（下单+mock支付，不管理购物车）
+  local pid=$1 aid=$2 r oid
+  r=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$pid,\"quantity\":1},\"addressId\":$aid}")
+  oid=$(jq -r '.data.orderId // .data.id // empty' <<<"$r"); [[ -n "$oid" ]] || { echo ""; return; }
+  req POST "/api/orders/$oid/pay" "$UT" >/dev/null
+  echo "$oid"
+}
+
+echo "-- 付款成功 → NEW_ORDER 落库 --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"E2E-P1","channels":["LOCAL","EXPRESS"],"copies":1}],"repeat":{"localAfterMin":60,"expressAfterMin":60,"everyMin":60,"maxTimes":5,"reprint":false},"offlineAlertMin":5,"printCancel":true}' >/dev/null
+PO1=$(pay_new_order "$PID" "$ADDR"); [[ -n "$PO1" ]] && ok "下单并支付 #$PO1" || fail "下单/支付"
+sleep 0.3
+R=$(PJOBS "$PO1")
+assert_eq "NEW_ORDER 已落库" "$(jq -r '.data.list[0].kind' <<<"$R")" "NEW_ORDER"
+assert_eq "NEW_ORDER 已发送(mock 即时成功)" "$(jq -r '.data.list[0].status' <<<"$R")" "SENT"
+assert_eq "printerSn 落到已配置的打印机" "$(jq -r '.data.list[0].printerSn' <<<"$R")" "E2E-P1"
+
+echo "-- 同一订单重复触发只产生一条（dedupeKey 幂等）--"
+# 支付接口对同一订单没有条件写守卫（PENDING_PAYMENT 快照读之后才建事务），并发双击可能两次都改到
+# status=PAID；不管业务层这条竞态最终谁赢，出票层必须只留一条 NEW_ORDER——这正是要验证的幂等边界。
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR}")
+DUPO=$(jq -r '.data.orderId // .data.id' <<<"$R")
+DUPR1=$(mktemp); DUPR2=$(mktemp)
+req POST "/api/orders/$DUPO/pay" "$UT" > "$DUPR1" &
+req POST "/api/orders/$DUPO/pay" "$UT" > "$DUPR2" &
+wait
+sleep 0.3
+assert_eq "重复触发只产生 1 条 NEW_ORDER" "$(jq -r '[.data.list[] | select(.kind=="NEW_ORDER")] | length' <<<"$(PJOBS "$DUPO")")" "1"
+rm -f "$DUPR1" "$DUPR2"
+
+echo "-- 渠道未配置打印机 → SKIPPED（留痕而非静默不出票）--"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"E2E-P1","channels":["LOCAL"],"copies":1}],"printCancel":true}' >/dev/null
+PO3=$(pay_new_order "$PID" "$ADDR")
+sleep 0.3
+R=$(PJOBS "$PO3")
+assert_eq "EXPRESS 渠道无打印机 → SKIPPED" "$(jq -r '.data.list[0].status' <<<"$R")" "SKIPPED"
+assert_eq "SKIPPED 记录了原因" "$(jq -r '.data.list[0].lastError' <<<"$R")" "未配置该渠道的打印机"
+
+echo "-- 打印机功能未启用 → 不落任何打印记录 --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null
+PO4=$(pay_new_order "$PID" "$ADDR")
+sleep 0.3
+assert_eq "禁用打印时不落库" "$(jq -r '.data.total' <<<"$(PJOBS "$PO4")")" "0"
+
+echo "-- 打印失败重试耗尽 → FAILED，且离线恢复后自动补打 --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"E2E-P1","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/retry-delays "$AT" '{"delays":[50,50,50]}' >/dev/null
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"E2E-P1","state":"OFFLINE"}' >/dev/null
+PO5=$(pay_new_order "$PID" "$ADDR")
+sleep 0.2
+assert_eq "首次尝试失败仍是 PENDING(attempts=1)" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "PENDING:1"
+sleep 0.2; req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
+assert_eq "第 2 次尝试失败仍是 PENDING(attempts=2)" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "PENDING:2"
+sleep 0.2; req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
+assert_eq "第 3 次尝试失败 → FAILED" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "FAILED:3"
+PJID5=$(jq -r '.data.list[0].id' <<<"$(PJOBS "$PO5")")
+# 离线告警：直接注入「已离线超过 offlineAlertMin」，不真等 5 分钟（阈值下限是 1 分钟，调不到 0）
+req POST /api/admin/system/printer-mock/health-track "$AT" '{"sn":"E2E-P1","offlineSinceMsAgo":600000,"alerted":false}' >/dev/null
+R=$(req POST /api/admin/system/run-scheduler "$AT" '{}')
+[[ "$(jq -r .data.printerHealth <<<"$R")" -ge 1 ]] && ok "持续离线达阈值触发告警(printerHealth≥1)" || fail "printerHealth 告警" "$R"
+assert_eq "工作台打印机状态灯=OFFLINE" "$(req GET '/api/admin/workbench/snapshot?fresh=1' "$AT" | jq -r .data.printer.status)" "OFFLINE"
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"E2E-P1","state":"ONLINE"}' >/dev/null
+R=$(req POST /api/admin/system/run-scheduler "$AT" '{}')
+[[ "$(jq -r .data.printerHealth <<<"$R")" -ge 1 ]] && ok "恢复在线触发告知+补打(printerHealth≥1)" || fail "printerHealth 恢复" "$R"
+assert_eq "工作台打印机状态灯=ONLINE" "$(req GET '/api/admin/workbench/snapshot?fresh=1' "$AT" | jq -r .data.printer.status)" "ONLINE"
+assert_eq "FAILED 作业已被恢复补打成功" "$(req GET /api/admin/print-jobs "$AT" | jq -r --arg id "$PJID5" '.data.list[] | select((.id|tostring)==$id) | .status')" "SENT"
+
+echo "-- 后台绑定/解绑/测试页/状态 --"
+R=$(req POST /api/admin/printers/bind "$AT" '{"sn":"E2E-P2","key":"anykey","name":"后厨机"}')
+assert_eq "绑定成功后出现在列表" "$(jq -r '[.data.printers[].sn] | index("E2E-P2") != null' <<<"$R")" "true"
+R=$(req POST /api/admin/printers/E2E-P2/test "$AT")
+assert_eq "测试页已入队" "$(jq -r .data.enqueued <<<"$R")" "true"
+R=$(req GET /api/admin/printers/status "$AT")
+assert_eq "状态接口返回两台" "$(jq -r '.data | length' <<<"$R")" "2"
+R=$(req DELETE /api/admin/printers/E2E-P2 "$AT")
+assert_eq "解绑后列表只剩一台" "$(jq -r '.data.printers | length' <<<"$R")" "1"
+
+echo "-- 打印记录失败重试 / 订单重打 --"
+req POST /api/admin/system/printer-mock/fail "$AT" '{"sn":"E2E-P1","kind":"CONFIG","message":"密钥不对（mock）"}' >/dev/null
+R=$(req POST "/api/admin/orders/$PO1/reprint" "$AT")
+assert_eq "重打已入队" "$(jq -r .data.enqueued <<<"$R")" "true"
+sleep 0.2
+RPJID=$(req GET "/api/admin/print-jobs?orderId=$PO1" "$AT" | jq -r '[.data.list[] | select(.kind=="REPRINT")][0].id')
+assert_eq "CONFIG 类错误立即 FAILED 不重试" "$(req GET /api/admin/print-jobs "$AT" | jq -r --arg id "$RPJID" '.data.list[]|select((.id|tostring)==$id)|.attempts')" "1"
+R=$(req POST "/api/admin/print-jobs/$RPJID/retry" "$AT")
+assert_eq "手动重试成功(打印机已恢复正常)" "$(jq -r .data.status <<<"$R")" "SENT"
+R=$(req POST "/api/admin/orders/$PO1/reprint" "$AT")
+JID2=$(jq -r '.data.jobIds[0]' <<<"$R")
+[[ "$JID2" != "$RPJID" ]] && ok "重打每次都新开一条记录（非幂等，符合预期）" || fail "重打不应幂等"
+
+echo "-- CANCEL 触发：顾客申请取消 / 自助取消 --"
+CO1=$(mk_local_paid); req POST "/api/admin/local/orders/$CO1/accept" "$AT" >/dev/null
+R=$(req POST "/api/orders/$CO1/cancel-request" "$UT" '{"note":"打印机 e2e"}'); assert_eq "cancel-request 成功" "$(code "$R")" "0"
+sleep 0.3
+assert_eq "顾客申请取消 → CANCEL 已出票" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(PJOBS "$CO1")")" "1"
+
+CO2=$(pay_new_order "$PID" "$ADDR")
+R=$(req PUT "/api/orders/$CO2/cancel" "$UT"); assert_eq "自助取消成功" "$(jq -r '.data.status' <<<"$R")" "REFUNDED"
+sleep 0.3
+assert_eq "自助取消(全额退款) → CANCEL 已出票" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(PJOBS "$CO2")")" "1"
+
+echo "-- 未接单重复播报 --"
+req POST /api/admin/system/printer-mock/repeat-min-wait "$AT" '{"ms":0}' >/dev/null
+RO1=$(pay_new_order "$PID" "$ADDR")
+R=$(req POST /api/admin/system/run-scheduler "$AT" '{}')
+[[ "$(jq -r .data.repeatAnnounce <<<"$R")" -ge 1 ]] && ok "repeatAnnounce ≥1" || fail "repeatAnnounce" "$R"
+assert_eq "未接单订单已出 REPEAT 票" "$(jq -r '[.data.list[] | select(.kind=="REPEAT")] | length' <<<"$(PJOBS "$RO1")")" "1"
+
+# 复位：不让本段状态影响第 31 段「打印机占位」等既有断言在下一轮重跑时的前置假设
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null
 
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
