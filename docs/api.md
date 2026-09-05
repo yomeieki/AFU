@@ -985,7 +985,7 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 | 42231 | 400 | 该分类下有待付款订单，暂不可切换渠道 | `PUT /api/admin/categories/:id`（改 `channel` 时，`services/product-channel.ts`） |
 | 42239 | 400 | 请重新获取配送报价后再提交 | `POST /api/orders`（LOCAL）：`quoteToken` 缺失/验签失败/已过期/`addressId` 或**收货**坐标与凭证不符。与 42227 的分工：42239 是「你手上这张票不作数，重报一次价」，42227 是「店家改了参数，刷新后重新提交」 |
 
-> 上述码值中的 12 个均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出（`42221` 在 M1 阶段仅预留码值，M2 起已实现，见附录 C）；`42239` 是后加的（强制报价凭证），占用 42238 与预留给打印机的 42240-42242 之间唯一的空位；`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）两个码值不在该清单中，同样在 M1 阶段仅预留，**M2 起已实现，用法见附录 C**。
+> 上述码值中的 12 个均在计划文档 `docs/superpowers/plans/2026-09-03-local-delivery-m1-channel-foundation.md` 的 Global Constraints 一节列出（`42221` 在 M1 阶段仅预留码值，M2 起已实现，见附录 C）；`42239` 是后加的（强制报价凭证），占用 42238 与打印机的 42240-42242（M2b 起已实现，见附录 D）之间唯一的空位；`42225`（呼叫骑手失败）、`42228`（已有进行中的配送单）两个码值不在该清单中，同样在 M1 阶段仅预留，**M2 起已实现，用法见附录 C**。
 
 ---
 
@@ -1164,3 +1164,69 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 | 42238 | 400 | 取消请求超时，请稍后重试（状态未变化） | `delivery/cancel`（调用快递100 `cancel` 超时；本地状态保证未被误改） |
 
 > 上述 7 个码值出现在 `docs/superpowers/plans/2026-09-03-local-delivery-m2-engine.md` 的 Global Constraints 表。HTTP 状态码全部是 400——`AppError` 的 `httpStatus` 默认值即 400，`services/delivery/orchestrator.ts` 里这些抛出均未传第三个参数覆盖默认值（与项目里绝大多数业务错误码的约定一致，业务语义全靠 `code` 区分，HTTP 状态码本身不承载语义）。
+
+---
+
+## 附录 D：出票与打印机（M2b）
+
+规格 `docs/superpowers/specs/2026-09-03-local-delivery-design.md` §8b。核心层（`printer.ts` 接口 /
+`feie.ts` 飞鹅实现 / `mock.ts` / `content.ts` 票面渲染 / `printer-settings.ts` / `ticket/index.ts` 的
+`enqueueOrderTicket`/`processQueue`/`repeatAnnounce`/`healthCheck`）由更早一批实现；本里程碑把它接进
+业务流：付款成功触发出票、scheduler 三任务、工作台打印机状态灯、后台绑定/记录/重试接口。
+
+### 触发点
+
+| 事件 | 位置 | 说明 |
+|---|---|---|
+| 付款成功 | `routes/orders.ts`（mock 支付）、`routes/wechat-notify.ts`（真实微信支付回调） | `enqueueOrderTicket(orderId,'NEW_ORDER')`，fire-and-forget，与 `notifyOrderPaid` 并列，绝不阻塞回调应答 |
+| 顾客申请取消（D6②） | `POST /api/orders/:id/cancel-request` | `printCancel=true` 时出 `CANCEL` 提醒票 |
+| 顾客自助秒退（D6①） | `PUT /api/orders/:id/cancel`（`PAID` 且未接单分支） | 决定取消即出票，不等退款请求/回调确认完成 |
+| 微信退款成功回调 | `routes/wechat-notify.ts`（`REFUND.SUCCESS`） | 仅当订单累计退完全款（转 `REFUNDED`）才出 `CANCEL` 票，覆盖走异步退款到账的场景（如后台退款/售后同意）；不改 `services/refund.ts` |
+| 店员手动重打 | `POST /api/admin/orders/:id/reprint` | `enqueueOrderTicket(orderId,'REPRINT')`，每次都新开一条记录，不做幂等 |
+| 后台打印测试页 | `POST /api/admin/printers/:sn/test` | `orderId=0`、`orderNo='TEST'` |
+
+已知缺口：`admin/orders.ts` 的「拒单」与管理端手动退款、mock 支付模式下的管理端退款（`initiateRefund`
+内部同步调用 `finalizeRefundSuccess`，不经真实微信 webhook）暂未产生 `CANCEL` 票——这些路径不在本里程碑
+「允许触碰」的文件范围内。
+
+### scheduler 新增三任务
+
+| 任务 | 内容 |
+|---|---|
+| `printQueueSweep` | 兜扫 `PrintJob(PENDING)` 按 5s/30s/2min 退避重试，3 次仍失败转 `FAILED` + 告警；`SENT` 超 3 分钟未确认查一次平台状态 |
+| `repeatAnnounce` | `PAID` 且等待超过 `repeat.localAfterMin`/`expressAfterMin` 分钟未接单 → 入队 `REPEAT` 作业（精简催单票或按 `repeat.reprint` 重打全票），次数耗尽告警老板 |
+| `printerHealth` | 查全部已配置打印机状态；连续 `offlineAlertMin` 分钟离线/异常告警一次；恢复 `ONLINE` 时告知一次并自动补打 30 分钟内的 `FAILED` 作业（超过 30 分钟的旧单不补打） |
+
+三个任务不经 `run-scheduler` 的 override（那是同城配送阈值专用的临时覆盖通道）——出票的开关/阈值都在
+`Setting(key=printer)` 里，改阈值走 `PUT /admin/settings/printer`。
+
+### 接口
+
+| 接口 | 说明 |
+|---|---|
+| `GET/PUT /api/admin/settings/printer` | 打印机运营设置（`enabled`/`printers[]`/`voice`/`repeat`/`offlineAlertMin`/`printCancel`） |
+| `POST /api/admin/printers/bind` | `{ sn, key, name? }`，成功调用飞鹅 `Open_printerAddlist` 后才写入设置；`key` 不落库明文 |
+| `DELETE /api/admin/printers/:sn` | 只从本地设置移除，不调用飞鹅侧删除接口 |
+| `POST /api/admin/printers/:sn/test` | 打印测试页 |
+| `GET /api/admin/printers/status` | 现查一次全部已配置打印机状态（供设置页手动刷新；工作台状态灯走独立的缓存路径，见下） |
+| `GET /api/admin/print-jobs?orderId=` | 打印记录：带 `orderId` 返回该订单最多 50 条，不带返回全局最近 20 条 |
+| `POST /api/admin/print-jobs/:id/retry` | 仅 `FAILED` 状态可重试，条件写防并发 |
+| `POST /api/admin/orders/:id/reprint` | 两渠道通用 |
+| `GET /api/admin/workbench/snapshot` | `data.printer` 由硬编码 `NOT_CONNECTED` 改为真实健康检测归并结果：`{ status, printers[] }`，`status` 取多台打印机中「最差」的一个（任一 `OFFLINE`/查询出错 → `OFFLINE`；任一 `ABNORMAL`/`UNKNOWN` → `ABNORMAL`；否则 `ONLINE`；未启用/未绑定任何打印机 → `NOT_CONNECTED`） |
+
+非生产（`PRINTER_PROVIDER_MOCK=true` 时才挂载于 `/api/admin/system/printer-mock`）：`POST /reset`、
+`POST /state {sn,state}`、`POST /fail {sn,kind,message?}`、`GET /jobs?sn=`、`POST /retry-delays {delays}`、
+`POST /health-track {sn,offlineSinceMsAgo,alerted}`、`POST /repeat-min-wait {ms}`——最后三个是测试专用钩子，
+用于跳过重试退避（5s/30s/2min）、离线告警持续时长（下限 1 分钟）、重复播报等待阈值（下限 1 分钟）的真实
+等待，e2e 秒级验证这几条路径，生产环境不挂载。
+
+### 错误码 `42240`-`42242`
+
+之前只是预留码值（见附录 B 末尾说明），本里程碑起在 `routes/admin/printer.ts` 的 `mapPrinterError`
+实际抛出，对应 `services/ticket/printer.ts` 的 `PrinterError.kind`：
+
+| code | HTTP | 含义 | 对应 PrinterError.kind |
+|---|---|---|---|
+| 42240 | 400 | 打印机未配置（账号/密钥/该渠道未绑定打印机等） | `CONFIG` |
+| 42241 | 400 | 打印机离线 | `CAPACITY` |
+| 42242 | 400 | 打印提交失败（附平台原文） | `BUSINESS`/`TIMEOUT` |
