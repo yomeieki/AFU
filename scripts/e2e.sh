@@ -1621,6 +1621,62 @@ assert_eq "A 的 ORDER 类流水里不包含 B 的订单号（用户隔离）" \
     '[.data.list[] | select(.refType=="ORDER") | select(.refId==$o6 or .refId==$o7 or .refId==$o8)] | length' <<<"$LEDGER_A")" "0"
 
 # 收尾：还原全局会员设置、删掉本段创建的测试地址
+echo "-- 滚动续期：有效期从「最后一次消费」起算 --"
+# 规则（spec §5.4 / docs/member-terms-copy.md）：积分到期日 = 最后一次消费 + validDays。
+# 顾客再次消费时，账户内**全部**未过期积分的到期日一并顺延；不是每批各自算。
+M1R_ADDR=$(req POST /api/addresses "$M1A" '{"receiverName":"M1续期","receiverPhone":"13800000009","province":"四川省","city":"自贡市","district":"自流井区","detail":"续期测试地址","isDefault":0}' | jq -r .data.id)
+
+# 先攒一笔分，再人为把它改成「10 天后到期」，模拟一笔很久以前得的、快过期的积分
+RO1=$(m1_completed_order "$M1A" "$M1R_ADDR" 10000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+RLED=$(sql "SELECT id FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$RO1' AND type='EARN' LIMIT 1;")
+[[ -n "$RLED" ]] && ok "续期测试：已有一条 EARN 流水 #$RLED" || fail "续期测试：造分失败"
+sql "UPDATE points_ledgers SET expires_at=DATE_ADD(NOW(), INTERVAL 10 DAY) WHERE id=$RLED;"
+DAYS_BEFORE=$(sql "SELECT DATEDIFF(expires_at, NOW()) FROM points_ledgers WHERE id=$RLED;")
+assert_eq "续期前：旧积分距到期 10 天" "$DAYS_BEFORE" "10"
+
+# 再消费一单 → 旧那行的到期日应被推到约一年后
+RO2=$(m1_completed_order "$M1A" "$M1R_ADDR" 10000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+DAYS_AFTER=$(sql "SELECT DATEDIFF(expires_at, NOW()) FROM points_ledgers WHERE id=$RLED;")
+[[ "${DAYS_AFTER:-0}" -gt 300 ]] \
+  && ok "新消费把旧积分的到期日推到一年后（${DAYS_BEFORE}天 → ${DAYS_AFTER}天）" \
+  || fail "旧积分未被续期：仍剩 ${DAYS_AFTER:-?} 天"
+
+# earn=0 的单（实付 0.5 元，floor(0.5)=0 分）同样要续期——
+# 规则写的是「最后一次消费」不是「最后一次得分」，买得少也是买了
+sql "UPDATE points_ledgers SET expires_at=DATE_ADD(NOW(), INTERVAL 10 DAY) WHERE id=$RLED;"
+RO3=$(m1_completed_order "$M1A" "$M1R_ADDR" 50)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+assert_eq "该单确实 0 分（实付 0.5 元）" "$(sql "SELECT points_earned FROM orders WHERE id=$RO3;")" "0"
+DAYS_ZERO=$(sql "SELECT DATEDIFF(expires_at, NOW()) FROM points_ledgers WHERE id=$RLED;")
+[[ "${DAYS_ZERO:-0}" -gt 300 ]] \
+  && ok "得 0 分的消费同样触发续期（剩 ${DAYS_ZERO} 天）" \
+  || fail "earn=0 的单未触发续期：仍剩 ${DAYS_ZERO:-?} 天"
+
+# 已经过期的行不能被消费「复活」——expirePoints 每日才跑一次，
+# 中间存在「按日期已过期但 remaining 未清零」的行，少了守卫会把它们救回来
+sql "UPDATE points_ledgers SET expires_at=DATE_SUB(NOW(), INTERVAL 1 DAY) WHERE id=$RLED;"
+RO4=$(m1_completed_order "$M1A" "$M1R_ADDR" 10000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+DAYS_DEAD=$(sql "SELECT DATEDIFF(expires_at, NOW()) FROM points_ledgers WHERE id=$RLED;")
+[[ "${DAYS_DEAD:-0}" -lt 0 ]] \
+  && ok "已过期的积分行不会被新消费复活（仍为 ${DAYS_DEAD} 天）" \
+  || fail "已过期积分被复活：变成 ${DAYS_DEAD:-?} 天"
+
+# 收尾：把上面人为弄过期的那行真正清掉。
+# 不做这一步，本段就会给第 37 段的一致性脚本留下一个「余额里还算着已过期的分」的脏状态
+# ——那不是代码 bug，是测试自己造的。顺带把 expirePoints 也验了。
+BAL_PRE_EXPIRE=$(sql "SELECT points_balance FROM users WHERE id=$M1A_UID;")
+req POST /api/admin/system/run-scheduler "$AT" '{"forceDailyMemberTasks":true}' >/dev/null
+assert_eq "过期任务把该行 remaining 清零" "$(sql "SELECT remaining FROM points_ledgers WHERE id=$RLED;")" "0"
+BAL_POST_EXPIRE=$(sql "SELECT points_balance FROM users WHERE id=$M1A_UID;")
+[[ "$BAL_POST_EXPIRE" -lt "$BAL_PRE_EXPIRE" ]] \
+  && ok "过期同时扣减了余额（$BAL_PRE_EXPIRE → $BAL_POST_EXPIRE）" \
+  || fail "过期未扣减余额：$BAL_PRE_EXPIRE → $BAL_POST_EXPIRE"
+
+req DELETE "/api/addresses/$M1R_ADDR" "$M1A" >/dev/null
+
 req PUT /api/admin/settings/member "$AT" "$ORIG_MEMBER_SETTINGS" >/dev/null
 req DELETE "/api/addresses/$M1A_ADDR" "$M1A" >/dev/null
 req DELETE "/api/addresses/$M1B_ADDR" "$M1B" >/dev/null
