@@ -19,6 +19,9 @@ model User {
   phone       String?   @db.VarChar(20)
   status      Int       @default(1) @db.TinyInt
   lastLoginAt DateTime? @map("last_login_at")
+  // 冗余 = 未过期入账行（EARN/GIFT_REVERT）remaining 之和；权威来源仍是 PointsLedger，
+  // 见 scripts/check-points-consistency.mjs 的只读校验
+  pointsBalance Int     @default(0) @map("points_balance")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
@@ -26,6 +29,8 @@ model User {
   addresses Address[]
   orders    Order[]
   scanLogs  ScanLog[]
+  pointsLedgers PointsLedger[]
+  userCoupons   UserCoupon[]
 
   @@map("users")
 }
@@ -273,6 +278,17 @@ model Order {
   // REAL_ORDERS），顾客端不下发（routes/orders.ts 的 withPayExpire 会剥掉）。
   // 注意它挡不住热销榜：那读的是 Product.salesCount 冗余列，隔离办法见 docs/ops-test-orders.md。
   isTest              Boolean   @default(false) @map("is_test")
+  // ── 会员积分/优惠券（M1 账本层，见 docs/superpowers/plans/2026-09-04-member-m1-ledger.md）──
+  // 普通 Int 列，不建关系字段（与 Refund/Delivery.activeOrderId 同款处理）
+  couponId        Int?      @map("coupon_id")
+  discountAmount  Int       @default(0) @map("discount_amount")
+  // 赠品消耗的积分（M2 结算链路写入，M1 恒为 0）
+  pointsUsed      Int       @default(0) @map("points_used")
+  // 本单实际发放的积分，可能为 0（小额单/已全额退款）
+  pointsEarned    Int       @default(0) @map("points_earned")
+  // 积分结算的唯一「已处理」标记：非空 = settlePoints 已处理过（无论是否发出流水），
+  // 不得用 pointsEarned === 0 判断（spec §5.4）——否则 earn=0 的订单会被兜底任务永远重扫
+  pointsSettledAt DateTime? @map("points_settled_at")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
@@ -286,6 +302,7 @@ model Order {
 
   @@index([userId, status])
   @@index([status, createdAt])
+  @@index([status, pointsSettledAt, completedAt])
   @@map("orders")
 }
 
@@ -304,6 +321,9 @@ model OrderItem {
   productPrice Int      @map("product_price")
   quantity     Int
   subtotal     Int
+  // 赠品行：productPrice/subtotal = 0，不进小计与门槛判定（M2 结算链路写入，M1 不产生赠品行）
+  isGift       Boolean  @default(false) @map("is_gift")
+  pointsCost   Int      @default(0) @map("points_cost")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -597,4 +617,112 @@ model PrintJob {
   @@index([status, createdAt])
   @@index([orderId])
   @@map("print_jobs")
+}
+
+// ─────────────────────────────────────────────────────────
+// 会员积分 + 优惠券（M1 账本层，M2 起接入下单计价）。
+// 设计依据 docs/superpowers/specs/2026-09-04-member-points-coupon-design.md §4。
+// ─────────────────────────────────────────────────────────
+
+// 积分流水。User.pointsBalance 是冗余缓存，真正的余额永远可由本表 remaining 重算，
+// 出账必留痕（不允许直接改余额不记流水）。
+model PointsLedger {
+  id           Int       @id @default(autoincrement())
+  userId       Int       @map("user_id")
+  // EARN 消费得分 | REDEEM 兑换券 | GIFT 随单赠品 | GIFT_REVERT 未支付取消退回
+  // | REFUND_DEDUCT 退款扣回 | EXPIRE 过期 | ADMIN 手动调整（预留，本轮无入口）
+  type         String    @db.VarChar(16)
+  delta        Int                                        // 正=入账 负=出账
+  balanceAfter Int       @map("balance_after")
+  remaining    Int       @default(0)                      // 仅入账行有意义：该笔尚未被消耗/过期的余量
+  refType      String    @map("ref_type") @db.VarChar(16) // ORDER | COUPON | REFUND | LEDGER
+  refId        String    @map("ref_id") @db.VarChar(32)
+  remark       String?   @db.VarChar(255)
+  // EARN/GIFT_REVERT = 到期日；GIFT = 被扣行里最早的到期日，供 GIFT_REVERT 释放时继承
+  // （2026-09-05 回填：见 services/member/points.ts 的 consumePoints 与 M1 计划 Task 3 Step 2）
+  expiresAt    DateTime? @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([type, refType, refId])                        // 幂等防线：同一来源只能记一次账
+  @@index([userId, createdAt])
+  @@index([userId, type, expiresAt])                      // FIFO 扣减与过期扫描
+  @@map("points_ledgers")
+}
+
+// 券模板：店员定义的券种
+model CouponTemplate {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(64)
+  description  String?  @db.VarChar(255)
+  amount       Int                                        // 减免金额（分）
+  threshold    Int      @default(0)                       // 满多少可用（分），0 = 代金券
+  channel      String   @default("ALL") @db.VarChar(16)   // ALL | LOCAL | EXPRESS
+  validDays    Int      @map("valid_days")                // 领取后 N 天有效
+  source       String   @db.VarChar(16)                   // ADMIN | POINTS | CAMPAIGN | NEWCOMER
+  pointsCost   Int?     @map("points_cost")                // source=POINTS 必填
+  totalLimit   Int?     @map("total_limit")                // source=CAMPAIGN 可选总量
+  perUserLimit Int?     @map("per_user_limit")
+  issuedCount  Int      @default(0) @map("issued_count")
+  status       String   @default("ON") @db.VarChar(16)     // ON | OFF
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  coupons UserCoupon[]
+
+  @@index([source, status, sortOrder])
+  @@map("coupon_templates")
+}
+
+// 发到某个人手里的一张券。面额等字段快照自模板，模板停用/改价不影响已发券
+model UserCoupon {
+  id         Int       @id @default(autoincrement())
+  userId     Int       @map("user_id")
+  templateId Int       @map("template_id")
+  code       String    @unique @db.VarChar(32)            // 展示与客服核对用
+  name       String    @db.VarChar(64)                    // ↓ 四个快照字段，模板改价/停用不影响已发券
+  amount     Int
+  threshold  Int       @default(0)
+  channel    String    @default("ALL") @db.VarChar(16)
+  status     String    @default("UNUSED") @db.VarChar(16) // UNUSED | USED | EXPIRED
+  source     String    @db.VarChar(16)                    // 同模板 source
+  sourceRef  String?   @map("source_ref") @db.VarChar(64) // 赔偿时 = 关联订单号
+  issuedBy   String?   @map("issued_by") @db.VarChar(64)  // 赔偿时 = 操作管理员
+  remark     String?   @db.VarChar(255)                   // 赔偿原因
+  expiresAt  DateTime  @map("expires_at")
+  usedAt     DateTime? @map("used_at")
+  // 普通 Int 列，不建关系字段（与 Order.couponId 同款处理，避免双向强关联）
+  orderId    Int?      @map("order_id")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user     User           @relation(fields: [userId], references: [id])
+  template CouponTemplate @relation(fields: [templateId], references: [id])
+
+  @@index([userId, status, expiresAt])
+  @@index([orderId])
+  @@index([status, expiresAt])                            // 过期扫描
+  @@map("user_coupons")
+}
+
+// 可用积分加购的随单赠品（M2 起接入下单结算，M1 只建表不使用）
+model PointsGood {
+  id            Int      @id @default(autoincrement())
+  productId     Int      @map("product_id")
+  skuId         Int?     @map("sku_id")
+  pointsCost    Int      @map("points_cost")
+  perOrderLimit Int      @default(1) @map("per_order_limit")
+  stockLimit    Int?     @map("stock_limit")                // 可选总量，NULL = 不限
+  issuedCount   Int      @default(0) @map("issued_count")
+  status        String   @default("ON") @db.VarChar(16)
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // 注意：MySQL 唯一索引不约束 NULL，无 SKU 商品的重复校验需在代码里先 findFirst 再插
+  // （与 Cart 表 @@unique([userId, productId, skuId]) 同款处理）
+  @@unique([productId, skuId])
+  @@index([status, sortOrder])
+  @@map("points_goods")
 }

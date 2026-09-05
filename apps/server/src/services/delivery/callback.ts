@@ -12,6 +12,7 @@ import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert } from '../order-notify'
 import { sendDeliverSubscribeMessage } from '../subscribe-message'
 import { rollbackOrderAfterCancel } from './orchestrator'
+import { settlePoints } from '../member/points'
 
 const updateTimeIsoOf = (p: { providerUpdateTime: Date | null }) => p.providerUpdateTime ? p.providerUpdateTime.toISOString() : null
 
@@ -139,6 +140,9 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
         after.push(() => sendDeliverSubscribeMessage(o.user.openid, { id: o.id, orderNo: o.orderNo }, { courierName: p.courierName ?? delivery.courierName, courierMobile: p.courierMobile ?? delivery.courierMobile }, o.items[0]?.productName))
       } else if (p.providerStatus === '520') {
         await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: { in: ['PREPARING', 'SHIPPED'] } }, data: { status: 'COMPLETED', completedAt: new Date() } })
+        // 会员积分（M1）：同城配送完成也要发分，事务提交后才触发（settlePoints 自己会重新
+        // 读一次订单状态，即使上面这次 updateMany 是无效的 0 行也安全）
+        after.push(() => void settlePoints(delivery.orderId))
       } else if (p.providerStatus === '720') {
         // 取货后被取消：SHIPPED 回退 PREPARING。
         // 与主动取消共用同一个实现（orchestrator.rollbackOrderAfterCancel），护栏只写一处

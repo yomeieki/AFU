@@ -35,9 +35,43 @@ async function main() {
 
   // ── 演示数据（分类/示例商品）仅非生产环境写入 ─────────────
   if (process.env.NODE_ENV === 'production') {
-    console.log('ℹ️  生产环境：跳过演示分类/商品，请在后台自行录入')
+    console.log('ℹ️  生产环境：跳过演示分类/商品/会员券模板，请在后台自行录入')
     return
   }
+
+  // ── 会员券模板样例（三条来源各一个，供 e2e 与本地联调用）────────
+  // CouponTemplate 没有天然唯一列（不像 User.openid/Admin.username 能直接 upsert），
+  // 沿用本文件里 categories/products 那种「先查是否已有同名的，没有才插」的幂等写法，
+  // 而不是字面意义上的 prisma upsert（那需要一个唯一 where 键，这里没有）。
+  const couponSamples: {
+    name: string
+    description: string
+    amount: number
+    threshold: number
+    validDays: number
+    source: string
+    pointsCost?: number
+  }[] = [
+    { name: '新人礼 满30减5', description: '新用户首次登录自动到账', amount: 500, threshold: 3000, validDays: 30, source: 'NEWCOMER' },
+    { name: '积分兑 满50减10', description: '积分商城可兑换', amount: 1000, threshold: 5000, validDays: 30, source: 'POINTS', pointsCost: 200 },
+    { name: '客服补偿 无门槛10元', description: '店员定向发放，用于售后/配送异常补偿', amount: 1000, threshold: 0, validDays: 90, source: 'ADMIN' },
+  ]
+  for (const s of couponSamples) {
+    const exists = await prisma.couponTemplate.findFirst({ where: { name: s.name } })
+    if (exists) continue
+    await prisma.couponTemplate.create({
+      data: {
+        name: s.name,
+        description: s.description,
+        amount: s.amount,
+        threshold: s.threshold,
+        validDays: s.validDays,
+        source: s.source,
+        pointsCost: s.pointsCost ?? null,
+      },
+    })
+  }
+  console.log('✅ 会员券模板样例：新人礼 / 积分兑 / 客服补偿（各按名称去重，重跑不覆盖）')
 
   // ── 商品分类 ──────────────────────────────────────────
   const categoryCount = await prisma.category.count()

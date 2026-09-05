@@ -1,11 +1,13 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 import prisma from '../utils/prisma'
 import { signUserToken } from '../utils/jwt'
 import { success } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { userLoginLimiter } from '../middlewares/rate-limit'
 import { config } from '../config'
+import { issueNewcomerCoupon } from '../services/member/coupons'
 
 const router = Router()
 
@@ -45,11 +47,28 @@ router.post('/wechat-login', userLoginLimiter, async (req: Request, res: Respons
       openid = data.openid
     }
 
-    const user = await prisma.user.upsert({
-      where: { openid },
-      update: { lastLoginAt: new Date() },
-      create: { openid, status: 1 },
-    })
+    // 不用 upsert：新客券只在「这是一个新用户」时发一次，upsert 本身分不出这次命中的是
+    // create 分支还是 update 分支。改成显式 find → create（捕 P2002 幂等）/ update，
+    // 与既有惯例一致（幂等靠唯一索引，捕冲突后 findUnique 取回既有行，不解析 err.meta.target）。
+    let user = await prisma.user.findUnique({ where: { openid } })
+    let isNewUser = false
+    if (user) {
+      user = await prisma.user.update({ where: { openid }, data: { lastLoginAt: new Date() } })
+    } else {
+      try {
+        user = await prisma.user.create({ data: { openid, status: 1 } })
+        isNewUser = true
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          // 并发双击：另一次请求抢先建了这个 openid，这次当作老用户登录，不发新客券
+          user = await prisma.user.update({ where: { openid }, data: { lastLoginAt: new Date() } })
+        } else {
+          throw e
+        }
+      }
+    }
+
+    if (isNewUser) void issueNewcomerCoupon(user.id)
 
     const token = signUserToken({ userId: user.id, openid: user.openid })
 

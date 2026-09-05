@@ -24,6 +24,10 @@ import {
 import {
   processQueue as printQueueSweep, repeatAnnounce as printRepeatAnnounce, printerHealthTask,
 } from './ticket'
+import { settlePoints, expirePointsBatch } from './member/points'
+import { expireCouponsBatch } from './member/coupons'
+import { getMemberSettings } from './member/settings'
+import { getCronState, patchCronState, isSameLocalDay } from './member/cron-state'
 
 const TICK_MS = 60 * 1000
 const LOW_STOCK_PUSH_INTERVAL_MS = 12 * 60 * 60 * 1000
@@ -56,6 +60,12 @@ export interface SchedulerOverrides {
   cancelRequestPendingMin?: number
   autoCallDelayMin?: number
   quoteRefreshMin?: number
+  // 会员积分/优惠券（M1）：settleMissedPoints 下界（默认 2 分钟前，防止扫到还没跑完 confirm
+  // 钩子那一瞬间的单）；e2e 要验证「漏挂钩子 2 分钟后被兜底任务补发」等不到 2 分钟，传 0 绕过。
+  settleMissedPointsAfterMin?: number
+  // expirePoints / expireCoupons 两个「每日一次」任务的日切判定，e2e 传 true 绕过，
+  // 否则一天之内重复调用 run-scheduler 只有第一次真的会执行。
+  forceDailyMemberTasks?: boolean
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -85,6 +95,10 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['printQueueSweep', () => printQueueSweep().then((r) => r.retried + r.confirmed)],
     ['repeatAnnounce', () => printRepeatAnnounce().then((r) => r.announced + r.exhausted)],
     ['printerHealth', () => printerHealthTask().then((r) => r.alerted + r.recovered + r.backfilled)],
+    // 会员积分/优惠券（M1，见 docs/superpowers/plans/2026-09-04-member-m1-ledger.md Task 6）
+    ['settleMissedPoints', () => settleMissedPoints(overrides.settleMissedPointsAfterMin)],
+    ['expirePoints', () => runMemberDailyTask('lastExpirePointsAt', expirePointsBatch, overrides.forceDailyMemberTasks)],
+    ['expireCoupons', () => runMemberDailyTask('lastExpireCouponsAt', expireCouponsBatch, overrides.forceDailyMemberTasks)],
   ]
   try {
     for (const [name, fn] of tasks) {
@@ -183,4 +197,52 @@ export async function pushLowStock(): Promise<number> {
   if (low.length === 0) return 0
   notifyLowStock(low, LOW_STOCK_THRESHOLD)
   return low.length
+}
+
+// ─────────────────────────────────────────────────────────
+// 会员积分/优惠券（M1）
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 兜底：扫漏挂积分发放钩子的订单（COMPLETED 有多条路径，钩子只是加速，正确性靠这个任务保证）。
+ * 严格按 spec §5.4：下界 7 天避免开关从关到开时突然给历史全量订单补发（也避免关闭期间积压的
+ * 订单被无限扫描）；上界默认 2 分钟避免扫到 confirm 钩子还没来得及自己 settlePoints 完的单
+ * （几率很小，但两处都在写同一行，让钩子有个窗口领先更干净）。
+ */
+const SETTLE_MISSED_POINTS_AFTER_MIN = 2
+const SETTLE_MISSED_POINTS_WINDOW_DAYS = 7
+export async function settleMissedPoints(afterMin = SETTLE_MISSED_POINTS_AFTER_MIN): Promise<number> {
+  const settings = await getMemberSettings()
+  if (!settings.points.enabled) return 0
+  const now = Date.now()
+  const upper = new Date(now - afterMin * 60 * 1000)
+  const lower = new Date(now - SETTLE_MISSED_POINTS_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+  const due = await prisma.order.findMany({
+    where: { status: 'COMPLETED', pointsSettledAt: null, isTest: false, completedAt: { gte: lower, lte: upper } },
+    select: { id: true },
+    take: BATCH,
+    orderBy: { completedAt: 'asc' },
+  })
+  for (const { id } of due) await settlePoints(id)
+  return due.length
+}
+
+/**
+ * expirePoints / expireCoupons 共用的「每日一次」执行判定：上次记录的执行日与今天不同才跑，
+ * 跑完立即记录本次时间。force=true（e2e）时无视日切直接跑。
+ */
+async function runMemberDailyTask(
+  field: 'lastExpirePointsAt' | 'lastExpireCouponsAt',
+  fn: () => Promise<number>,
+  force = false
+): Promise<number> {
+  const now = new Date()
+  if (!force) {
+    const state = await getCronState()
+    const last = state[field]
+    if (last && isSameLocalDay(new Date(last), now)) return 0
+  }
+  const result = await fn()
+  await patchCronState({ [field]: now.toISOString() })
+  return result
 }

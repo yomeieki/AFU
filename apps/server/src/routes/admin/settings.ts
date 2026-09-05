@@ -7,6 +7,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { getShippingSettings, setShippingSettings } from '../../services/settings'
+import { getMemberSettings, setMemberSettings } from '../../services/member/settings'
 import { AppError } from '../../middlewares/error'
 import {
   getLocalSettings, setLocalSettings, patchLocalSettings, sanitizeLocalSettings,
@@ -36,6 +37,37 @@ router.put('/shipping', async (req, res, next) => {
   try {
     const body = shippingSchema.parse(req.body)
     res.json({ code: 0, message: 'ok', data: await setShippingSettings(body) })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// 数值范围与结构在此校验；templateId 是否存在且为 NEWCOMER 模板，业务语义更重，交给
+// setMemberSettings 去查库校验（返回 40001，见 services/member/settings.ts）
+const memberSettingsSchema = z.object({
+  points: z.object({
+    enabled: z.boolean(),
+    earnRatePerYuan: z.number().int().min(1).max(100),
+    validDays: z.number().int().min(1).max(3650),
+  }),
+  newcomer: z.object({
+    templateId: z.number().int().positive().nullable(),
+  }),
+  rulesText: z.string().max(2000),
+})
+
+router.get('/member', async (_req, res, next) => {
+  try {
+    res.json({ code: 0, message: 'ok', data: await getMemberSettings() })
+  } catch (e) {
+    next(e)
+  }
+})
+
+router.put('/member', async (req, res, next) => {
+  try {
+    const body = memberSettingsSchema.parse(req.body)
+    res.json({ code: 0, message: 'ok', data: await setMemberSettings(body) })
   } catch (e) {
     next(e)
   }

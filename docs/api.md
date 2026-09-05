@@ -1230,3 +1230,86 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 | 42240 | 400 | 打印机未配置（账号/密钥/该渠道未绑定打印机等） | `CONFIG` |
 | 42241 | 400 | 打印机离线 | `CAPACITY` |
 | 42242 | 400 | 打印提交失败（附平台原文） | `BUSINESS`/`TIMEOUT` |
+
+## 附录 E：会员积分与优惠券（M1 账本层）
+
+设计依据 `docs/superpowers/specs/2026-09-04-member-points-coupon-design.md`，实施计划
+`docs/superpowers/plans/2026-09-04-member-m1-ledger.md`。**M1 只做服务端账本，不改下单计价、
+不碰任何前端页面**——顾客端和后台目前看不到任何变化；积分商城/赠品/结算页用券留给 M2。
+
+### 数据模型
+
+一次迁移建齐了 M1–M2 全部结构（`20260906000000_member_points_coupon`）：`PointsLedger`
+（积分流水）、`CouponTemplate`（券模板）、`UserCoupon`（用户券）、`PointsGood`（随单赠品，M1
+未使用）；`User.pointsBalance`；`Order` 的 `couponId/discountAmount/pointsUsed/pointsEarned/
+pointsSettledAt`（M1 只用 `pointsEarned`/`pointsSettledAt`，其余留给 M2）；`OrderItem.isGift/
+pointsCost`（M1 未使用）。字段定义与枚举取值见 spec §4。
+
+### 服务端实现
+
+| 文件 | 职责 |
+|---|---|
+| `services/member/settings.ts` | `Setting(key='member')` 读写 + 60s 缓存；读失败时保守回退（`points.enabled=false`），与运费设置读失败回退「全 0」的语义方向相反——防止配置不可信时误发分 |
+| `services/member/points.ts` | 发放（`settlePoints`）/ FIFO 扣减（`consumePoints`）/ 过期（`expirePointsBatch`）/ 退款扣回（`deductPointsOnRefund`）/ 只读查询 |
+| `services/member/coupons.ts` | 发券（`issueCoupon` 公共原语 + `redeemByPoints`/`claimCampaign`/`issueNewcomerCoupon`）/ 过期（`expireCouponsBatch`）/ 只读查询 |
+| `services/member/cron-state.ts` | `expirePoints`/`expireCoupons` 两个「每日一次」任务的日切判定（`Setting(key='member_cron_state')`） |
+
+### 发放/扣回钩子
+
+| 事件 | 位置 |
+|---|---|
+| 顾客确认收货 | `PUT /api/orders/:id/confirm` |
+| 发货超时自动确认收货 | `scheduler.autoCompleteShippedOrders` |
+| 同城骑手送达（520 回调） | `services/delivery/callback.ts`，事务提交后触发（塞进已有的 `after[]` 数组） |
+| 同城店员标记已送达 | `services/delivery/orchestrator.ts` 的 `markDelivered` |
+| 兜底（漏挂钩子） | `scheduler.settleMissedPoints`，每分钟扫 `COMPLETED && pointsSettledAt IS NULL && isTest=false && completedAt ∈ [now-7d, now-2min]` |
+| 退款扣回 | `services/refund.ts` 的 `finalizeRefundSuccess` 事务末尾（同一事务内，退款成功但扣回失败会一起回滚，靠微信回调重试机制补） |
+| 新客券 | `routes/auth.ts` 的 `wechat-login`，新建 `User` 分支之后 |
+
+以上全部 fire-and-forget（退款扣回除外——那个必须在同一事务内，见上表），失败不影响主流程，
+由 `settleMissedPoints` 兜底任务补。
+
+### scheduler 新增三任务
+
+| 任务 | 内容 |
+|---|---|
+| `settleMissedPoints` | 见上表；开关 `member.points.enabled=false` 时直接返回 0 |
+| `expirePoints` | 每日一次：`type IN ('EARN','GIFT_REVERT') && remaining>0 && expiresAt<now`，批 200，`remaining→0` + 写 `EXPIRE` 流水 + 余额同步 |
+| `expireCoupons` | 每日一次：`UserCoupon(status='UNUSED', expiresAt<now)` 批量置 `EXPIRED` |
+
+`run-scheduler` 的 overrides 新增 `settleMissedPointsAfterMin`（下界降到 0，e2e 用）与
+`forceDailyMemberTasks`（绕过日切判定，e2e 用）。
+
+### 接口
+
+用户态（挂 `verifyUserToken`，一律 `where:{userId:req.userId!}`，见 `routes/member.ts`）：
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/member/summary` | `{ pointsBalance, expiringSoon:{points,date}\|null, availableCoupons }` |
+| `GET /api/member/points/ledger?page=&pageSize=` | 流水，白名单只返回 `typeLabel/delta/refType/refId/remark/createdAt` |
+| `GET /api/member/coupons?status=available\|used\|expired` | 券列表，白名单只返回 `id/code/name/amount/threshold/channel/status/source/expiresAt/usedAt`（不返回 `issuedBy/remark/sourceRef/templateId`） |
+| `POST /api/member/points/redeem` | `{ templateId }`，积分兑换券 |
+| `POST /api/member/coupons/claim` | `{ templateId }`，领券中心领取 |
+
+管理态：`GET/PUT /api/admin/settings/member`（积分总开关/每元得分/有效期天数/新客券模板/规则文案）。
+券模板管理、赠品管理、用户页积分/券列、赔偿券发放（`source=ADMIN`）留给 M3，本里程碑只提供了
+`issueCoupon()` 通用原语，未开放对应的管理端点。
+
+### 新错误码（`4225x`，5 个）
+
+| code | 含义 |
+|---|---|
+| 42250 | 积分不足 |
+| 42251 | 优惠券不可用（M1 暂无触发路径，留给 M2 结算链路） |
+| 42252 | 赠品超出限购或已兑完（M1 暂无触发路径，留给 M2） |
+| 42253 | 该券已领完或已达每人上限 |
+| 42254 | 券模板已停用 |
+
+### 已知待办（交接给后续里程碑）
+
+- 券的实际使用（下单抵扣、赠品加购、`GET /member/checkout-options`）、`releaseOrderBenefits`
+  （未支付取消释放券与赠品积分）— 全部在 M2。
+- 券模板/赠品管理页、用户页积分与券列、赔偿券发放按钮 — M3。
+- 会员中心/积分商城/我的券/领券中心/积分明细五个小程序页面、封面入口接线 — M4。
+- `docs/staff-guide.md`「优惠券与积分」章节、`docs/miniapp-release-checklist.md` 的规则公示检查项 — M5。

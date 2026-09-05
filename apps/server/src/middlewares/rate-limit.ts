@@ -1,4 +1,5 @@
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
+import { Request } from 'express'
 import { config } from '../config'
 
 /**
@@ -96,6 +97,29 @@ export const scanLogLimiter = rateLimit({
  * statusCode 强制 200：回调应答语义与其它接口相反（N5），限流命中也不能例外，
  * 否则会被快递100 当成异常触发重推风暴。
  */
+/** 挂在 verifyUserToken 之后，req.userId 恒有值；ipKeyGenerator 兜底只是与 upload.ts 同款防御写法 */
+const memberKeyGenerator = (req: Request) => (req.userId ? `u:${req.userId}` : ipKeyGenerator(req.ip ?? ''))
+
+// 会员只读端点（/member/summary、/member/points/ledger、/member/coupons）：查询，宽松限流
+export const memberReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(120, 2000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: memberKeyGenerator,
+  message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
+})
+
+// 会员写端点（/member/points/redeem、/member/coupons/claim）：会消耗积分/限量券库存，比只读更严
+export const memberWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(20, 500),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: memberKeyGenerator,
+  message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
+})
+
 export const kdCallbackLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: devCeiling(120, 2000),
