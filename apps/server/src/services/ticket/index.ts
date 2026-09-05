@@ -65,6 +65,7 @@ type OrderForTicket = {
   id: number; orderNo: string; deliveryType: string; createdAt: Date; paidAt: Date | null
   totalAmount: number; shippingFee: number; actualAmount: number; remark: string | null
   receiverName: string; receiverPhone: string; receiverFullAddress: string
+  receiverDistrict: string; receiverDetail: string
   receiverPoiName: string | null; distanceM: number | null; estimatedDeliveryAt: Date | null
   announceCount: number
   items: { productName: string; specText: string | null; quantity: number; subtotal: number }[]
@@ -74,6 +75,7 @@ const ORDER_SELECT = {
   id: true, orderNo: true, deliveryType: true, createdAt: true, paidAt: true,
   totalAmount: true, shippingFee: true, actualAmount: true, remark: true,
   receiverName: true, receiverPhone: true, receiverFullAddress: true,
+  receiverDistrict: true, receiverDetail: true,
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true } },
 } as const
@@ -92,6 +94,8 @@ function toTicketInput(order: OrderForTicket, seq: number | null): TicketOrderIn
     receiverName: order.receiverName,
     receiverPhone: order.receiverPhone,
     receiverFullAddress: order.receiverFullAddress,
+    receiverDistrict: order.receiverDistrict,
+    receiverDetail: order.receiverDetail,
     receiverPoiName: order.receiverPoiName,
     distanceM: order.distanceM,
     estimatedDeliveryAt: order.estimatedDeliveryAt,

@@ -12,6 +12,8 @@
  * `TICKET_BYTE_LIMIT` 的判断逻辑**——这点在返回报告里作为待核实项列出。
  */
 
+import { localShortAddress } from '../../utils/address'
+
 export type TicketChannel = 'LOCAL' | 'EXPRESS'
 
 export interface TicketItemInput {
@@ -39,6 +41,9 @@ export interface TicketOrderInput {
   receiverPhone: string
   receiverFullAddress: string
   // ── 同城专属（channel==='LOCAL' 时使用）──
+  // 省市区拆分字段：同城票面只用「区 + 详细地址」，省市恒为门店所在地，是纯噪音
+  receiverDistrict?: string | null
+  receiverDetail?: string | null
   receiverPoiName?: string | null
   distanceM?: number | null
   estimatedDeliveryAt?: Date | null
@@ -126,7 +131,9 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   const receiverBlock: string[] = isLocal
     ? [
         `收货人：${o.receiverName}　电话：${o.receiverPhone}`,
-        `地址：${[o.receiverPoiName, o.receiverFullAddress].filter(Boolean).join(' ')}`,
+        // 同城单省市恒为门店所在地，对厨房是纯噪音；58mm 只有 32 列，
+        // 砍掉这 6 个字等于多出小半行给楼栋门牌。区不能省——配送范围可能跨区。
+        `地址：${[o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' ')}`,
         ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
         ...(o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
       ]
