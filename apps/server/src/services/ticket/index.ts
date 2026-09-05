@@ -58,6 +58,24 @@ const SENT_CONFIRM_BATCH = 20
  *  PENDING/SENT 候选还剩多少，单轮总耗时一超过预算就提前收工，剩下的留到下一次 tick，
  *  换来的是「兜扫可能要跑好几轮才处理完一次网络劣化的大批量」，但至少不会把整个调度器卡死。 */
 const PROCESS_QUEUE_BUDGET_MS = 30 * 1000
+/** HIGH 3（复核第三轮）：`printerHealthTask` 一轮的墙钟预算。
+ *
+ *  M4 只把预算加进了 `processQueue`，而形状完全一样的两个串行外呼循环
+ *  （`retryRecoveredPrinterJobs`、`recoverFromOfflineQueue`）留在 `printerHealthTask` 里没有预算；
+ *  R9 又把它们的触发条件从「坏满 offlineAlertMin(5 分钟)」放宽成「上一轮坏」+「进程重启后首轮」，
+ *  UNKNOWN 归入 bad 之后任何一次状态文案解析不出来的抖动也会在下一轮制造一次「恢复」——
+ *  从罕见路径变成了高频路径。
+ *
+ *  最坏情况：晚高峰抖 1 分钟、积压 30 单 → 30 次 queryJob(各 10s) + 30 次 attemptSend(各最坏 20s)
+ *  串行 ≈ 900 秒。这 15 分钟里 scheduler 的 `running` 一直持有，待付款超时取消、自动呼叫骑手、
+ *  漏发积分补扫全部一轮都不跑。
+ *
+ *  预算给到 **整个 printerHealthTask**（deadline 由它算好往下传）而不是每个循环各给一份，
+ *  否则多台打印机时会按台数累乘。没处理完的行不改状态、留到下一次 tick 自然会被重新选中。 */
+const PRINTER_HEALTH_BUDGET_MS = 30 * 1000
+/** 恢复类循环的批量：这些循环每条都要真打外呼，用 BATCH(100) 顶格没有意义——
+ *  预算先到就退出了，反而多查一堆用不上的行。与 SENT_CONFIRM_BATCH 同量级。 */
+const RECOVER_BATCH = 20
 /** SENT 超过这个时长还查不到「已打印」，放弃继续主动查询（M4）：飞鹅对久远 providerJobId 会
  *  返回「订单不存在」（ret=1001），这类行会永远停在 SENT、越攒越多，把后续新 SENT 行挤出批次；
  *  24h 后不再查，只把 lastError 标成 CONFIRM:GAVE_UP（状态仍留 SENT——我们并不知道它到底有没有
@@ -616,9 +634,14 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
     take: BATCH,
   })
 
+  // HIGH 3：这个循环每条候选都可能走 enqueueOrderTicket → attemptSend（真外呼），
+  // 与 processQueue 同一类风险。BATCH 顶格 100 条时最坏能拖到十几分钟，期间 scheduler
+  // 的 running 一直持有。跳出不改任何 DB 状态，剩下的下一次 tick 会重新选中。
+  const announceStartedAt = Date.now()
   let announced = 0
   let exhausted = 0
   for (const order of candidates) {
+    if (Date.now() - announceStartedAt > PROCESS_QUEUE_BUDGET_MS) break
     if (!order.paidAt) continue
     const afterMin = order.deliveryType === 'LOCAL' ? settings.repeat.localAfterMin : settings.repeat.expressAfterMin
     const waitedMs = now - order.paidAt.getTime()
@@ -770,7 +793,7 @@ export function _setPrinterHealthTrackForTest(
  * 我们依然不知道上一次超时的那次请求到底有没有真的送达打印机，M11 的封顶就是为了这个不确定性，
  * 不该被"设备好像连上了"绕过去。
  */
-export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
+export async function retryRecoveredPrinterJobs(sn: string, deadline?: number): Promise<number> {
   const cutoff = new Date(Date.now() - RECOVER_BACKFILL_MS)
   const jobs = await prisma.printJob.findMany({
     where: {
@@ -778,10 +801,13 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
       NOT: [{ lastError: { startsWith: 'CONFIG:' } }, { lastError: { startsWith: 'TIMEOUT:' } }],
     },
     orderBy: { createdAt: 'asc' },
-    take: BATCH,
+    take: RECOVER_BATCH,
   })
   let count = 0
   for (const job of jobs) {
+    // HIGH 3：整轮墙钟预算到点就收工。这里没有改任何 DB 状态，跳出不会丢单——
+    // 剩下的 FAILED 行下一次 tick 的同一查询会重新选中。
+    if (deadline !== undefined && Date.now() > deadline) break
     const moved = await prisma.printJob.updateMany({
       where: { id: job.id, status: 'FAILED' },
       data: { status: 'PENDING', attempts: 0, lastError: null },
@@ -848,7 +874,7 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
  * 行也误伤成"跟这次离线无关"）。`lastError` 排除已经精确覆盖了复核指出的具体案例。
  */
 export async function recoverFromOfflineQueue(
-  sn: string, providerName: PrinterProviderName
+  sn: string, providerName: PrinterProviderName, deadline?: number
 ): Promise<{ backfilled: number; dropped: number }> {
   let waiting = 0
   try {
@@ -882,10 +908,12 @@ export async function recoverFromOfflineQueue(
       OR: [{ lastError: null }, { lastError: { not: 'CONFIRM:GAVE_UP' } }],
     },
     orderBy: { createdAt: 'asc' },
-    take: BATCH,
+    take: RECOVER_BATCH,
   })
   let dropped = 0
   for (const job of stale) {
+    // HIGH 3：整轮墙钟预算（stale 这一支不打外呼，通常很快，但为对称也守同一条线）
+    if (deadline !== undefined && Date.now() > deadline) break
     const moved = await prisma.printJob.updateMany({
       where: { id: job.id, status: job.status },
       data: { status: 'FAILED', lastError: 'STALE:DROPPED' },
@@ -913,10 +941,14 @@ export async function recoverFromOfflineQueue(
       status: { in: ['PENDING', 'SENT'] },
     },
     orderBy: { createdAt: 'asc' },
-    take: BATCH,
+    take: RECOVER_BATCH,
   })
   let backfilled = 0
   for (const job of recent) {
+    // HIGH 3：这一支每条都要 queryJob(最坏 10s) + attemptSend(最坏 20s)，是整个
+    // printerHealthTask 里最能拖时间的地方，预算到点必须收工。这里不改 DB 状态，
+    // 剩下的行下一次 tick 会被同一查询重新选中（30 分钟窗口内都还在）。
+    if (deadline !== undefined && Date.now() > deadline) break
     // R5：重发前先问一次飞鹅这条到底打没打——万一在我们 queryQueueInfo/clearQueue 这两次外呼
     // 之间的空档，飞鹅自己已经把它吐出来了（R7 的竞速），直接确认 PRINTED，不再调 attemptSend
     // 打第二遍。查询本身失败不影响后续正常补发（按「还不确定」处理，跟原来的行为一致）。
@@ -958,6 +990,9 @@ export interface PrinterHealthTaskResult { checked: number; alerted: number; rec
  * 顺带把这次查询结果写进 `lastHealthSnapshot`，供 workbench 快照直接读缓存、不必每次轮询都外呼。
  */
 export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
+  // HIGH 3：整轮墙钟预算。deadline 往下传给 retryRecoveredPrinterJobs 与
+  // recoverFromOfflineQueue——给到**整个任务**而不是每个循环各一份，多台打印机时不会累乘。
+  const healthDeadline = Date.now() + PRINTER_HEALTH_BUDGET_MS
   let settings: PrinterSettings
   try {
     settings = await getPrinterSettings()
@@ -1020,7 +1055,7 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
       // 意味着这类短暂故障期间转 FAILED 的作业永远没有机会被自动补打，只能等店员在后台点
       // 「失败重试」。`isFirstSeen` 时按「可能刚恢复」处理，见上面的注释。
       if (prevBad) {
-        backfilled += await retryRecoveredPrinterJobs(e.sn)
+        backfilled += await retryRecoveredPrinterJobs(e.sn, healthDeadline)
       }
       // D2（H5b）：同样跟 alerted/isFirstSeen 解耦——哪怕这次离线短到没触发告警阈值，只要曾经
       // 是 OFFLINE（或者 track 缺失、不确定之前是不是 OFFLINE），恢复时都要查一次 waiting，
@@ -1031,7 +1066,7 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
           // 圈定，是否重复打印由重发前的 queryJob 现问飞鹅。用「观测到的 offlineSince」当代理
           // 会在「真实断线 → 我们探测到」的 0–60 秒空档里丢单，isFirstSeen（pm2 重启后首轮）
           // 退化用 now 时更是把所有历史行全排除 —— 而 clearQueue 已经先一步把票删了。
-          const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName)
+          const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName, healthDeadline)
           backfilled += n
         } catch (err) {
           console.warn(`[ticket] 离线恢复清队列/补发异常 sn=${e.sn}:`, (err as Error).message)
