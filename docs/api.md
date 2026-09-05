@@ -1179,20 +1179,23 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 | 事件 | 位置 | 说明 |
 |---|---|---|
 | 付款成功 | `routes/orders.ts`（mock 支付）、`routes/wechat-notify.ts`（真实微信支付回调） | `enqueueOrderTicket(orderId,'NEW_ORDER')`，fire-and-forget，与 `notifyOrderPaid` 并列，绝不阻塞回调应答；出票单独起一条 promise 链，不依赖同一处理函数里其它同步 void 通知函数是否抛出（H3） |
-| 顾客申请取消（D6②） | `POST /api/orders/:id/cancel-request` | `printCancel=true` 时出 `CANCEL` 提醒票 |
+| 顾客申请取消（D6②） | `POST /api/orders/:id/cancel-request` | `printCancel=true` 时出 `CANCEL_REQUEST` 提醒票（H6：不是 `CANCEL`——这只是「申请」，店员可能驳回，票面文案与真正的取消要分开） |
+| 取消申请被驳回 | `POST /api/admin/local/orders/:id/cancel-request/reject` | `printCancel=true` 时出 `RESUME` 票，提醒厨房「顾客还是要这一单，继续制作」（H6） |
 | 顾客自助秒退（D6①） | `PUT /api/orders/:id/cancel`（`PAID` 且未接单分支） | 决定取消即出票，不等退款请求/回调确认完成 |
 | 退款成功、订单累计退完全款 | `services/refund.ts` 的 `finalizeRefundSuccess`（事务提交后，`flippedToRefunded` 时） | 覆盖**全部**退款入口——后台一键退款（含 mock 同步 SUCCESS）、售后同意、顾客自助取消触发的退款、微信异步退款回调，各入口不必各自记得补一次；部分退款不出票；`CANCEL` 的 `dedupeKey` 固定 `seq=0`，同一单被多个入口重复推进只会真出一张 |
 | 商家拒单 / 人工标记退款完成 | `routes/admin/orders.ts` 的 `reject` / `refund-complete` | 只在「付过款、店里理论上已经知道这单」时补票；未付款单从没出过接单票，不需要补取消票（详见 `cb27694`） |
 | 店员手动重打 | `POST /api/admin/orders/:id/reprint` | `enqueueOrderTicket(orderId,'REPRINT')`，每次都新开一条记录，不做幂等 |
 | 后台打印测试页 | `POST /api/admin/printers/:sn/test` | `orderId=0`、`orderNo='TEST'` |
 
+`PrintJob.status` 状态机：`PENDING`（待发送/待重试）→ `SENDING`（认领态，发送中）→ `SENT`（已提交给服务商，等待轮询确认）→ `PRINTED`（已确认打印完成）；失败分支 `FAILED`、跳过分支 `SKIPPED`（如配置读取失败）。`SENDING` 是短暂的认领态，正常只在 `attemptSend` 执行期间可见；孤儿回收（进程被杀死留下的 `SENDING` 残留）会把它退回 `PENDING`。
+
 ### scheduler 新增三任务
 
 | 任务 | 内容 |
 |---|---|
-| `printQueueSweep` | 兜扫 `PrintJob(PENDING)` 按 5s/30s/2min 退避重试，3 次仍失败转 `FAILED` + 告警；`SENT` 超 3 分钟未确认查一次平台状态 |
+| `printQueueSweep` | 兜扫 `PrintJob(PENDING)` 按 5s/30s/2min 退避重试；M2：普通失败（非超时）首发之后最多再重试 3 次，合计**最多 4 次发送**仍失败才转 `FAILED` + 告警（不是「3 次失败转 FAILED」——那样总共只发了 3 次，比规格少一次）；`TIMEOUT` 类失败另有更保守的封顶（首发 + 至多 1 次重试 = 最多 2 次发送，且重试前必须确认打印机在线，见 M11）；`CONFIG` 类错误不占重试次数，直接 `FAILED`；`SENT` 超 3 分钟未确认查一次平台状态 |
 | `repeatAnnounce` | `PAID` 且等待超过 `repeat.localAfterMin`/`expressAfterMin` 分钟未接单 → 入队 `REPEAT` 作业（精简催单票或按 `repeat.reprint` 重打全票），次数耗尽告警老板 |
-| `printerHealth` | 查全部已配置打印机状态；连续 `offlineAlertMin` 分钟离线/异常告警一次；恢复 `ONLINE` 时告知一次并自动补打 30 分钟内的 `FAILED` 作业（超过 30 分钟的旧单不补打） |
+| `printerHealth` | 查全部已配置打印机状态；连续 `offlineAlertMin` 分钟离线/异常告警一次；恢复 `ONLINE` 时告知一次，并触发两条独立的补发路径：① `retryRecoveredPrinterJobs`——重打该打印机名下最近 30 分钟内、失败原因非 `CONFIG` 类的 `FAILED` 作业（超过窗口的旧单不补打）；② D2 `recoverFromOfflineQueue`——打印机离线期间飞鹅侧 `Open_printMsg` 其实仍返回成功（票已进云端队列，不会走到 `FAILED`），所以先查 `queryQueueInfo(sn).waiting`：`waiting<=0` 什么都不做；`waiting>0` 说明恢复瞬间飞鹅会把队列全部自动吐出，先 `clearQueue` 清空云端积压，再由本地 `PrintJob` 记录决定真正补发谁——30 分钟窗口内仍是 `PENDING`/`SENT`（未确认）的行重置为 `PENDING` 走 `attemptSend` 重发；超过窗口的旧单标 `FAILED` + `lastError='STALE:DROPPED'`（不算新故障，不告警） |
 
 三个任务不经 `run-scheduler` 的 override（那是同城配送阈值专用的临时覆盖通道）——出票的开关/阈值都在
 `Setting(key=printer)` 里，改阈值走 `PUT /admin/settings/printer`。
@@ -1205,6 +1208,7 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 | `POST /api/admin/printers/bind` | `{ sn, key, name? }`，成功调用飞鹅 `Open_printerAddlist` 后才写入设置；`key` 不落库明文 |
 | `DELETE /api/admin/printers/:sn` | 只从本地设置移除，不调用飞鹅侧删除接口 |
 | `POST /api/admin/printers/:sn/test` | 打印测试页 |
+| `POST /api/admin/printers/:sn/clear-queue` | D2：手动清空该打印机云端待打印队列（飞鹅 `Open_delPrinterSqs`）。正常情况下由 `printerHealth` 检测到「离线恢复且 `waiting>0`」时自动调用，这里是给店主的手动入口 |
 | `GET /api/admin/printers/status` | 现查一次全部已配置打印机状态（供设置页手动刷新；工作台状态灯走独立的缓存路径，见下） |
 | `GET /api/admin/print-jobs?orderId=` | 打印记录：带 `orderId` 返回该订单最多 50 条，不带返回全局最近 20 条 |
 | `POST /api/admin/print-jobs/:id/retry` | 仅 `FAILED` 状态可重试，条件写防并发 |
