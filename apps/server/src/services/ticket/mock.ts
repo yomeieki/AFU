@@ -7,12 +7,18 @@
  */
 import {
   PrinterProvider, PrintTicketInput, PrintTicketResult, PrinterStatusResult, QueryJobResult,
-  BindPrinterInput, PrinterError, PrinterOnlineState,
+  BindPrinterInput, PrinterError, PrinterOnlineState, PrinterQueueInfo,
 } from './printer'
 
 interface MockJob { id: string; sn: string; content: string; copies: number; printedAt: number }
+/** D2（H5b）：离线期间「已提交但还没被飞鹅吐出来」的票，模拟飞鹅云端队列——不在 `jobs` 里，
+ *  `queryJob` 因此查不到（printed:false），直到 `clearQueue` 丢弃或（真机行为）打印机自己恢复吐出。
+ *  本 mock 不模拟「打印机一恢复就自动吐出」那个瞬间的竞态（真机实验里两者几乎同时发生，
+ *  我们的健康检测来不及抢在前面）——这是刻意简化，见 D2 交付报告。 */
+interface CloudQueuedJob { id: string; sn: string; content: string; copies: number; queuedAt: number }
 
 const jobs = new Map<string, MockJob>()
+const cloudQueue = new Map<string, CloudQueuedJob[]>()
 /** e2e 可写：sn → 强制在线状态 或 强制下一次 print 抛出的错误 */
 const forcedState = new Map<string, PrinterOnlineState>()
 const forcedPrintError = new Map<string, { kind: 'CONFIG' | 'CAPACITY' | 'BUSINESS' | 'TIMEOUT'; message: string }>()
@@ -23,10 +29,16 @@ let seq = 0
 /** 仅测试/e2e 用：清空 mock 内部状态，避免跨用例串味 */
 export function _resetMockPrinter(): void {
   jobs.clear()
+  cloudQueue.clear()
   forcedState.clear()
   forcedPrintError.clear()
   forcedDelayMs.clear()
   seq = 0
+}
+
+/** 仅测试/e2e 用：某台打印机云端队列里还积压了多少条（对照 feie.ts 的 queryQueueInfo） */
+export function _mockQueueWaiting(sn: string): number {
+  return cloudQueue.get(sn)?.length ?? 0
 }
 
 /** 仅测试/e2e 用：让该 sn 的下一次（及之后每一次，直到被覆盖/重置）print() 调用先睡 ms 毫秒再返回，
@@ -63,9 +75,18 @@ export const mockPrinterProvider: PrinterProvider = {
       forcedPrintError.delete(job.sn)
       throw new PrinterError(forced.kind, 'MOCK_FORCED', forced.message)
     }
-    const state = forcedState.get(job.sn)
-    if (state === 'OFFLINE') throw new PrinterError('CAPACITY', 'MOCK_OFFLINE', '打印机离线（mock）')
+    const state = forcedState.get(job.sn) ?? 'ONLINE'
+    // D2（H5）：2026-09-05 真机实验确认——打印机离线（网络/电源断开）时 Open_printMsg 仍返回
+    // ret=0（成功），票排进飞鹅云端队列，不是失败。ABNORMAL（卡纸/开盖等物理故障）不一样：
+    // 那是设备本身打不出来，即使联网正常也真的会失败，沿用旧的 CAPACITY 语义。
+    if (state === 'ABNORMAL') throw new PrinterError('CAPACITY', 'MOCK_ABNORMAL', '打印机异常：缺纸或开盖（mock）')
     const id = `MOCK-${Date.now()}-${++seq}`
+    if (state === 'OFFLINE') {
+      const q = cloudQueue.get(job.sn) ?? []
+      q.push({ id, sn: job.sn, content: job.content, copies: job.copies ?? 1, queuedAt: Date.now() })
+      cloudQueue.set(job.sn, q)
+      return { providerJobId: id }
+    }
     jobs.set(id, { id, sn: job.sn, content: job.content, copies: job.copies ?? 1, printedAt: Date.now() })
     return { providerJobId: id }
   },
@@ -76,10 +97,20 @@ export const mockPrinterProvider: PrinterProvider = {
   },
 
   async queryJob(providerJobId: string): Promise<QueryJobResult> {
+    // 还在云端队列里（cloudQueue，未被 clearQueue 丢弃、也未真机式自动吐出）→ 未打印
     return { printed: jobs.has(providerJobId) }
   },
 
   async bindPrinter(_input: BindPrinterInput): Promise<void> {
     // mock 无需真实绑定，直接成功
+  },
+
+  async queryQueueInfo(sn: string): Promise<PrinterQueueInfo> {
+    return { waiting: cloudQueue.get(sn)?.length ?? 0 }
+  },
+
+  async clearQueue(sn: string): Promise<void> {
+    // 真机语义：清空整个队列，丢弃的票不会再自己吐出来
+    cloudQueue.delete(sn)
   },
 }

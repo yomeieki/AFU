@@ -23,7 +23,7 @@ import crypto from 'crypto'
 import { config, validateFeieConfig } from '../../config'
 import {
   PrinterProvider, PrintTicketInput, PrintTicketResult, PrinterStatusResult, QueryJobResult,
-  BindPrinterInput, PrinterError, PrinterErrorKind, PrinterOnlineState,
+  BindPrinterInput, PrinterError, PrinterErrorKind, PrinterOnlineState, PrinterQueueInfo,
 } from './printer'
 
 const TIMEOUT_MS = 10_000
@@ -148,5 +148,26 @@ export const feieProvider: PrinterProvider = {
     // Open_printerAddlist：printerContent = "SN#KEY#备注名#手机号"，多台换行分隔；这里只绑一台
     const printerContent = `${input.sn}#${input.key}#${input.name ?? ''}#`
     await post('Open_printerAddlist', { printerContent })
+  },
+
+  // D2（H5b）：2026-09-05 真机实验确认飞鹅有云端待打印队列——打印机离线期间 Open_printMsg 仍返回
+  // ret=0，票排进这个队列，恢复上线时会自动全部吐出。queryQueueInfo/clearQueue 是应对这件事的两个
+  // 接口：前者观测积压（waiting），后者清空（不能按单删）。
+  async queryQueueInfo(sn: string): Promise<PrinterQueueInfo> {
+    const data = await post('Open_printerInfo', { sn })
+    // [推断/待核实] 真机实验只确认了 data 里含数值型 waiting 字段，完整响应结构未见官方文档逐字
+    // 给出——这里防御性解析，字段缺失/类型不对一律按 0 处理，不能因为解析失败挡住恢复补打流程。
+    const raw = data.data
+    let waiting = 0
+    if (raw && typeof raw === 'object' && 'waiting' in (raw as Record<string, unknown>)) {
+      const w = (raw as Record<string, unknown>).waiting
+      const n = typeof w === 'number' ? w : parseInt(String(w), 10)
+      if (Number.isFinite(n)) waiting = n
+    }
+    return { waiting, raw }
+  },
+
+  async clearQueue(sn: string): Promise<void> {
+    await post('Open_delPrinterSqs', { sn })
   },
 }

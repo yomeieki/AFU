@@ -67,6 +67,17 @@ export interface QueryJobResult {
   raw?: unknown
 }
 
+/**
+ * D2（H5b）：`Open_printerInfo` 的 `waiting` 字段——2026-09-05 真机实验确认过的观测点，用来判断
+ * 「打印机从离线恢复时，云端队列里是否堆了票」。飞鹅官方文档抓取里没有这个接口的完整字段表
+ * [推断/待核实——真机实验只验证了 waiting 这一个字段存在且为数值]，`feie.ts` 的解析对缺字段/
+ * 类型不对做防御性兜底（按 0 处理），不会因为解析失败阻断恢复补打流程。
+ */
+export interface PrinterQueueInfo {
+  waiting: number
+  raw?: unknown
+}
+
 export interface BindPrinterInput {
   sn: string
   /** 打印机随机出厂的绑定密钥，只用于本次绑定调用，不落库存明文（见 printer-settings.ts） */
@@ -81,4 +92,12 @@ export interface PrinterProvider {
   queryJob(providerJobId: string): Promise<QueryJobResult>
   /** 绑定打印机到开发者账号（飞鹅 Open_printerAddlist）；后台绑定页用，mock 直接返回成功 */
   bindPrinter(input: BindPrinterInput): Promise<void>
+  /** D2（H5b）：查询该打印机云端待打印队列积压量（飞鹅 Open_printerInfo 的 waiting 字段） */
+  queryQueueInfo(sn: string): Promise<PrinterQueueInfo>
+  /**
+   * D2（H5b）：清空该打印机云端待打印队列（飞鹅 Open_delPrinterSqs）。**清空整个队列，不能按单删**——
+   * 只应在「检测到从离线恢复且 waiting>0」时调用，紧跟着从我们自己的 PrintJob 表按 30 分钟窗口
+   * 择优重发，见 services/ticket/index.ts 的 recoverFromOfflineQueue。
+   */
+  clearQueue(sn: string): Promise<void>
 }
