@@ -145,10 +145,6 @@ interface SettleOrder {
 }
 
 /**
- * 订单完成后发放积分。前置条件任一不满足直接返回，不抛错（调用点全是 fire-and-forget）。
- * pointsSettledAt 是唯一的「已处理」标记，即使 earn<=0 也要写，否则会被兜底任务永远重扫。
- */
-/**
  * 滚动续期：把该用户全部**未过期入账行**的到期日推到 `expiresAt`。
  *
  * 只有 `expiresAt` 这一个值被改，行的结构不动——所以 FIFO 扣减、`expirePoints` 扫描、
@@ -157,6 +153,13 @@ interface SettleOrder {
  * `expiresAt: { gt: now }` 这个条件不能省：`expirePoints` 每日才跑一次，
  * 中间会存在「按日期已过期但 remaining 还没被清零」的行。少了这个条件，
  * 一次消费就会把这些本该作废的积分**复活**。
+ *
+ * `expiresAt: { lt: expiresAt }`（B7）同样不能省：续期必须单调只增。没有这条上界，
+ * 「补发几天前的旧单」或「调短 validDays 后再消费」都会把目标到期日算得比账户当前到期日更早，
+ * 这次 updateMany 会把全账户的到期日**往前拽**——违反 docs/member-terms-copy.md X.6
+ * 「规则调整不影响调整前已获得积分的有效期」，也破坏 H7/M16 依赖的「全部在世行同一天过期」前提。
+ * 调用方（settlePoints）已经把目标 expiresAt 取过 max(本单目标, 账户当前在世行最大到期日)，
+ * 这里的上界是双保险，不依赖调用方一定算对。
  */
 async function extendLivePoints(
   tx: Prisma.TransactionClient,
@@ -169,54 +172,74 @@ async function extendLivePoints(
       userId,
       type: { in: ['EARN', 'GIFT_REVERT'] },
       remaining: { gt: 0 },
-      expiresAt: { gt: now },
+      expiresAt: { gt: now, lt: expiresAt },
     },
     data: { expiresAt },
   })
   return r.count
 }
 
+/**
+ * 订单完成后发放积分。前置条件任一不满足直接返回，不抛错（调用点全是 fire-and-forget，
+ * settlePoints 自身 try/catch 全包，永不向调用方抛错——调用点都是 fire-and-forget，
+ * 失败由 settleMissedPoints 兜底任务补发）。pointsSettledAt 是唯一的「已处理」标记，
+ * 即使 earn<=0 也要写，否则会被兜底任务永远重扫。
+ *
+ * H1：订单读进事务内并加行锁（第一句 `SELECT ... FOR UPDATE`），与 finalizeRefundSuccess 里
+ * `UPDATE orders SET refunded_amount = ...` 那次隐式行锁互斥——settle 与部分退款并发时，
+ * 谁先拿到锁谁看到的 refundedAmount 就是最新值，不会出现「两边都读到退款前的旧值，
+ * settle 按满额发分、退款按 pointsEarned=0 不扣」这种永久多发。锁顺序 orders → points_ledgers →
+ * users，与 finalizeRefundSuccess 一致，不会死锁。
+ *
+ * enabled 判断放在读到订单字段之后、任何写操作之前——关着的时候直接 return，不写
+ * pointsSettledAt（B3 的既有约定）：这保证以后店主打开开关时，settleMissedPoints 的 7 天
+ * 窗口仍能捡到这些单补发，而不是被一个「已处理」标记永久挡在候选集外。
+ */
 export async function settlePoints(orderId: number): Promise<void> {
   try {
-    const order = (await prisma.order.findUnique({
-      where: { id: orderId },
-      select: {
-        id: true, orderNo: true, userId: true, status: true, isTest: true,
-        actualAmount: true, refundedAmount: true, pointsSettledAt: true, completedAt: true,
-      },
-    })) as SettleOrder | null
-    if (!order) return
-    if (order.status !== 'COMPLETED') return
-    if (order.isTest) return
-    if (order.pointsSettledAt !== null) return
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`
+      const order = (await tx.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true, orderNo: true, userId: true, status: true, isTest: true,
+          actualAmount: true, refundedAmount: true, pointsSettledAt: true, completedAt: true,
+        },
+      })) as SettleOrder | null
+      if (!order) return
+      if (order.status !== 'COMPLETED') return
+      if (order.isTest) return
+      if (order.pointsSettledAt !== null) return
 
-    const settings = await getMemberSettings()
-    if (!settings.points.enabled) return
+      const settings = await getMemberSettings()
+      if (!settings.points.enabled) return
 
-    const earn = calcEarn(order.actualAmount, order.refundedAmount, settings.points.earnRatePerYuan)
-    const now = new Date()
+      // 锁后读到的 refundedAmount 算 earn：与并发退款互斥后这里看到的一定是最新值
+      const earn = calcEarn(order.actualAmount, order.refundedAmount, settings.points.earnRatePerYuan)
+      const now = new Date()
+      // B5：本单的算分基数，供退款扣回按比例摊（与 earnRatePerYuan 无关，见 calcRefundDeduct）
+      const pointsBase = Math.max(0, order.actualAmount - order.refundedAmount)
 
-    // 滚动续期的目标到期日：本单完成时刻 + validDays。
-    // 有效期是「最后一次消费起算」而非「每批各自起算」——见 spec §5.4 与
-    // docs/member-terms-copy.md。顾客持续消费则积分一直不过期。
-    const expiresAt = new Date((order.completedAt ?? now).getTime() + settings.points.validDays * 24 * 60 * 60 * 1000)
+      // B7：目标到期日取 max(本单完成时刻 + validDays, 账户当前在世行的最大到期日)，
+      // 续期只增不减；见 extendLivePoints 顶部注释与 §7-2。
+      const baseTarget = new Date((order.completedAt ?? now).getTime() + settings.points.validDays * 24 * 60 * 60 * 1000)
+      const maxLive = await tx.pointsLedger.aggregate({
+        where: { userId: order.userId, type: { in: ['EARN', 'GIFT_REVERT'] }, remaining: { gt: 0 }, expiresAt: { gt: now } },
+        _max: { expiresAt: true },
+      })
+      const expiresAt = maxLive._max.expiresAt && maxLive._max.expiresAt > baseTarget ? maxLive._max.expiresAt : baseTarget
 
-    if (earn <= 0) {
-      // 实付不足 1 元、得分为 0 的单**照样续期**：规则写的是「最后一次消费」不是
-      // 「最后一次得分」，顾客确实来买了，不该因为买得少就不算数。
-      // 与订单标记同事务：先续期后标记而两步不原子的话，一旦标记成功、续期失败，
-      // pointsSettledAt 已置位会让本单永远不再重试，那次续期就永久丢了。
-      await prisma.$transaction(async (tx) => {
+      if (earn <= 0) {
+        // 实付不足 1 元、得分为 0 的单**照样续期**：规则写的是「最后一次消费」不是
+        // 「最后一次得分」，顾客确实来买了，不该因为买得少就不算数。
         await extendLivePoints(tx, order.userId, expiresAt, now)
         await tx.order.updateMany({
           where: { id: orderId, pointsSettledAt: null },
-          data: { pointsEarned: 0, pointsSettledAt: now },
+          data: { pointsEarned: 0, pointsSettledAt: now, pointsBase },
         })
-      })
-      return
-    }
+        return
+      }
 
-    await prisma.$transaction(async (tx) => {
       let created = true
       try {
         await tx.pointsLedger.create({
@@ -243,7 +266,7 @@ export async function settlePoints(orderId: number): Promise<void> {
       await extendLivePoints(tx, order.userId, expiresAt, now)
       await tx.order.updateMany({
         where: { id: orderId, pointsSettledAt: null },
-        data: { pointsEarned: earn, pointsSettledAt: now },
+        data: { pointsEarned: earn, pointsSettledAt: now, pointsBase },
       })
     })
   } catch (e) {
