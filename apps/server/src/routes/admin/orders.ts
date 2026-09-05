@@ -5,6 +5,7 @@ import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { rollbackOrderStock } from '../../utils/order-stock'
 import { ACTIVE_REFUND_STATUSES, finalizeRefundSuccess, initiateRefund, remainingRefundable } from '../../services/refund'
+import { deductPointsOnRefund } from '../../services/member/points'
 import { sendShipSubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
 import { enqueueOrderTicket } from '../../services/ticket'
@@ -409,8 +410,11 @@ router.post('/:id/refund-complete', async (req: Request, res: Response, next: Ne
           where: { id },
           select: {
             orderNo: true,
+            userId: true,
             actualAmount: true,
             refundedAmount: true,
+            pointsEarned: true,
+            pointsBase: true,
             payment: { select: { outTradeNo: true } },
           },
         })
@@ -430,7 +434,7 @@ router.post('/:id/refund-complete', async (req: Request, res: Response, next: Ne
           //    这个号从未发给微信，别让人拿它去商户平台查单；唯一索引顺带挡住重复补记。
           //  · operator 沿用 :350 的 manual: 前缀，reason 写明是人工补记。
           //  · activeOrderId 置 null：这是终态，不能占住在途位挡掉以后的退款。
-          await tx.refund.create({
+          const manualRefund = await tx.refund.create({
             data: {
               orderId: id,
               orderNo: fresh.orderNo,
@@ -447,6 +451,20 @@ router.post('/:id/refund-complete', async (req: Request, res: Response, next: Ne
               activeOrderId: null,
             },
           })
+          // R11：这条路自己在事务里翻转 Refund/Order 状态，不经 finalizeRefundSuccess——
+          // 全仓唯一的 deductPointsOnRefund 调用点在那个函数里，够不着这里。不补的话：
+          // 订单已结算发分 → 全额退款 → 微信回调丢失 → 店员用本接口人工收尾 →
+          // 钱退了、积分一分没扣，且这次 updateMany 已经把 order 状态收尾成 REFUNDED，
+          // 兜底任务也不会再碰。同事务内调用：扣回失败要能让整笔人工标记回滚，
+          // 不留「钱退了、分没扣」的半截状态（与 finalizeRefundSuccess 同一取舍）。
+          await deductPointsOnRefund(
+            tx,
+            {
+              id, userId: fresh.userId, orderNo: fresh.orderNo, pointsEarned: fresh.pointsEarned,
+              pointsBase: fresh.pointsBase, actualAmount: fresh.actualAmount, refundedAmount: fresh.actualAmount,
+            },
+            { id: manualRefund.id, amount: remaining }
+          )
         }
         await tx.payment.updateMany({ where: { orderId: id }, data: { status: 'REFUNDED' } })
       })
