@@ -132,6 +132,40 @@ SYSTEM_ALERT_WECOM_WEBHOOK=""
 SYSTEM_ALERT_PUSHPLUS_TOKEN=""
 ```
 
+### 同城配送相关变量（KD100 / 门店回调）
+
+生产 `.env` 里另外需要这几项，`.env.example` 已给出模板：
+
+```env
+# 快递100 同城急送（企业版账号，key/secret 在快递100 企业管理后台申请）
+KD100_KEY="快递100 分配的 key"
+KD100_SECRET="快递100 分配的 secret"
+
+# 回调 URL 拼接前缀，务必是不带尾斜杠的完整域名（下方「callbackUrl 长度预算」依赖这个值）
+PUBLIC_BASE_URL="https://api.yourdomain.com"
+
+# 本地开发/e2e 专用，生产绝不能出现 =true（见下）
+# LOCAL_DELIVERY_PROVIDER_MOCK=true
+```
+
+- `KD100_KEY`/`KD100_SECRET`：不填时呼叫骑手会在请求发起前直接报错「Missing required env var」（`config.ts:validateKd100Config`）；mock 模式（`LOCAL_DELIVERY_PROVIDER_MOCK=true`）下不校验，因为呼叫骑手会走 mock 分支不打真实接口。
+- `PUBLIC_BASE_URL`：拼进快递100 回调 URL（`{PUBLIC_BASE_URL}/api/kd/{deliveryNo}`），也是微信支付回调等其他外部回调 URL 的基础域名。**必须不带尾斜杠**，多一个 `/` 会让回调 URL 长度和路径都变样。
+- `LOCAL_DELIVERY_PROVIDER_MOCK`：**生产环境这一项只要等于字符串 `"true"` 服务就会拒绝启动**（`config.ts` 生产环境校验，与 `WECHAT_PAY_MOCK` 等其他 mock 开关同一逻辑）。`.env.example` 里这一行已经注释掉，**不要整段复制 `.env.example` 到生产 `.env`**，逐项用下面的 `set-env.sh` 填。本地开发/e2e 才需要在启动命令里带这个变量为 `true`。
+
+#### callbackUrl 长度预算（换域名前必看）
+
+快递100 对回调 URL 硬性限长 50 字符，服务启动时会算一次最坏情况并校验（`config.ts` 里的 `worstKdCallbackUrl` 检查），生产环境超长直接 `process.exit(1)`：
+
+| URL | 长度 |
+|---|---|
+| `{PUBLIC_BASE_URL}/api/kd/D123456-1`（生产当前实例） | 48 |
+| `{PUBLIC_BASE_URL}/api/kd/D999999-99`（最坏情况：6 位订单号 + 2 位重呼序号） | **49**（上限 50，只剩 1 字符余量） |
+| `{PUBLIC_BASE_URL}/api/kd/D9999999-999`（7 位订单号或 3 位序号） | 51 ✗ 会被启动校验拦住 |
+
+推论：当前域名 `api.yourdomain.com` 这一段占多少字符，`PUBLIC_BASE_URL` 全长就顶多再留 1 个字符的余量给别的东西。**换任何更长的 API 域名之前，先把回调路径前缀从 `/api/kd/` 缩短**（例如改成 `/api/k/`，同时改 nginx 里对应的 `location` 与代码里生成回调 URL 的拼接处），否则新域名部署时服务会直接启动失败。订单号到七位（百万单）或重呼序号到三位（同一单重呼 100 次）也会顶破上限，但前者是很多年后才会遇到的规模、后者不会真的发生——两种情况都由启动校验和 `deliveryNo` 生成处的长度校验兜底，不会静默产生一条打不通的回调 URL。
+
+> **已实测生产账号数值**：`api.yuegui-hotel.online`（本项目当前唯一实际生产域名）算出来的最坏回调 URL 正好是 49 字符——这不是巧合留出的宽裕余量,是刚好卡在临界值附近,**部署窗口里不要顺手给 `PUBLIC_BASE_URL` 加尾斜杠**（会变成 50 且路径会多一个 `/`）。
+
 > **首次配置 COS 后的存量图片迁移**（只需做一次）：
 > ```bash
 > cd /www/food-shop/apps/server
@@ -223,7 +257,31 @@ nginx -t && nginx -s reload
 
 模板要点：
 - `location /api/wechat/pay/` 单独反代且不限流、不缓冲 body——同时覆盖支付回调 `/notify` 与退款回调 `/refund-notify`（**升级到自动退款后必须是这个前缀**，老配置只写了 `/notify`）
+- `location /api/kd/` 单独反代，同样不限流、不缓冲 body——快递100 配送单回调专用，`scripts/nginx.conf` 模板里**已经配好这一段**（不是「沿用 `/api/` 通用规则即可」，而是必须存在的独立 `location`）：回调请求需要透传原始字节做验签，通用 `location /api/` 那条会做限流与缓冲，用来对付面向浏览器的普通接口，放在回调上会有干扰验签或丢突发请求的风险。**换域名/迁移服务器时把这段和 `/api/wechat/pay/` 一起原样复制过去，不要只复制 `location /api/` 那一条**。
 - `location /uploads/` 存量本地图片过渡期直出；COS 迁移完成一个部署周期后可删
+
+### 部署后回调链路演练（curl，不依赖真实骑手触发）
+
+新环境部署完、`.env` 填好 `KD100_KEY/SECRET`、`PUBLIC_BASE_URL` 之后，不用等真实呼叫一次骑手才能确认 `/api/kd/:deliveryNo` 这条回调链路通不通。`scripts/e2e.sh` 里的 `kd_cb` 辅助函数（约 761 行）演示了怎么手工构造一条合法签名的回调请求；把它简化成独立可执行的片段：
+
+```bash
+#!/bin/bash
+# 用法：kd-callback-drill.sh <deliveryNo> <callbackSalt> [providerStatus] [statusDesc]
+# callbackSalt 从数据库直接查（生产没有 mock 模式的 /kd100-mock/salt 端点可用，
+# 那个端点只在 config.mock.delivery=true 时才挂载，生产严禁开 mock）：
+#   mysql -uroot -p food_shop -e \
+#     "SELECT delivery_no, callback_salt FROM deliveries WHERE delivery_no='D<orderId>-1'"
+DELIVERY_NO="$1"; SALT="$2"; STATUS="${3:-100}"; DESC="${4:-演练:骑手已接单}"
+PARAM=$(printf '{"taskId":"DRILL-TASK","status":"%s","statusDesc":"%s","updateTime":"%s","courierName":"演练骑手","courierMobile":"13900000000","kuaidicom":"drill"}' \
+  "$STATUS" "$DESC" "$(date '+%Y-%m-%d %H:%M:%S')")
+SIGN=$(printf '%s%s' "$PARAM" "$SALT" | md5sum | cut -d' ' -f1 | tr 'a-f' 'A-F')
+curl -s -w '\nHTTP %{http_code}\n' -X POST "https://api.yourdomain.com/api/kd/${DELIVERY_NO}" \
+  --data-urlencode "param=${PARAM}" \
+  --data-urlencode "sign=${SIGN}" \
+  --data-urlencode "taskId=DRILL-TASK"
+```
+
+预期：`HTTP 200` 且响应体 `{"result":true,...}`；再用 `GET /api/admin/local/orders/:id/delivery`（管理员 token）确认该订单的配送单状态确实推进了。**这条演练会真的改动一条真实（测试）配送单的状态**，只应该对着一笔专门造出来的测试订单跑，跑完按 `docs/ops-test-orders.md` 的收尾步骤清理，不要拿一笔真实顾客订单练手。
 
 ---
 
