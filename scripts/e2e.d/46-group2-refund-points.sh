@@ -17,7 +17,8 @@ echo "-- R3：finalizeRefundSuccess 事务头两句改锁定读（FOR UPDATE）�
 # 改成头两句 `SELECT ... FOR UPDATE`（refunds→orders），与 settlePoints 的
 # `SELECT ... FOR UPDATE` 打头对称。这里只做一个「不改变正常行为」的弱回归：确认改造后
 # 退款流程本身（含积分扣回）仍然功能正常——真正的锁序验证见报告里的两会话实验复述。
-ok "R3：见报告——两个 MySQL 会话实测锁序（无法在单线程 bash e2e 里复现真并发，同 H1）"
+# （R3 的复现结论见 docs/superpowers/notes/2026-09-05-review-round2.md；
+#   原来这里是一条无条件 ok，只给 PASS 计数 +1、什么都没验，已删）
 
 echo "-- R3 弱回归：finalizeRefundSuccess 改造后，退款仍正确扣回积分（功能不退化）--"
 IFS=$'\t' read -r G2R3_TOKEN G2R3_UID < <(m1_login "a${G2_TAG}G2R3")
@@ -42,7 +43,8 @@ echo "-- R6：expirePointsBatch 返回 {scanned,processed}，runMemberDailyTask 
 #   端到端 runSchedulerTick 返回总处理数=7；按旧规则(processed<limit 判断退出)本该在
 #   round1 后就以总数=4 收工（H9 想解决的「一天只清一批」问题原样保留）；
 #   按新规则(scanned<limit)正确处理满 7 条，只留真正被救回的那 1 条给下一天扫描。
-ok "R6：M13 竞态的确定性复现（monkeypatch 独立脚本，不在 e2e.sh 内）——结果见报告"
+# （R6 的复现结论见 docs/superpowers/notes/2026-09-05-review-round2.md；
+#   原来这里是一条无条件 ok，只给 PASS 计数 +1、什么都没验，已删）
 
 # 这里补一个不依赖竞态、纯粹回归 H9 既有行为的断言：>limit 条到期候选、无外部干扰时，
 # 一次 tick 仍能循环处理完全部候选（与 43-daily-task-loop.sh 的 H9 断言同源，
@@ -54,8 +56,12 @@ for i in 1 2 3 4 5 6; do
        VALUES ($G2R6_UID, 'EARN', 10, $((i*10)), 10, 'ORDER', 'g2r6-${G2_TAG}-$i', DATE_SUB(NOW(), INTERVAL 1 DAY), NOW());"
 done
 sql "UPDATE users SET points_balance = points_balance + 60 WHERE id=$G2R6_UID;"
-R=$(req POST /api/admin/system/run-scheduler "$AT" '{"forceDailyMemberTasks":true,"dailyTaskBatchLimit":2}')
-assert_eq "R6 回归：6 条到期候选、每批 2 条，一次 tick 循环处理完全部 6 条" "$(jq -r .data.expirePoints <<<"$R")" "6"
+# ⚠️ 这里刻意**不**断言 `.data.expirePoints`——它是 expirePointsBatch 的**全库**计数，
+# 会被前面分片（如 43 插的 205 条）的残留污染。2026-09-06 实测过一次：回退 H9 的循环之后，
+# 43 只处理 200 条剩下 5 条，本段的全库计数就变成 5+6=11 而不是 6，断言转红，
+# 但失败文案写的是「R6 回归：一次 tick 循环处理完全部 6 条」——**把排查引到完全无关的方向**。
+# 只按 user_id 过滤断言自己造的那 6 条，下面那条就够了。
+req POST /api/admin/system/run-scheduler "$AT" '{"forceDailyMemberTasks":true,"dailyTaskBatchLimit":2}' >/dev/null
 G2R6_LIVE_AFTER=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE user_id=$G2R6_UID AND ref_id LIKE 'g2r6-${G2_TAG}-%' AND remaining=0;")
 assert_eq "R6 回归：6 条全部 remaining=0" "$G2R6_LIVE_AFTER" "6"
 
@@ -69,7 +75,8 @@ echo "-- R10：微信同步返回 ABNORMAL 时订单停在 REFUNDING，CANCEL �
 #   造一笔 COMPLETED/WECHAT 已支付订单，发起全额退款，微信同步返回 ABNORMAL：
 #   订单停在 REFUNDING、退款单状态 ABNORMAL；CANCEL 出票数——临时禁用本次新增的
 #   fire-and-forget 调用（模拟修复前代码）复现为 0，恢复后为 1。
-ok "R10：ABNORMAL 分支下 CANCEL 已出的前后对比（独立脚本，不在 e2e.sh 内）——结果见报告"
+# （R10 的复现结论见 docs/superpowers/notes/2026-09-05-review-round2.md；
+#   原来这里是一条无条件 ok，只给 PASS 计数 +1、什么都没验，已删）
 
 echo "-- R10 弱回归：MOCK 模式下全额退款仍然只出恰好 1 条 CANCEL（新增的提前出票与 finalize 那次去重正常）--"
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null

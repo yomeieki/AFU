@@ -64,14 +64,25 @@ sql "update print_jobs set created_at=DATE_SUB(NOW(3), INTERVAL 40 MINUTE), last
 
 req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-R8","state":"OFFLINE"}' >/dev/null
 req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 建立 wasOffline（仍离线）
+# ⚠️ 这一单不能省：recoverFromOfflineQueue 开头有 `if (waiting <= 0) return`，
+# 而 GAVE_UP 那条僵尸行是打印机在线时下的、票直接进了 mock 的 jobs、cloudQueue 是空的。
+# 不在离线期间补一单把 waiting 顶上去，整段 stale 查询（R8 的 OR 排除子句就在那里）
+# 根本不会被执行——2026-09-06 实测：把那条 OR 子句整行删掉，下面两条断言照样全绿，
+# 也就是说它们原本证明能力为零。补这一单之后才真正有区分度。
+G3_R8_QUEUED=$(pay_new_order "$PID" "$ADDR")
+sleep 0.2
 req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-R8","state":"ONLINE"}' >/dev/null
 req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 恢复：应该跳过这条 GAVE_UP 僵尸行
 sleep 0.2
 G3_R8_ROW=$(PJOBS "$G3_R8_OID" | jq -c '.data.list[0]')
 assert_eq "R8：GAVE_UP 僵尸行恢复检测后原样保持 SENT（旧写法会武断改判 FAILED）" "$(jq -r .status <<<"$G3_R8_ROW")" "SENT"
 assert_eq "R8：lastError 仍是 CONFIRM:GAVE_UP，没被覆盖成 STALE:DROPPED" "$(jq -r .lastError <<<"$G3_R8_ROW")" "CONFIRM:GAVE_UP"
-assert_eq "R8：打印机物理只有最初那 1 次真实印出，恢复检测没有让它被重印第 2 次" \
-  "$(req GET "/api/admin/system/printer-mock/jobs?sn=G3-R8" "$AT" | jq -r '.data | length')" "1"
+# 期望 2 而不是 1：① 最初那单（打印机在线时直接印出）② 离线期间那单（入云端队列，
+# 恢复时被合法补发）。**关键是没有第 3 次**——那条 GAVE_UP 僵尸行没有被重印。
+# 如果 R8 的 OR 排除子句被删掉，僵尸行会被判成 STALE:DROPPED（上面两条先转红），
+# 这一条也会跟着变（实测 2026-09-06：删掉 OR 子句后三条全红）。
+assert_eq "R8：物理印出 2 次（最初 + 离线补发），僵尸行没有被重印成第 3 次" \
+  "$(req GET "/api/admin/system/printer-mock/jobs?sn=G3-R8" "$AT" | jq -r '.data | length')" "2"
 
 echo "-- R9-a：补打 FAILED 作业跟 alerted 解耦——ABNORMAL(缺纸/开盖) 从未触发过告警也照样补打 --"
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-R9A","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":30,"printCancel":true}' >/dev/null
