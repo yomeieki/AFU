@@ -725,8 +725,12 @@ export async function enqueuePrinterTestJob(sn: string): Promise<EnqueueResult> 
 // 是同一类做法，不是新引入的模式。**代价**：多实例部署或进程重启会丢失"已持续离线多久"的计时，
 // 相当于该次重启后重新起算——PM2 单实例 fork 前提下可接受（与 lastLowStockPushAt 的既有取舍一致）。
 /** D2（H5b）：`wasOffline` 独立于 `alerted` 跟踪——云端排队从打印机一断线就开始堆积，不等
- *  `offlineAlertMin` 阈值。哪怕这次离线短到没触发告警，恢复时也要检查 waiting 决定要不要清队列。 */
-interface PrinterHealthTrack { offlineSince: number | null; alerted: boolean; wasOffline: boolean }
+ *  `offlineAlertMin` 阈值。哪怕这次离线短到没触发告警，恢复时也要检查 waiting 决定要不要清队列。
+ *  R9（复核第二轮）：`wasBad` 单独记录"上一轮是否 bad"，`retryRecoveredPrinterJobs` 的触发条件
+ *  改用它而不是 `alerted`——ABNORMAL（缺纸/开盖）通常几分钟内就恢复，往往等不到
+ *  `offlineAlertMin`（默认 5 分钟）触发告警，`alerted` 永远是 false，绑在它上面的补打因此永远
+ *  不会执行，FAILED 的作业会永远停在 FAILED（H5 的失效链原样复现，只是把「离线」换成「缺纸」）。 */
+interface PrinterHealthTrack { offlineSince: number | null; alerted: boolean; wasOffline: boolean; wasBad: boolean }
 const healthTrack = new Map<string, PrinterHealthTrack>()
 let lastHealthSnapshot: { at: number; entries: PrinterHealthEntry[] } | null = null
 /** workbench 快照复用这份缓存的最长时效：略大于 scheduler 的 60s 心跳，容忍一次心跳延迟/失败 */
@@ -745,9 +749,16 @@ export function _resetPrinterHealthTrack(): void {
  * 不去动生产配置本身的校验下限。
  */
 export function _setPrinterHealthTrackForTest(
-  sn: string, track: { offlineSince: number | null; alerted: boolean; wasOffline?: boolean }
+  sn: string, track: { offlineSince: number | null; alerted: boolean; wasOffline?: boolean; wasBad?: boolean }
 ): void {
-  healthTrack.set(sn, { offlineSince: track.offlineSince, alerted: track.alerted, wasOffline: track.wasOffline ?? false })
+  healthTrack.set(sn, {
+    offlineSince: track.offlineSince,
+    alerted: track.alerted,
+    wasOffline: track.wasOffline ?? false,
+    // 未显式传入时按 alerted||wasOffline 推断——历史调用点（H5b 之前写的 e2e）只关心
+    // alerted/wasOffline，让它们继续能间接表达「上一轮是不是 bad」，不强制全部改造。
+    wasBad: track.wasBad ?? (track.alerted || (track.wasOffline ?? false)),
+  })
 }
 
 /**
@@ -755,11 +766,26 @@ export function _setPrinterHealthTrackForTest(
  * （账号/密钥/未绑定等配置问题不会因为「设备连通性恢复」而自愈，重打只会立刻再失败一次，白白
  * 占用打印机队列——这是规格没写死、本批自行做出的判断，详见最终报告）的作业，重置为 PENDING 后
  * 立即重新尝试发送一次。超过窗口的旧单按规格明确要求不再补打。
+ *
+ * R9（复核第二轮，跟着 `printerHealthTask` 的触发条件改动一起发现的新坑）：也排除
+ * `lastError` 以 `TIMEOUT:` 开头的行——M11 把 TIMEOUT 类失败的重试上限砍到只有 2 次
+ * （`TIMEOUT_MAX_ATTEMPTS`），理由是飞鹅打印接口没有幂等 token，多打一次真的可能多出一张纸；
+ * 这条补打路径如果不认这个类别，会绕开那道上限。触发条件从「持续 bad 超过 offlineAlertMin
+ * 才补打」放宽成「上一轮 bad/未知」之后，这个组合变得容易撞上：同一次 scheduler tick 里，
+ * `printQueueSweep` 刚把一条 TIMEOUT 耗尽的作业判成 FAILED，紧接着同一 tick 的
+ * `printerHealth`（对一台刚配置、之前从没查过状态的打印机，`isFirstSeen` 会保守当成
+ * "可能刚恢复"）就把这同一条刚失败的作业当成"设备恢复了，该补打"重新发一次——
+ * 对连通性问题这么做没问题，但对 TIMEOUT 类失败，"是否恢复"跟"要不要再试"根本是两回事：
+ * 我们依然不知道上一次超时的那次请求到底有没有真的送达打印机，M11 的封顶就是为了这个不确定性，
+ * 不该被"设备好像连上了"绕过去。
  */
 export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
   const cutoff = new Date(Date.now() - RECOVER_BACKFILL_MS)
   const jobs = await prisma.printJob.findMany({
-    where: { printerSn: sn, status: 'FAILED', createdAt: { gt: cutoff }, NOT: { lastError: { startsWith: 'CONFIG:' } } },
+    where: {
+      printerSn: sn, status: 'FAILED', createdAt: { gt: cutoff },
+      NOT: [{ lastError: { startsWith: 'CONFIG:' } }, { lastError: { startsWith: 'TIMEOUT:' } }],
+    },
     orderBy: { createdAt: 'asc' },
     take: BATCH,
   })
@@ -947,8 +973,21 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
   let recovered = 0
   let backfilled = 0
   for (const e of entries) {
-    const bad = e.state === 'OFFLINE' || e.state === 'ABNORMAL' || e.state === 'ERROR'
-    const track = healthTrack.get(e.sn) ?? { offlineSince: null, alerted: false, wasOffline: false }
+    // UNKNOWN（复核第二轮）：workbench 的 `summarizePrinterStatus` 把 UNKNOWN 归到 ABNORMAL
+    // 那一档（未启用/未绑定才是 NOT_CONNECTED，其余"查不清楚"一律不当成"没事"）——这里原来
+    // 没把 UNKNOWN 算进 `bad`，两处口径相反：一台真正查不清楚状态的打印机会被这里当成"良好"，
+    // 既不累计离线时长也不触发任何恢复检查，跟工作台顶栏同时刻显示的"异常"矛盾。UNKNOWN 归 bad。
+    const bad = e.state === 'OFFLINE' || e.state === 'ABNORMAL' || e.state === 'ERROR' || e.state === 'UNKNOWN'
+    const existing = healthTrack.get(e.sn)
+    // R9：`healthTrack` 缺这个 sn 只有两种可能——这台打印机是刚配置上的（没有"之前"可言），
+    // 或者进程刚重启、原来的跟踪状态全部丢失（PM2 restart，见上面「代价」那段注释）。两者无法
+    // 区分，保守按"可能刚从坏状态恢复"处理一次：即使这一轮直接是 good，也照样走一遍
+    // retryRecoveredPrinterJobs/recoverFromOfflineQueue——重启后第一次轮询恰好是 ONLINE 时，
+    // 原来的写法（`alerted`/`wasOffline` 全新落地都是 false）会让这两条恢复路径一次都不触发，
+    // 缺纸期间转 FAILED 的作业、离线期间排进云端队列的票都永远没人再理。
+    const isFirstSeen = existing === undefined
+    const track: PrinterHealthTrack = existing ?? { offlineSince: null, alerted: false, wasOffline: false, wasBad: false }
+    const prevBad = isFirstSeen ? true : track.wasBad
     if (bad) {
       if (track.offlineSince === null) track.offlineSince = now
       const downMin = (now - track.offlineSince) / 60_000
@@ -966,13 +1005,24 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
       if (track.alerted) {
         recovered++
         notifySystemAlert('打印机已恢复', [`打印机 ${e.name}（${e.sn}）`], { key: `printer:recovered:${e.sn}` })
+      }
+      // R9：补打 FAILED 作业的触发条件改成「上一轮 bad、本轮 good」（`prevBad`），跟 `alerted`
+      // 解耦——`alerted` 只在持续 bad 超过 `offlineAlertMin`（默认 5 分钟）才会置位，而 ABNORMAL
+      // 常见的缺纸/开盖往往几分钟内就被店员发现并处理掉，等不到这个阈值；原来绑在 `alerted` 上
+      // 意味着这类短暂故障期间转 FAILED 的作业永远没有机会被自动补打，只能等店员在后台点
+      // 「失败重试」。`isFirstSeen` 时按「可能刚恢复」处理，见上面的注释。
+      if (prevBad) {
         backfilled += await retryRecoveredPrinterJobs(e.sn)
       }
-      // D2（H5b）：不依赖 alerted——哪怕这次离线短到没触发告警阈值，只要曾经是 OFFLINE，
-      // 恢复时都要查一次 waiting，决定要不要清云端队列 + 从本地记录补发。
-      if (track.wasOffline) {
+      // D2（H5b）：同样跟 alerted/isFirstSeen 解耦——哪怕这次离线短到没触发告警阈值，只要曾经
+      // 是 OFFLINE（或者 track 缺失、不确定之前是不是 OFFLINE），恢复时都要查一次 waiting，
+      // 决定要不要清云端队列 + 从本地记录补发。
+      if (track.wasOffline || isFirstSeen) {
         try {
-          // R5：把这次离线开始的时间点传给 recoverFromOfflineQueue，用来圈定"这次离线期间"的行。
+          // R5：offlineSince 传给 recoverFromOfflineQueue 用来圈定「这次离线期间」的行——
+          // track.offlineSince 在 bad 分支里被设置过就不会是 null；isFirstSeen 且从未记录过
+          // offlineSince 时，没有更好的信息，只能退化用 now（等价于"从这一刻才算离线"，
+          // 不会误伤更早的历史行，是偏保守的选择）。
           const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName, track.offlineSince ?? now)
           backfilled += n
         } catch (err) {
@@ -983,6 +1033,7 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
       track.alerted = false
       track.wasOffline = false
     }
+    track.wasBad = bad
     healthTrack.set(e.sn, track)
   }
   return { checked: entries.length, alerted, recovered, backfilled }
