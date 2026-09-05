@@ -91,7 +91,30 @@ Page({
       return
     }
     // onLoad 后会紧跟一次 onShow；首次报价完成前不重复打 /local/quote。
-    if (this._quotedOnce) this.refreshQuote('show')
+    if (this._quotedOnce) this.reloadAddressAndQuote()
+  },
+
+  // 「去补充定位」走的是地址编辑页，保存后只 navigateBack、不写 globalData.selectedAddress，
+  // 这里不重新拉地址的话 this.data.address 里的 latE6/lngE6 永远是旧的 null，
+  // 顾客补完定位回来仍被「该地址缺少定位」挡住，是个死循环。
+  reloadAddressAndQuote: function() {
+    var self = this
+    var current = this.data.address
+    getAddresses()
+      .then(function(addresses) {
+        var list = addresses || []
+        var latest = current
+          ? list.find(function(item) { return item.id === current.id })
+          : null
+        // 当前地址在编辑页被删掉了：退回默认/首条，与 loadData 的选法一致
+        if (!latest) latest = list.find(function(item) { return item.isDefault }) || list[0] || null
+        self.setData({ address: latest })
+        self.refreshQuote('show')
+      })
+      .catch(function() {
+        // 拉不到地址就按旧地址报价，至少不把页面卡死
+        self.refreshQuote('show')
+      })
   },
 
   onUnload: function() {
