@@ -206,12 +206,22 @@ async function extendLivePoints(
  * settle 按满额发分、退款按 pointsEarned=0 不扣」这种永久多发。锁顺序 orders → points_ledgers →
  * users，与 finalizeRefundSuccess 一致，不会死锁。
  *
- * enabled 判断放在读到订单字段之后、任何写操作之前——关着的时候直接 return，不写
+ * enabled 判断的约束是「在任何写操作之前」，不是「在锁之后」——关着的时候直接 return，不写
  * pointsSettledAt（B3 的既有约定）：这保证以后店主打开开关时，settleMissedPoints 的 7 天
  * 窗口仍能捡到这些单补发，而不是被一个「已处理」标记永久挡在候选集外。
+ *
+ * M15：getMemberSettings() 提到 `$transaction` 之前读，不要挪到 `FOR UPDATE` 之后——
+ * 它用全局 `prisma`（连接池的另一条连接），缓存未命中时要等一次 DB 往返；握着 order 行锁
+ * 再去连接池要第二条连接，比它本来要替换掉的「事务外读」形态更差（持锁时间更长，连接池
+ * 紧张时还可能因为等不到连接而把这把锁攥得更久）。enabled 判断本身与订单状态无关，
+ * 不需要事务/锁提供的隔离保护，提到最前面不影响任何正确性——不满足就直接 return，
+ * 连事务都不用开，锁也不用拿。
  */
 export async function settlePoints(orderId: number): Promise<void> {
   try {
+    const settings = await getMemberSettings()
+    if (!settings.points.enabled) return
+
     await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`
       const order = (await tx.order.findUnique({
@@ -225,9 +235,6 @@ export async function settlePoints(orderId: number): Promise<void> {
       if (order.status !== 'COMPLETED') return
       if (order.isTest) return
       if (order.pointsSettledAt !== null) return
-
-      const settings = await getMemberSettings()
-      if (!settings.points.enabled) return
 
       // 锁后读到的 refundedAmount 算 earn：与并发退款互斥后这里看到的一定是最新值
       const earn = calcEarn(order.actualAmount, order.refundedAmount, settings.points.earnRatePerYuan)
