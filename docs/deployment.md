@@ -234,6 +234,50 @@ pm2 save
 bash /www/food-shop/scripts/deploy.sh
 ```
 
+### ⚠️ 前置：生产机拉不到远端，代码必须用 git bundle 搬过去
+
+上面这条命令里的 `git fetch` **在本项目从来没有成功过**。生产机的 remote 是私有仓库
+`https://github.com/yomeieki/AFU.git`，机器上没有凭据，且 GitHub 账号已挂起：
+
+```
+$ git ls-remote --heads origin
+fatal: could not read Username for 'https://github.com': No such device or address
+```
+
+所以「跑 deploy.sh 就能更新」这个说法是错的，必须先把提交搬上去。实测可行的做法
+（2026-09-05 首次跑通，180 个提交 / 5.8MB）：
+
+```bash
+# ① 本地：打增量包（<生产当前 SHA>..<要部署的 SHA>），先建个分支名给 bundle 用
+git branch -f deploy-batch1 <要部署的 SHA>
+git bundle create /tmp/afu.bundle <生产当前 SHA>..deploy-batch1
+git bundle verify /tmp/afu.bundle          # 会列出前置提交，确认生产机都有
+
+# ② 传上去（deploy.sh 一并传：生产上那份可能是旧版，不支持 DEPLOY_REF）
+scp /tmp/afu.bundle scripts/deploy.sh ubuntu@162.14.114.95:/home/ubuntu/
+
+# ③ 生产：只 fetch 进一个独立 ref，不动 HEAD，确认无误再部署
+ssh ubuntu@162.14.114.95
+cd /www/food-shop
+git fetch /home/ubuntu/afu.bundle deploy-batch1:refs/heads/deploy-batch1
+git log --oneline -1                        # HEAD 应仍是旧版
+DEPLOY_REF=<要部署的 SHA> bash /home/ubuntu/deploy.sh
+```
+
+几个要点：
+
+- **从 `/home/ubuntu/deploy.sh` 跑，不要从仓库里跑**。`deploy.sh` 第 2 步会
+  `git reset --hard`，把正在执行的脚本文件本身换掉；从仓库外执行可以完全避开这个问题。
+  另外生产上那份 `scripts/deploy.sh` 是部署前那一版，**旧版没有 `DEPLOY_REF`**。
+- `git bundle verify` 列出的前置提交，生产机必须**全部**有（用 `git cat-file -e <sha>^{commit}` 逐个验），
+  否则 fetch 会失败。做增量包时前置通常就是生产当前 HEAD 及其合并基。
+- 部署前查一次 `git status --porcelain -uno`：`reset --hard` 会抹掉已跟踪文件的未提交改动。
+  本项目实测只有 `package-lock.json` 因 npm 版本差异有 `libc` 字段增删，抹掉无害；
+  **但每次都要看一眼**，别默认它一定无害。
+
+> 什么时候不需要这一套：GitHub 账号恢复、或生产机配好部署密钥之后，`git fetch` 才真正可用。
+> 在那之前，任何写着「跑 deploy.sh 就行」的文档都是不完整的。
+
 deploy.sh 会自动完成：**预检（生产环境缺 COS 配置会在动服务之前就中止）** → git 拉取 → 安装依赖 → **迁移前备份数据库** → prisma generate（先快照旧 Client）→ 编译到 `dist.next/` → 迁移（**失败：还原 `dist/` 与 Prisma Client 到部署前，打印三步恢复命令，不重启**；成功：换上 `dist.next/`）→ admin 构建发布 → PM2 热重载 → **pm2-logrotate 安装/配置（幂等）** → Nginx reload → 健康检查（含 DB 探活），并在结尾打印代码回滚与数据库恢复命令。
 
 > 迁移失败时磁盘上仍是旧产物是刻意的：老进程虽然还在内存里跑，但 PM2 之后任何一次自发重启（`max_memory_restart`、机器重启）都会从磁盘重新加载；若 `dist/` 已是新代码就会拿新代码打老库，全站 500 而 `/health` 照样绿。
