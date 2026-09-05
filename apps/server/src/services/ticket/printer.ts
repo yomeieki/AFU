@@ -8,8 +8,9 @@
  * 播报由打印机固件在收到 `Open_printMsg` 时自动触发（见 docs/research/2026-09-03-cloud-printer-feie-xpyun.md §1.7）。
  */
 
-/** PrintJob.kind：NEW_ORDER 新单 | REPEAT 未接单重打 | CANCEL 取消/退款提醒 | REPRINT 手动重打 | TEST 测试页 */
-export type PrintJobKind = 'NEW_ORDER' | 'REPEAT' | 'CANCEL' | 'REPRINT' | 'TEST'
+/** PrintJob.kind：NEW_ORDER 新单 | REPEAT 未接单重打 | CANCEL 取消/退款提醒 | REPRINT 手动重打 |
+ *  TEST 测试页 | CANCEL_REQUEST 顾客申请取消（未决，店员可驳回）| RESUME 取消申请被驳回，继续制作（H6） */
+export type PrintJobKind = 'NEW_ORDER' | 'REPEAT' | 'CANCEL' | 'REPRINT' | 'TEST' | 'CANCEL_REQUEST' | 'RESUME'
 
 /** PrintJob.provider */
 export type PrinterProviderName = 'FEIE' | 'MOCK' | 'XPYUN'

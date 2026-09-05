@@ -535,8 +535,12 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')
     notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note })
     // 出票（规格 §8b「顾客申请取消」）：这一步只是挂起申请、订单状态未变，但厨房该立刻知道「先别做了」，
-    // 不必等店员处理完才收到消息——CANCEL 票是给店内看的物理提醒，与走推送通知的 notifyCancelRequest 并列。
-    enqueueOrderTicket(id, 'CANCEL').catch((err) => {
+    // 不必等店员处理完才收到消息——票面是给店内看的物理提醒，与走推送通知的 notifyCancelRequest 并列。
+    // H6：kind 用独立的 CANCEL_REQUEST（不是 CANCEL）——这只是「申请」，店员可能驳回，票面文案、
+    // printCancel 开关判断、打印记录筛选都要能跟真正的「取消」区分开。seq 用 cancelRequestedAt 的
+    // 时间戳而不是固定 0：驳回后 cancelRequestedAt 会被清空，顾客可以再申请一次，固定 seq 会被
+    // dedupe 当成「已出过同一张票」吞掉，第二次申请就再也传不到厨房。
+    enqueueOrderTicket(id, 'CANCEL_REQUEST', { seq: cancelRequestedAt.getTime() }).catch((err) => {
       console.error('[orders] enqueueOrderTicket 失败（cancel-request）:', (err as Error).message)
     })
     success(res, { cancelRequestedAt })

@@ -8,6 +8,7 @@ import {
   callRider, voidUnknownDelivery, precancelDelivery, cancelDelivery, addTip, selfDeliver, markDelivered,
 } from '../../services/delivery/orchestrator'
 import { refreshOrderQuote, kickOffQuote, isQuoteStale } from '../../services/delivery/quote'
+import { enqueueOrderTicket } from '../../services/ticket'
 
 const router = Router()
 
@@ -102,6 +103,12 @@ router.post('/:id/cancel-request/reject', async (req: Request, res: Response, ne
     if (moved.count === 0) {
       throw new AppError(42204, target.cancelRequestedAt ? `订单状态为 ${target.status}，取消申请已无需处理` : '该订单没有待处理的取消申请')
     }
+    // H6：驳回意味着顾客还是要这一单，厨房该继续做——出一张 RESUME 票提醒。seq 用当次驳回时间戳
+    // （不是固定 0）：这个 kind 专门对应"驳回"这个动作本身，每次驳回都该是新的一张，不与任何
+    // 其它 RESUME 共享 dedupe 槽位。
+    enqueueOrderTicket(id, 'RESUME', { seq: Date.now() }).catch((err) => {
+      console.error('[admin/delivery] enqueueOrderTicket 失败（驳回取消申请）:', (err as Error).message)
+    })
     success(res, await prisma.order.findUnique({ where: { id } }))
   } catch (e) { next(e) }
 })

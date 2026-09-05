@@ -218,6 +218,29 @@ export function renderCancelTicket(input: { orderNo: string; channel: TicketChan
   return assemble(lines)
 }
 
+/** 顾客申请取消（H6）：订单状态未变，只是店员还没确认，票面必须跟真正的「取消」区分开，
+ *  厨房看到这张要暂停制作，等结果，不是当场停工。 */
+export function renderCancelRequestTicket(input: { orderNo: string; channel: TicketChannel; at: Date }): string {
+  const lines = [
+    '<CB>顾客申请取消</CB>',
+    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单：${input.orderNo}`,
+    `时间：${fmtDateTime(input.at)}`,
+    '<BOLD>待店员确认，请暂停制作</BOLD>',
+  ]
+  return assemble(lines)
+}
+
+/** 取消申请被店员驳回（H6）：顾客还是要这一单，厨房该继续做 */
+export function renderResumeTicket(input: { orderNo: string; channel: TicketChannel; at: Date }): string {
+  const lines = [
+    '<CB>取消申请已驳回</CB>',
+    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单：${input.orderNo}`,
+    `时间：${fmtDateTime(input.at)}`,
+    '<BOLD>请继续制作</BOLD>',
+  ]
+  return assemble(lines)
+}
+
 /** 后台「打印测试页」 */
 export function renderTestTicket(printerName?: string): string {
   const lines: string[] = [

@@ -22,7 +22,8 @@ import {
 import { feieProvider } from './feie'
 import { mockPrinterProvider } from './mock'
 import {
-  renderOrderTicket, renderReminderTicket, renderCancelTicket, renderTestTicket, TicketOrderInput,
+  renderOrderTicket, renderReminderTicket, renderCancelTicket, renderCancelRequestTicket, renderResumeTicket,
+  renderTestTicket, TicketOrderInput,
 } from './content'
 
 const BATCH = 100
@@ -135,6 +136,12 @@ function renderForKind(kind: PrintJobKind, order: OrderForTicket, settings: Prin
   if (kind === 'CANCEL') {
     return renderCancelTicket({ orderNo: order.orderNo, channel, reason: '订单取消/退款', at: new Date() })
   }
+  if (kind === 'CANCEL_REQUEST') {
+    return renderCancelRequestTicket({ orderNo: order.orderNo, channel, at: new Date() })
+  }
+  if (kind === 'RESUME') {
+    return renderResumeTicket({ orderNo: order.orderNo, channel, at: new Date() })
+  }
   if (kind === 'REPEAT' && !settings.repeat.reprint) {
     return renderReminderTicket({ orderNo: order.orderNo, channel, waitedMin: waitedMin ?? 0 })
   }
@@ -188,7 +195,10 @@ export async function enqueueOrderTicket(
     return { enqueued: false, reason: 'SETTINGS_UNREADABLE' }
   }
   if (!settings.enabled) return { enqueued: false, reason: 'PRINTER_DISABLED' }
-  if (kind === 'CANCEL' && !settings.printCancel) return { enqueued: false, reason: 'CANCEL_TICKET_DISABLED' }
+  // H6：CANCEL_REQUEST（申请取消）、RESUME（驳回后继续制作）与 CANCEL（真正取消）都是「取消类」票，
+  // 同受 printCancel 开关管——开关本意是「取消/退款相关的提醒要不要打」，不是只认字面的 CANCEL。
+  const isCancelKind = kind === 'CANCEL' || kind === 'CANCEL_REQUEST' || kind === 'RESUME'
+  if (isCancelKind && !settings.printCancel) return { enqueued: false, reason: 'CANCEL_TICKET_DISABLED' }
 
   const order = await prisma.order.findUnique({ where: { id: orderId }, select: ORDER_SELECT })
   if (!order) return { enqueued: false, reason: 'ORDER_NOT_FOUND' }
