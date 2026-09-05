@@ -195,7 +195,9 @@ if ! npm run db:migrate:deploy; then
     # 最后一个目录（旧行为的探测范围，不是旧行为「编造表名」的做法），并在提示里明说这是
     # 降级模式、探测范围可能不全，运维需要自己核对 prisma/migrations 下本次实际新增的目录。
     DEGRADED_PROBE=1
-    PENDING_MIG_DIRS=("$(ls -d prisma/migrations/*/ | sort | tail -1)")
+    # `|| true`：与 R1 同一类失效——set -euo pipefail 下这条管道一旦无输出（prisma/migrations
+    # 不存在等）会把脚本在**打印恢复指引之前**炸掉，运维拿不到备份路径和第 ③ 步。
+    PENDING_MIG_DIRS=("$(ls -d prisma/migrations/*/ 2>/dev/null | sort | tail -1)") || true
   fi
   MYSQL_CLI="mysql -h ${DB_HOST} -P ${DB_PORT} -u ${DB_USER} -p ${DB_NAME}"
   NEW_TABLES=""
@@ -206,7 +208,7 @@ if ! npm run db:migrate:deploy; then
     NEW_TABLES=$(grep -ho 'CREATE TABLE `[^`]*`' "${PENDING_MIG_DIRS[@]/%/migration.sql}" 2>/dev/null \
       | sed 's/CREATE TABLE //' | paste -sd, - || true)
   fi
-  PENDING_MIG_LIST="${PENDING_MIG_DIRS[*]}"
+  PENDING_MIG_LIST="${PENDING_MIG_DIRS[*]-}"
   restore_artifacts
   echo "=========================================="
   echo " ERROR: 迁移失败！服务未重启，旧进程仍在跑旧代码；磁盘上的 dist/ 与 Prisma Client 已还原为部署前版本。"

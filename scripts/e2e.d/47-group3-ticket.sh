@@ -63,6 +63,36 @@ for oid in "${G3_R5_PRE_OIDS[@]}" "$G3_R5_DURING_OID"; do
 done
 assert_eq "R5：没有任何一单掉进 FAILED" "$G3_R5_ANY_FAILED" "0"
 
+echo "-- R7-MAJORITY：恢复时飞鹅已经自己把队列吐完（waiting=0），我们不该再动它 --"
+# 真机实测：通电 74s 后打印机在线时，队列里那张票**已经自己吐出来了**、waiting 归 0。
+# 而我们的健康检测是 60s 轮询 —— 绝大多数情况下我们观测到的就是 waiting=0，
+# recoverFromOfflineQueue 一进来就 return，整套 clearQueue + 补发一行都不执行。
+# mock 默认不模拟这个瞬间（刻意简化），导致上面 R5/R8 那些用例全部押在 waiting>0 这条
+# **少数**路径上，多数路径覆盖为零。这里用 /auto-flush 把多数路径也变成可测。
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-MAJ","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/printer-mock/auto-flush "$AT" '{"sn":"G3-MAJ","enabled":true}' >/dev/null
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-MAJ","state":"OFFLINE"}' >/dev/null
+G3_MAJ_OID=$(pay_new_order "$PID" "$ADDR")
+sleep 0.2
+assert_eq "R7-MAJ：离线期间那单进了云端队列" \
+  "$(req GET '/api/admin/system/printer-mock/queue?sn=G3-MAJ' "$AT" | jq -r .data.waiting)" "1"
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 建立 wasOffline
+# 切 ONLINE 的同时飞鹅自己把队列吐完（真机行为），我们的轮询晚一步才看到
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-MAJ","state":"ONLINE"}' >/dev/null
+assert_eq "R7-MAJ：飞鹅已自行吐完，waiting 归 0" \
+  "$(req GET '/api/admin/system/printer-mock/queue?sn=G3-MAJ' "$AT" | jq -r .data.waiting)" "0"
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 恢复检测：应当什么都不做
+sleep 0.3
+# 关键：票已经出去了，不能被再印一遍
+assert_eq "R7-MAJ：物理只印 1 次（飞鹅吐的那次），恢复检测没有重复补发" \
+  "$(req GET "/api/admin/system/printer-mock/jobs?sn=G3-MAJ" "$AT" | jq -r '.data | length')" "1"
+# 已知的现实后果，用断言把它钉住而不是留在报告里：waiting=0 时我们提前 return，
+# 那条行不会被 queryJob 确认，只能等 processQueue 的 SENT 确认循环去推进（3 分钟后）。
+assert_eq "R7-MAJ：该行仍是 SENT（多数路径下恢复检测不参与确认，由 SENT 确认循环负责）" \
+  "$(PJOBS "$G3_MAJ_OID" | jq -r '.data.list[0].status')" "SENT"
+req POST /api/admin/system/printer-mock/auto-flush "$AT" '{"sn":"G3-MAJ","enabled":false}' >/dev/null
+
 echo "-- R5-GAP：真实断线与我们探测到之间的空档，票不能被 clearQueue 删掉又不补发 --"
 # `offlineSince` 是**健康检测轮询探测到坏状态**的时刻，不是打印机真正断线的时刻。
 # scheduler 心跳 60s，所以两者之间天然有 0–60 秒的空档。这段空档里下的单：

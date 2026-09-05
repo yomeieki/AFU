@@ -28,7 +28,7 @@ import {
 import { PrinterError, PrinterOnlineState } from '../../services/ticket/printer'
 import {
   _resetMockPrinter, _setMockPrinterState, _setMockPrintFailure, _listMockJobs, _setMockPrintDelay,
-  _mockQueueWaiting, _markMockCloudJobPrinted,
+  _mockQueueWaiting, _markMockCloudJobPrinted, _setMockAutoFlushOnRecover,
 } from '../../services/ticket/mock'
 
 const router = Router()
@@ -294,6 +294,20 @@ printerMockRouter.post('/health-track', async (req: Request, res: Response, next
 // 切换的同时把 cloudQueue 整个清空，recoverFromOfflineQueue 一进来看到 waiting===0 就直接提前
 // return 了，根本走不到 queryJob-before-resend 那段代码，测不出东西。这里用的是「waiting 依然
 // >0（还没被我们观测到清零），但这一条具体的作业其实已经被物理打印」这个更精确的竞态。
+// R7 的**多数路径**开关：真机实测「通电 74s 后打印机在线时，队列里的票已经自己吐完了、
+// waiting=0」，而我们的健康检测是 60s 轮询——绝大多数情况下我们观测到的就是 waiting=0，
+// recoverFromOfflineQueue 一进来就 return，整套 clearQueue + 补发一行都不执行。
+// mock 默认不模拟这个瞬间（刻意简化），导致 e2e 全部押在 waiting>0 这条少数路径上。
+// 这个开关把多数路径也变成可测：开了之后 OFFLINE→ONLINE 会把 cloudQueue 直接搬进 jobs。
+const autoFlushSchema = z.object({ sn: z.string().trim().min(1), enabled: z.boolean() })
+printerMockRouter.post('/auto-flush', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { sn, enabled } = autoFlushSchema.parse(req.body ?? {})
+    _setMockAutoFlushOnRecover(sn, enabled)
+    success(res, { ok: true })
+  } catch (e) { next(e) }
+})
+
 const markPrintedSchema = z.object({ providerJobId: z.string().trim().min(1) })
 printerMockRouter.post('/mark-cloud-job-printed', async (req: Request, res: Response, next: NextFunction) => {
   try {
