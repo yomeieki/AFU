@@ -5,6 +5,9 @@
  *  2. 已发货 N 天自动确认收货
  *  3. 已付款超 15 分钟未接单 → 企微群催单（每单一次）
  *  4. 低库存推送（每 12 小时最多一次）
+ *  ……（同城配送相关任务见各自注释）
+ *  + 出票三任务（规格 §8b，M2b 接入）：printQueueSweep 兜扫队列 / repeatAnnounce 未接单重复播报 /
+ *    printerHealth 打印机离线-恢复告警与补打，实现在 services/ticket/index.ts。
  */
 import prisma from '../utils/prisma'
 import { config } from '../config'
@@ -18,6 +21,9 @@ import {
   remindLocalUncalled, remindCancelRequestPending, autoCallRiders, autoCompleteLocalDelivered,
   housekeepingDelivery, refreshStaleQuotes,
 } from './delivery/tasks'
+import {
+  processQueue as printQueueSweep, repeatAnnounce as printRepeatAnnounce, printerHealthTask,
+} from './ticket'
 
 const TICK_MS = 60 * 1000
 const LOW_STOCK_PUSH_INTERVAL_MS = 12 * 60 * 60 * 1000
@@ -72,6 +78,13 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['localAutoCall', () => autoCallRiders(overrides.autoCallDelayMin)],
     ['localAutoComplete', () => autoCompleteLocalDelivered(overrides.autoCompleteDays)],
     ['localHousekeeping', housekeepingDelivery],
+    // 出票三任务（规格 §8b）：兜扫 PENDING/SENT 队列、未接单重复播报、打印机健康（离线/异常告警+恢复补打）。
+    // 三者各自读 Setting(key=printer) 的开关/阈值（enabled/repeat.*/offlineAlertMin），不经 overrides——
+    // 与其余任务不同，出票没有「联调时需要临时调阈值」的诉求：e2e 改阈值走 PUT /admin/settings/printer
+    // 就够了，不需要在 run-scheduler 的 SchedulerOverrides 里再开一条平行的配置通道。
+    ['printQueueSweep', () => printQueueSweep().then((r) => r.retried + r.confirmed)],
+    ['repeatAnnounce', () => printRepeatAnnounce().then((r) => r.announced + r.exhausted)],
+    ['printerHealth', () => printerHealthTask().then((r) => r.alerted + r.recovered + r.backfilled)],
   ]
   try {
     for (const [name, fn] of tasks) {
