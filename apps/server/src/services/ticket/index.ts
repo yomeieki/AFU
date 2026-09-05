@@ -443,8 +443,18 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
       data: { status: 'PENDING', attempts: 0, lastError: null },
     })
     if (moved.count === 0) continue
-    await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, 1)
-    count++
+    try {
+      // attemptSend 内部对「打印失败」这类错误自己兜底，但 getProvider() 那一行本身在 try 之外
+      // （只在收到未实现的 provider 名字时才会抛，正常路径不会走到）；这里补一层，让恢复补打这个
+      // 批处理循环里，单条历史脏数据（比如 provider 字段被更早版本写成了不认识的值）不会把整个
+      // printerHealthTask 拖垮——那样会导致 scheduler 的这一轮 stats 里连 printerHealth 这个键
+      // 都不出现，调用方（工作台/e2e）拿到的是 undefined 而不是一个数字，对照 processQueue() 里
+      // SENT 确认循环同样的 try/catch 写法。
+      await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, 1)
+      count++
+    } catch (e) {
+      console.warn(`[ticket] 恢复补打失败 job=${job.id}:`, (e as Error).message)
+    }
   }
   return count
 }
