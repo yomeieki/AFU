@@ -470,23 +470,37 @@ export async function deductPointsOnRefund(
 export interface PointsSummary {
   balance: number
   expiringSoon: { points: number; date: string } | null
+  /** 账户级到期日 = 全部在世行的最大 expiresAt（滚动续期下应等于每一行的 expiresAt）；
+   *  没有任何在世行时为 null。供 M4 常驻文案「若 1 年内无消费，您的 N 分将于 X 日全部过期」使用（M16）。 */
+  pointsExpireAt: string | null
 }
 
-/** 30 天内到期的合计与最早日期；没有则 expiringSoon=null */
+/**
+ * H7：balance 不能直接读 User.pointsBalance 冗余列——那是「未扣到期过滤」的账面值，
+ * expirePoints 每日才跑一次，到期后最长约 24 小时里冗余列仍是满额，而 consumePoints
+ * 按 expiresAt>now 过滤会拒绝兑换，两处口径对不上。这里改成实算 Σ(remaining>0 且未过期)，
+ * 与 consumePoints 的过滤条件保持一致。
+ * 30 天内到期的合计与最早日期；没有则 expiringSoon=null。
+ */
 export async function getPointsSummary(userId: number): Promise<PointsSummary> {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { pointsBalance: true } })
   const now = new Date()
   const soonCutoff = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+  // 按 expiresAt 升序取全部在世行：一次查询同时算出 balance（H7）、expiringSoon、
+  // pointsExpireAt=max(expiresAt)（M16，滚动续期下就是最后一行）。
   const rows = await prisma.pointsLedger.findMany({
-    where: { userId, type: { in: ['EARN', 'GIFT_REVERT'] }, remaining: { gt: 0 }, expiresAt: { gt: now, lte: soonCutoff } },
+    where: { userId, type: { in: ['EARN', 'GIFT_REVERT'] }, remaining: { gt: 0 }, expiresAt: { gt: now } },
     orderBy: { expiresAt: 'asc' },
     select: { remaining: true, expiresAt: true },
   })
-  const points = rows.reduce((sum, r) => sum + r.remaining, 0)
-  const date = rows[0]?.expiresAt ?? null
+  const balance = rows.reduce((sum, r) => sum + r.remaining, 0)
+  const soonRows = rows.filter((r) => r.expiresAt !== null && r.expiresAt <= soonCutoff)
+  const soonPoints = soonRows.reduce((sum, r) => sum + r.remaining, 0)
+  const soonDate = soonRows[0]?.expiresAt ?? null
+  const maxExpiresAt = rows.length > 0 ? rows[rows.length - 1].expiresAt : null
   return {
-    balance: user.pointsBalance,
-    expiringSoon: points > 0 && date ? { points, date: date.toISOString() } : null,
+    balance,
+    expiringSoon: soonPoints > 0 && soonDate ? { points: soonPoints, date: soonDate.toISOString() } : null,
+    pointsExpireAt: maxExpiresAt ? maxExpiresAt.toISOString() : null,
   }
 }
 
