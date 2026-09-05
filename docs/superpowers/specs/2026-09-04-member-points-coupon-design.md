@@ -214,7 +214,8 @@ model OrderItem {
 **设置**（`Setting` key `member`，`services/member/settings.ts`，复用 `settings.ts` 范式）：
 ```ts
 interface MemberSettings {
-  points: { enabled: boolean; earnRatePerYuan: number; validDays: number }  // 默认 true / 1 / 365
+  points: { enabled: boolean; earnRatePerYuan: number; validDays: number }  // 默认 true / **100** / 365（PO 2026-09-05 定 100 分/元）
+  // ⚠️ earnRatePerYuan=100 意味着一单 ¥28 = 2800 分，赠品与换券的积分价必须按这个量级重定
   newcomer: { templateId: number | null }                                   // 默认 null = 不发
   rulesText: string                                                         // 规则说明补充文案
 }
@@ -261,6 +262,36 @@ actualAmount = subtotal − discount + shippingFee
 - **兜底** scheduler `settleMissedPoints`：每分钟扫 `status='COMPLETED' && pointsSettledAt IS NULL && isTest = false && completedAt BETWEEN now−7d AND now−2min`，批 100，逐单调 `settlePoints`。
   - 下界 7 天有两个作用：积分开关从关到开时，不会突然给历史全量订单补发；`enabled=false` 期间积压的订单也不会无限扫描。开关关闭时该任务直接跳过。
 - **过期** scheduler `expirePoints`：每日一次，扫 `type IN ('EARN','GIFT_REVERT') && remaining > 0 && expiresAt < now`，批 200：每行 `remaining → 0` + 写 EXPIRE 流水（`refType='LEDGER'`, `refId = 被过期的那行 id`，故 `@@unique` 天然防重）+ `pointsBalance decrement`。
+
+- **⚠️ 有效期改为「最后一次消费起算」的滚动续期（PO 2026-09-05 定）**
+
+  原设计是**按批过期**：每笔积分从它自己产生那天起算 `validDays`，一批一批陆续掉。
+  PO 要求改成**账户级**：积分的到期日 = 最后一次消费 + `validDays`（已定 **365 天**）；
+  只要顾客还在消费，全部积分一直不过期；`validDays` 天不消费，账户内积分**一次性全部清零**。
+
+  **实现方式（刻意选择保留既有机制，不推翻）**：每行仍然各自存 `expiresAt`，
+  只是在 `settlePoints` 成功后追加一步——把该用户**全部未过期入账行**的 `expiresAt`
+  统一推到 `completedAt + validDays`：
+
+  ```
+  await tx.pointsLedger.updateMany({
+    where: { userId, type: { in: ['EARN','GIFT_REVERT'] }, remaining: { gt: 0 }, expiresAt: { gt: now } },
+    data:  { expiresAt: addDays(completedAt, validDays) },
+  })
+  ```
+
+  这样 FIFO 扣减、`expirePoints` 扫描、`GIFT_REVERT` 继承最早到期日**全都不用改**——
+  它们读的仍然是行上的 `expiresAt`，只是这个值会被续期推后。
+
+  **触发点是订单完成，不是付款**：与发积分同一时刻同一钩子，且下单后取消/退款的单
+  不会白白帮顾客续期一年。
+
+  **对顾客文案的影响**：会员中心原设计的「N 分将于 X 月 X 日过期」（某一批分）在滚动
+  续期下不成立，必须改成账户级口径「若 1 年内无消费，您的 N 分将于 X 月 X 日全部过期」。
+  规则页与协议的**权威定稿见 `docs/member-terms-copy.md`**，一字照抄。
+
+  **副作用要认下来**：流失顾客是悬崖式清零（攒了一年的分一次性归零，包括昨天刚得的）。
+  PO 已知悉，并因此把窗口从最初提的 3 个月放宽到 1 年。
 - **退款扣回**（在 `finalizeRefundSuccess` 内，退款成功写完之后）：
   - 条件：`order.pointsEarned > 0`。已扣回量 = 该订单 `REFUND_DEDUCT` 流水 delta 绝对值之和。
   - `deduct = min( floor(refund.amount / 100) × rate , pointsEarned − 已扣回 , user.pointsBalance )` → **不会出现负余额，也不会扣超过这单给过的分**。
