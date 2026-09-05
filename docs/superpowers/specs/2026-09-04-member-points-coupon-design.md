@@ -214,8 +214,11 @@ model OrderItem {
 **设置**（`Setting` key `member`，`services/member/settings.ts`，复用 `settings.ts` 范式）：
 ```ts
 interface MemberSettings {
-  points: { enabled: boolean; earnRatePerYuan: number; validDays: number }  // 默认 true / **100** / 365（PO 2026-09-05 定 100 分/元）
+  points: { enabled: boolean; earnRatePerYuan: number; validDays: number }  // 默认 **false** / **100** / 365（PO 2026-09-05 定）
   // ⚠️ earnRatePerYuan=100 意味着一单 ¥28 = 2800 分，赠品与换券的积分价必须按这个量级重定
+  // ⚠️ enabled 默认 **false**：顾客端五页要到 M4 才有，此时发分顾客看不见，且积分价尚未重定。
+  //    由店主在 M3 设置页显式打开。这是产品决定，与「比例必须是 100」那条纠错无关——
+  //    以后无论何时打开开关，比例都必须是 100。
   newcomer: { templateId: number | null }                                   // 默认 null = 不发
   rulesText: string                                                         // 规则说明补充文案
 }
