@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Copy, Phone, RefreshCw, Search, Truck } from 'lucide-react'
-import { getOrders, acceptOrder, shipOrder, cancelOrder, completeRefund, completeOrder } from '../api/admin'
+import { Copy, Phone, Printer, RefreshCw, Search, Truck } from 'lucide-react'
+import { getOrders, acceptOrder, shipOrder, cancelOrder, completeRefund, completeOrder, reprintOrder } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import Button from '../components/ui/Button'
@@ -69,6 +69,7 @@ export default function Orders() {
   const [shipError, setShipError] = useState('')
   const [shipping, setShipping] = useState(false)
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
+  const [reprintingId, setReprintingId] = useState<number | null>(null)
   const { afterSaleCount } = usePendingOrders()
   const modalOpenRef = useRef(false)
   modalOpenRef.current = !!(shipModal || refundTarget)
@@ -138,6 +139,23 @@ export default function Orders() {
   }
 
   const handleAccept = (order: Order) => withToast(() => acceptOrder(order.id), '已接单，开始备餐', '接单失败')
+
+  // 票卡纸、被撕坏、店员没看见是日常——不弹确认框（不是危险操作，只是多打一张纸）
+  const handleReprint = async (order: Order) => {
+    setReprintingId(order.id)
+    try {
+      const r = await reprintOrder(order.id)
+      toast[r.enqueued ? 'success' : 'error'](
+        r.enqueued
+          ? '已发送重打'
+          : { PRINTER_DISABLED: '打印机功能未启用', NO_PRINTER_CONFIGURED: '该单所属渠道尚未配置打印机' }[r.reason ?? ''] ?? '重打失败'
+      )
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '重打失败')
+    } finally {
+      setReprintingId(null)
+    }
+  }
 
   const handleComplete = async (order: Order) => {
     const ok = await confirmDialog({
@@ -295,6 +313,12 @@ export default function Orders() {
       {order.status === 'SHIPPED' && <button onClick={() => handleComplete(order)} className={cls.muted}>标记完成</button>}
       {renderRefundActions(order, cls)}
       {order.status === 'PENDING_PAYMENT' && <button onClick={() => handleCancel(order)} className={cls.danger}>取消</button>}
+      {order.status !== 'PENDING_PAYMENT' && (
+        <button onClick={() => handleReprint(order)} disabled={reprintingId === order.id} className={`${cls.muted} disabled:opacity-40 inline-flex items-center gap-1`} title="重打该单小票（票卡纸/被撕坏/没看见时用）">
+          <Printer className="w-3.5 h-3.5" />
+          {reprintingId === order.id ? '发送中...' : '重打小票'}
+        </button>
+      )}
       <button onClick={() => setExpanded(expanded === order.id ? null : order.id)} className={cls.link}>
         {expanded === order.id ? expandLabel[1] : expandLabel[0]}
       </button>
