@@ -961,7 +961,7 @@ M1 只做「渠道基础设施」：分类/商品按 `channel` 归属、门店�
 |---|---|
 | `GET /api/admin/settings/local-delivery` | 读取完整同城配送设置（门店坐标/营业时段/运费阶梯/起送门槛/配送半径/接单宽限期/单次上限等），结构见 `LocalDeliverySettings`（`services/local-settings.ts`） |
 | `PUT /api/admin/settings/local-delivery` | 全量保存。服务端先 `sanitizeLocalSettings` 再校验；`enabled=true`（开启同城配送总开关）时走更严格的 `validateForEnable`（例如必须已设置门店坐标） |
-| `PATCH /api/admin/settings/local-delivery/store-location` | 单独更新门店坐标 `{ latE6, lngE6 }`（商家端「一键定位」用，不必先拉全量设置再整份 PUT） |
+| `PATCH /api/admin/settings/local-delivery/store-location` | 单独更新门店坐标 `{ latE6, lngE6 }`（商家端「门店位置」地图选点用，不必先拉全量设置再整份 PUT——`apps/miniapp/pages/merchant/index.js` 调的是 `wx.chooseLocation` 手动选点，不是 `wx.getLocation` 自动定位，这里不是「一键」） |
 | `POST /api/admin/settings/local-delivery/pause` | 临时暂停接单 `{ reason, until? }`（ISO datetime，缺省不限时） |
 | `DELETE /api/admin/settings/local-delivery/pause` | 取消暂停 |
 
@@ -1082,6 +1082,18 @@ Body：
 入库失败时 HTTP 500，`result: false`。`result` 字段仅供人工核对回调日志，快递100 是否重推只看 HTTP 状态码。
 
 状态机细节（rank 单调推进、旁路态、N8 特例、720 回退）见 spec §5.3；回调幂等键 `dedupeKey = CB:<deliveryNo>:<providerStatus>:<updateTime ?? md5(rawBody)>`（`services/delivery/events.ts`）。
+
+### 顾客端 `GET /api/orders/:id` 的同城扩展字段
+
+M1/M2 在通用订单详情响应之外，为 `deliveryType='LOCAL'` 的订单额外补了几个字段（`apps/server/src/routes/orders.ts`）：
+
+| 字段 | 说明 |
+|---|---|
+| `canRequestCancel` | 是否可以调用下面的 `POST /:id/cancel-request`。仅当 `deliveryType==='LOCAL' && status==='PREPARING'` 且已接单（`acceptedAt` 非空）且未过 `acceptGraceMin` 宽限期且尚未申请过，为 `true`；其余一律 `false`（非同城订单恒 `false`） |
+| `cancelRequestDeadline` | 宽限期截止时间（`acceptedAt + acceptGraceMin` 分钟），非同城订单或未接单时为 `null`。前端用它显示倒计时/「已超过可取消时间」 |
+| `delivery` | 仅 `deliveryType==='LOCAL'` 时非 `null`，取该订单最近一条 `Delivery` 记录的顾客可见白名单视图（`customerDeliveryView`，`routes/orders.ts`）：`{ status, statusLabel, courierName, courierMobile, courierCompany, pickedUpAt, deliveredAt }`。**注意**：这与设计 spec §5.7 描述的白名单字段不完全一致——spec 里写的 `statusDesc`/`courierCompanyLabel`/`acceptedAt`/`estimatedDeliveryAt`/`events[]` 在当前代码里并不存在，实际字段名是 `statusLabel`（不是 `statusDesc`）、`courierCompany`（不是 `courierCompanyLabel`），且没有 `acceptedAt`/`estimatedDeliveryAt`/`events`。这是设计与实现的落差，本次文档同步只如实记录代码现状，未回头改 spec（不在本轮任务范围） |
+
+**这三个字段只在 `GET /api/orders/:id`（详情）返回，`GET /api/orders`（列表）没有**——列表接口没有调用 `cancelWindowOf`，也没有查 `delivery`；顾客端「我的订单」列表页如果要判断能否申请取消，需要先进详情页。
 
 ### 顾客端骑手位置 `GET /api/orders/:id/courier`
 
