@@ -16,6 +16,7 @@ import { config } from '../../config'
 import kd100MockRouter from './kd100-mock'
 import deliveryRouter from './delivery'
 import workbenchRouter from './workbench'
+import printerRouter, { printerMockRouter } from './printer'
 
 const router = Router()
 
@@ -35,10 +36,14 @@ router.use('/banners', bannersAdminRouter)
 router.use('/system', systemRouter)
 // Mock control plane: only in dev/e2e (production disables via config layer)
 if (config.mock.delivery) router.use('/system/kd100-mock', kd100MockRouter)
+if (config.mock.printer) router.use('/system/printer-mock', printerMockRouter)
 router.use('/local/orders', deliveryRouter)
 router.use('/workbench', workbenchRouter)
 router.use('/users', usersRouter)
 router.use('/upload', uploadRouter)
 router.use('/settings', settingsRouter)
+// printer.ts 自带完整相对路径（/settings/printer、/printers/*、/print-jobs*、/orders/:id/reprint），
+// 挂在根上、放在 settingsRouter/ordersRouter 之后：两边都没有同名路由，穿透互不冲突（见该文件头注释）。
+router.use('/', printerRouter)
 
 export default router
