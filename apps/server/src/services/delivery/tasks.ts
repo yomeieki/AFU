@@ -221,7 +221,9 @@ export async function autoCompleteLocalDelivered(days?: number): Promise<number>
     const moved = await prisma.order.updateMany({ where: { id: o.id, status: 'SHIPPED' }, data: { status: 'COMPLETED', completedAt: new Date() } })
     if (moved.count === 0) continue
     if (dlv.activeOrderId !== null) {
-      await prisma.delivery.updateMany({ where: { id: dlv.id }, data: { status: 'DELIVERED', statusRank: 100, deliveredAt: new Date(), activeOrderId: null } })
+      // 与其它所有终态写入同一范式：上面读到的 status 只是快照，这几毫秒里回调/店员可能已把它
+      // 置 CANCELLED/FAILED，无守卫会把一张已取消的单改写成 DELIVERED（取消费与「已送达」同时成立）
+      await prisma.delivery.updateMany({ where: { id: dlv.id, status: { notIn: [...TERMINAL] } }, data: { status: 'DELIVERED', statusRank: 100, deliveredAt: new Date(), activeOrderId: null } })
     }
     n++
   }
