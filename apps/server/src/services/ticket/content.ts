@@ -49,6 +49,9 @@ export interface TicketOrderInput {
   estimatedDeliveryAt?: Date | null
   /** 当日流水号（调用方按需计算传入，缺省不打印这一行） */
   seq?: number | null
+  /** REPEAT（未接单重复播报）第几次催单——只在打整张全票时（repeat.reprint=true）跟 seq 并排打印，
+   *  避免跟当日流水号混成一件事（M12：旧实现把播报次数当当日流水打，店员会读错） */
+  announceNo?: number | null
 }
 
 const TICKET_BYTE_LIMIT = 5000
@@ -130,6 +133,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   const header: string[] = [
     `<CB>${isLocal ? '同城配送' : '全国邮寄'}</CB>`,
     ...(o.seq !== null && o.seq !== undefined ? [`<C>今日第 ${o.seq} 单</C>`] : []),
+    ...(o.announceNo !== null && o.announceNo !== undefined ? [`<C>第 ${o.announceNo} 次催单</C>`] : []),
     `订单号：${o.orderNo}`,
     `下单：${fmtDateTime(o.createdAt)}`,
     `付款：${fmtDateTime(o.paidAt)}`,
@@ -196,12 +200,14 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   return assemble([...header, ...receiverBlock, ...remarkBlock, ...itemLines, ...footer])
 }
 
-/** 未接单重复播报的精简「催接单」小票（D7；repeat.reprint=false 时用这个，而不是整张全票） */
-export function renderReminderTicket(input: { orderNo: string; channel: TicketChannel; waitedMin: number }): string {
+/** 未接单重复播报的精简「催接单」小票（D7；repeat.reprint=false 时用这个，而不是整张全票）。
+ *  announceNo 是这一单第几次被催（M12：不是当日流水号，命名与文案上都要跟"今日第N单"分开，
+ *  不然店员会把催单次数误读成流水号）。 */
+export function renderReminderTicket(input: { orderNo: string; channel: TicketChannel; waitedMin: number; announceNo: number }): string {
   const lines = [
     '<CB>催接单</CB>',
     `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单：${input.orderNo}`,
-    `<B>已等待 ${input.waitedMin} 分钟未接单</B>`,
+    `<B>已等待 ${input.waitedMin} 分钟未接单（第 ${input.announceNo} 次催单）</B>`,
     '请到工作台接单',
   ]
   return assemble(lines)
