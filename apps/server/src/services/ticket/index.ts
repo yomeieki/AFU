@@ -8,6 +8,7 @@
  *
  * 硬件是带语音播报的云喇叭款：`print()` 正常出票即触发固件自动播报，本文件不做任何播报专属调用。
  */
+import crypto from 'crypto'
 import prisma from '../../utils/prisma'
 import { config } from '../../config'
 import { notifySystemAlert } from '../notify'
@@ -64,8 +65,27 @@ function getProvider(name: PrinterProviderName): PrinterProvider {
   throw new PrinterError('CONFIG', 'PROVIDER_NOT_IMPLEMENTED', `打印 provider ${name} 尚未实现（二期）`)
 }
 
-function buildDedupeKey(orderId: number, kind: PrintJobKind, seq: number, idx: number): string {
-  return `${orderId}|${kind}|${seq}.${idx}`.slice(0, 64)
+/** dedupeKey 第四段的指纹：sha1(sn) 前 10 位。`dedupeKey` 是 `@db.VarChar(64)`，直接拼 SN 原文
+ *  最长可能到 `10位orderId + 1 + 14位kind(CANCEL_REQUEST) + 1 + 13位seq + 1 + 32位sn` ≈ 72 字符，
+ *  超限会被 `.slice(0,64)` 静默截断成假冲突（M8）；哈希前 10 位足够避免碰撞，且总长稳定可控。 */
+function snFingerprint(sn: string): string {
+  return crypto.createHash('sha1').update(sn, 'utf8').digest('hex').slice(0, 10)
+}
+
+/**
+ * M8：第四段原来用 printers 数组下标（idx），店员增删打印机后数组下标会漂移到别的 SN——
+ * 同一 (orderId,kind,seq) 组合下，旧行的 dedupeKey 可能因为下标巧合撞上新行该用的 key，
+ * 让新行被误判为「已出过」而静默跳过。改用 SN 的指纹，与打印机在数组里的位置无关。
+ */
+function buildDedupeKey(orderId: number, kind: PrintJobKind, seq: number, sn: string): string {
+  return `${orderId}|${kind}|${seq}|${snFingerprint(sn)}`.slice(0, 64)
+}
+
+/** SKIPPED 留痕行（未配置打印机 / 配置读取失败等，没有真实 SN 可用）专用的 key 格式——
+ *  `skip:` 前缀保证它不会跟任何真实作业的 key（第四段永远是十六进制指纹）撞在一起，
+ *  也不会占用真实作业的槽位（M8：修好 M9 之后新增的这条路径同样要避免这个坑）。 */
+function buildSkipDedupeKey(orderId: number, kind: PrintJobKind, seq: number, reason: string): string {
+  return `${orderId}|${kind}|${seq}|skip:${reason}`.slice(0, 64)
 }
 
 type OrderForTicket = {
@@ -154,7 +174,7 @@ export async function enqueueOrderTicket(
       if (o) orderNo = o.orderNo
     } catch { /* 连订单都查不到，说明 DB 本身有问题，退化用 orderId 占位 */ }
     const lastError = `CONFIG:SETTINGS_UNREADABLE ${(e as Error).message}`.slice(0, 255)
-    const dedupeKey = `${orderId}|${kind}|${opts.seq ?? 0}|settings-unreadable`.slice(0, 64)
+    const dedupeKey = buildSkipDedupeKey(orderId, kind, opts.seq ?? 0, 'SETTINGS_UNREADABLE')
     try {
       await prisma.printJob.create({
         data: { orderId, orderNo, kind, provider: 'FEIE', printerSn: '', status: 'SKIPPED', content: '', lastError, dedupeKey },
@@ -183,7 +203,7 @@ export async function enqueueOrderTicket(
   if (printers.length === 0) {
     // 打印机未配置该渠道：仍落一条 SKIPPED 记录留痕，而不是静默什么都不做——
     // 店主在「打印记录」里能看到「这单本该出票但没配打印机」，而不是以为系统没触发。
-    const dedupeKey = buildDedupeKey(orderId, kind, baseSeq, 0)
+    const dedupeKey = buildSkipDedupeKey(orderId, kind, baseSeq, 'NO_PRINTER_CONFIGURED')
     try {
       const row = await prisma.printJob.create({
         data: {
@@ -199,10 +219,9 @@ export async function enqueueOrderTicket(
     return { enqueued: jobIds.length > 0, reason: 'NO_PRINTER_CONFIGURED', jobIds }
   }
 
-  for (let i = 0; i < printers.length; i++) {
-    const printer = printers[i]
+  for (const printer of printers) {
     const content = renderForKind(kind, order, settings, orderSeqOrNull(baseSeq, kind), opts.waitedMin)
-    const dedupeKey = buildDedupeKey(orderId, kind, baseSeq, i)
+    const dedupeKey = buildDedupeKey(orderId, kind, baseSeq, printer.sn)
     let row
     try {
       row = await prisma.printJob.create({
@@ -499,7 +518,7 @@ export async function enqueuePrinterTestJob(sn: string): Promise<EnqueueResult> 
   const providerName = activeProviderName(settings)
   const printer = settings.printers.find((p) => p.sn === sn)
   const content = renderTestTicket(printer?.name)
-  const dedupeKey = `0|TEST|${Date.now()}|${sn}`.slice(0, 64)
+  const dedupeKey = buildDedupeKey(0, 'TEST', Date.now(), sn)
   const row = await prisma.printJob.create({
     data: { orderId: 0, orderNo: 'TEST', kind: 'TEST', provider: providerName, printerSn: sn, status: 'PENDING', content, dedupeKey },
   })
