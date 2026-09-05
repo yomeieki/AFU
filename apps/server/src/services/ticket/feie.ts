@@ -164,8 +164,18 @@ export const feieProvider: PrinterProvider = {
   // 接口：前者观测积压（waiting），后者清空（不能按单删）。
   async queryQueueInfo(sn: string): Promise<PrinterQueueInfo> {
     const data = await post('Open_printerInfo', { sn })
-    // [推断/待核实] 真机实验只确认了 data 里含数值型 waiting 字段，完整响应结构未见官方文档逐字
-    // 给出——这里防御性解析，字段缺失/类型不对一律按 0 处理，不能因为解析失败挡住恢复补打流程。
+    // ✅ 2026-09-06 真机核实（SN 222601993，只读探针打印原始 JSON）：`data` 是**对象**，
+    //    `waiting` 是 **number**。完整响应：
+    //      {"msg":"ok","ret":0,"data":{"model":0,"status":0,"printlogo":"N","scanSwitch":0,"waiting":0}}
+    //    对照 `Open_queryPrinterStatus` 的 `data` 是**字符串**（"离线。"）——两个接口的
+    //    响应形状不同，别照搬。
+    //
+    //    这条曾经是「[推断/待核实]」，而它是整条离线恢复链路的总开关：若 data 是字符串，
+    //    waiting 会恒为 0 → recoverFromOfflineQueue 一进来就 return → clearQueue、
+    //    STALE:DROPPED、补发全部静默 no-op 且无痕。现已排除。
+    //
+    //    防御性解析保留：官方文档没有逐字给出完整结构，字段缺失/类型不对一律按 0，
+    //    不能因为解析失败挡住恢复补打流程。
     const raw = data.data
     let waiting = 0
     if (raw && typeof raw === 'object' && 'waiting' in (raw as Record<string, unknown>)) {

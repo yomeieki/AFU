@@ -63,6 +63,58 @@ for oid in "${G3_R5_PRE_OIDS[@]}" "$G3_R5_DURING_OID"; do
 done
 assert_eq "R5：没有任何一单掉进 FAILED" "$G3_R5_ANY_FAILED" "0"
 
+echo "-- P7a：催单绑营业时间——邮寄非营业时段不催且不烧次数，同城照常催 --"
+# PO 2026-09-06 定：同城打烊后继续催（钱已收，19:58 进来的单不能因为 20:00 一到就没人管）；
+# 邮寄非营业时间一律不催（深夜没人在店里）。营业时间复用同城那一套（店就一个）。
+# ⚠️ 关键性质：邮寄被跳过时**不能推进 announceCount** —— 否则打烊那几小时把 maxTimes
+# 空烧完，第二天开门反而一次都不催，正好是这个门控要避免的相反效果。
+P7A_ORIG_LOCAL=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-BIZ","channels":["LOCAL","EXPRESS"],"copies":1}],"repeat":{"localAfterMin":1,"expressAfterMin":1,"everyMin":1,"maxTimes":5,"reprint":false},"offlineAlertMin":30,"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+# 把营业时段设成一个绝不包含"现在"的窗口 → 店处于打烊状态
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.businessHours=[{"start":"03:00","end":"03:01"}]' <<<"$P7A_ORIG_LOCAL")" >/dev/null
+
+P7A_EXPRESS_OID=$(pay_new_order "$PID" "$ADDR")
+[[ -n "$P7A_EXPRESS_OID" ]] && ok "P7a：前置——邮寄单已下单支付 #$P7A_EXPRESS_OID" || fail "P7a：下单失败"
+sleep 0.2
+# ⚠️ paid_at 必须老过**库里所有残留 PAID 单**，不是「够老就行」。
+# repeatAnnounce 的候选是 `orderBy paidAt asc take 100`，而开发库反复跑 e2e 会攒下上千条
+# 残留 PAID 单（2026-09-06 实测 1508 条，第 100 老的是当天上午）。付款时间只往回推 30 分钟
+# 的话，这一单根本进不了扫描窗口 —— 于是「不催」的断言会因为「压根没被扫到」而假绿，
+# 看起来门控生效了，其实门控一次都没被触达。用一个远早于任何残留的时间点钉死。
+# （同一个坑咬过飞鹅接线那一轮，它当时把一条断言弱化成了「任务不抛异常」。）
+sql "UPDATE orders SET paid_at = '2026-08-01 00:00:00.000' WHERE id=$P7A_EXPRESS_OID;"
+# ⚠️ 自检：sql() 把 stderr 重定向到 /dev/null，UPDATE 写错了会**静默失败**。
+# 不验这一条的话，下面「不催」的断言会因为「等待时间根本没到」而假绿——
+# 看起来门控生效了，其实门控压根没被触达。（2026-09-06 本人第一版就踩了这个坑。）
+assert_eq "P7a：前置——paid_at 已推到远早于所有残留单（catch sql() 静默失败）" \
+  "$(sql "SELECT IF(paid_at < '2026-08-02','yes','no') FROM orders WHERE id=$P7A_EXPRESS_OID;")" "yes"
+assert_eq "P7a：前置——该单确实排进了 repeatAnnounce 的扫描窗口（最老 100 条）" \
+  "$(sql "SELECT IF((SELECT COUNT(*) FROM orders WHERE status='PAID' AND paid_at < (SELECT paid_at FROM orders WHERE id=$P7A_EXPRESS_OID)) < 100,'yes','no');")" "yes"
+assert_eq "P7a：前置——该单是 EXPRESS（门控只对邮寄生效）" \
+  "$(sql "SELECT delivery_type FROM orders WHERE id=$P7A_EXPRESS_OID;")" "EXPRESS"
+assert_eq "P7a：前置——催单首次延迟已设成 1 分钟" \
+  "$(req GET /api/admin/settings/printer "$AT" | jq -r .data.repeat.expressAfterMin)" "1"
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
+sleep 0.3
+assert_eq "P7a：打烊时邮寄单不催" \
+  "$(sql "SELECT announce_count FROM orders WHERE id=$P7A_EXPRESS_OID;")" "0"
+assert_eq "P7a：也没有留下 REPEAT 作业" \
+  "$(sql "SELECT COUNT(*) FROM print_jobs WHERE order_id=$P7A_EXPRESS_OID AND kind='REPEAT';")" "0"
+# 再跑几轮，确认次数没有被空烧
+for _ in 1 2 3; do req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null; sleep 0.1; done
+assert_eq "P7a：连跑多轮后 announceCount 仍是 0（没有空烧 maxTimes）" \
+  "$(sql "SELECT announce_count FROM orders WHERE id=$P7A_EXPRESS_OID;")" "0"
+
+# 开门 → 同一单应该开始催
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.businessHours=[{"start":"00:00","end":"23:59"}]' <<<"$P7A_ORIG_LOCAL")" >/dev/null
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
+sleep 0.3
+assert_eq "P7a：开门后同一单开始催（次数没被之前的打烊时段吃掉）" \
+  "$(sql "SELECT announce_count FROM orders WHERE id=$P7A_EXPRESS_OID;")" "1"
+
+req PUT /api/admin/settings/local-delivery "$AT" "$P7A_ORIG_LOCAL" >/dev/null
+
 echo "-- B1-ORDER：先清队列补发、再补打 FAILED，且预算耗尽时绝不「删了不补」--"
 # 终审发现的第 7 例「两个各自正确的改动叠加」：
 #   ① prevBad 分支先跑 retryRecoveredPrinterJobs，它发出去的票当场进飞鹅云端队列 → waiting≥1

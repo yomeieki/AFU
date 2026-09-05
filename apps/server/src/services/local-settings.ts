@@ -323,6 +323,24 @@ export function isOpenNow(s: LocalDeliverySettings, now: Date = new Date()): boo
   return s.enabled && !isPaused(s, now) && inHours(s, now)
 }
 
+/**
+ * 「店现在开着吗」——只看营业时段与临时停业，**不看同城配送的总开关**。
+ *
+ * 与 `isOpenNow` 的区别只在少了 `s.enabled` 那一项，但这一项差别很关键：
+ * `enabled` 是「同城配送这个渠道开不开」，而营业时间是「人在不在店里」。
+ * 打印机的「未接单催单」要绑的是后者——邮寄单在深夜不该催，理由是没人在店里，
+ * 跟同城渠道开没开毫无关系。生产现在同城正是关着的，用 `isOpenNow` 会导致
+ * 邮寄单**永远不催**。
+ *
+ * 营业时间只有同城这一套（存在 `local_delivery` 这个 Setting key 下），
+ * 因为店就一个、开门时间就一套。这在概念上有点别扭——「同城设置」里的时间
+ * 影响到了邮寄单的催单——但另存一份的代价是两处时间要分别维护，
+ * 改了一处忘了另一处就会出怪事。PO 2026-09-06 定：复用这一套。
+ */
+export function isShopOpenNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
+  return !isPaused(s, now) && inHours(s, now)
+}
+
 export function nextOpenText(s: LocalDeliverySettings, now: Date = new Date()): string {
   if (s.businessHours.length === 0) return '暂未设置营业时间'
   const cur = shanghaiMinutes(now)

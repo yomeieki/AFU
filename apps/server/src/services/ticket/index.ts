@@ -26,6 +26,7 @@ import {
   renderOrderTicket, renderReminderTicket, renderCancelTicket, renderCancelRequestTicket, renderResumeTicket,
   renderTestTicket, TicketOrderInput,
 } from './content'
+import { getLocalSettings, isShopOpenNow } from '../local-settings'
 
 const BATCH = 100
 /**
@@ -640,9 +641,26 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
   const announceStartedAt = Date.now()
   let announced = 0
   let exhausted = 0
+  // 催单绑营业时间（PO 2026-09-06 定）。只读一次，循环里复用。
+  // 读失败不阻断催单——催不该因为读不到营业时间就停摆（同城单本来也不受门控）。
+  let shopOpen = true
+  try {
+    shopOpen = isShopOpenNow(await getLocalSettings())
+  } catch (e) {
+    console.warn('[ticket] repeatAnnounce 读营业时间失败，本轮按「营业中」处理:', (e as Error).message)
+  }
+
   for (const order of candidates) {
     if (Date.now() - announceStartedAt > PROCESS_QUEUE_BUDGET_MS) break
     if (!order.paidAt) continue
+    // 邮寄单：非营业时间一律不催（深夜没人在店里，催了也没人看）。
+    // 同城单：不受门控，打烊后继续催 —— 钱已经收了，19:58 进来的单不能因为 20:00 一到
+    // 就没人提醒；同城单本来也只能在营业时间下单，催单最多延续到打烊后一小段。
+    //
+    // ⚠️ 这里是 `continue` 而不是「记一次」：**绝不能推进 announceCount / lastAnnouncedAt**。
+    // 否则打烊那几个小时会把 maxTimes 空烧完，第二天开门时次数已经耗尽，反而一次都不催 ——
+    // 那正好是这个门控要避免的相反效果。
+    if (order.deliveryType !== 'LOCAL' && !shopOpen) continue
     const afterMin = order.deliveryType === 'LOCAL' ? settings.repeat.localAfterMin : settings.repeat.expressAfterMin
     const waitedMs = now - order.paidAt.getTime()
     const waitedMin = waitedMs / 60_000

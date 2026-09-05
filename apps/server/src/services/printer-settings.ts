@@ -66,7 +66,9 @@ export const DEFAULT_PRINTER_SETTINGS: PrinterSettings = {
   },
   repeat: {
     localAfterMin: 2,
-    expressAfterMin: 5,
+    // PO 2026-09-06 定：邮寄从规格的 5 分钟放宽到 10 —— 邮寄单不赶时间，没必要 5 分钟就喂。
+    // 同城保持 2 分钟不变（骨子里是赶时间的）。
+    expressAfterMin: 10,
     everyMin: 2,
     maxTimes: 5,
     reprint: false,
