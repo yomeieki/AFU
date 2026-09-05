@@ -497,22 +497,35 @@ export interface PointsSummary {
  * 按 expiresAt>now 过滤会拒绝兑换，两处口径对不上。这里改成实算 Σ(remaining>0 且未过期)，
  * 与 consumePoints 的过滤条件保持一致。
  * 30 天内到期的合计与最早日期；没有则 expiringSoon=null。
+ *
+ * 热路径改造：这是顾客端首页接口，改前是 findMany 把该用户全部在世行整表拉进 Node 求和——
+ * 滚动续期（B7）让一个长期顾客的全部在世行永远不到期、一单一行，「读一个冗余列」就这样
+ * 蜕变成了「全表扫」。改用两条 aggregate：第一条对全部在世行求 Σremaining（H7 的 balance）
+ * 与 max(expiresAt)（M16 的 pointsExpireAt，滚动续期下就是全部在世行共同的到期日）；
+ * 第二条只在 30 天窗口内求 Σremaining 与 min(expiresAt)（expiringSoon）。两条都是数据库侧
+ * 聚合，不把行数据搬到 Node 里。
  */
 export async function getPointsSummary(userId: number): Promise<PointsSummary> {
   const now = new Date()
   const soonCutoff = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-  // 按 expiresAt 升序取全部在世行：一次查询同时算出 balance（H7）、expiringSoon、
-  // pointsExpireAt=max(expiresAt)（M16，滚动续期下就是最后一行）。
-  const rows = await prisma.pointsLedger.findMany({
-    where: { userId, type: { in: ['EARN', 'GIFT_REVERT'] }, remaining: { gt: 0 }, expiresAt: { gt: now } },
-    orderBy: { expiresAt: 'asc' },
-    select: { remaining: true, expiresAt: true },
-  })
-  const balance = rows.reduce((sum, r) => sum + r.remaining, 0)
-  const soonRows = rows.filter((r) => r.expiresAt !== null && r.expiresAt <= soonCutoff)
-  const soonPoints = soonRows.reduce((sum, r) => sum + r.remaining, 0)
-  const soonDate = soonRows[0]?.expiresAt ?? null
-  const maxExpiresAt = rows.length > 0 ? rows[rows.length - 1].expiresAt : null
+  const liveTypes: LedgerType[] = ['EARN', 'GIFT_REVERT']
+  const liveWhere = { userId, type: { in: liveTypes }, remaining: { gt: 0 } }
+  const [overall, soon] = await Promise.all([
+    prisma.pointsLedger.aggregate({
+      where: { ...liveWhere, expiresAt: { gt: now } },
+      _sum: { remaining: true },
+      _max: { expiresAt: true },
+    }),
+    prisma.pointsLedger.aggregate({
+      where: { ...liveWhere, expiresAt: { gt: now, lte: soonCutoff } },
+      _sum: { remaining: true },
+      _min: { expiresAt: true },
+    }),
+  ])
+  const balance = overall._sum?.remaining ?? 0
+  const soonPoints = soon._sum?.remaining ?? 0
+  const soonDate = soon._min?.expiresAt ?? null
+  const maxExpiresAt = overall._max?.expiresAt ?? null
   return {
     balance,
     expiringSoon: soonPoints > 0 && soonDate ? { points: soonPoints, date: soonDate.toISOString() } : null,
