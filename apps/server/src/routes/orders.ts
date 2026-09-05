@@ -546,12 +546,20 @@ router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunctio
 
     const order = await prisma.order.findFirst({ where: { id, userId } })
     if (!order) throw new AppError(40401, '订单不存在', 404)
+    // 同城单的 SHIPPED 只表示骑手已取货、菜还在路上：由顾客手点 COMPLETED 会绕开退款侧
+    // 「有在途配送单不许退款」的拦截（COMPLETED 免检），骑手到达前就能部分退款；
+    // 且之后 720 回退也因不再是 SHIPPED 而落空。同城单的完成一律由 520 回调 / 店员「标记已送达」
+    // / 兜底任务写入，这里对 LOCAL 直接拒绝。
+    if (order.deliveryType === 'LOCAL') throw new AppError(42204, '同城订单由骑手送达后自动完成')
     if (order.status !== 'SHIPPED') throw new AppError(42204, '仅已发货订单可确认收货')
 
-    const updated = await prisma.order.update({
-      where: { id },
+    // 条件写：上面读到的 status 是快照，与退款/售后并发时以先落库者为准，不能无条件 update
+    const moved = await prisma.order.updateMany({
+      where: { id, userId, status: 'SHIPPED' },
       data: { status: 'COMPLETED', completedAt: new Date() },
     })
+    if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id } })
     success(res, withPayExpire(updated))
   } catch (e) {
     next(e)
