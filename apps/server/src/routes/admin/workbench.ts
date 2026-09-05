@@ -9,10 +9,25 @@ import { DELIVERY_STATUS_LABEL } from '../../services/delivery/state'
 import { getCircuitState } from '../../services/delivery/circuit'
 import { getLocalSettings, isOpenNow } from '../../services/local-settings'
 import { REAL_ORDERS } from '../../utils/stats-scope'
+import { getWorkbenchPrinterHealth, PrinterHealthEntry } from '../../services/ticket'
 
 const router = Router()
 const WAITING_STATUSES = ['CALLING', 'ACCEPTED', 'ARRIVING', 'ARRIVED', 'REASSIGNING', 'ABNORMAL', 'UNKNOWN']
 let cache: { at: number; data: unknown } | null = null
+
+/**
+ * 多台打印机时取「最差」状态作为工作台顶栏那一个状态灯的口径：任何一台离线/查询出错就算 OFFLINE，
+ * 否则任何一台缺纸/开盖/未知就算 ABNORMAL，全部在线才是 ONLINE；未启用或未绑定任何打印机则是
+ * NOT_CONNECTED（对应旧硬编码值，前端「未接入」文案继续可用）。这个四态归并规则规格没有写死，是本批
+ * 自行做的选择——多打印机场景目前只有「同城/邮寄分渠道各一台」，先给个够用的合并口径，
+ * 后续如果需要逐台展示，`printers` 字段已经带了明细，前端可以不经服务端改动就切换成逐台展示。
+ */
+function summarizePrinterStatus(entries: PrinterHealthEntry[]): 'NOT_CONNECTED' | 'ONLINE' | 'ABNORMAL' | 'OFFLINE' {
+  if (entries.length === 0) return 'NOT_CONNECTED'
+  if (entries.some((e) => e.state === 'OFFLINE' || e.state === 'ERROR')) return 'OFFLINE'
+  if (entries.some((e) => e.state === 'ABNORMAL' || e.state === 'UNKNOWN')) return 'ABNORMAL'
+  return 'ONLINE'
+}
 
 function startOfToday(): Date { const d = new Date(); d.setHours(0, 0, 0, 0); return d }
 
@@ -93,7 +108,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     cols.done = cols.done.slice(0, 30)
 
     const today = startOfToday()
-    const [todayOrders, revenue, doneLocal, cancelReqCount, badDeliveries] = await Promise.all([
+    const [todayOrders, revenue, doneLocal, cancelReqCount, badDeliveries, printerEntries] = await Promise.all([
       // 三个经营数字都排除测试单（口径见 utils/stats-scope）。上面的五列卡片故意**不**排除：
       // 联调时店员要在工作台上看到自己造的那一单走完流程，那是操作视图不是统计。
       prisma.order.count({ where: { ...REAL_ORDERS, paidAt: { gte: today } } }),
@@ -103,6 +118,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       prisma.order.findMany({ where: { ...REAL_ORDERS, deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today }, paidAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
       prisma.order.count({ where: { deliveryType: 'LOCAL', cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } } }),
       prisma.delivery.count({ where: { activeOrderId: { not: null }, status: { in: ['ABNORMAL', 'UNKNOWN'] } } }),
+      getWorkbenchPrinterHealth(),
     ])
     const durations = doneLocal.filter((o) => o.paidAt && o.completedAt).map((o) => (o.completedAt!.getTime() - o.paidAt!.getTime()) / 60000)
     const circuit = getCircuitState()
@@ -116,7 +132,10 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       circuit: { tripped: circuit.tripped },
       localEnabled: settings.enabled, localOpenNow: isOpenNow(settings),
       paused: settings.paused ? { reason: settings.paused.reason, until: settings.paused.until } : null,
-      printer: { status: 'NOT_CONNECTED' as const },
+      printer: {
+        status: summarizePrinterStatus(printerEntries),
+        printers: printerEntries.map((e) => ({ sn: e.sn, name: e.name, state: e.state })),
+      },
       pendingAlerts: cancelReqCount + badDeliveries + (circuit.tripped ? 1 : 0),
       now: new Date().toISOString(),
     }
