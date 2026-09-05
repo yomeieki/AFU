@@ -10,6 +10,7 @@ import bannersRouter from './banners'
 import authRouter from './auth'
 import uploadRouter from './upload'
 import localRouter from './local'
+import memberRouter from './member'
 import { verifyUserToken } from '../middlewares/auth'
 import { scanLogLimiter } from '../middlewares/rate-limit'
 
@@ -31,6 +32,7 @@ router.use('/cart', verifyUserToken, cartRouter)
 router.use('/addresses', verifyUserToken, addressRouter)
 router.use('/orders', verifyUserToken, orderRouter)
 router.use('/upload', verifyUserToken, uploadRouter)
+router.use('/member', verifyUserToken, memberRouter)
 
 // ── 扫码日志（可选认证：未登录也可记录，userId 为空；匿名可写库，必须限流）───────
 router.use('/scan-logs', scanLogLimiter, scanLogRouter)
