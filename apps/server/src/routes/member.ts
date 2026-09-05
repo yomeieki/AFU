@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { success } from '../utils/response'
 import { memberReadLimiter, memberWriteLimiter } from '../middlewares/rate-limit'
 import { getPointsSummary, listLedger } from '../services/member/points'
-import { redeemByPoints, claimCampaign, listUserCoupons, countAvailable, CouponListStatus } from '../services/member/coupons'
+import { redeemByPoints, claimCampaign, listUserCoupons, countAvailable, toCouponView, CouponListStatus } from '../services/member/coupons'
 
 const router = Router()
 
@@ -81,24 +81,27 @@ const templateIdSchema = z.object({
 })
 
 // POST /api/member/points/redeem { templateId } — 积分兑换优惠券
+// 响应过 toCouponView() 裁剪成与 GET /coupons 同一份白名单——redeemByPoints() 返回的是
+// issueCoupon() 建出来的完整 UserCoupon 行，直接透传会泄露 issuedBy/remark/sourceRef/
+// templateId/userId 等内部字段（只是本人数据，无越权，但违反 spec §5.7 的输出约定）。
 router.post('/points/redeem', memberWriteLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
     const { templateId } = templateIdSchema.parse(req.body)
     const coupon = await redeemByPoints(userId, templateId)
-    success(res, coupon)
+    success(res, toCouponView(coupon))
   } catch (e) {
     next(e)
   }
 })
 
-// POST /api/member/coupons/claim { templateId } — 领券中心领取
+// POST /api/member/coupons/claim { templateId } — 领券中心领取（响应白名单同上）
 router.post('/coupons/claim', memberWriteLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
     const { templateId } = templateIdSchema.parse(req.body)
     const coupon = await claimCampaign(userId, templateId)
-    success(res, coupon)
+    success(res, toCouponView(coupon))
   } catch (e) {
     next(e)
   }

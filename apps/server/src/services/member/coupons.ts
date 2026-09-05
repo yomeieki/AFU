@@ -92,18 +92,39 @@ export async function issueCoupon(tx: Prisma.TransactionClient, input: IssueCoup
  * 积分兑换。顺序很关键：先发券拿到 id，再调 consumePoints 扣分——
  * consumePoints 会自己写一条 REDEEM 流水，refId 需要是券的 id，
  * 而 id 只有券已经建出来才有；两者同事务，扣分失败会连券一起回滚。
+ *
+ * 并发安全：事务第一句锁模板行（`FOR UPDATE`），后续 perUserLimit 的 count()、
+ * totalLimit 的递增判 count 才是串行化之后的值——否则同一用户 5 个并发请求，
+ * `count()` 都读到同一个旧快照，5 个都会通过校验（已在 e2e.d/42 里实测复现：
+ * 不加锁时同一用户并发兑换要么全部得逞，要么互相死锁，返回一堆 50001）。
+ * `totalLimit` 的 updateMany 写法照抄 claimCampaign——之前完全没有这道防线，
+ * M3 后台一旦对 POINTS 模板放开 totalLimit 字段就是「限量兑换品无限兑换」。
  */
 export async function redeemByPoints(userId: number, templateId: number) {
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM coupon_templates WHERE id = ${templateId} FOR UPDATE`
     const template = await tx.couponTemplate.findUnique({ where: { id: templateId } })
     if (!template) throw new AppError(42251, '优惠券不存在')
     if (template.source !== 'POINTS' || template.pointsCost == null || template.pointsCost <= 0) {
       throw new AppError(42251, '该券不支持积分兑换')
     }
+    // 停用要精确返回 42254（既有行为，e2e.sh:1587 断言），必须在下面 totalLimit 的
+    // updateMany 之前判——那道 where 也带 status:'ON'，OFF 模板会先撞在那里，
+    // 拿到含混的「已领完或已停用」42253，把 42254 这个更具体的错误码盖掉。
+    if (template.status === 'OFF') throw new AppError(42254, '该优惠券已停用')
     if (template.perUserLimit != null) {
       const already = await tx.userCoupon.count({ where: { userId, templateId, source: 'POINTS' } })
       if (already >= template.perUserLimit) throw new AppError(42253, '已达每人限领数量')
     }
+    const moved = await tx.couponTemplate.updateMany({
+      where: {
+        id: templateId,
+        status: 'ON',
+        ...(template.totalLimit != null ? { issuedCount: { lt: template.totalLimit } } : {}),
+      },
+      data: { issuedCount: { increment: 1 } },
+    })
+    if (moved.count === 0) throw new AppError(42253, '已达兑换总量上限')
     const coupon = await issueCoupon(tx, { userId, template, source: 'POINTS', sourceRef: null, issuedBy: null, remark: null })
     await consumePoints(tx, userId, template.pointsCost, {
       type: 'REDEEM',
@@ -116,11 +137,18 @@ export async function redeemByPoints(userId: number, templateId: number) {
 }
 
 /**
- * 领券中心。totalLimit 用 updateMany 条件递增判 count 做并发防线（限量券不超发）；
+ * 领券中心。事务第一句锁模板行（`FOR UPDATE`）：MySQL RR 下这是一次锁定读，会读到
+ * 最新已提交的行并等其他并发事务提交/回滚，之后本事务内的普通 SELECT（perUserLimit
+ * 的 count()）用的快照也随之推进到「串行化之后」的状态——不加这一句时，同一用户的
+ * 5 个并发请求会各自在事务开始时刻建立快照，`count()` 全部读到同一个旧值，全部通过
+ * 校验（旧实现的实际后果，已用 e2e.d/42 的 B4-1 实测复现：totalLimit=null 时
+ * updateMany 的 where 压根没有数量条件，5 个并发请求 5 个都成功）。
+ * totalLimit 用 updateMany 条件递增判 count 做并发防线（限量券不超发）；
  * perUserLimit 用已发数判定——两者是不同维度的限制，可以同时生效。
  */
 export async function claimCampaign(userId: number, templateId: number) {
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM coupon_templates WHERE id = ${templateId} FOR UPDATE`
     const template = await tx.couponTemplate.findUnique({ where: { id: templateId } })
     if (!template || template.source !== 'CAMPAIGN') throw new AppError(42251, '优惠券不存在')
     if (template.perUserLimit != null) {
@@ -208,6 +236,17 @@ const COUPON_SELECT = {
   expiresAt: true,
   usedAt: true,
 } satisfies Prisma.UserCouponSelect
+
+/**
+ * 把 issueCoupon() 返回的完整 UserCoupon 行按 GET /member/coupons 同一份白名单裁剪，
+ * 供 claim/redeem 两个 POST 端点复用——不返回 issuedBy/remark/sourceRef/templateId/
+ * userId 等内部字段（spec §5.7）。字段列表与 COUPON_SELECT 是同一份，改一处两边一起改。
+ */
+export function toCouponView<T extends Record<string, unknown>>(coupon: T): Pick<T, keyof typeof COUPON_SELECT> {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(COUPON_SELECT)) out[key] = coupon[key]
+  return out as Pick<T, keyof typeof COUPON_SELECT>
+}
 
 export async function listUserCoupons(userId: number, status: CouponListStatus) {
   const now = new Date()
