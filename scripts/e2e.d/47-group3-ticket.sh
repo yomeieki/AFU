@@ -46,11 +46,43 @@ G3_R5_PHYS=$(req GET "/api/admin/system/printer-mock/jobs?sn=G3-R5" "$AT" | jq -
 assert_eq "R5：打印机物理只多收到这 1 次真正的 print()，总计 6 次（旧实现会把前 5 单也判进补发窗口，物理变成 11 次）" \
   "$G3_R5_PHYS" "6"
 
-G3_R5_ALL_SENT=1
-for oid in "${G3_R5_PRE_OIDS[@]}" "$G3_R5_DURING_OID"; do
-  [[ "$(PJOBS "$oid" | jq -r '.data.list[0].status')" == "SENT" ]] || G3_R5_ALL_SENT=0
+# 期望：离线**之前**那 5 单被 queryJob 确认已打印 → PRINTED（这是比停在 SENT 更准确的终态，
+# 2026-09-06 去掉 sentAt 过滤后才走得到这条路径）；离线**期间**那单被重发 → SENT。
+# 真正要守住的性质是「一单都没被重印、一单都没变成 FAILED」——物理次数上面那条已经锁死了，
+# 这里只锁「没有任何一单掉进 FAILED」。
+G3_R5_PRE_PRINTED=0
+for oid in "${G3_R5_PRE_OIDS[@]}"; do
+  [[ "$(PJOBS "$oid" | jq -r '.data.list[0].status')" == "PRINTED" ]] && G3_R5_PRE_PRINTED=$((G3_R5_PRE_PRINTED+1))
 done
-assert_eq "R5：6 单最终都还是 SENT，没有任何一单的状态被误改" "$G3_R5_ALL_SENT" "1"
+assert_eq "R5：离线前那 5 单被 queryJob 确认成 PRINTED（不是停在 SENT 无人问津）" "$G3_R5_PRE_PRINTED" "5"
+assert_eq "R5：离线期间那单被补发后是 SENT" \
+  "$(PJOBS "$G3_R5_DURING_OID" | jq -r '.data.list[0].status')" "SENT"
+G3_R5_ANY_FAILED=0
+for oid in "${G3_R5_PRE_OIDS[@]}" "$G3_R5_DURING_OID"; do
+  [[ "$(PJOBS "$oid" | jq -r '.data.list[0].status')" == "FAILED" ]] && G3_R5_ANY_FAILED=1
+done
+assert_eq "R5：没有任何一单掉进 FAILED" "$G3_R5_ANY_FAILED" "0"
+
+echo "-- R5-GAP：真实断线与我们探测到之间的空档，票不能被 clearQueue 删掉又不补发 --"
+# `offlineSince` 是**健康检测轮询探测到坏状态**的时刻，不是打印机真正断线的时刻。
+# scheduler 心跳 60s，所以两者之间天然有 0–60 秒的空档。这段空档里下的单：
+#   print() 成功（飞鹅云端排队）→ 行是 SENT，sentAt 落在 offlineSince **之前**
+#   恢复时 clearQueue 把它从飞鹅侧删掉，若补发窗口又把它排除 → **票被我们删了还不补**，
+#   永久停在 SENT，24h 后打上 CONFIRM:GAVE_UP 再也没人碰 → 静默丢单。
+# 下面用 sleep 6 模拟这个探测延迟（只要超过任何「秒级缓冲」即可）。
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-GAP","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-GAP","state":"OFFLINE"}' >/dev/null
+G3_GAP_OID=$(pay_new_order "$PID" "$ADDR")     # 真实断线之后、我们探测到之前下的单
+sleep 6                                          # 探测延迟
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 这一刻才 offlineSince=now
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-GAP","state":"ONLINE"}' >/dev/null
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 恢复：清队列 + 补发
+sleep 0.3
+assert_eq "R5-GAP：探测空档里的票被补发出来（不是被 clearQueue 删掉就没了）" \
+  "$(req GET "/api/admin/system/printer-mock/jobs?sn=G3-GAP" "$AT" | jq -r '.data | length')" "1"
+assert_eq "R5-GAP：云端队列已清空" \
+  "$(req GET '/api/admin/system/printer-mock/queue?sn=G3-GAP' "$AT" | jq -r .data.waiting)" "0"
 
 echo "-- R8：恢复检测不会把 M4 的 GAVE_UP 僵尸行武断改判成 FAILED/STALE:DROPPED --"
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-R8","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null

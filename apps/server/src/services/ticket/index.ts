@@ -92,15 +92,6 @@ const SEND_INTERVAL_MS = 300
 /** 打印机恢复在线后自动补打 FAILED 作业的回溯窗口：超过这个时长的旧单不再补打（规格 §8b，避免离线
  *  半天后恢复时一次吐一堆过期小票）*/
 const RECOVER_BACKFILL_MS = 30 * 60 * 1000
-/** R5：`offlineSince` 是我们的健康检测**观测到**打印机变坏的那一刻，不是打印机**实际**开始离线
- *  的那一刻——两者之间天然差着最多一个轮询周期的检测延迟（生产是 60s 的 scheduler 心跳）。
- *  用 `offlineSince` 原值去卡 `sentAt >= offlineSince` 会把「确实是这次离线期间发出、但恰好
- *  赶在我们这次轮询探测到状态变坏之前」的行误判成"离线之前就发的"而漏掉重发/确认，最坏情况是
- *  一张已经被 clearQueue 丢弃、又没资格补发的票再也没人管，orderId 对应的顾客永远收不到接单票。
- *  回退这一点点缓冲，把判定边界往前推——代价是极少数「确实是离线前发的」行被多判一次
- *  queryJob（不会导致重复打印，因为重发前有 R5 的 queryJob 前置检查），换来的是不会漏掉
- *  真正该处理的行。 */
-const RECENT_SENT_BUFFER_MS = 5 * 1000
 
 function activeProviderName(settings: PrinterSettings): PrinterProviderName {
   if (config.mock.printer) return 'MOCK'
@@ -828,9 +819,19 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
  *
  * R5（复核第二轮）：原来的「窗口内行」筛选只按 `createdAt` 圈 30 分钟，不区分「离线期间才排进
  * 云端队列的票」与「离线之前就已经正常打印、只是 SENT→PRINTED 确认还没到 3 分钟窗口的票」——
- * 后者被一起当成「可能没打印成功」重发一遍，厨房会拿到重复接单票。改用 `offlineSince`（调用方
- * 传入，取自 `healthTrack` 里这次离线开始的时间点）圈定：SENT 行只挑 `sentAt >= offlineSince`
- * 的（PENDING 行本来就没发出去过，不受这条限制）。另外，重发前对带 `providerJobId` 的行先
+ * 后者被一起当成「可能没打印成功」重发一遍，厨房会拿到重复接单票。
+ *
+ * **第一版修法（按 `sentAt >= offlineSince` 圈定）已于 2026-09-06 推翻，不要改回去。**
+ * `offlineSince` 是健康检测**观测到**坏状态的时刻，而心跳 60s，与打印机真实断线之间天然有
+ * 0–60 秒空档。那空档里下的单 print() 是成功的（票进飞鹅云端队列）、行是 SENT、`sentAt` 落在
+ * `offlineSince` 之前 —— 而上面的 `clearQueue` 已经把它从飞鹅侧删掉了。再被 `sentAt` 排除，
+ * 就是**我们主动删了票又不补发**，永久停在 SENT，24h 后打成 `CONFIRM:GAVE_UP` 便再没有任何
+ * 路径会碰它 —— 静默丢单。`isFirstSeen`（pm2 重启后首轮）退化用 `now` 时更糟：所有历史行全排除。
+ * e2e `47` 的 R5-GAP 用例锁死了这个行为（加过滤时 jobs=0，去掉后 jobs=1）。
+ *
+ * 现在窗口内的 PENDING 与 SENT 一视同仁，**重复打印完全交给重发前的 `queryJob` 判定** ——
+ * 那是现问飞鹅「这条到底打没打」，比拿时间戳当代理准确得多。两道防线只留准的那道。
+ * 重发前对带 `providerJobId` 的行先
  * `queryJob` 一次——哪怕 `waiting` 汇报的是「还没吐出来」，飞鹅那边也可能恰好在我们
  * `queryQueueInfo`/`clearQueue` 这两次外呼之间的空档就把它吐出去了（R7：真机 74s 自动吐出 vs
  * 我们 60s 轮询，多数情况下我们观测到 waiting>0 时其实已经开始在吐），`printed:true` 就直接判
@@ -847,7 +848,7 @@ export async function retryRecoveredPrinterJobs(sn: string): Promise<number> {
  * 行也误伤成"跟这次离线无关"）。`lastError` 排除已经精确覆盖了复核指出的具体案例。
  */
 export async function recoverFromOfflineQueue(
-  sn: string, providerName: PrinterProviderName, offlineSince: number
+  sn: string, providerName: PrinterProviderName
 ): Promise<{ backfilled: number; dropped: number }> {
   let waiting = 0
   try {
@@ -866,7 +867,6 @@ export async function recoverFromOfflineQueue(
   }
 
   const cutoff = new Date(Date.now() - RECOVER_BACKFILL_MS)
-  const offlineSinceDate = new Date(offlineSince - RECENT_SENT_BUFFER_MS)
 
   // 超过 30 分钟窗口的旧单：不再补打，标 STALE:DROPPED（不是新故障，不告警）。
   // R8：排除掉 lastError='CONFIRM:GAVE_UP'（M4 的僵尸行，见上面函数注释）。
@@ -893,16 +893,24 @@ export async function recoverFromOfflineQueue(
     dropped += moved.count
   }
 
-  // 窗口内的行：PENDING 本来就没发出去过，直接重置重发；SENT 只挑 sentAt>=offlineSince
-  // （R5：排除掉离线之前就已经正常打印、只是还没确认的行）。
+  // 窗口内的行：PENDING 与 SENT 一视同仁，全部走下面的 queryJob-before-resend。
+  //
+  // 这里**刻意不再**按 `sentAt >= offlineSince` 圈定（R5 最初的写法，2026-09-06 已推翻）：
+  // `offlineSince` 是健康检测**观测到**坏状态的时刻，而心跳是 60s，与打印机真实断线之间
+  // 天然有 0–60 秒空档。那个空档里下的单，print() 是成功的（票进飞鹅云端队列）、行是 SENT、
+  // sentAt 落在 offlineSince **之前** —— 而上面的 clearQueue 已经把它从飞鹅侧删掉了。
+  // 再被 sentAt 过滤排除掉，就是**我们主动删了票又不补发**，永久停在 SENT，
+  // 24h 后打成 CONFIRM:GAVE_UP 便再也没有任何路径会碰它 —— 静默丢单。
+  // pm2 重启后的 isFirstSeen 分支更糟：offlineSince 退化成 now，等于把所有历史行全排除。
+  //
+  // R5 想防的「重复打印已经印好的票」，由下面的 queryJob-before-resend 直接覆盖 ——
+  // 那是**问飞鹅这条到底打没打**，比拿时间戳当代理准确得多。两道防线只留准的那道。
+  // 实测（e2e `47` 的 R5-GAP 用例）：加过滤时空档里的票 jobs=0（丢单），去掉后 jobs=1。
   const recent = await prisma.printJob.findMany({
     where: {
       printerSn: sn,
       createdAt: { gte: cutoff },
-      OR: [
-        { status: 'PENDING' },
-        { status: 'SENT', sentAt: { gte: offlineSinceDate } },
-      ],
+      status: { in: ['PENDING', 'SENT'] },
     },
     orderBy: { createdAt: 'asc' },
     take: BATCH,
@@ -1019,11 +1027,11 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
       // 决定要不要清云端队列 + 从本地记录补发。
       if (track.wasOffline || isFirstSeen) {
         try {
-          // R5：offlineSince 传给 recoverFromOfflineQueue 用来圈定「这次离线期间」的行——
-          // track.offlineSince 在 bad 分支里被设置过就不会是 null；isFirstSeen 且从未记录过
-          // offlineSince 时，没有更好的信息，只能退化用 now（等价于"从这一刻才算离线"，
-          // 不会误伤更早的历史行，是偏保守的选择）。
-          const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName, track.offlineSince ?? now)
+          // 不再传 offlineSince（2026-09-06 推翻）：补发窗口只由 RECOVER_BACKFILL_MS（30 分钟）
+          // 圈定，是否重复打印由重发前的 queryJob 现问飞鹅。用「观测到的 offlineSince」当代理
+          // 会在「真实断线 → 我们探测到」的 0–60 秒空档里丢单，isFirstSeen（pm2 重启后首轮）
+          // 退化用 now 时更是把所有历史行全排除 —— 而 clearQueue 已经先一步把票删了。
+          const { backfilled: n } = await recoverFromOfflineQueue(e.sn, providerName)
           backfilled += n
         } catch (err) {
           console.warn(`[ticket] 离线恢复清队列/补发异常 sn=${e.sn}:`, (err as Error).message)
