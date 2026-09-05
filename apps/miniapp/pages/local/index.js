@@ -1,6 +1,7 @@
 const { request } = require('../../utils/request')
 const { getLocalMeta } = require('../../api/local')
 const { getCart, addToCart, updateCartItem, deleteCartItem } = require('../../api/cart')
+const { getProductDetail } = require('../../api/product')
 const { formatPrice, formatStock } = require('../../utils/format')
 
 // 左侧分类栏首项：id 为 null 时请求不带 categoryId。
@@ -176,7 +177,34 @@ Page({
     var id = e.currentTarget.dataset.id
     var product = this.data.list.find(function(item) { return item.id === id })
     if (!product || product.stock <= 0) return
-    this.setData({ skuShow: true, skuProduct: product })
+    if (this._loadingSku) return
+    var self = this
+    this._loadingSku = true
+    // 列表项只有 hasSkus 没有 skus/specDimensions，直接喂给 sku-popup 会当成无规格商品，
+    // 多规格商品加购时服务端必报 40001「请选择商品规格」且顾客没有任何绕过路径。
+    // 用导航栏 loading 而非 showLoading：后者会和请求层的错误 toast 抢同一个提示实例。
+    wx.showNavigationBarLoading()
+    getProductDetail(id)
+      .then(function(full) {
+        self._loadingSku = false
+        wx.hideNavigationBarLoading()
+        if (!full || full.status !== 'ON_SHELF') {
+          wx.showToast({ title: '该商品已下架', icon: 'none' })
+          return
+        }
+        self.setData({
+          skuShow: true,
+          skuProduct: Object.assign({}, full, {
+            skus: full.skus || [],
+            specDimensions: full.specDimensions || [],
+          }),
+        })
+      })
+      .catch(function() {
+        // 失败提示由统一请求层弹出；这里只放开重入
+        self._loadingSku = false
+        wx.hideNavigationBarLoading()
+      })
   },
 
   onSkuClose: function() {
