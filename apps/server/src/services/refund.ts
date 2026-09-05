@@ -123,6 +123,10 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   // 事务 A：（全额）状态流转 + 库存回滚 + 创建退款记录（不含外呼）
   // 返回 isIdempotentHit=true 表示这不是新建的记录，而是命中了 outRefundNo 唯一索引复用回来的已有退款——
   // 调用方（下面）据此跳过「再发起一次微信退款/再跑一次 finalize」，直接把现状返回给上层。
+  // R10：只在这次事务内真正把订单从「未在退款中」翻转成 REFUNDING 时才需要出 CANCEL 票——
+  // 见下面 :127 分支末尾赋值为 true；命中幂等重放（isIdempotentHit）或订单本来就已经在
+  // REFUNDING（fromRefunding，如「已 ABNORMAL/CLOSED 后重试」）都不重复出票。
+  let cancelTicketDue = false
   const { refund, isIdempotentHit } = await prisma.$transaction(async (tx) => {
     if (isFull && !fromRefunding) {
       // where 里加 deliveries:{none:{activeOrderId:{not:null}}}：这是 callRider 那侧原子复核的另一半。
@@ -154,6 +158,7 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
         }
         throw new AppError(42204, '订单状态已变化，请刷新后重试')
       }
+      cancelTicketDue = true
     }
     try {
       const created = await tx.refund.create({
@@ -190,6 +195,20 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       throw e
     }
   })
+
+  // R10：CANCEL 出票挂在「决定退款」这一刻（订单事务内翻转成 REFUNDING 成功提交），而不是
+  // 挂在「钱真的退到」（finalizeRefundSuccess 里 flippedToRefunded 那次）——后面走 WECHAT
+  // 分支若同步返回 ABNORMAL（用户账户异常，需商户平台人工处理，可能拖几天）或 CLOSED（退款关闭），
+  // 订单会停在 REFUNDING 但 finalizeRefundSuccess 永远不会被调用，那条路径下 CANCEL 票一辈子不出、
+  // 厨房继续照做。这里出的这次与 finalizeRefundSuccess 出的那次共用 dedupeKey(seq=0)，
+  // 天然去重：MOCK 模式或 WECHAT 同步 SUCCESS 时两次都会尝试入队，只落一条。
+  // 必须在事务外、fire-and-forget：enqueueOrderTicket 用全局 prisma 且有外呼（飞鹅），
+  // 不能让打印异常影响/回滚退款事务，也不能抱着 order 行锁打印。
+  if (cancelTicketDue) {
+    enqueueOrderTicket(orderId, 'CANCEL').catch((err) => {
+      console.error('[refund] enqueueOrderTicket 失败（initiateRefund 转 REFUNDING）:', (err as Error).message)
+    })
+  }
 
   if (isIdempotentHit) {
     const reloaded = await reload(orderId, refund.id)
