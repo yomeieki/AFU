@@ -212,7 +212,9 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       return
     }
 
-    // 事务成功后推送新订单通知（fire-and-forget）
+    // 事务成功后推送新订单通知（fire-and-forget）。sendPaidSubscribeMessage 与 notifyOrderPaid
+    // 都是同步 void 函数，任一处同步抛出（模板字段配错、user 为空、items[0] 解构异常）都只能各自
+    // try/catch 兜住——不能让其中一个的异常连累另一个，更不能让它们连累下面独立起的出票链路（H3）。
     prisma.order
       .findUnique({
         where: { id: orderId },
@@ -220,26 +222,39 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
       })
       .then((paid) => {
         if (paid && paid.status === 'PAID') {
-          sendPaidSubscribeMessage(paid.user.openid, paid, paid.items[0]?.productName)
-          notifyOrderPaid(
-            {
-              orderNo: paid.orderNo,
-              actualAmount: paid.actualAmount,
-              receiverName: paid.receiverName,
-              receiverPhone: paid.receiverPhone,
-              paidAt: paid.paidAt ?? new Date(),
-            },
-            paid.items
-          )
-          // 出票（规格 §8b）：真实微信支付回调的付款成功触发点，与 notifyOrderPaid 并列 fire-and-forget。
-          // 打印异常绝不能冒泡到这条回调的应答——微信回调失败会重推，但整个 wechatPayNotifyHandler
-          // 早已决定要对本次回调回 SUCCESS（见函数尾 replyOk），出票是回调应答之外的旁路副作用。
-          enqueueOrderTicket(orderId, 'NEW_ORDER').catch((err) => {
-            console.error('[wechat-notify] enqueueOrderTicket 失败:', (err as Error).message)
-          })
+          try {
+            sendPaidSubscribeMessage(paid.user.openid, paid, paid.items[0]?.productName)
+          } catch (err) {
+            console.error('[wechat-notify] sendPaidSubscribeMessage 失败:', (err as Error).message)
+          }
+          try {
+            notifyOrderPaid(
+              {
+                orderNo: paid.orderNo,
+                actualAmount: paid.actualAmount,
+                receiverName: paid.receiverName,
+                receiverPhone: paid.receiverPhone,
+                paidAt: paid.paidAt ?? new Date(),
+              },
+              paid.items
+            )
+          } catch (err) {
+            console.error('[wechat-notify] notifyOrderPaid 失败:', (err as Error).message)
+          }
         }
       })
-      .catch(() => undefined)
+      .catch((err) => console.error('[wechat-notify] 付款后通知失败:', (err as Error).message))
+
+    // 出票（规格 §8b）：真实微信支付回调的付款成功触发点。照 orders.ts:754 mock 支付路径的写法，
+    // 单独起一条 promise 链，而不是塞进上面那条——上面那条的两个同步 void 函数（哪怕已经各自
+    // try/catch）与这条查询本身都不该成为出票执行与否的前提；enqueueOrderTicket 内部会自己
+    // 按 orderId 重新查订单与商品，不依赖上面 findUnique 的结果。事务已经把订单推到 PAID
+    // （本函数上面的 tx.order.update），走到这里意味着没有 lateCancelled 早退，可以直接出票。
+    // 打印异常绝不能冒泡到这条回调的应答——微信回调失败会重推，但整个 wechatPayNotifyHandler
+    // 早已决定要对本次回调回 SUCCESS（见函数尾 replyOk），出票是回调应答之外的旁路副作用。
+    enqueueOrderTicket(orderId, 'NEW_ORDER').catch((err) => {
+      console.error('[wechat-notify] enqueueOrderTicket 失败:', (err as Error).message)
+    })
   } catch (err) {
     if (err instanceof AmountMismatchError) {
       // 金额不一致：不更新订单，记录日志并返回 FAIL（微信会重试，需人工介入排查）
@@ -300,18 +315,9 @@ export async function wechatRefundNotifyHandler(req: Request, res: Response): Pr
         rawData: rawBody,
         rawField: 'wxNotifyData',
       })
-      // 出票（规格 §8b「全额退款成功」）：finalizeRefundSuccess 只在累计退款打满 actualAmount 时才把
-      // 订单转 REFUNDED（services/refund.ts 内部逻辑，本文件不碰该文件，只在这里读一次结果状态判断要
-      // 不要出票）——部分退款不出 CANCEL 票，避免店员把「退了一部分」误读成「这单不用做了」。
-      // 这条路径主要覆盖走真实微信退款异步到账的场景（admin 后台退款/售后同意等）；mock 支付下
-      // initiateRefund 同步调用 finalizeRefundSuccess、不经这个 webhook，那部分场景已由
-      // routes/orders.ts 的自助取消分支在决定取消的当下直接出票覆盖（不必等回调）。
-      prisma.order
-        .findUnique({ where: { id: refund.orderId }, select: { id: true, status: true } })
-        .then((order) => {
-          if (order?.status === 'REFUNDED') return enqueueOrderTicket(order.id, 'CANCEL')
-        })
-        .catch((err) => console.error('[wechat-refund-notify] enqueueOrderTicket 失败:', (err as Error).message))
+      // CANCEL 出票不在这里做：B1 已把它下沉进 finalizeRefundSuccess 本体（翻转成 REFUNDED 的
+      // 那一次事务提交后），覆盖所有退款入口（后台一键退款/售后同意/顾客自助取消/拒单），
+      // 包括走这条真实微信退款异步回调的场景。这里再调一次纯属重复出票，已删除。
     } else if (event === 'REFUND.ABNORMAL') {
       await markRefundAbnormal(refund.id, rawBody)
     } else if (event === 'REFUND.CLOSED') {
