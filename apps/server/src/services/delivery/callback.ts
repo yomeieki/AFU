@@ -25,7 +25,12 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
     } } },
   })
   if (!delivery) {
-    notifySystemAlert('快递100 回调查不到配送单', [`deliveryNo=${deliveryNo}`, '若此前有下单超时，可能是占位落库失败的孤儿单，请到快递100 后台核对'], { key: `kd-cb-miss:${deliveryNo}` })
+    // B6-02：这条路由未鉴权（安全性只靠 per-单 salt），deliveryNo 又是 D<orderId>-<seq>
+    // 这种易猜的格式——键里若带 deliveryNo，任何人构造一批互不相同的 deliveryNo 就能让
+    // 每个键各自躲过 5 分钟同键抑制，把告警刷爆、淹没真实告警。改成固定键，同一窗口内
+    // 无论访问多少个不同 deliveryNo 都只发一条；notifySystemAlert 自带的「期间抑制 N 次」
+    // 已经是本窗口内的计数，不用再自己维护一份。
+    notifySystemAlert('快递100 回调查不到配送单', [`deliveryNo=${deliveryNo}`, '若此前有下单超时，可能是占位落库失败的孤儿单，请到快递100 后台核对'], { key: 'kd:unknown-delivery' })
     return { http: 200 }
   }
   const parsed = getDeliveryProvider().verifyAndParseCallback(body, delivery.callbackSalt)
