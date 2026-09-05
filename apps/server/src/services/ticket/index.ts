@@ -45,6 +45,15 @@ export function _resetRetryDelaysMsForTest(): void {
 }
 /** SENT 状态超过这个时长仍未被回调/查询确认为 PRINTED，就主动查一次平台状态（规格 §8b 兜扫） */
 const SENT_CONFIRM_AFTER_MS = 3 * 60 * 1000
+/** SENT 确认循环单轮上限：比 BATCH（100）小很多——每条都是一次带 10s 超时的外呼，100 条串行
+ *  最坏能拖到 1000s，而 scheduler 的 `running` 标志整轮持有，期间同城呼叫骑手/待付款超时取消/
+ *  退款兜底全部停摆（M4）。20 条封顶把最坏情况压到 200s 量级。 */
+const SENT_CONFIRM_BATCH = 20
+/** SENT 超过这个时长还查不到「已打印」，放弃继续主动查询（M4）：飞鹅对久远 providerJobId 会
+ *  返回「订单不存在」（ret=1001），这类行会永远停在 SENT、越攒越多，把后续新 SENT 行挤出批次；
+ *  24h 后不再查，只把 lastError 标成 CONFIRM:GAVE_UP（状态仍留 SENT——我们并不知道它到底有没有
+ *  打印成功，只是放弃继续主动确认，不能武断改判 FAILED/PRINTED 造成误告警或误判）。 */
+const SENT_GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000
 /** SENDING 超过这个时长还没转出（成功→SENT、失败→PENDING/FAILED），判定是进程在发送途中被杀死留下的
  *  孤儿行——比 feie.ts 的 fetch 超时（10s）多留 5s 缓冲，不会跟正常发送中的行打架（B6 孤儿回收） */
 const SENDING_ORPHAN_AFTER_MS = 15 * 1000
@@ -388,12 +397,15 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
 
   const sentDeadline = new Date(now - SENT_CONFIRM_AFTER_MS)
   const sent = await prisma.printJob.findMany({
-    where: { status: 'SENT', sentAt: { lt: sentDeadline } },
+    // M4：lastError:null 排除掉已经被判定 CONFIRM:GAVE_UP 的僵尸行——不然它们会一直占着
+    // sentAt 最早、排在批次最前面的位置，把后面真正需要确认的新 SENT 行挤出这一轮。
+    where: { status: 'SENT', sentAt: { lt: sentDeadline }, lastError: null },
     orderBy: { sentAt: 'asc' },
-    take: BATCH,
+    take: SENT_CONFIRM_BATCH,
   })
   for (const job of sent) {
     if (!job.providerJobId) continue
+    const staleForTooLong = job.sentAt !== null && now - job.sentAt.getTime() > SENT_GIVE_UP_AFTER_MS
     try {
       const provider = getProvider(job.provider as PrinterProviderName)
       const result = await provider.queryJob(job.providerJobId)
@@ -403,9 +415,19 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
           data: { status: 'PRINTED', printedAt: new Date() },
         })
         confirmed += moved.count
+      } else if (staleForTooLong) {
+        await prisma.printJob.updateMany({ where: { id: job.id, status: 'SENT' }, data: { lastError: 'CONFIRM:GAVE_UP' } })
       }
-      // 还没打印完成：保持 SENT，下一轮再查（飞鹅无回调可依赖时，这是唯一的确认路径）
+      // 还没打印完成、也没超过放弃窗口：保持 SENT，下一轮再查（飞鹅无回调可依赖时，这是唯一的确认路径）
     } catch (e) {
+      // 飞鹅对久远/不存在的 providerJobId 返回 ret=1001「订单ID错误」——这类行永远查不出结果，
+      // 跟「已经查了 24h 还没定论」一样，都属于「放弃继续查」，不是「打印失败」（我们并不知道
+      // 它到底有没有打印成功，只是不再主动确认了，不能武断改判 FAILED 造成误告警）。
+      const isOrderNotFound = e instanceof PrinterError && e.code === '1001'
+      if (isOrderNotFound || staleForTooLong) {
+        await prisma.printJob.updateMany({ where: { id: job.id, status: 'SENT' }, data: { lastError: 'CONFIRM:GAVE_UP' } })
+        continue
+      }
       console.warn(`[ticket] 查询打印状态失败 job=${job.id}:`, (e as Error).message)
     }
   }
