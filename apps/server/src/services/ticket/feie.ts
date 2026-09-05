@@ -44,7 +44,14 @@ export function _sign(user: string, ukey: string, stime: string): string {
 export function _mapFeieError(ret: number | string | undefined, msg: string): PrinterErrorKind {
   if (String(ret) === '1002') return 'CONFIG' // 已确认：账号/SN 跨站（国内站 vs 国际站）不匹配
   const m = msg || ''
-  if (/不存在|未绑定|未添加|签名|USER|UKEY|用户名|账号|not match/i.test(m)) return 'CONFIG'
+  // M10：CONFIG 是这套启发式唯一承重的分界——判成 CONFIG 直接 FAILED 且被永久排除在补打之外
+  // （retryRecoveredPrinterJobs 明确跳过 `lastError` 以 `CONFIG:` 开头的行）。原来的关键字里
+  // 「签名/USER/UKEY/账号」对应的是 sig 校验失败，而 2026-09-05 已确认服务器时钟漂移会让
+  // `stime` 超出飞鹅的校验窗口、返回一条同样含"签名"字样的错误——NTP 一修好这些请求立刻能
+  // 重新发出去，属于会自愈的 BUSINESS/CAPACITY 类，判成 CONFIG 会让这些行永久失去补打资格，
+  // NTP 修好后仍需店主逐条手点重试。这里收窄到确定不会自愈的关键字：打印机压根没绑定/不存在，
+  // 或用户名本身就填错——这些不会随时间自己变好。
+  if (/不存在|未绑定|未添加|用户名|not match/i.test(m)) return 'CONFIG'
   if (/离线|不在线|缺纸|开盖|异常|队列已满|通信失败/.test(m)) return 'CAPACITY'
   return 'BUSINESS'
 }
