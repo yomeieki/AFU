@@ -201,8 +201,12 @@ sleep 0.3
 assert_eq "B1-4：自助取消 + finalizeRefundSuccess 双源出票，dedupe 后仍恰好 1 条（无重复）" \
   "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(PJOBS_A40 "$B1_O4")")" "1"
 
-echo "-- M13：expirePointsBatch 的 CAS where 补 expiresAt<now（亚秒级竞争无法在 bash 里复现，验收=opus 复核 where 子句）--"
-ok "M13：见 apps/server/src/services/member/points.ts expirePointsBatch 的 CAS where（代码复核项，非 e2e 断言）"
+# M13（expirePointsBatch 的 CAS where 补 expiresAt<now，防止把刚被 extendLivePoints 续期救回的
+# 行错误清零）：第二轮复核点名——这里原来放的是一句无条件 `ok`，PASS 计数 +1，什么都没验。
+# 亚秒级竞争（候选 findMany 快照之后、per-row 事务提交之前被并发续期）在 bash 里没有能注入
+# 延迟的钩子，真的造不出来，删掉这条假断言；M13 的 CAS where 子句本身已经在复核报告里由人工
+# 代码审查核实过（见 docs/superpowers/notes/2026-09-05-review-round2.md「确认真修到了的」一节），
+# 这里不再补一条自欺欺人的 e2e。
 
 # 收尾：还原打印机/会员设置、删掉本段创建的测试地址
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
