@@ -370,7 +370,11 @@ export interface WorkbenchCard {
     distanceM: number | null
     estimatedDeliveryAt: string | null   // 规格 §3 要求同城卡片出现「预计送达」，来自 Order.estimatedDeliveryAt
     cancelRequested: boolean
-    delivery: { status: string; statusLabel: string; courierName: string | null; courierMobile: string | null } | null
+    delivery: {
+      status: string; statusLabel: string; courierName: string | null; courierMobile: string | null
+      /** 最近一次呼叫骑手失败（运力方拒单/下单报错），订单还停在备餐中等店员重呼或改自送。服务端可选下发 */
+      callFailed?: boolean
+    } | null
   } | null
 }
 
