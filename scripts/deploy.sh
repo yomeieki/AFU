@@ -121,9 +121,34 @@ echo "  dist/app.js: $(du -sh dist/app.js | cut -f1)"
 # ── [6/9] 数据库迁移 ─────────────────────────────────────────────────────────
 echo "[6/9] 执行数据库迁移..."
 if ! npm run db:migrate:deploy; then
+  # MySQL 的 DDL 不可回滚：一个迁移里多条 CREATE TABLE / CREATE INDEX / ADD FOREIGN KEY，
+  # 失败点在建表之后时新表已经落库。只灌回 dump 不会删它们（mysqldump 只 DROP/CREATE 备份里
+  # 有的表），下次 migrate deploy 重跑该迁移会在 CREATE TABLE 撞 1050，Prisma 写入一条
+  # finished_at IS NULL 的失败记录，此后每次部署都直接 P3009 退出——所以恢复必须三步都做。
+  # 这里把「dump 里没有、库里却有」的表算出来，就是本次迁移新建的表。
+  MYSQL_CLI="mysql -h ${DB_HOST} -P ${DB_PORT} -u ${DB_USER} -p ${DB_NAME}"
+  NEW_TABLES=""
+  if command -v mysql >/dev/null; then
+    for t in $(mysql -N -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" -e 'SHOW TABLES' 2>/dev/null || true); do
+      zgrep -q "CREATE TABLE \`${t}\`" "${PRE_BACKUP}" || NEW_TABLES="${NEW_TABLES}${NEW_TABLES:+, }\`${t}\`"
+    done
+  fi
   echo "=========================================="
-  echo " ERROR: 迁移失败！服务未重启，数据库可用备份恢复："
-  echo "   gunzip < ${PRE_BACKUP} | mysql -h ${DB_HOST} -P ${DB_PORT} -u ${DB_USER} -p ${DB_NAME}"
+  echo " ERROR: 迁移失败！服务未重启，旧进程仍在跑旧代码。"
+  echo " 恢复数据库请按顺序做完三步（少做 ②③ 下次部署会 P3009 卡死）："
+  echo "   ① 灌回迁移前备份："
+  echo "      gunzip < ${PRE_BACKUP} | ${MYSQL_CLI}"
+  if [[ -n "${NEW_TABLES}" ]]; then
+    echo "   ② 删掉本次迁移新建的表（备份里没有、库里已有）：${NEW_TABLES}"
+  else
+    echo "   ② 删掉本次迁移新建的表（未能自动探测，请对照 prisma/migrations 里本次的 CREATE TABLE）："
+    NEW_TABLES='`delivery_events`, `deliveries`, `print_jobs`'
+    echo "      本轮同城上线（20260904000000_local_delivery）新建的是：${NEW_TABLES}"
+  fi
+  echo "      ${MYSQL_CLI} -e 'SET FOREIGN_KEY_CHECKS=0; DROP TABLE IF EXISTS ${NEW_TABLES}; SET FOREIGN_KEY_CHECKS=1;'"
+  echo "   ③ 清掉 Prisma 的失败记录（① 恢复了 _prisma_migrations 时此步为空操作，照跑无害）："
+  echo "      ${MYSQL_CLI} -e 'DELETE FROM _prisma_migrations WHERE finished_at IS NULL'"
+  echo " 之后：修好原因重跑 bash scripts/deploy.sh；或先回代码 DEPLOY_REF=${BEFORE} bash scripts/deploy.sh"
   echo "=========================================="
   exit 1
 fi
