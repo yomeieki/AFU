@@ -8,6 +8,9 @@ let cached: { token: string; expiresAt: number } | null = null
 let inFlight: Promise<string> | null = null
 
 const REFRESH_AHEAD_MS = 5 * 60 * 1000
+// A9：这里之前是裸 fetch，无超时——微信网关不响应时会一直挂着，而 getAccessToken 是
+// 二维码生成/订阅消息发送两条链路唯一的 token 来源，挂住就等于把它们一起拖死。
+const TOKEN_FETCH_TIMEOUT_MS = 10000
 
 export function isWechatApiConfigured(): boolean {
   return !!process.env.WECHAT_APP_ID && !!process.env.WECHAT_APP_SECRET
@@ -27,7 +30,16 @@ async function fetchToken(): Promise<string> {
   const secret = process.env.WECHAT_APP_SECRET
   if (!appId || !secret) throw new Error('WECHAT_APP_ID / WECHAT_APP_SECRET 未配置')
   const url = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(secret)}`
-  const resp = await fetch(url)
+  let resp: Response
+  try {
+    resp = await fetch(url, { signal: AbortSignal.timeout(TOKEN_FETCH_TIMEOUT_MS) })
+  } catch (e) {
+    const err = e as Error
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      throw new Error(`获取 access_token 请求超时（${TOKEN_FETCH_TIMEOUT_MS}ms）: ${err.message}`)
+    }
+    throw err
+  }
   const data = (await resp.json()) as { access_token?: string; expires_in?: number; errcode?: number; errmsg?: string }
   if (!data.access_token) {
     throw new Error(`获取 access_token 失败: ${data.errcode ?? ''} ${data.errmsg ?? ''}`.trim())

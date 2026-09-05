@@ -22,6 +22,9 @@ export type VerifyMode = 'public-key' | 'platform-cert'
 const PUBLIC_KEY_PREFIX = 'PUB_KEY_ID_'
 const CERT_CACHE_TTL_MS = 12 * 60 * 60 * 1000
 const MAX_CLOCK_SKEW_SEC = 5 * 60
+// A9：证书下载裸 fetch 之前没有超时，对端不响应会一直挂着 resolvePlatformCert（进而挂住
+// verifyWechatNotify——支付/退款回调的验签路径）。15s 与 wechat-pay.ts 的出站请求超时对齐。
+const CERT_DOWNLOAD_TIMEOUT_MS = 15000
 
 type VerifyResult = { ok: true; mode: VerifyMode } | { ok: false; reason: string }
 
@@ -84,9 +87,19 @@ async function downloadPlatformCerts(): Promise<void> {
     if (!isSet(apiV3Key)) throw new Error('WECHAT_PAY_API_V3_KEY not configured')
     const url = 'https://api.mch.weixin.qq.com/v3/certificates'
     const authorization = generateWxPayAuthorization('GET', url, '')
-    const resp = await fetch(url, {
-      headers: { Accept: 'application/json', Authorization: authorization },
-    })
+    let resp: Response
+    try {
+      resp = await fetch(url, {
+        headers: { Accept: 'application/json', Authorization: authorization },
+        signal: AbortSignal.timeout(CERT_DOWNLOAD_TIMEOUT_MS),
+      })
+    } catch (e) {
+      const err = e as Error
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw new Error(`平台证书下载请求超时（${CERT_DOWNLOAD_TIMEOUT_MS}ms）: ${err.message}`)
+      }
+      throw err
+    }
     const data = (await resp.json()) as CertificatesResponse
     if (!resp.ok || !data.data) {
       throw new Error(`certificates download failed: ${data.code} - ${data.message}`)
