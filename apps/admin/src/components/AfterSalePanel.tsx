@@ -44,14 +44,19 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
   const [rejectReply, setRejectReply] = useState('')
   const [rejecting, setRejecting] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
+  // 接口失败时必须和「真的没有申请」区分开：侧栏红点走的是另一条接口（pending-count），
+  // 这里若静默显示「没有待处理的售后申请」，店主会以为今天没人申请售后而关掉页面
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const load = (p = page) => {
     setLoading(true)
+    setLoadFailed(false)
     getAfterSales({ page: p, pageSize, status: status || undefined })
       .then((res) => {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
       })
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false))
   }
 
@@ -97,6 +102,11 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
         {loading ? (
           <div className="p-3 space-y-3">
             {[...Array(3)].map((_, i) => <div key={i} className="h-24 bg-gray-100 rounded-lg animate-pulse" />)}
+          </div>
+        ) : loadFailed ? (
+          <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
+            <span>售后列表加载失败，当前显示的不是真实数据</span>
+            <Button size="sm" variant="secondary" onClick={() => load()}>重试</Button>
           </div>
         ) : list.length === 0 ? (
           <EmptyState text={status === 'PENDING' ? '没有待处理的售后申请' : '暂无售后记录'} />
@@ -151,7 +161,7 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
             ))}
           </div>
         )}
-        {!loading && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+        {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
       </div>
 
       {approveTarget && (
