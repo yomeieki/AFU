@@ -1302,10 +1302,15 @@ PO4=$(pay_new_order "$PID" "$ADDR")
 sleep 0.3
 assert_eq "禁用打印时不落库" "$(jq -r '.data.total' <<<"$(PJOBS "$PO4")")" "0"
 
-echo "-- 打印失败重试耗尽 → FAILED，且离线恢复后自动补打 --"
+echo "-- 打印失败重试耗尽 → FAILED，且设备异常恢复后自动补打 --"
+# D2（H5 修法作废）：2026-09-05 真机实验证实「打印机离线（网络/电源断开）」时 Open_printMsg 仍
+# 返回成功，print() 不会失败——用 state:OFFLINE 强制 print() 失败已经不成立，这段测的是「设备
+# 本身打不出来」这类真实会失败的场景（缺纸/开盖等物理故障，mock 里对应 ABNORMAL），跟离线/
+# 连通性是两回事。OFFLINE 专属的新语义（不重试、恢复后清云端队列+按 30 分钟窗口补发）见
+# scripts/e2e.d/45-printer-offline.sh。
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"E2E-P1","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null
 req POST /api/admin/system/printer-mock/retry-delays "$AT" '{"delays":[50,50,50]}' >/dev/null
-req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"E2E-P1","state":"OFFLINE"}' >/dev/null
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"E2E-P1","state":"ABNORMAL"}' >/dev/null
 PO5=$(pay_new_order "$PID" "$ADDR")
 sleep 0.2
 assert_eq "首次尝试失败仍是 PENDING(attempts=1)" "$(jq -r '.data.list[0] | "\(.status):\(.attempts)"' <<<"$(PJOBS "$PO5")")" "PENDING:1"
@@ -1322,7 +1327,7 @@ PJID5=$(jq -r '.data.list[0].id' <<<"$(PJOBS "$PO5")")
 req POST /api/admin/system/printer-mock/health-track "$AT" '{"sn":"E2E-P1","offlineSinceMsAgo":600000,"alerted":false}' >/dev/null
 R=$(req POST /api/admin/system/run-scheduler "$AT" '{}')
 [[ "$(jq -r '.data.printerHealth // 0' <<<"$R")" -ge 1 ]] && ok "持续离线达阈值触发告警(printerHealth≥1)" || fail "printerHealth 告警" "$R"
-assert_eq "工作台打印机状态灯=OFFLINE" "$(req GET '/api/admin/workbench/snapshot?fresh=1' "$AT" | jq -r .data.printer.status)" "OFFLINE"
+assert_eq "工作台打印机状态灯=ABNORMAL" "$(req GET '/api/admin/workbench/snapshot?fresh=1' "$AT" | jq -r .data.printer.status)" "ABNORMAL"
 req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"E2E-P1","state":"ONLINE"}' >/dev/null
 R=$(req POST /api/admin/system/run-scheduler "$AT" '{}')
 [[ "$(jq -r '.data.printerHealth // 0' <<<"$R")" -ge 1 ]] && ok "恢复在线触发告知+补打(printerHealth≥1)" || fail "printerHealth 恢复" "$R"
