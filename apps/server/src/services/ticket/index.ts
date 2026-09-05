@@ -886,6 +886,18 @@ export async function recoverFromOfflineQueue(
   }
   if (waiting <= 0) return { backfilled: 0, dropped: 0 }
 
+  // ⚠️ 预算不够就**整个跳过**，绝不「删了又不补」（终审 B-1）。
+  // clearQueue 是把票从飞鹅侧真删掉，而补发靠的是下面两个带 deadline 的循环——
+  // 预算已经烧光时它们第一次迭代就 break，结果是票被我们删了、又没补回去，
+  // 而 printerHealthTask 结尾会把 wasOffline/wasBad 清空，下一轮根本不再进这个分支：
+  // 票永久停在 SENT，24h 后打成 CONFIRM:GAVE_UP，此后再没有任何路径碰它 —— 静默丢单。
+  // 宁可这一轮什么都不做（飞鹅自己会把队列吐出来，最坏是出几张过期票，看得见），
+  // 也不能删掉我们补不回来的东西。下一次 tick 状态仍坏就会再来一次。
+  if (deadline !== undefined && Date.now() > deadline) {
+    console.warn(`[ticket] 离线恢复预算已耗尽 sn=${sn}（waiting=${waiting}），本轮不清队列也不补发`)
+    return { backfilled: 0, dropped: 0 }
+  }
+
   try {
     await getProvider(providerName).clearQueue(sn)
   } catch (e) {
@@ -939,6 +951,21 @@ export async function recoverFromOfflineQueue(
       printerSn: sn,
       createdAt: { gte: cutoff },
       status: { in: ['PENDING', 'SENT'] },
+      // B-2（终审）：与 retryRecoveredPrinterJobs 保持同一条排除线。
+      // 飞鹅**没有幂等 token**，超时之后我们根本不知道对方收没收到，所以 M11 给 TIMEOUT
+      // 定了「首发 + 1 次重试」的硬封顶。而这里原本没有这条过滤、下面又无条件把
+      // attempts 清零 —— 一次「恢复」事件就把封顶抹掉，每次恢复都给同一条再发一张，
+      // 真机上那就是真的多出纸。第三轮去掉 sentAt 过滤之后 PENDING 行全都进了这个循环，
+      // 这条路径从不可达变成了常见。
+      // 用 OR 显式放行 lastError=null：SQL 里 `NULL NOT LIKE 'x%'` 结果是 NULL 不是 TRUE，
+      // 单写 NOT 会把正常的空值行也一并挡在外面（R8 踩过同一个坑）。
+      OR: [
+        { lastError: null },
+        { AND: [
+          { lastError: { not: { startsWith: 'TIMEOUT:' } } },
+          { lastError: { not: { startsWith: 'CONFIG:' } } },
+        ] },
+      ],
     },
     orderBy: { createdAt: 'asc' },
     take: RECOVER_BATCH,
@@ -1049,15 +1076,14 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
         recovered++
         notifySystemAlert('打印机已恢复', [`打印机 ${e.name}（${e.sn}）`], { key: `printer:recovered:${e.sn}` })
       }
-      // R9：补打 FAILED 作业的触发条件改成「上一轮 bad、本轮 good」（`prevBad`），跟 `alerted`
-      // 解耦——`alerted` 只在持续 bad 超过 `offlineAlertMin`（默认 5 分钟）才会置位，而 ABNORMAL
-      // 常见的缺纸/开盖往往几分钟内就被店员发现并处理掉，等不到这个阈值；原来绑在 `alerted` 上
-      // 意味着这类短暂故障期间转 FAILED 的作业永远没有机会被自动补打，只能等店员在后台点
-      // 「失败重试」。`isFirstSeen` 时按「可能刚恢复」处理，见上面的注释。
-      if (prevBad) {
-        backfilled += await retryRecoveredPrinterJobs(e.sn, healthDeadline)
-      }
-      // D2（H5b）：同样跟 alerted/isFirstSeen 解耦——哪怕这次离线短到没触发告警阈值，只要曾经
+      // ⚠️ 顺序不能反（终审 B-1）：**先清队列补发，再补打 FAILED**。
+      // 反过来的话，retryRecoveredPrinterJobs 发出去的票当场就进了飞鹅云端队列，
+      // 紧接着 recoverFromOfflineQueue 看到 waiting>0，把**自己刚发出去的票**当成陈旧积压
+      // clearQueue 删掉 —— 预算充足时是白折腾一轮（删完再补发一遍），预算不够时就是丢单。
+      // 现在这个顺序下，清队列只会清到真正的历史积压，补打的票进的是一个刚清干净的队列。
+      // e2e `47` 的 B1-ORDER 用例锁住了这个顺序（调回旧顺序会转红）。
+      //
+      // D2（H5b）：触发条件跟 alerted/isFirstSeen 解耦——哪怕这次离线短到没触发告警阈值，只要曾经
       // 是 OFFLINE（或者 track 缺失、不确定之前是不是 OFFLINE），恢复时都要查一次 waiting，
       // 决定要不要清云端队列 + 从本地记录补发。
       if (track.wasOffline || isFirstSeen) {
@@ -1071,6 +1097,14 @@ export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
         } catch (err) {
           console.warn(`[ticket] 离线恢复清队列/补发异常 sn=${e.sn}:`, (err as Error).message)
         }
+      }
+      // R9：补打 FAILED 作业的触发条件改成「上一轮 bad、本轮 good」（`prevBad`），跟 `alerted`
+      // 解耦——`alerted` 只在持续 bad 超过 `offlineAlertMin`（默认 5 分钟）才会置位，而 ABNORMAL
+      // 常见的缺纸/开盖往往几分钟内就被店员发现并处理掉，等不到这个阈值；原来绑在 `alerted` 上
+      // 意味着这类短暂故障期间转 FAILED 的作业永远没有机会被自动补打，只能等店员在后台点
+      // 「失败重试」。`isFirstSeen` 时按「可能刚恢复」处理，见上面的注释。
+      if (prevBad) {
+        backfilled += await retryRecoveredPrinterJobs(e.sn, healthDeadline)
       }
       track.offlineSince = null
       track.alerted = false

@@ -63,6 +63,41 @@ for oid in "${G3_R5_PRE_OIDS[@]}" "$G3_R5_DURING_OID"; do
 done
 assert_eq "R5：没有任何一单掉进 FAILED" "$G3_R5_ANY_FAILED" "0"
 
+echo "-- B1-ORDER：先清队列补发、再补打 FAILED，且预算耗尽时绝不「删了不补」--"
+# 终审发现的第 7 例「两个各自正确的改动叠加」：
+#   ① prevBad 分支先跑 retryRecoveredPrinterJobs，它发出去的票当场进飞鹅云端队列 → waiting≥1
+#   ② recoverFromOfflineQueue 看到 waiting>0 就 clearQueue，把**自己刚发出去的票**删掉
+#   ③ 补发循环这时预算已烧光，第一次迭代就 break
+#   ④ printerHealthTask 结尾清空 wasOffline/wasBad → 下一轮不再进这个分支
+#   结果：票被删了、补不回来、零告警。
+# 修法是「顺序调换 + 预算不够就整个跳过」。这里锁住可观测的那一半：
+# 一条 FAILED 作业在恢复后被补打出来，且没有被随后的清队列吞掉。
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-ORD","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":30,"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/printer-mock/retry-delays "$AT" '{"delays":[10,10,10]}' >/dev/null
+# 先造一条 FAILED：ABNORMAL 让 print() 真失败，耗尽重试
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-ORD","state":"ABNORMAL"}' >/dev/null
+G3_ORD_OID=$(pay_new_order "$PID" "$ADDR")
+for _ in 1 2 3 4; do sleep 0.15; req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null; done
+sleep 0.3
+assert_eq "B1-ORDER：前置——该作业已耗尽重试成 FAILED" \
+  "$(PJOBS "$G3_ORD_OID" | jq -r '.data.list[0].status')" "FAILED"
+# 再制造一次「离线 → 有积压 → 恢复」，让两条恢复路径在同一轮里都被触发
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-ORD","state":"OFFLINE"}' >/dev/null
+G3_ORD_QUEUED=$(pay_new_order "$PID" "$ADDR")
+sleep 0.2
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 建立 wasOffline/wasBad
+req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-ORD","state":"ONLINE"}' >/dev/null
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null   # 恢复：先清队列补发，再补打 FAILED
+sleep 0.5
+assert_eq "B1-ORDER：离线期间那单被补发（没被 clearQueue 吞掉）" \
+  "$(PJOBS "$G3_ORD_QUEUED" | jq -r '.data.list[0].status')" "SENT"
+assert_eq "B1-ORDER：FAILED 那单被补打出来（补打发生在清队列之后，不会被删）" \
+  "$(PJOBS "$G3_ORD_OID" | jq -r '.data.list[0].status')" "SENT"
+assert_eq "B1-ORDER：云端队列已清空" \
+  "$(req GET '/api/admin/system/printer-mock/queue?sn=G3-ORD' "$AT" | jq -r .data.waiting)" "0"
+req POST /api/admin/system/printer-mock/retry-delays "$AT" '{"delays":[5000,30000,120000]}' >/dev/null
+
 echo "-- R7-MAJORITY：恢复时飞鹅已经自己把队列吐完（waiting=0），我们不该再动它 --"
 # 真机实测：通电 74s 后打印机在线时，队列里那张票**已经自己吐出来了**、waiting 归 0。
 # 而我们的健康检测是 60s 轮询 —— 绝大多数情况下我们观测到的就是 waiting=0，
