@@ -1681,6 +1681,8 @@ req PUT /api/admin/settings/member "$AT" "$ORIG_MEMBER_SETTINGS" >/dev/null
 req DELETE "/api/addresses/$M1A_ADDR" "$M1A" >/dev/null
 req DELETE "/api/addresses/$M1B_ADDR" "$M1B" >/dev/null
 
+for f in "$(dirname "$0")"/e2e.d/*.sh; do [[ -f "$f" ]] && source "$f"; done
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
