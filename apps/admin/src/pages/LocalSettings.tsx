@@ -29,6 +29,11 @@ export default function LocalSettings() {
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
   const [money, setMoney] = useState({ baseFee: '', perKmFee: '', freeThreshold: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
+  // 门店坐标另有一条写入路径（小程序商家端一键定位 → PATCH store-location），而本页的保存是整包
+  // 覆盖式 PUT、服务端没有乐观锁。店主按本页指引去店门口定完位、回到这个还开着的标签页改别的参数
+  // 再保存，若把页面加载时缓存的旧坐标一起写回，新坐标就被静默改掉了。
+  // 所以只有店主真的动过这两个输入框才发送手填值，否则保存前先取服务端最新坐标合并。
+  const [coordDirty, setCoordDirty] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const hydrate = (v: LocalDeliverySettings) => {
@@ -38,7 +43,9 @@ export default function LocalSettings() {
       minOrderAmount: toYuan(v.fee.minOrderAmount), maxPerCall: toYuan(v.tip.maxPerCall), maxPerOrder: toYuan(v.tip.maxPerOrder),
     })
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
+    setCoordDirty(false)
   }
+  const editCoord = (p: Partial<typeof coord>) => { setCoord({ ...coord, ...p }); setCoordDirty(true) }
   const [loadFailed, setLoadFailed] = useState(false)
   // 没有 catch 的话接口一挂，页面就永远停在「加载中...」，店主只会以为后台坏了。
   useEffect(() => {
@@ -57,32 +64,47 @@ export default function LocalSettings() {
   const handleSave = async (enabledOverride?: boolean) => {
     const fen = Object.fromEntries(Object.entries(money).map(([k, v]) => [k, toFen(v)])) as Record<keyof typeof money, number | null>
     if (Object.values(fen).some((v) => v === null)) { toast.error('金额格式不正确（最多两位小数）'); return }
-    let latE6: number | null = null, lngE6: number | null = null
-    if (coord.lat.trim() || coord.lng.trim()) {
+    // 手填坐标只在店主动过输入框时才算数；没动过就在下面用服务端最新值
+    let typedLatE6: number | null = null, typedLngE6: number | null = null
+    if (coordDirty && (coord.lat.trim() || coord.lng.trim())) {
       if (!coord.lat.trim() || !coord.lng.trim()) { toast.error('请同时填写纬度和经度'); return }
       const lat = Number(coord.lat), lng = Number(coord.lng)
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) { toast.error('坐标格式不正确'); return }
-      latE6 = Math.round(lat * 1e6); lngE6 = Math.round(lng * 1e6)
-      if (!inZigong(latE6, lngE6)) {
+      typedLatE6 = Math.round(lat * 1e6); typedLngE6 = Math.round(lng * 1e6)
+      if (!inZigong(typedLatE6, typedLngE6)) {
         const ok = await confirmDialog({ title: '坐标看起来不在自贡附近', content: '请确认没有把经纬度顺序填反、且使用的是腾讯/高德坐标。仍要保存？', danger: true })
         if (!ok) return
       }
     }
-    const payload: LocalDeliverySettings = {
-      ...s,
-      enabled: enabledOverride ?? s.enabled,
-      store: { ...s.store, latE6, lngE6 },
-      fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, freeThreshold: fen.freeThreshold!, minOrderAmount: fen.minOrderAmount! },
-      tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
-    }
-    // 保存后的提示按「这次是否动了门店坐标」分叉，因为两种情况对顾客的影响完全不同：
-    //  - 动了坐标：在途报价凭证里签的是旧门店坐标，那段道路距离量的是另一条路，只能整张作废
-    //    （顾客提交时收到 42227「配送费已更新，请刷新后重新提交」）；
-    //  - 没动坐标：凭证里除距离外每个量（运费/范围/起送门槛）都在下单时按当前设置重算，
-    //    所以新参数立刻生效，正在结算页的顾客**不会**被踢下来，按新参数校验即可。
-    const storeMoved = latE6 !== s.store.latE6 || lngE6 !== s.store.lngE6
     setSaving(true)
     try {
+      // 服务端 PUT 是整包覆盖（缺 latE6/lngE6 会被置空），所以不能省掉这两个字段，
+      // 只能保存前先取一次最新设置，把别的路径写进去的坐标（以及暂停状态）合并进来再写回
+      let fresh: LocalDeliverySettings
+      try {
+        fresh = await getLocalSettings()
+      } catch {
+        toast.error('读取最新设置失败，本次未保存，请刷新后重试')
+        return
+      }
+      const latE6 = coordDirty ? typedLatE6 : fresh.store.latE6
+      const lngE6 = coordDirty ? typedLngE6 : fresh.store.lngE6
+      const payload: LocalDeliverySettings = {
+        ...s,
+        version: fresh.version,
+        paused: fresh.paused,
+        enabled: enabledOverride ?? s.enabled,
+        store: { ...s.store, latE6, lngE6 },
+        fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, freeThreshold: fen.freeThreshold!, minOrderAmount: fen.minOrderAmount! },
+        tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
+      }
+      // 保存后的提示按「这次是否动了门店坐标」分叉，因为两种情况对顾客的影响完全不同：
+      //  - 动了坐标：在途报价凭证里签的是旧门店坐标，那段道路距离量的是另一条路，只能整张作废
+      //    （顾客提交时收到 42227「配送费已更新，请刷新后重新提交」）；
+      //  - 没动坐标：凭证里除距离外每个量（运费/范围/起送门槛）都在下单时按当前设置重算，
+      //    所以新参数立刻生效，正在结算页的顾客**不会**被踢下来，按新参数校验即可。
+      // 比对对象必须是服务端最新坐标，跟页面缓存的旧值比会恒为 false。
+      const storeMoved = latE6 !== fresh.store.latE6 || lngE6 !== fresh.store.lngE6
       hydrate(await updateLocalSettings(payload))
       toast.success(storeMoved
         ? '已保存（门店坐标已变更，正在结算页的顾客需刷新后重新报价）'
@@ -156,8 +178,8 @@ export default function LocalSettings() {
             </div>
           </Field>
           <Field label="详细地址"><input className={inputCls} value={s.store.address} onChange={(e) => patchStore({ address: e.target.value })} /></Field>
-          <Field label="纬度（高级）" hint="如 29.339123"><input className={inputCls} inputMode="decimal" value={coord.lat} onChange={(e) => setCoord({ ...coord, lat: e.target.value })} /></Field>
-          <Field label="经度（高级）" hint="如 104.778456"><input className={inputCls} inputMode="decimal" value={coord.lng} onChange={(e) => setCoord({ ...coord, lng: e.target.value })} /></Field>
+          <Field label="纬度（高级）" hint="如 29.339123"><input className={inputCls} inputMode="decimal" value={coord.lat} onChange={(e) => editCoord({ lat: e.target.value })} /></Field>
+          <Field label="经度（高级）" hint="如 104.778456"><input className={inputCls} inputMode="decimal" value={coord.lng} onChange={(e) => editCoord({ lng: e.target.value })} /></Field>
         </div>
         {coord.lat && coord.lng && (
           <a className="text-xs text-blue-600 underline" target="_blank" rel="noreferrer"
