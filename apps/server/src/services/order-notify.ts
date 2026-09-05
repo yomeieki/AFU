@@ -144,6 +144,35 @@ export function notifyOrderPaid(order: NotifyOrderInfo, items: NotifyItemInfo[])
   }
 }
 
+/** 打印彻底失败（重试耗尽转 FAILED）后的回退强化推送（规格 §8b：打印机是接单流程的单点，
+ *  这是它唯一的兜底）。只对 NEW_ORDER 票用——CANCEL/REPEAT 等票即使打印失败，店员也已经从
+ *  别的渠道（工作台/微信通知）知道这单的存在，不需要再单独推一条；NEW_ORDER 打印失败则可能
+ *  意味着厨房完全不知道有这一单。文案带商品与地址，店主拿到就能直接派单，不用再打开后台查。 */
+export function notifyPrintFailed(
+  order: { orderNo: string; actualAmount: number; receiverName: string; receiverPhone: string; receiverFullAddress: string },
+  items: NotifyItemInfo[]
+): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const lines = items.map((it) => {
+    const spec = it.specText ? `（${it.specText}）` : ''
+    return `- ${it.productName}${spec} × ${it.quantity}`
+  })
+  const content = [
+    `**⚠️ 打印失败，已改为推送（打印机故障期间请留意本条，人工确认是否已接单）**`,
+    `订单号：${order.orderNo}`,
+    `金额：**¥${fmtYuan(order.actualAmount)}**`,
+    ...lines,
+    `收货人：${order.receiverName} ${order.receiverPhone}`,
+    `地址：${order.receiverFullAddress}`,
+  ].join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) {
+    sendPushPlus(pushplusToken, `打印失败，已改为推送 ¥${fmtYuan(order.actualAmount)}`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+  }
+}
+
 /** 顾客提交售后申请 → 通知员工到后台处理 */
 export function notifyAfterSaleRequest(
   order: { orderNo: string; actualAmount: number; receiverName: string; receiverPhone: string },

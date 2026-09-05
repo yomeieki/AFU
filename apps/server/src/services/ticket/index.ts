@@ -12,6 +12,7 @@ import crypto from 'crypto'
 import prisma from '../../utils/prisma'
 import { config } from '../../config'
 import { notifySystemAlert } from '../notify'
+import { notifyPrintFailed } from '../order-notify'
 import {
   getPrinterSettings, setPrinterSettings, printersForChannel,
   PrinterSettings, PrinterChannel, PrinterEntry,
@@ -325,7 +326,10 @@ async function attemptSendOnce(
 }
 
 async function handleSendFailure(jobId: number, err: PrinterError): Promise<void> {
-  const job = await prisma.printJob.findUnique({ where: { id: jobId }, select: { attempts: true, orderNo: true, status: true } })
+  const job = await prisma.printJob.findUnique({
+    where: { id: jobId },
+    select: { attempts: true, orderNo: true, status: true, kind: true, orderId: true },
+  })
   if (!job || job.status !== 'SENDING') return
   const lastError = `${err.kind}:${err.code} ${err.message}`.slice(0, 255)
   // CONFIG 类错误（账号/密钥/打印机未绑定）重试没有意义，直接 FAILED，不占重试次数
@@ -345,6 +349,24 @@ async function handleSendFailure(jobId: number, err: PrinterError): Promise<void
     notifySystemAlert('打印失败', [`订单 ${job.orderNo}`, lastError, '打印机故障期间请留意工作台/推送，人工确认是否已接单'], {
       key: `print:failed:${jobId}`,
     })
+    // M3：打印机是接单流程的单点，NEW_ORDER 票彻底打印失败可能意味着厨房完全不知道有这一单——
+    // 光靠 notifySystemAlert（文案只有订单号，还可能被限频吞掉）不够，规格要求的兜底是回退
+    // 强化推送（文案带商品与地址，店主拿到就能直接派单）。CANCEL/REPEAT 等其它 kind 不推：
+    // 店员已经从别的渠道知道这单存在，不需要再单独推一条。
+    if (job.kind === 'NEW_ORDER') {
+      try {
+        const order = await prisma.order.findUnique({
+          where: { id: job.orderId },
+          select: {
+            orderNo: true, actualAmount: true, receiverName: true, receiverPhone: true, receiverFullAddress: true,
+            items: { select: { productName: true, specText: true, quantity: true } },
+          },
+        })
+        if (order) notifyPrintFailed(order, order.items)
+      } catch (e2) {
+        console.warn('[ticket] 打印彻底失败后查订单详情失败（推送兜底跳过）:', (e2 as Error).message)
+      }
+    }
   }
 }
 
