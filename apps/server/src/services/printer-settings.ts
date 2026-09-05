@@ -12,6 +12,7 @@
  */
 import prisma from '../utils/prisma'
 import { notifySystemAlert } from './notify'
+import { PrinterError } from './ticket/printer'
 
 export const PRINTER_SETTINGS_KEY = 'printer'
 const CACHE_TTL_MS = 60 * 1000
@@ -131,6 +132,10 @@ export function sanitizePrinterSettings(raw: unknown): PrinterSettings {
 /** 校验重复出现的 SN、渠道未覆盖等结构合法但业务上有问题的组合（保存时用） */
 export function validatePrinterSettings(s: PrinterSettings): string[] {
   const errs: string[] = []
+  // H4：sanitize 允许 provider='XPYUN' 原样通过（校验要有机会看到用户到底选了什么），但保存时
+  // 必须挡在这里——首期只实现了 feie.ts，选了 XPYUN 存进库会变成一条只有 getProvider() 抛错时
+  // 才会暴露的定时炸弹（脏行躺在库里，直到某次出票才炸）。
+  if (s.provider !== 'FEIE') errs.push('该打印平台尚未支持（二期开放），暂仅支持飞鹅（FEIE）')
   const seen = new Set<string>()
   for (const p of s.printers) {
     if (seen.has(p.sn)) errs.push(`打印机编号 ${p.sn} 重复`)
@@ -145,19 +150,24 @@ let cached: { value: PrinterSettings; at: number } | null = null
 
 export async function getPrinterSettings(): Promise<PrinterSettings> {
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value
-  let value = DEFAULT_PRINTER_SETTINGS
+  let value: PrinterSettings
   try {
     const row = await prisma.setting.findUnique({ where: { key: PRINTER_SETTINGS_KEY } })
-    if (row) value = sanitizePrinterSettings(JSON.parse(row.value))
+    value = row ? sanitizePrinterSettings(JSON.parse(row.value)) : DEFAULT_PRINTER_SETTINGS
   } catch (e) {
-    // 读不到配置 = 打印关闭（不出票不代表少收钱，比误打印/误告警更安全）。
-    // 兜底值只给这一次调用用，不写进 cached：一次 DB 抖动不能让接下来 60 秒都读不到真实配置，
-    // 下一次调用要重新尝试读库（对照 services/settings.ts 里这条修过的坑）。
-    console.warn('[printer-settings] 读取失败，回退默认值:', (e as Error).message)
-    notifySystemAlert('打印机配置读取失败', ['本次按未配置处理（未写缓存，下次调用重读）', (e as Error).message], {
+    // M9：「读不到配置」与「本来就没配置」是两回事。没配置时不出票是安全默认；读失败（DB 抖动/
+    // JSON 损坏）如果也退化成同一个默认值再悄悄放行，出票层会以为一切正常只是没开——不建行、
+    // 不告警，比"未配置"更危险的路径反而什么都不留（原实现的坑）。改成抛出，交给各调用方按
+    // 自己的语义处理：enqueueOrderTicket 落一条 SKIPPED 痕迹，healthCheck/repeatAnnounce/
+    // printerHealthTask 按"本轮跳过"处理，bindPrinterToAccount/unbindPrinter/
+    // enqueuePrinterTestJob 这类管理员主动操作直接把错误透传给路由层。
+    // 兜底值不写进 cached：一次 DB 抖动不能让接下来 60 秒都读不到真实配置，下一次调用要重新
+    // 尝试读库（对照 services/settings.ts 里这条修过的坑）。
+    console.warn('[printer-settings] 读取失败:', (e as Error).message)
+    notifySystemAlert('打印机配置读取失败', ['出票/健康检查本轮将按需要跳过或留痕（不再静默当作未配置）', (e as Error).message], {
       key: 'settings:printer-fallback',
     })
-    return value
+    throw new PrinterError('CONFIG', 'SETTINGS_UNREADABLE', `打印机配置读取失败：${(e as Error).message}`)
   }
   cached = { value, at: Date.now() }
   return value

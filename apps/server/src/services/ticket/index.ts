@@ -140,7 +140,32 @@ export async function enqueueOrderTicket(
   kind: PrintJobKind,
   opts: { seq?: number; waitedMin?: number } = {}
 ): Promise<EnqueueResult> {
-  const settings = await getPrinterSettings()
+  let settings: PrinterSettings
+  try {
+    settings = await getPrinterSettings()
+  } catch (e) {
+    // M9：配置读不出来 ≠ 未配置。「未配置」时不出票是安全默认；读失败如果也静默退化成同一条路径，
+    // 出票层会以为一切正常只是没开，既不建行也不告警——这条路径比「未配置」更危险却什么都不留。
+    // 这里落一条 SKIPPED 痕迹（尽量带上真实 orderNo）+ 告警，让店主知道这单本该出票但没能判断。
+    let orderNo = String(orderId)
+    try {
+      const o = await prisma.order.findUnique({ where: { id: orderId }, select: { orderNo: true } })
+      if (o) orderNo = o.orderNo
+    } catch { /* 连订单都查不到，说明 DB 本身有问题，退化用 orderId 占位 */ }
+    const lastError = `CONFIG:SETTINGS_UNREADABLE ${(e as Error).message}`.slice(0, 255)
+    const dedupeKey = `${orderId}|${kind}|${opts.seq ?? 0}|settings-unreadable`.slice(0, 64)
+    try {
+      await prisma.printJob.create({
+        data: { orderId, orderNo, kind, provider: 'FEIE', printerSn: '', status: 'SKIPPED', content: '', lastError, dedupeKey },
+      })
+    } catch (e2) {
+      if (!isDuplicateKeyError(e2)) console.error('[ticket] 配置读取失败且留痕行写入也失败:', (e2 as Error).message)
+    }
+    notifySystemAlert('打印机配置读取失败，本次出票已跳过', [`订单 #${orderId}（${orderNo}）`, lastError], {
+      key: 'settings:printer-fallback',
+    })
+    return { enqueued: false, reason: 'SETTINGS_UNREADABLE' }
+  }
   if (!settings.enabled) return { enqueued: false, reason: 'PRINTER_DISABLED' }
   if (kind === 'CANCEL' && !settings.printCancel) return { enqueued: false, reason: 'CANCEL_TICKET_DISABLED' }
 
@@ -241,8 +266,11 @@ async function attemptSendOnce(
     data: { status: 'SENDING' },
   })
   if (claimed.count === 0) return // 已被并发的另一次调用认领在发，或该行已不是 PENDING（幂等退出）
-  const provider = getProvider(providerName)
   try {
+    // H4：getProvider() 放在 try 内——某条历史脏行的 provider 字段是不认识的值（比如更早版本
+    // 写入的 XPYUN，或手工改库）时，这里会抛 PrinterError('CONFIG', ...)，走下面的 catch 正常
+    // 转成 FAILED，而不是直接从 attemptSendOnce 抛出去，把 processQueue 那一整轮兜死。
+    const provider = getProvider(providerName)
     const result = await provider.print({ sn, content, copies })
     await prisma.printJob.updateMany({
       where: { id: jobId, status: 'SENDING' },
@@ -302,8 +330,16 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
   for (const job of pending) {
     const delay = retryDelaysMs[Math.min(job.attempts, retryDelaysMs.length - 1)]
     if (job.attempts > 0 && now - job.updatedAt.getTime() < delay) continue
-    await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, 1)
-    retried++
+    try {
+      // H4：单条脏行（比如 provider 字段被更早版本写成了不认识的值）不能把这一轮剩下的所有作业
+      // 都拖死——attemptSend 内部已经把 getProvider() 挪进了 try（会被 handleSendFailure 正常
+      // 转成 FAILED），这里再包一层是防御性的：万一 claim 那一步的 prisma 调用本身抛出（比如
+      // DB 抖动），也只丢这一条，不影响同一轮里的其它作业。
+      await attemptSend(job.id, job.provider as PrinterProviderName, job.printerSn, job.content, 1)
+      retried++
+    } catch (e) {
+      console.warn(`[ticket] 重试发送异常 job=${job.id}:`, (e as Error).message)
+    }
   }
 
   const sentDeadline = new Date(now - SENT_CONFIRM_AFTER_MS)
@@ -350,7 +386,13 @@ export function _setRepeatAnnounceMinWaitMsForTest(ms: number | null): void {
  * 尚未接进 scheduler.ts，本批只实现函数本体、可独立调用/测试。
  */
 export async function repeatAnnounce(): Promise<{ announced: number; exhausted: number }> {
-  const settings = await getPrinterSettings()
+  let settings: PrinterSettings
+  try {
+    settings = await getPrinterSettings()
+  } catch (e) {
+    console.warn('[ticket] repeatAnnounce 读配置失败，本轮跳过:', (e as Error).message)
+    return { announced: 0, exhausted: 0 }
+  }
   if (!settings.enabled) return { announced: 0, exhausted: 0 }
   const now = Date.now()
 
@@ -414,13 +456,19 @@ export interface PrinterHealthEntry {
  * （核心层不假设自己被多频繁调用，状态判断交给挂钩点）。
  */
 export async function healthCheck(): Promise<PrinterHealthEntry[]> {
-  const settings = await getPrinterSettings()
+  let settings: PrinterSettings
+  try {
+    settings = await getPrinterSettings()
+  } catch (e) {
+    console.warn('[ticket] healthCheck 读配置失败，本轮跳过:', (e as Error).message)
+    return []
+  }
   if (!settings.enabled || settings.printers.length === 0) return []
   const providerName = activeProviderName(settings)
-  const provider = getProvider(providerName)
   const results: PrinterHealthEntry[] = []
   for (const p of settings.printers) {
     try {
+      const provider = getProvider(providerName)
       const status = await provider.queryStatus(p.sn)
       results.push({ sn: p.sn, name: p.name, state: status.state, raw: status.raw })
     } catch (e) {
@@ -520,7 +568,14 @@ export interface PrinterHealthTaskResult { checked: number; alerted: number; rec
  * 顺带把这次查询结果写进 `lastHealthSnapshot`，供 workbench 快照直接读缓存、不必每次轮询都外呼。
  */
 export async function printerHealthTask(): Promise<PrinterHealthTaskResult> {
-  const settings = await getPrinterSettings()
+  let settings: PrinterSettings
+  try {
+    settings = await getPrinterSettings()
+  } catch (e) {
+    console.warn('[ticket] printerHealthTask 读配置失败，本轮跳过:', (e as Error).message)
+    lastHealthSnapshot = { at: Date.now(), entries: [] }
+    return { checked: 0, alerted: 0, recovered: 0, backfilled: 0 }
+  }
   if (!settings.enabled || settings.printers.length === 0) {
     lastHealthSnapshot = { at: Date.now(), entries: [] }
     return { checked: 0, alerted: 0, recovered: 0, backfilled: 0 }
