@@ -8,6 +8,11 @@ set -uo pipefail
 BASE="${BASE:-http://localhost:3100}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin123456}"
+# 供直连 MySQL 的少数几处用（同城取消申请计时器回填、收尾兜底清理、会员券模板造数据）。
+# 参数化而不是各处各写一遍字面量 food_shop_sc：本次会员积分/优惠券改动为隔离测试
+# 用了一个单独的库名（food_shop_m1），如果还硬编码 food_shop_sc，这几处会安静地
+# 无操作（docker exec 连去了一个没有这次改动数据的库），断言会莫名其妙地错。
+DB_NAME="${DB_NAME:-food_shop_sc}"
 PASS=0; FAIL=0
 # mk_local_paid 造单失败要能让整跑变红，但它总是在 $(...) 子 shell 里被调用（如
 # `DLO1=$(mk_local_paid)`），子 shell 里改的 FAIL 变量回不到主 shell——`fail` 在那里形同虚设。
@@ -416,7 +421,7 @@ R=$(req GET "/api/orders/$LO1" "$UT"); assert_eq "窗口内 canRequestCancel=tru
 R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{"note":"不要了"}'); assert_eq "申请取消 code 0" "$(code "$R")" "0"
 R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{}'); assert_eq "重复申请 42229" "$(code "$R")" "42229"
 [[ "$(jq -r .message <<<"$R")" == *"已提交过"* ]] && ok "重复申请提示区分于超窗口" || fail "重复申请提示未区分" "$R"
-docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set cancel_requested_at=NULL, accepted_at=DATE_SUB(NOW(3), INTERVAL 10 MINUTE) where id=$LO1;" 2>/dev/null
+docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password "$DB_NAME" -e "update orders set cancel_requested_at=NULL, accepted_at=DATE_SUB(NOW(3), INTERVAL 10 MINUTE) where id=$LO1;" 2>/dev/null
 R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{}'); assert_eq "超窗口 42229" "$(code "$R")" "42229"
 R=$(req GET "/api/admin/orders?pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "0" ]] && ok "后台订单列表默认不含同城单" || fail "后台列表混入同城单"
 R=$(req GET "/api/admin/orders?deliveryType=LOCAL&pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "1" ]] && ok "deliveryType=LOCAL 可查到" || fail "LOCAL 筛选" "$R"
@@ -1361,6 +1366,234 @@ assert_eq "未接单订单已出 REPEAT 票" "$(jq -r '[.data.list[] | select(.k
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
 req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null
 
+echo "== 36. 会员积分与优惠券（M1）=="
+sql() { docker exec -i food-shop-mysql mysql -N -ufoodshop_user -pfoodshop_password "$DB_NAME" -e "$1" 2>/dev/null; }
+
+# 备份原有会员设置，本段末尾原样写回——这是全局配置，共享同一个库的其他联调/agent 不该被本段改动影响
+ORIG_MEMBER_SETTINGS=$(req GET /api/admin/settings/member "$AT" | jq -c .data)
+req PUT /api/admin/settings/member "$AT" '{"points":{"enabled":true,"earnRatePerYuan":1,"validDays":365},"newcomer":{"templateId":null},"rulesText":""}' >/dev/null
+
+# 全新用户，避免与前面段落里 $UT 已经积累的积分/流水互相干扰断言。
+# mock 登录的 openid 取 code 的前 8 位（见 routes/auth.ts），所以这里的每个 code
+# 前 8 位必须互不相同，且每次跑本脚本都要不同——否则本轮和上一轮撞出同一个 openid，
+# 在持久化的开发库上重跑会复用上一轮的用户及其账本，把绝对值断言全部算错
+# （$RANDOM 撞车概率够低，测试脚本不需要更强的唯一性保证）。
+M1_TAG=$RANDOM
+m1_login() { # code -> 打印 "token<TAB>userId"
+  local r
+  r=$(req POST /api/auth/wechat-login "" "{\"code\":\"$1\"}")
+  jq -r '"\(.data.token)\t\(.data.userId)"' <<<"$r"
+}
+IFS=$'\t' read -r M1A M1A_UID < <(m1_login "a${M1_TAG}A_member1")
+IFS=$'\t' read -r M1B M1B_UID < <(m1_login "a${M1_TAG}B_member2")
+[[ -n "$M1A" && -n "$M1B" ]] && ok "会员测试用户 A/B 登录" || fail "会员测试用户登录失败"
+M1A_ADDR=$(req POST /api/addresses "$M1A" '{"receiverName":"M1会员A","receiverPhone":"13800000001","province":"四川省","city":"自贡市","district":"自流井区","detail":"会员测试地址A","isDefault":1}' | jq -r .data.id)
+M1B_ADDR=$(req POST /api/addresses "$M1B" '{"receiverName":"M1会员B","receiverPhone":"13800000002","province":"四川省","city":"自贡市","district":"自流井区","detail":"会员测试地址B","isDefault":1}' | jq -r .data.id)
+
+# 造券模板：三条 M1 已实现的发放路径各一个 + 一个大额积分兑换（供 FIFO/余额不足测试）+
+# 一个已停用的积分兑换券（供 42254）+ 一个仅 1 个总量的限量券（供并发不超发）
+sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, points_cost, status, created_at, updated_at) VALUES ('E2E新客礼', 300, 0, 'ALL', 30, 'NEWCOMER', NULL, 'ON', NOW(), NOW());"
+TPL_NEWCOMER=$(sql "SELECT id FROM coupon_templates WHERE name='E2E新客礼' ORDER BY id DESC LIMIT 1;")
+sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, points_cost, status, created_at, updated_at) VALUES ('E2E积分兑换券', 500, 0, 'ALL', 30, 'POINTS', 50, 'ON', NOW(), NOW());"
+TPL_POINTS=$(sql "SELECT id FROM coupon_templates WHERE name='E2E积分兑换券' ORDER BY id DESC LIMIT 1;")
+sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, points_cost, status, created_at, updated_at) VALUES ('E2E大额积分兑换券', 2000, 0, 'ALL', 30, 'POINTS', 300, 'ON', NOW(), NOW());"
+TPL_POINTS_BIG=$(sql "SELECT id FROM coupon_templates WHERE name='E2E大额积分兑换券' ORDER BY id DESC LIMIT 1;")
+sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, points_cost, status, created_at, updated_at) VALUES ('E2E已停用积分券', 100, 0, 'ALL', 30, 'POINTS', 10, 'OFF', NOW(), NOW());"
+TPL_OFF=$(sql "SELECT id FROM coupon_templates WHERE name='E2E已停用积分券' ORDER BY id DESC LIMIT 1;")
+sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, total_limit, per_user_limit, status, created_at, updated_at) VALUES ('E2E领券中心限每人', 200, 0, 'ALL', 30, 'CAMPAIGN', NULL, 1, 'ON', NOW(), NOW());"
+TPL_CAMPAIGN=$(sql "SELECT id FROM coupon_templates WHERE name='E2E领券中心限每人' ORDER BY id DESC LIMIT 1;")
+sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, total_limit, status, created_at, updated_at) VALUES ('E2E并发限量券', 150, 0, 'ALL', 30, 'CAMPAIGN', 1, 'ON', NOW(), NOW());"
+TPL_CONCURRENT=$(sql "SELECT id FROM coupon_templates WHERE name='E2E并发限量券' ORDER BY id DESC LIMIT 1;")
+# 专用来把 M1A 首笔订单发的 100 分整数清空的券——后面 FIFO 测试要精确断言「先扣早到期
+# 那笔、再扣下一笔的剩余部分」，如果不先清空这笔早先发的分，它会作为另一条到期日更早
+# （相对后面才造的两笔 FIFO 测试单）的入账行意外插进 FIFO 顺序里，把断言算错。
+sql "INSERT INTO coupon_templates (name, amount, threshold, channel, valid_days, source, points_cost, status, created_at, updated_at) VALUES ('E2E清空基线券', 50, 0, 'ALL', 30, 'POINTS', 100, 'ON', NOW(), NOW());"
+TPL_DRAIN=$(sql "SELECT id FROM coupon_templates WHERE name='E2E清空基线券' ORDER BY id DESC LIMIT 1;")
+[[ -n "$TPL_NEWCOMER" && -n "$TPL_POINTS" && -n "$TPL_POINTS_BIG" && -n "$TPL_OFF" && -n "$TPL_CAMPAIGN" && -n "$TPL_CONCURRENT" && -n "$TPL_DRAIN" ]] \
+  && ok "券模板造数据完成（7 个）" || fail "券模板造数据失败" "$TPL_NEWCOMER/$TPL_POINTS/$TPL_POINTS_BIG/$TPL_OFF/$TPL_CAMPAIGN/$TPL_CONCURRENT/$TPL_DRAIN"
+
+# 造一个已支付订单，直接 SQL 推到 COMPLETED（跳过发货/收货真实流程——这几个测试只关心
+# 积分账本，不关心配送时间线）；可选覆盖 actual_amount，用于精确控制 earn 取值。
+# 用法：m1_completed_order <token> <addressId> [actualAmountOverride]
+m1_completed_order() {
+  local t=$1 aid=$2 override=${3:-} r cid oid
+  r=$(req POST /api/cart "$t" "{\"productId\":$PID,\"quantity\":1}")
+  cid=$(jq -r '.data.id // empty' <<<"$r"); [[ -n "$cid" ]] || { echo ""; return; }
+  r=$(req POST /api/orders "$t" "{\"cartItemIds\":[$cid],\"addressId\":$aid,\"deliveryType\":\"EXPRESS\"}")
+  oid=$(jq -r '.data.orderId // .data.id // empty' <<<"$r"); [[ -n "$oid" ]] || { echo ""; return; }
+  req POST "/api/orders/$oid/pay" "$t" >/dev/null
+  if [[ -n "$override" ]]; then
+    sql "UPDATE orders SET status='COMPLETED', completed_at=NOW(), actual_amount=$override WHERE id=$oid;"
+  else
+    sql "UPDATE orders SET status='COMPLETED', completed_at=NOW() WHERE id=$oid;"
+  fi
+  echo "$oid"
+}
+
+echo "-- 发分幂等 + P2002 幂等重扫 --"
+O1=$(m1_completed_order "$M1A" "$M1A_ADDR" 10000)
+[[ -n "$O1" ]] && ok "M1 订单#$O1 已完成（实付 100 元）" || fail "造单失败(发分幂等测试)"
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+EARNED1=$(sql "SELECT points_earned FROM orders WHERE id=$O1;")
+assert_eq "首次结算得分正确（100元→100分）" "$EARNED1" "100"
+LEDGER_COUNT1=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$O1';")
+assert_eq "写了恰好 1 条 EARN 流水" "$LEDGER_COUNT1" "1"
+# 强制清空 pointsSettledAt 重扫：应命中 @@unique 冲突，流水不增、余额不变，仅补写标记
+BAL_BEFORE_REPLAY=$(sql "SELECT points_balance FROM users WHERE id=$M1A_UID;")
+sql "UPDATE orders SET points_settled_at=NULL WHERE id=$O1;"
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+LEDGER_COUNT1B=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$O1';")
+BAL_AFTER_REPLAY=$(sql "SELECT points_balance FROM users WHERE id=$M1A_UID;")
+assert_eq "重复触发只发一次（P2002 幂等，流水仍只有 1 条）" "$LEDGER_COUNT1B" "1"
+assert_eq "幂等重扫不改变余额" "$BAL_AFTER_REPLAY" "$BAL_BEFORE_REPLAY"
+SETTLED_AGAIN=$(sql "SELECT points_settled_at IS NOT NULL FROM orders WHERE id=$O1;")
+assert_eq "幂等重扫仍补写了 pointsSettledAt 标记" "$SETTLED_AGAIN" "1"
+# 花掉 O1 发的这 100 分，避免它作为一条到期日早于后面 FIFO 测试单的入账行，
+# 干扰后面对「先扣哪一笔」的精确断言（见 TPL_DRAIN 定义处的注释）
+R=$(req POST /api/member/points/redeem "$M1A" "{\"templateId\":$TPL_DRAIN}")
+assert_eq "清空 O1 的 100 分基线" "$(code "$R")" "0"
+
+echo "-- earn=0 不写流水、不永远重扫 --"
+O2=$(m1_completed_order "$M1A" "$M1A_ADDR" 50)
+[[ -n "$O2" ]] && ok "M1 造小额单#$O2（实付 5 角）" || fail "造小额单失败"
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+E2=$(sql "SELECT points_earned FROM orders WHERE id=$O2;")
+S2=$(sql "SELECT points_settled_at IS NOT NULL FROM orders WHERE id=$O2;")
+L2=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$O2';")
+assert_eq "小额单 earn=0" "$E2" "0"
+assert_eq "小额单已写 settled 标记" "$S2" "1"
+assert_eq "earn=0 不写任何流水" "$L2" "0"
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+L2B=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$O2';")
+assert_eq "跑两次任务后仍无流水（不会永远重扫，靠 pointsSettledAt 而非 earn=0 判断）" "$L2B" "0"
+
+echo "-- isTest 单不发分 --"
+O3=$(m1_completed_order "$M1A" "$M1A_ADDR" 10000)
+sql "UPDATE orders SET is_test=1 WHERE id=$O3;"
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+E3=$(sql "SELECT points_earned FROM orders WHERE id=$O3;")
+S3=$(sql "SELECT points_settled_at FROM orders WHERE id=$O3;")
+assert_eq "isTest 单不发积分" "$E3" "0"
+[[ "$S3" == "NULL" ]] && ok "isTest 单被兜底任务过滤条件挡在候选集外（settledAt 仍为空）" || fail "isTest 单不该有 settled 标记" "$S3"
+# 注意：不把 is_test 改回 0——它已经没有 pointsSettledAt 标记，一旦摘掉 isTest 就会被
+# 下一次 run-scheduler 当成「漏挂钩子的正常单」捡回去补发积分，污染后面 M1A 的余额断言。
+
+echo "-- FIFO 先扣早到期 + 余额不足 42250 --"
+BAL_BEFORE_FIFO_ORDERS=$(sql "SELECT points_balance FROM users WHERE id=$M1A_UID;")
+O4=$(m1_completed_order "$M1A" "$M1A_ADDR" 20000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+sql "UPDATE points_ledgers SET expires_at=DATE_ADD(NOW(), INTERVAL 1 DAY) WHERE ref_type='ORDER' AND ref_id='$O4';"
+O5=$(m1_completed_order "$M1A" "$M1A_ADDR" 20000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+BAL_BEFORE_FIFO=$(sql "SELECT points_balance FROM users WHERE id=$M1A_UID;")
+# 用相对基线前后的增量断言，不假设 M1A 在本段之前的绝对余额——它可能已经因为前面
+# 的幂等/小额单子测试而带了别的分值，只有这两笔 200 元订单贡献的增量才是本测试关心的
+assert_eq "FIFO 前置：两笔 200 元订单共发 400 分（相对基线的增量）" "$((BAL_BEFORE_FIFO - BAL_BEFORE_FIFO_ORDERS))" "400"
+R=$(req POST /api/member/points/redeem "$M1A" "{\"templateId\":$TPL_POINTS_BIG}")
+assert_eq "兑换 300 分的券成功" "$(code "$R")" "0"
+REM_O4=$(sql "SELECT remaining FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$O4';")
+REM_O5=$(sql "SELECT remaining FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$O5';")
+assert_eq "FIFO 先把到期早的那笔(O4)扣到 0" "$REM_O4" "0"
+assert_eq "早到期扣完后接着从下一笔(O5)扣剩余部分" "$REM_O5" "100"
+R=$(req POST /api/member/points/redeem "$M1A" "{\"templateId\":$TPL_POINTS_BIG}")
+assert_eq "余额只剩 100，再兑换 300 分的券返回 42250" "$(code "$R")" "42250"
+
+echo "-- 过期清零 --"
+O6=$(m1_completed_order "$M1B" "$M1B_ADDR" 10000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+sql "UPDATE points_ledgers SET expires_at='2020-01-01 00:00:00' WHERE ref_type='ORDER' AND ref_id='$O6';"
+BAL_B_BEFORE_EXPIRE=$(sql "SELECT points_balance FROM users WHERE id=$M1B_UID;")
+assert_eq "过期前 M1B 余额=100" "$BAL_B_BEFORE_EXPIRE" "100"
+req POST /api/admin/system/run-scheduler "$AT" '{"forceDailyMemberTasks":true}' >/dev/null
+REM_O6=$(sql "SELECT remaining FROM points_ledgers WHERE ref_type='ORDER' AND ref_id='$O6';")
+BAL_B_AFTER_EXPIRE=$(sql "SELECT points_balance FROM users WHERE id=$M1B_UID;")
+EXPIRE_LEDGER=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE type='EXPIRE' AND ref_type='LEDGER' AND user_id=$M1B_UID;")
+assert_eq "过期后该行 remaining=0" "$REM_O6" "0"
+assert_eq "过期后余额同步清零" "$BAL_B_AFTER_EXPIRE" "0"
+assert_eq "写了 EXPIRE 流水" "$EXPIRE_LEDGER" "1"
+
+echo "-- 退款扣回：按比例、连续两次部分退款不超扣、已花光扣到 0 不为负 --"
+O7=$(m1_completed_order "$M1B" "$M1B_ADDR" 10000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+EARNED_O7=$(sql "SELECT points_earned FROM orders WHERE id=$O7;")
+assert_eq "退款测试单发了 100 分" "$EARNED_O7" "100"
+R=$(req POST "/api/admin/orders/$O7/refund" "$AT" '{"amount":3000,"reason":"E2E部分退款1"}')
+assert_eq "第一次部分退款(30元)成功" "$(code "$R")" "0"
+BAL_AFTER_REFUND1=$(sql "SELECT points_balance FROM users WHERE id=$M1B_UID;")
+assert_eq "第一次部分退款按比例扣回 30 分" "$BAL_AFTER_REFUND1" "70"
+R=$(req POST "/api/admin/orders/$O7/refund" "$AT" '{"amount":3000,"reason":"E2E部分退款2"}')
+assert_eq "第二次部分退款(再30元)成功" "$(code "$R")" "0"
+BAL_AFTER_REFUND2=$(sql "SELECT points_balance FROM users WHERE id=$M1B_UID;")
+assert_eq "连续两次部分退款累计扣回 60 分，不超过发放量 100" "$BAL_AFTER_REFUND2" "40"
+
+O8=$(m1_completed_order "$M1B" "$M1B_ADDR" 10000)
+req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
+R=$(req POST /api/member/points/redeem "$M1B" "{\"templateId\":$TPL_POINTS}")
+assert_eq "M1B 兑换成功（花掉 50 分，为下面的扣光测试做准备）" "$(code "$R")" "0"
+R=$(req POST "/api/admin/orders/$O8/refund" "$AT" '{"amount":10000,"reason":"E2E全额退款扣光测试"}')
+assert_eq "全额退款成功" "$(code "$R")" "0"
+BAL_FINAL=$(sql "SELECT points_balance FROM users WHERE id=$M1B_UID;")
+[[ "$BAL_FINAL" -ge 0 ]] && ok "花掉的积分扣到 0 为止，余额非负（=$BAL_FINAL）" || fail "余额出现负数！" "$BAL_FINAL"
+
+echo "-- 三条发券路径 + 停用模板 42254 --"
+req PUT /api/admin/settings/member "$AT" "{\"points\":{\"enabled\":true,\"earnRatePerYuan\":1,\"validDays\":365},\"newcomer\":{\"templateId\":$TPL_NEWCOMER},\"rulesText\":\"\"}" >/dev/null
+IFS=$'\t' read -r M1C M1C_UID < <(m1_login "a${M1_TAG}C_member3")
+R=$(req GET "/api/member/coupons?status=available" "$M1C")
+assert_eq "新用户首次登录发一张 NEWCOMER 券" "$(jq -r '[.data.list[] | select(.source=="NEWCOMER")] | length' <<<"$R")" "1"
+IFS=$'\t' read -r M1C_2 M1C_2_UID < <(m1_login "a${M1_TAG}C_member3")
+assert_eq "二次登录是同一个用户（userId 相同）" "$M1C_2_UID" "$M1C_UID"
+R2=$(req GET "/api/member/coupons?status=available" "$M1C_2")
+assert_eq "新客券二次登录不重复发放" "$(jq -r '[.data.list[] | select(.source=="NEWCOMER")] | length' <<<"$R2")" "1"
+
+R=$(req GET "/api/member/coupons?status=available" "$M1A")
+assert_eq "积分兑换（POINTS）来源的券确实发出来了" "$(jq -r '[.data.list[] | select(.source=="POINTS")] | length > 0' <<<"$R")" "true"
+
+R=$(req POST /api/member/coupons/claim "$M1A" "{\"templateId\":$TPL_CAMPAIGN}")
+assert_eq "领券中心（CAMPAIGN）首次领取成功" "$(code "$R")" "0"
+R=$(req POST /api/member/coupons/claim "$M1A" "{\"templateId\":$TPL_CAMPAIGN}")
+assert_eq "每人限领：同一用户二次领取被拒 42253" "$(code "$R")" "42253"
+
+R=$(req POST /api/member/points/redeem "$M1A" "{\"templateId\":$TPL_OFF}")
+assert_eq "停用模板兑换返回 42254" "$(code "$R")" "42254"
+
+echo "-- 限量券并发不超发 --"
+req POST /api/member/coupons/claim "$M1A" "{\"templateId\":$TPL_CONCURRENT}" > /tmp/e2e_m1_concurrent_a.json &
+req POST /api/member/coupons/claim "$M1B" "{\"templateId\":$TPL_CONCURRENT}" > /tmp/e2e_m1_concurrent_b.json &
+wait
+CC_A=$(jq -r .code /tmp/e2e_m1_concurrent_a.json)
+CC_B=$(jq -r .code /tmp/e2e_m1_concurrent_b.json)
+CC_SUCCESS=0
+[[ "$CC_A" == "0" ]] && CC_SUCCESS=$((CC_SUCCESS+1))
+[[ "$CC_B" == "0" ]] && CC_SUCCESS=$((CC_SUCCESS+1))
+assert_eq "总量=1 的限量券并发领取只有一个成功" "$CC_SUCCESS" "1"
+ISSUED_COUNT_DB=$(sql "SELECT issued_count FROM coupon_templates WHERE id=$TPL_CONCURRENT;")
+assert_eq "issuedCount 精确等于 1，未超发" "$ISSUED_COUNT_DB" "1"
+rm -f /tmp/e2e_m1_concurrent_a.json /tmp/e2e_m1_concurrent_b.json
+
+echo "-- 过期券不在可用列表（按 expiresAt 实时判定，不依赖任务是否跑过）--"
+UC_ID=$(sql "SELECT id FROM user_coupons WHERE user_id=$M1B_UID AND status='UNUSED' ORDER BY id DESC LIMIT 1;")
+[[ -n "$UC_ID" ]] && ok "找到 M1B 一张可用券 #$UC_ID 用于过期测试" || fail "M1B 没有可用券可供过期测试"
+sql "UPDATE user_coupons SET expires_at='2020-01-01 00:00:00' WHERE id=$UC_ID;"
+R=$(req GET "/api/member/coupons?status=available" "$M1B")
+assert_eq "过期券不出现在 available 列表" "$(jq -r --argjson id "$UC_ID" '[.data.list[] | select(.id==$id)] | length' <<<"$R")" "0"
+R2=$(req GET "/api/member/coupons?status=expired" "$M1B")
+assert_eq "过期券出现在 expired 列表" "$(jq -r --argjson id "$UC_ID" '[.data.list[] | select(.id==$id)] | length' <<<"$R2")" "1"
+
+echo "-- 越权/未登录 --"
+R=$(curl -s "$BASE/api/member/summary")
+assert_eq "未登录访问 /member/summary 返回 40101" "$(code "$R")" "40101"
+LEDGER_A=$(req GET /api/member/points/ledger "$M1A")
+# 只比对 refType=ORDER 的流水：REDEEM 流水的 refId 是券的 id，和订单 id 是两套不同的
+# 自增序列，数值可能凑巧相等——不带 refType 一起过滤会把这种巧合误判成串号
+assert_eq "A 的 ORDER 类流水里不包含 B 的订单号（用户隔离）" \
+  "$(jq -r --arg o6 "$O6" --arg o7 "$O7" --arg o8 "$O8" \
+    '[.data.list[] | select(.refType=="ORDER") | select(.refId==$o6 or .refId==$o7 or .refId==$o8)] | length' <<<"$LEDGER_A")" "0"
+
+# 收尾：还原全局会员设置、删掉本段创建的测试地址
+req PUT /api/admin/settings/member "$AT" "$ORIG_MEMBER_SETTINGS" >/dev/null
+req DELETE "/api/addresses/$M1A_ADDR" "$M1A" >/dev/null
+req DELETE "/api/addresses/$M1B_ADDR" "$M1B" >/dev/null
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
@@ -1372,11 +1605,14 @@ rm -f "$PNG" "$R1" "$R2"
 [[ -n "${LCAT:-}" ]] && req DELETE "/api/admin/categories/$LCAT" "$AT" >/dev/null
 [[ -n "${ECAT:-}" ]] && req DELETE "/api/admin/categories/$ECAT" "$AT" >/dev/null
 [[ -n "${LCID:-}" ]] && req DELETE "/api/cart/$LCID" "$UT" >/dev/null
-for o in ${LO1:-} ${LO2:-}; do docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password food_shop_sc -e "update orders set status='CANCELLED' where id=$o and status in ('PENDING_PAYMENT','PAID','PREPARING');" 2>/dev/null; done
+for o in ${LO1:-} ${LO2:-}; do docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password "$DB_NAME" -e "update orders set status='CANCELLED' where id=$o and status in ('PENDING_PAYMENT','PAID','PREPARING');" 2>/dev/null; done
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null 2>&1 || true
 
 echo "== 24. 渠道一致性 =="
 node scripts/check-channel-consistency.mjs && ok "product.channel = category.channel" || fail "渠道不一致"
+
+echo "== 37. 积分账本一致性 =="
+node scripts/check-points-consistency.mjs && ok "pointsBalance = Σ未过期入账行 remaining" || fail "积分账本不一致"
 
 # mk_local_paid 在子 shell 里记的失败次数，主 shell 现在才第一次看得到——并入总计数，
 # 否则 mk_local_paid 报价/下单失败时，脚本可能因为后续断言恰好没被那个空 orderId 绊到而误报全绿。
