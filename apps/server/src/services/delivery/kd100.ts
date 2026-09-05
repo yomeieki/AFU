@@ -156,6 +156,16 @@ export const kd100Provider: DeliveryProvider = {
   },
   async queryCourier({ taskId }) {
     const data = await post('queryCourier', { taskId })
+    // 坐标系必须是 GCJ-02（lbsType=2）才能和收货坐标同系比较：
+    // 收货坐标来自 wx.chooseLocation，是 GCJ-02；BD-09（lbsType=1）与之相差数百米。
+    // 官方默认是 2，但响应里会带回实际值——不是 2 就当拿不到位置（顾客端整块卡片隐藏），
+    // 而不是照算一个悄悄偏几百米、还不报错的距离。快递100 FAQ「距离与实际严重不符」
+    // 的头一条排查项就是它。真遇到 lbsType=1 再补 BD-09→GCJ-02 转换，别提前写没验过的算法。
+    const lbsType = data.data?.lbsType
+    if (lbsType != null && String(lbsType) !== '2') {
+      console.warn(`[kd100] queryCourier 返回非 GCJ-02 坐标（lbsType=${String(lbsType)}），已按无位置处理`)
+      return null
+    }
     const lat = Number(data.data?.courierLat), lng = Number(data.data?.courierLng)
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
     return { latE6: Math.round(lat * 1e6), lngE6: Math.round(lng * 1e6) }
