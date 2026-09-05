@@ -96,11 +96,23 @@
   <text class="loading-text">加载中...</text>
 </view>
 
+<!-- 加载失败：扫码冷启动时本页是栈底，不能返回，只能页内给出原因和重试 -->
+<view wx:if="{{!loading && loadError}}" class="loading-page" style="flex-direction: column; gap: 32rpx;">
+  <text class="loading-text">{{loadErrorText || '商品加载失败'}}</text>
+  <button class="btn-plain" hover-class="none" bindtap="onRetryLoad">重新加载</button>
+</view>
+
 <!-- Bottom action bar -->
 <view class="action-bar safe-bottom" wx:if="{{!loading && product && entered}}">
-  <button class="btn-cart btn-plain" hover-class="none" bindtap="onAddToCart">{{product.channel === 'LOCAL' ? '加入同城购物车' : '加入购物车'}}</button>
-  <button wx:if="{{product.channel !== 'LOCAL'}}" class="btn-buy btn-primary" hover-class="none" bindtap="onBuyNow">立即购买</button>
-  <button wx:else class="btn-buy btn-primary" hover-class="none" bindtap="goLocalCheckout">去同城结算</button>
+  <!-- 已下架：包装上的码还在流通，扫进来要一眼看到买不了，而不是走到下单才被服务端拒 -->
+  <block wx:if="{{offShelf}}">
+    <button class="btn-buy btn-primary btn-disabled" hover-class="none" disabled>该商品已下架</button>
+  </block>
+  <block wx:else>
+    <button class="btn-cart btn-plain" hover-class="none" bindtap="onAddToCart">{{product.channel === 'LOCAL' ? '加入同城购物车' : '加入购物车'}}</button>
+    <button wx:if="{{product.channel !== 'LOCAL'}}" class="btn-buy btn-primary" hover-class="none" bindtap="onBuyNow">立即购买</button>
+    <button wx:else class="btn-buy btn-primary" hover-class="none" bindtap="goLocalCheckout">去同城结算</button>
+  </block>
 </view>
 
 <!-- 规格选择弹层 -->

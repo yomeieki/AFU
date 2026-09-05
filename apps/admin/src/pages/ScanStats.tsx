@@ -37,10 +37,13 @@ export default function ScanStats() {
   const [page, setPage] = useState(1)
   const pageSize = 10
   const [loading, setLoading] = useState(true)
+  // 没有 catch 的话接口一挂就渲染「该时间段暂无扫码记录」和一排「-」，店主会当成真的没人扫码
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const load = useCallback(
     (p: number) => {
       setLoading(true)
+      setLoadFailed(false)
       Promise.all([
         getScanSummary(range),
         getScanTrend(range),
@@ -52,6 +55,7 @@ export default function ScanStats() {
           setRows(pr.data.data.list)
           setTotal(pr.data.data.total)
         })
+        .catch(() => setLoadFailed(true))
         .finally(() => setLoading(false))
     },
     [range]
@@ -125,6 +129,13 @@ export default function ScanStats() {
         {loading && <Spinner />}
       </div>
 
+      {loadFailed && (
+        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700 flex items-center justify-between gap-3">
+          <span>扫码统计加载失败，下面显示的不是真实数据</span>
+          <button onClick={() => load(page)} className="text-red-700 underline shrink-0">重试</button>
+        </div>
+      )}
+
       {/* 摘要卡 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map((c) => (
@@ -148,6 +159,9 @@ export default function ScanStats() {
 
       {/* 商品聚合表 */}
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
+        {loadFailed ? (
+          <div className="py-10 text-center text-sm text-red-600">商品扫码明细加载失败，请点上方「重试」</div>
+        ) : (
         <Table
           columns={4}
           loading={loading}
@@ -187,7 +201,8 @@ export default function ScanStats() {
             </tr>
           ))}
         </Table>
-        {!loading && total > pageSize && (
+        )}
+        {!loading && !loadFailed && total > pageSize && (
           <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />
         )}
       </div>

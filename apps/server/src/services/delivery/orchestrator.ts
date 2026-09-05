@@ -46,7 +46,8 @@ export async function callRider(input: CallRiderInput) {
   if (!order) throw new AppError(40401, '订单不存在', 404)
   if (order.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单可呼叫骑手')
   if (order.status !== 'PREPARING') throw new AppError(42204, `订单状态为 ${order.status}，仅备餐中订单可呼叫骑手`)
-  if (order.cancelRequestedAt) throw new AppError(42204, '顾客已申请取消，请先处理取消申请再决定是否呼叫')
+  // 「处理」= 同意（取消配送+退款）或驳回（POST /admin/local/orders/:id/cancel-request/reject 清标记），二者之一做完才放行
+  if (order.cancelRequestedAt) throw new AppError(42204, '顾客有待处理的取消申请，请先处理')
   if (order.receiverLatE6 === null || order.receiverLngE6 === null) throw new AppError(42223, '订单缺少收货坐标，无法呼叫骑手')
 
   const s = await getLocalSettings()
@@ -226,6 +227,14 @@ async function requireActive(orderId: number) {
  * （callback.ts 里 720 分支直接调它，不许各写一份——两份护栏迟早会drift）。
  * 三重护栏全部写进 where：先读后写会在读与写之间放进一笔部分退款（部分退款不改订单状态，
  * 因此 status 白名单挡不住它），那正是护栏要防的事。
+ *
+ * ⚠️ 语义提醒（B2-06）：这次回退之后，同城单的 PREPARING **不再等价于「货没出门」**——
+ * 骑手取货后取消（720）/自送半路取消都会把一张菜已经做好甚至已报废的单放回 PREPARING。
+ * 所以任何按 order.status 判断「要不要回滚库存」的地方都会被它骗到：
+ * 退款回滚库存的依据必须是「货有没有出门」本身——EXPRESS 看 Shipment 行是否存在，
+ * LOCAL 看最近一张 Delivery 的 pickedUpAt 是否非空（310 回调与 selfDeliver 是仅有的两个写入点），
+ * 而不是 status ∈ {PAID, PREPARING}。这条规则的落点在 services/refund.ts（initiateRefund），
+ * 这里只负责把「PREPARING 可能是回退来的」这个事实说清楚，不在此处伪装成未出库。
  */
 /** @returns 实际回退的订单行数（0 或 1）。三重护栏挡住时返回 0——调用方必须据此告警，不能假装成功。 */
 export async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, orderId: number): Promise<number> {

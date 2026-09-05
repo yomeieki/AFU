@@ -7,6 +7,7 @@
  */
 
 import prisma from '../utils/prisma'
+import { notifySystemAlert } from './notify'
 
 /** 运费规则。金额单位一律「分」，与订单表保持一致，避免浮点误差。 */
 export interface ShippingSettings {
@@ -51,7 +52,13 @@ export async function getShippingSettings(): Promise<ShippingSettings> {
   } catch (e) {
     // 配置读不出来时用默认值（全 0 = 全包邮无门槛），
     // 宁可少收运费也不能让顾客下不了单。
+    // 但兜底值只给这一单用，不进缓存：一次 DB 抖动不能让之后 60 秒的每一单都免运费、绕过起送门槛，
+    // 下一单就该重新去读真值。同时告警，让人知道这段时间有单是按全 0 收的。
     console.warn('[settings] 读取运费配置失败，回退默认值:', (e as Error).message)
+    notifySystemAlert('运费配置读取失败', ['本单按免运费、无起送门槛处理（未写缓存，下一单重读）', (e as Error).message], {
+      key: 'settings:shipping-fallback',
+    })
+    return value
   }
   cached = { value, at: Date.now() }
   return value

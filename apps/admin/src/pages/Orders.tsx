@@ -72,10 +72,16 @@ export default function Orders() {
   const { afterSaleCount } = usePendingOrders()
   const modalOpenRef = useRef(false)
   modalOpenRef.current = !!(shipModal || refundTarget)
+  // 没有 catch 的话接口一挂就渲染「暂无订单」，店主会当成今天没单。
+  // 显式刷新失败 → 错误态替换表格；30s 静默刷新失败 → 表格留着旧数据，
+  // 但要有一条「已 N 分钟未更新」细条（思路同 Workbench 顶栏），否则店主分不清「没新单」和「页面早僵了」。
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [lastOkAt, setLastOkAt] = useState<number | null>(null)
+  const [silentFailCount, setSilentFailCount] = useState(0)
 
   const load = (p = page, silent = false) => {
     if (isAfterSaleTab) return
-    if (!silent) setLoading(true)
+    if (!silent) { setLoading(true); setLoadFailed(false) }
     getOrders({
       page: p,
       pageSize,
@@ -86,9 +92,18 @@ export default function Orders() {
       .then((res) => {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
+        setLoadFailed(false)
+        setLastOkAt(Date.now())
+        setSilentFailCount(0)
+      })
+      .catch(() => {
+        // 计数递增而不是只置布尔：每次失败都触发一次重渲染，细条上的分钟数才会跟着走
+        if (silent) setSilentFailCount((c) => c + 1)
+        else setLoadFailed(true)
       })
       .finally(() => { if (!silent) setLoading(false) })
   }
+  const staleMinutes = silentFailCount > 0 && lastOkAt != null ? Math.floor((Date.now() - lastOkAt) / 60000) : null
 
   useEffect(() => { load() }, [page, filterStatus]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -338,7 +353,20 @@ export default function Orders() {
             </Button>
           </div>
 
+          {staleMinutes != null && !loadFailed && (
+            <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-800 flex items-center justify-between gap-3">
+              <span>自动刷新失败，订单数据已 {staleMinutes < 1 ? '不足 1' : staleMinutes} 分钟未更新，下面可能不是最新的</span>
+              <button onClick={() => load()} className="underline shrink-0">立即刷新</button>
+            </div>
+          )}
+
           <div className="bg-white rounded-lg shadow-card overflow-hidden">
+            {loadFailed ? (
+              <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
+                <span>订单列表加载失败，当前显示的不是真实数据</span>
+                <Button size="sm" variant="secondary" onClick={() => load()}>重试</Button>
+              </div>
+            ) : (
             <Table
               columns={6}
               loading={loading}
@@ -471,7 +499,8 @@ export default function Orders() {
                 </Fragment>
               ))}
             </Table>
-            {!loading && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+            )}
+            {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
           </div>
         </>
       )}

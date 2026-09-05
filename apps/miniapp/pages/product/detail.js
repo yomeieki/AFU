@@ -7,6 +7,12 @@ Page({
   data: {
     product: null,
     loading: true,
+    // 加载失败改为页内错误态：扫码冷启动时本页是页面栈第一层，navigateBack 必然失败
+    loadError: false,
+    loadErrorText: '',
+    // GET /products/:id 只过滤软删不过滤 status，已下架商品详情照样返回；
+    // 服务端要到加购/下单才拒（42202），这里提前把动作栏封掉
+    offShelf: false,
     // 页面 push 转场约 300ms，转场结束前不渲染 position:fixed 底部栏，
     // 避免固定栏在滑动动画中提前落到屏幕底、盖在前一页上形成「闪现」
     entered: false,
@@ -58,8 +64,12 @@ Page({
 
   loadProduct(id) {
     var self = this
+    this._productId = id
+    this.setData({ loading: true, loadError: false, loadErrorText: '' })
     wx.showLoading({ title: '加载中...' })
-    request({ url: '/products/' + id })
+    // silent：错误信息放进页内错误态展示，不走请求层 toast——
+    // showToast 与 showLoading 共用同一提示实例，hideLoading 会把 toast 一并关掉
+    request({ url: '/products/' + id, silent: true })
       .then(function(product) {
         wx.hideLoading()
         var images = (product.images && product.images.length > 0)
@@ -78,30 +88,49 @@ Page({
             // 「选择规格」行的占位提示：辣度、骨型
             specHint: dims.length > 0 ? dims.map(function(d) { return d.name }).join('、') : '',
           }),
+          offShelf: product.status !== 'ON_SHELF',
           loading: false,
         })
         wx.setNavigationBarTitle({ title: product.name })
       })
-      .catch(function() {
+      .catch(function(err) {
         wx.hideLoading()
-        self.setData({ loading: false })
-        setTimeout(function() { wx.navigateBack() }, 1500)
+        self.setData({
+          loading: false,
+          loadError: true,
+          loadErrorText: (err && err.message) || '商品加载失败',
+        })
       })
   },
 
+  onRetryLoad() {
+    if (this.data.loading || !this._productId) return
+    this.loadProduct(this._productId)
+  },
+
   // 底部按钮 / 「已选」行：统一打开规格弹层（无规格商品弹层内只选数量）
+  // 已下架时三个入口都不开弹层——「已选」行没有禁用态，只能在这里拦
+  canOpenSku() {
+    if (!this.data.product) return false
+    if (this.data.offShelf) {
+      wx.showToast({ title: '该商品已下架', icon: 'none' })
+      return false
+    }
+    return true
+  },
+
   onAddToCart() {
-    if (!this.data.product) return
+    if (!this.canOpenSku()) return
     this.setData({ skuPopupShow: true, skuPopupMode: 'cart' })
   },
 
   onBuyNow() {
-    if (!this.data.product) return
+    if (!this.canOpenSku()) return
     this.setData({ skuPopupShow: true, skuPopupMode: 'buy' })
   },
 
   onOpenSkuPopup() {
-    if (!this.data.product) return
+    if (!this.canOpenSku()) return
     this.setData({ skuPopupShow: true, skuPopupMode: 'cart' })
   },
 

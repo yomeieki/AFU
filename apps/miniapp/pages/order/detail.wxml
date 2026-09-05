@@ -257,7 +257,8 @@
     <text>去支付</text>
     <text wx:if="{{countdown}}" class="pay-btn-countdown">{{countdown}}</text>
   </view>
-  <view class="pay-btn btn-primary" wx:if="{{order.status === 'SHIPPED'}}" bindtap="onConfirmReceipt">
+  <!-- 同城单由骑手送达/店员标记完成，顾客在骑手取货后误点会把订单提前置为已完成 -->
+  <view class="pay-btn btn-primary" wx:if="{{order.status === 'SHIPPED' && !order.isLocal}}" bindtap="onConfirmReceipt">
     <text>确认收货</text>
   </view>
 </view>

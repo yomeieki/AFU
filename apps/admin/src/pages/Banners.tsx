@@ -41,11 +41,15 @@ export default function Banners() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [products, setProducts] = useState<Product[]>([])
+  // 没有 catch 的话接口一挂就渲染「暂无 Banner」，店主会以为轮播真的被清空了
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const load = () => {
     setLoading(true)
+    setLoadFailed(false)
     getBanners()
       .then((res) => setList(res.data.data))
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false))
   }
 
@@ -150,6 +154,12 @@ export default function Banners() {
       </div>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
+        {loadFailed ? (
+          <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
+            <span>轮播列表加载失败，当前显示的不是真实数据</span>
+            <Button size="sm" variant="secondary" onClick={load}>重试</Button>
+          </div>
+        ) : (
         <Table
           columns={6}
           loading={loading}
@@ -208,6 +218,7 @@ export default function Banners() {
             </tr>
           ))}
         </Table>
+        )}
       </div>
 
       {editing && (

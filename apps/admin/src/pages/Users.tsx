@@ -22,14 +22,19 @@ export default function Users() {
   const [ordersModal, setOrdersModal] = useState<AdminUser | null>(null)
   const [userOrders, setUserOrders] = useState<UserOrder[]>([])
   const [ordersLoading, setOrdersLoading] = useState(false)
+  // 没有 catch 的话接口一挂就渲染「暂无用户 / 暂无订单」，店主会当成真的没有
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [ordersFailed, setOrdersFailed] = useState(false)
 
   const load = (p = page) => {
     setLoading(true)
+    setLoadFailed(false)
     getUsers({ page: p, pageSize, keyword: keyword || undefined })
       .then((res) => {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
       })
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false))
   }
 
@@ -43,8 +48,11 @@ export default function Users() {
   const openOrders = (user: AdminUser) => {
     setOrdersModal(user)
     setOrdersLoading(true)
+    setOrdersFailed(false)
+    setUserOrders([])
     getUserOrders(user.id, { page: 1, pageSize: 20 })
       .then((res) => setUserOrders(res.data.data.list))
+      .catch(() => setOrdersFailed(true))
       .finally(() => setOrdersLoading(false))
   }
 
@@ -69,6 +77,12 @@ export default function Users() {
       </div>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
+        {loadFailed ? (
+          <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
+            <span>用户列表加载失败，当前显示的不是真实数据</span>
+            <Button size="sm" variant="secondary" onClick={() => load()}>重试</Button>
+          </div>
+        ) : (
         <Table
           columns={7}
           loading={loading}
@@ -150,7 +164,8 @@ export default function Users() {
             </tr>
           ))}
         </Table>
-        {!loading && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+        )}
+        {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
       </div>
 
       {/* 用户订单弹窗 */}
@@ -169,6 +184,11 @@ export default function Users() {
             <p className="flex items-center gap-2 text-sm text-gray-500">
               <Spinner /> 加载中...
             </p>
+          ) : ordersFailed ? (
+            <div className="py-6 flex flex-col items-center gap-3 text-sm text-red-600">
+              <span>订单加载失败，当前显示的不是真实数据</span>
+              <Button size="sm" variant="secondary" onClick={() => openOrders(ordersModal)}>重试</Button>
+            </div>
           ) : userOrders.length === 0 ? (
             <EmptyState icon={UsersIcon} text="暂无订单" />
           ) : (

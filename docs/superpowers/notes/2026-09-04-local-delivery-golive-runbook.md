@@ -174,7 +174,26 @@ curl -s -o /dev/null -w '%{http_code}\n' https://api.yuegui-hotel.online/api/loc
 
 ### E1. 迁移失败（`deploy.sh [6/9]` 中止）
 
-脚本已保护：不重启服务、直接 `exit 1`，旧进程还在跑旧代码，并打印 `gunzip | mysql` 恢复命令。此时只需回代码（见 E2），数据库通常不用动。
+脚本已保护：不重启服务、直接 `exit 1`，旧进程还在跑旧代码，磁盘上的 `dist/` 与 Prisma Client 也已还原为部署前版本（PM2 之后自发重启不会拿新代码打老库），并打印完整的三步恢复命令（含自动探测出的「本次新建的表」）。
+
+**不要只灌 dump 就重跑部署。** MySQL 的 DDL 不可回滚，`20260904000000_local_delivery` 是一个迁移里 4 段 `ALTER` + 3 个 `CREATE TABLE` + 2 个 `CREATE INDEX` + 2 个 `ADD FOREIGN KEY` 的独立语句；失败点在建表之后（索引重名、锁等待、磁盘满）时 `deliveries` / `delivery_events` / `print_jobs` 已经落库。`mysqldump` 的输出只 `DROP/CREATE` 备份里有的表，三张新表会原样留下；再跑 `deploy.sh` → 重跑该迁移 → `CREATE TABLE deliveries` 撞 **1050 already exists** → Prisma 写入一条 `finished_at IS NULL` 的失败记录 → 此后每次 `prisma migrate deploy` 都直接 **P3009 found failed migrations** 退出，部署管线卡死。
+
+按脚本打印的顺序做完三步（`<...>` 取自脚本输出，密码交互输入）：
+
+```bash
+# ① 灌回迁移前备份（deploy.sh [4/9] 自动生成）
+gunzip < /www/backups/pre-deploy/pre_deploy_<时间戳>.sql.gz | mysql -h <DB_HOST> -P <DB_PORT> -u <DB_USER> -p <DB_NAME>
+# ② 删掉本次迁移新建的表（备份里没有、库里已有；FK 关掉后顺序无所谓）
+mysql -h <DB_HOST> -P <DB_PORT> -u <DB_USER> -p <DB_NAME> \
+  -e 'SET FOREIGN_KEY_CHECKS=0; DROP TABLE IF EXISTS `delivery_events`, `deliveries`, `print_jobs`; SET FOREIGN_KEY_CHECKS=1;'
+# ③ 清掉 Prisma 的失败记录（① 已把 _prisma_migrations 恢复到迁移前时此步为空操作，照跑无害）
+mysql -h <DB_HOST> -P <DB_PORT> -u <DB_USER> -p <DB_NAME> \
+  -e 'DELETE FROM _prisma_migrations WHERE finished_at IS NULL'
+```
+
+然后二选一：修好失败原因重跑 `SKIP_FETCH=1 bash scripts/deploy.sh`；或按 E2 回代码。
+
+> 如果已经踩到 P3009（说明上面 ②③ 漏做了）：先补做 ②，再 `cd /www/food-shop/apps/server && npx prisma migrate resolve --rolled-back 20260904000000_local_delivery`（Prisma 官方做法，等价于 ③ 里对该条记录写 `rolled_back_at`），之后 `migrate deploy` 才会再次尝试它。
 
 ### E2. ✅ 推荐：只回代码，不动数据库
 

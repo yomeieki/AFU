@@ -1,7 +1,7 @@
 /**
  * 通知公共层：企微机器人 / PushPlus 的 HTTP 投递 + 系统告警（带限频）。
  *
- * - postJson：fire-and-forget，失败 5 秒后重试一次，绝不 throw
+ * - postJson：fire-and-forget，失败（HTTP 非 2xx 或 body 业务码失败）5 秒后重试一次，绝不 throw
  * - notifySystemAlert：系统级告警（500 / 进程异常 / 支付退款异常），
  *   同 key 在窗口期内只发一次（默认 5 分钟），防止告警风暴。
  *   告警投给所有已配置的渠道：
@@ -20,6 +20,26 @@ interface AlertRecord {
 
 const alertRecords = new Map<string, AlertRecord>()
 
+/**
+ * 企微群机器人与 PushPlus 的业务失败都是 HTTP 200 + body 里的错误码
+ * （企微 errcode≠0：webhook 失效 93000 / 限频 45009；PushPlus code≠200：token 失效、超额），
+ * 只看 resp.ok 会把这些当成功静默吞掉——而这条通道是唯一的服务内告警出口，
+ * 一旦 webhook 被重建或群被解散，此后所有告警全丢且没有任何日志。
+ * 所以必须读 body 判业务码，失败当作与 HTTP 错误同等的失败走同一套重试/warn。
+ */
+function assertBusinessOk(text: string): void {
+  let data: { errcode?: unknown; code?: unknown } | null = null
+  try {
+    data = JSON.parse(text) as { errcode?: unknown; code?: unknown }
+  } catch {
+    // 两个通道正常都回 JSON；回非 JSON（多半是代理/网关的错误页）同样不能当成功
+    throw new Error(`响应非 JSON: ${text.slice(0, 200)}`)
+  }
+  const wecomFailed = typeof data?.errcode === 'number' && data.errcode !== 0
+  const pushplusFailed = typeof data?.code === 'number' && data.code !== 200
+  if (wecomFailed || pushplusFailed) throw new Error(`业务失败: ${text.slice(0, 500)}`)
+}
+
 export async function postJson(url: string, body: unknown, label: string, retried = false): Promise<void> {
   try {
     const resp = await fetch(url, {
@@ -28,6 +48,7 @@ export async function postJson(url: string, body: unknown, label: string, retrie
       body: JSON.stringify(body),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    assertBusinessOk(await resp.text())
   } catch (e) {
     if (!retried) {
       setTimeout(() => {

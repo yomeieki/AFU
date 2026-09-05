@@ -65,6 +65,28 @@ router.post('/:id/call', async (req: Request, res: Response, next: NextFunction)
   } catch (e) { next(e) }
 })
 
+// POST /api/admin/local/orders/:id/cancel-request/reject — 驳回顾客的取消申请
+// cancelRequestedAt 是 callRider 与 autoCallRiders/refreshStaleQuotes/remindLocalUncalled 的硬性拦截条件，
+// 而此前全仓只有写入没有清除：顾客点过一次「申请取消」又改主意（电话说还是要），店家不想退款就只剩「自己送」。
+// 驳回就是把这组标记清回 null，让呼叫链路重新放行；同意取消走原有的「取消配送 + 退款」，不在这里。
+router.post('/:id/cancel-request/reject', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true, cancelRequestedAt: true } })
+    if (!target) throw new AppError(40401, '订单不存在', 404)
+    if (target.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单有取消申请')
+    // 终态/退款中的单上这个标记只是历史痕迹（徽标口径同 workbench.ts），不该再被「驳回」改写
+    const moved = await prisma.order.updateMany({
+      where: { id, cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED', 'REFUNDING'] } },
+      data: { cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null },
+    })
+    if (moved.count === 0) {
+      throw new AppError(42204, target.cancelRequestedAt ? `订单状态为 ${target.status}，取消申请已无需处理` : '该订单没有待处理的取消申请')
+    }
+    success(res, await prisma.order.findUnique({ where: { id } }))
+  } catch (e) { next(e) }
+})
+
 // POST /api/admin/local/orders/:id/quote — 手动重查配送报价（规格 §6b 保鲜第二层：呼叫弹窗上的刷新按钮）
 router.post('/:id/quote', async (req: Request, res: Response, next: NextFunction) => {
   try {

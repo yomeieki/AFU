@@ -29,6 +29,9 @@ export default function ShopSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({})
+  // 加载失败时表单停留在 useState 的 0.00 默认值，保存按钮若仍可点，店主一键就把「全场包邮」写进库里。
+  // 所以失败必须锁住保存并明说，范式同 LocalSettings。
+  const [loadFailed, setLoadFailed] = useState(false)
 
   useEffect(() => {
     getShippingSettings()
@@ -39,10 +42,12 @@ export default function ShopSettings() {
           minOrderAmount: toYuan(s.minOrderAmount),
         })
       )
+      .catch(() => { setLoadFailed(true); toast.error('运费规则加载失败，请刷新') })
       .finally(() => setLoading(false))
   }, [])
 
   const handleSave = async () => {
+    if (loadFailed) { toast.error('运费规则加载失败，请刷新后再保存'); return }
     const fee = toFen(form.fee)
     const freeThreshold = toFen(form.freeThreshold)
     const minOrderAmount = toFen(form.minOrderAmount)
@@ -134,8 +139,13 @@ export default function ShopSettings() {
           </ul>
         </div>
 
+        {loadFailed && (
+          <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+            运费规则加载失败，上面显示的不是当前生效的值，请刷新页面后再修改。
+          </div>
+        )}
         <div className="flex justify-end">
-          <Button loading={saving} onClick={handleSave}>
+          <Button loading={saving} disabled={loadFailed} onClick={handleSave}>
             {saving ? '保存中...' : '保存'}
           </Button>
         </div>

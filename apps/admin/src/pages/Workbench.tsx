@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
+import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
   Channel, DeliveryEventInfo, DeliveryInfo, LocalDeliverySettings, Order, OrderItem, RejectReason,
@@ -501,7 +501,9 @@ function Card({ card, colKey, now, onOpen, onHandleCancel }: {
   const local = card.channel === 'LOCAL'
   const d = card.local?.delivery ?? null
   const badFlow = !!d && ['ABNORMAL', 'UNKNOWN', 'FAILED'].includes(d.status)
-  const alert = !!card.local && (card.local.cancelRequested || badFlow)
+  // 呼叫失败是「立即处理」级别（§5 红框）：不重呼或改自送，这单就一直停在备餐中没人送
+  const callFailed = !!d?.callFailed
+  const alert = !!card.local && (card.local.cancelRequested || badFlow || callFailed)
   // 已完成列不再用等待胶囊的琥珀/红底：红是本页面最稀缺的信号（§0/§5「红框=立即处理」），
   // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
   // 改显示静态的完成时刻（服务端给 done 列的锚点就是 completedAt，即 card.waitSince）。
@@ -551,9 +553,10 @@ function Card({ card, colKey, now, onOpen, onHandleCancel }: {
           <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>去处理</button>
         </div>
       )}
-      {badFlow && d && (
+      {(badFlow || callFailed) && d && (
         <div className="wb__strip wb__strip--danger">
-          <span><CircleAlert className="w-3.5 h-3.5 inline" /> {d.statusLabel}</span>
+          {/* 呼叫失败时统一写「呼叫失败」而不是 statusLabel：FAILED 的 statusLabel 是运力方措辞，店员看不出该做什么 */}
+          <span><CircleAlert className="w-3.5 h-3.5 inline" /> {callFailed ? '呼叫失败' : d.statusLabel}</span>
         </div>
       )}
     </div>
@@ -585,8 +588,10 @@ function TopBar({
           <span className="wb__shop">{shopName}</span>
           <span className="wb__meta">{today.getMonth() + 1} 月 {today.getDate()} 日</span>
           <span className="wb__meta"><i className={`wb__dot ${openState.cls}`} />{openState.text}</span>
-          {/* 打印机：M2b 接飞鹅前恒为占位 */}
+          {/* 打印机芯片先藏起来：M2b 接飞鹅前它恒显示「未接入」，一个永远不变的灰点只会让店员以为
+              哪里坏了。接入后按 snap.printer.status 放出来。
           <span className="wb__meta"><Printer className="w-3.5 h-3.5" /><i className="wb__dot" />打印机 未接入</span>
+          */}
           <span className={`wb__alerts ${alerts > 0 ? 'wb__alerts--on' : ''}`}>
             <Bell className="w-3.5 h-3.5" />待处理告警 {alerts}
           </span>

@@ -55,9 +55,12 @@ export default function Products() {
   const [error, setError] = useState('')
   const [generatingQrId, setGeneratingQrId] = useState<number | null>(null)
   const [qrModal, setQrModal] = useState<Product | null>(null)
+  // 没有 catch 的话接口一挂就渲染「暂无商品」，店主会以为商品库被清空了
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const load = (p = page) => {
     setLoading(true)
+    setLoadFailed(false)
     getProducts({
       page: p,
       pageSize,
@@ -70,6 +73,7 @@ export default function Products() {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
       })
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false))
   }
 
@@ -403,6 +407,12 @@ export default function Products() {
       </div>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
+        {loadFailed ? (
+          <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
+            <span>商品列表加载失败，当前显示的不是真实数据</span>
+            <Button size="sm" variant="secondary" onClick={() => load()}>重试</Button>
+          </div>
+        ) : (
         <Table
           columns={8}
           loading={loading}
@@ -564,7 +574,8 @@ export default function Products() {
             </tr>
           ))}
         </Table>
-        {!loading && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+        )}
+        {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
       </div>
 
       {/* 新增/编辑弹窗 */}

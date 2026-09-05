@@ -21,11 +21,15 @@ export default function Categories() {
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  // 没有 catch 的话接口一挂就渲染「暂无分类」，店主会当成真的没有分类
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const load = () => {
     setLoading(true)
+    setLoadFailed(false)
     getCategories(channel)
       .then((res) => setList(res.data.data))
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false))
   }
 
@@ -94,6 +98,12 @@ export default function Categories() {
       <ChannelTabs value={channel} onChange={setChannel} />
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden overflow-x-auto">
+        {loadFailed ? (
+          <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
+            <span>分类列表加载失败，当前显示的不是真实数据</span>
+            <Button size="sm" variant="secondary" onClick={load}>重试</Button>
+          </div>
+        ) : (
         <Table
           columns={6}
           loading={loading}
@@ -128,6 +138,7 @@ export default function Categories() {
             </tr>
           ))}
         </Table>
+        )}
       </div>
 
       {showModal && (
