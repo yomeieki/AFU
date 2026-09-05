@@ -284,53 +284,15 @@ const refundSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(64).optional(),
 })
 
-// ─────────────────────────────────────────────────────────
-// 退款幂等注册表
-//
-// 后台 axios 超时 10 秒，而服务端调微信退款的 fetch 没有超时。微信慢于 10 秒时前端已经报错，
-// 店员照直觉再点一次——若第一次最终以网络异常收场（markRefundFailed 会释放在途占位、
-// activeOrderId 唯一索引不再拦人），第二次就会带着一个全新的 outRefundNo 真的再打一笔同额退款。
-//
-// 理想解是把幂等键透传进 initiateRefund，由它派生 outRefundNo，让重试撞上 Refund.outRefundNo
-// 的唯一索引、落到微信侧同一笔退款上；但 services/refund.ts 不在本次可改文件范围内，
-// 所以退一步在路由层拦：同一 (订单, 金额, 幂等键) 的重试直接复用第一次那个 Promise——
-// 第二次请求等的就是第一次那通微信调用的结果，压根不会发出第二笔。
-// PM2 是单实例 fork，进程内 Map 覆盖全部流量；进程重启会丢，但重启同样会掐断在途请求。
+// 幂等：idempotencyKey 透传进 initiateRefund，由它派生确定性 outRefundNo（见 services/refund.ts）。
+// 同一 (订单, 金额, 幂等键) 的重试会撞上 Refund.outRefundNo 唯一索引，复用的是微信侧同一笔退款，
+// 而不只是本进程内的一个 Promise——不依赖「PM2 单实例 fork」这个前提，多实例/进程重启后一样成立。
 // 不带幂等键的调用（e2e 的并发双击、脚本）行为完全不变，仍由 activeOrderId 唯一索引兜底。
-// ─────────────────────────────────────────────────────────
-type RefundAttemptResult = Awaited<ReturnType<typeof initiateRefund>>
-const REFUND_ATTEMPT_TTL_MS = 10 * 60 * 1000
-const refundAttempts = new Map<string, { at: number; task: Promise<RefundAttemptResult> }>()
-
-function purgeRefundAttempts() {
-  const deadline = Date.now() - REFUND_ATTEMPT_TTL_MS
-  for (const [key, entry] of refundAttempts) {
-    if (entry.at < deadline) refundAttempts.delete(key)
-  }
-}
-
 router.post('/:id/refund', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
     const { amount, reason, idempotencyKey } = refundSchema.parse(req.body ?? {})
-    const start = () => initiateRefund({ orderId: id, amount, reason, operator: req.adminUsername ?? undefined })
-    if (!idempotencyKey) return success(res, await start())
-
-    purgeRefundAttempts()
-    // 金额进键：店员改了金额再提交就是另一笔退款，不该被上一次的结果顶掉
-    const attemptKey = `${id}:${amount}:${idempotencyKey}`
-    let entry = refundAttempts.get(attemptKey)
-    if (!entry) {
-      entry = { at: Date.now(), task: start() }
-      refundAttempts.set(attemptKey, entry)
-      // 校验类失败（金额超余额、状态不允许退…）在调微信之前就抛了，钱一定没动过：
-      // 让出坑位，店员改完能立刻重提。5xx/未知异常保留——那种情况下微信到底扣没扣钱不可知，
-      // 重试原样拿回同一个错误，宁可让店员去商户平台核对，也不许它变成第二笔真退款。
-      entry.task.catch((e) => {
-        if (e instanceof AppError && e.httpStatus < 500) refundAttempts.delete(attemptKey)
-      })
-    }
-    success(res, await entry.task)
+    success(res, await initiateRefund({ orderId: id, amount, reason, operator: req.adminUsername ?? undefined, idempotencyKey }))
   } catch (e) {
     next(e)
   }

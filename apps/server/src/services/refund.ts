@@ -7,6 +7,7 @@
  *  - 0 < amount <= remaining；amount === remaining 视为「全额」（订单取消/退款流程），否则为「部分」（订单状态不变）
  *  - 同一订单同一时刻只能有一笔在途退款（Refund.activeOrderId 唯一索引），成功后释放，可再发起部分退款
  */
+import crypto from 'crypto'
 import { Prisma, Order, Refund } from '@prisma/client'
 import prisma from '../utils/prisma'
 import { AppError } from '../middlewares/error'
@@ -21,8 +22,20 @@ import { DELIVERY_STATUS_LABEL } from './delivery/state'
 /** 在途态：占用 activeOrderId，阻止同一订单并发发起 */
 export const ACTIVE_REFUND_STATUSES = ['PENDING', 'PROCESSING', 'ABNORMAL'] as const
 
+/** 不带幂等键：随机派生，行为与改动前完全一致 */
 export function buildOutRefundNo(orderId: number): string {
   return `refund_${orderId}_${Date.now()}`
+}
+
+/**
+ * 带幂等键：确定性派生，同一 (订单, 金额, 幂等键) 永远得到同一个 outRefundNo。
+ * 落到 Refund.outRefundNo 唯一索引上，重试自然撞索引——复用的是微信侧同一笔退款，
+ * 而不只是本进程内的一个 Promise（那道防线一旦换成多实例/进程重启就会失效）。
+ * 金额进派生：改了金额提交就是另一笔退款，不该被上一次的结果顶掉。
+ */
+function buildIdempotentOutRefundNo(orderId: number, amount: number, idempotencyKey: string): string {
+  const hash = crypto.createHash('sha256').update(`${orderId}:${amount}:${idempotencyKey}`).digest('hex').slice(0, 32)
+  return `refidem_${orderId}_${hash}`
 }
 
 export function remainingRefundable(order: { actualAmount: number; refundedAmount: number }): number {
@@ -44,6 +57,12 @@ export interface InitiateRefundInput {
   /** 记录到 Refund.operator：后台账号名 / 'system' */
   operator?: string
   afterSaleId?: number
+  /**
+   * 幂等键：同一 (orderId, amount, idempotencyKey) 派生同一个 outRefundNo。
+   * 撞上 Refund.outRefundNo 唯一索引时直接复用已存在的那笔退款现状返回，不再二次调用微信。
+   * 不传：outRefundNo 走原随机派生，行为与改动前完全一致。
+   */
+  idempotencyKey?: string
 }
 
 export interface InitiateRefundResult {
@@ -57,7 +76,7 @@ export interface InitiateRefundResult {
  * 发起退款。抛 AppError（校验失败）或在微信发起失败时抛 AppError(50201)（退款单已标 FAILED，可重试）。
  */
 export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
-  const { orderId, amount, reason, operator, afterSaleId } = input
+  const { orderId, amount, reason, operator, afterSaleId, idempotencyKey } = input
   if (!Number.isInteger(amount) || amount <= 0) throw new AppError(42206, '退款金额必须为正整数（分）')
 
   const order = await prisma.order.findUnique({
@@ -97,8 +116,12 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
     throw new AppError(42207, '模拟支付订单无法发起微信退款')
   }
 
+  const outRefundNo = idempotencyKey ? buildIdempotentOutRefundNo(orderId, amount, idempotencyKey) : buildOutRefundNo(orderId)
+
   // 事务 A：（全额）状态流转 + 库存回滚 + 创建退款记录（不含外呼）
-  const refund = await prisma.$transaction(async (tx) => {
+  // 返回 isIdempotentHit=true 表示这不是新建的记录，而是命中了 outRefundNo 唯一索引复用回来的已有退款——
+  // 调用方（下面）据此跳过「再发起一次微信退款/再跑一次 finalize」，直接把现状返回给上层。
+  const { refund, isIdempotentHit } = await prisma.$transaction(async (tx) => {
     if (isFull && !fromRefunding) {
       // where 里加 deliveries:{none:{activeOrderId:{not:null}}}：这是 callRider 那侧原子复核的另一半。
       // :82-87 的 42221 检查只是这段事务之外的快照，几毫秒内可能被 callRider 的 delivery.create 抢先——
@@ -131,12 +154,12 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       }
     }
     try {
-      return await tx.refund.create({
+      const created = await tx.refund.create({
         data: {
           orderId,
           orderNo: order.orderNo,
           outTradeNo: order.payment!.outTradeNo,
-          outRefundNo: buildOutRefundNo(orderId),
+          outRefundNo,
           amount,
           totalAmount: order.actualAmount,
           status: 'PENDING',
@@ -147,13 +170,29 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
           activeOrderId: orderId,
         },
       })
+      return { refund: created, isIdempotentHit: false }
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        // 带幂等键时 outRefundNo 是确定性派生的：撞索引大概率是同一 (订单, 金额, 幂等键) 的重试，
+        // 命中的是 outRefundNo 唯一索引而非 activeOrderId 唯一索引——查一下就能分清，不必去猜
+        // Prisma P2002 的 meta.target 长什么样（不同数据库/驱动版本格式并不稳定）。
+        // 查到了：直接复用已有那笔的现状，调用方拿到「已经在处理/已完成」的语义，不再二次发起微信退款。
+        // 查不到：说明真正撞的是 activeOrderId（同一订单另一笔不同幂等键/不带幂等键的退款并发在途），
+        // 维持原有报错语义。
+        if (idempotencyKey) {
+          const existing = await tx.refund.findUnique({ where: { outRefundNo } })
+          if (existing) return { refund: existing, isIdempotentHit: true }
+        }
         throw new AppError(42205, '该订单已有退款处理中')
       }
       throw e
     }
   })
+
+  if (isIdempotentHit) {
+    const reloaded = await reload(orderId, refund.id)
+    return { ...reloaded, mode: refund.mode === 'MOCK' ? 'mock' : 'wechat', isFull }
+  }
 
   if (mode === 'MOCK') {
     await finalizeRefundSuccess({ refundId: refund.id, operator })
