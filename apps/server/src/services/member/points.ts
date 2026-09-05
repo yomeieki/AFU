@@ -312,11 +312,14 @@ export async function expirePointsBatch(limit = 200): Promise<number> {
         // 拿它当扣减量会在并发消耗后把 pointsBalance 多扣——这里必须用当场读到的值。
         const row = await tx.pointsLedger.findUnique({ where: { id }, select: { remaining: true, userId: true } })
         if (!row || row.remaining <= 0) return false
+        // M13：CAS 的 where 补 expiresAt < now——候选列表是事务外的快照，这行有极小概率
+        // 在候选选出之后、这次事务提交之前被 extendLivePoints 续期成「在世」（亚秒级窗口）。
+        // 只比 remaining 不复核 expiresAt 的话，会把一条已经被续期救回来的行错误清零。
         const moved = await tx.pointsLedger.updateMany({
-          where: { id, remaining: row.remaining },
+          where: { id, remaining: row.remaining, expiresAt: { lt: new Date() } },
           data: { remaining: 0 },
         })
-        if (moved.count === 0) return false // 并发被改动，下一轮扫描再处理
+        if (moved.count === 0) return false // 并发被改动（含被续期救回），下一轮扫描再处理
 
         const updatedUser = await tx.user.update({ where: { id: row.userId }, data: { pointsBalance: { decrement: row.remaining } } })
         try {
