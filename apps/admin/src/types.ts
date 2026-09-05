@@ -404,3 +404,74 @@ export interface WorkbenchSnapshot {
 
 /** 拒单原因（顾客原样可见的文案由服务端映射） */
 export type RejectReason = 'SOLD_OUT' | 'OUT_OF_RANGE' | 'PAST_ACCEPT_TIME' | 'CUSTOMER_CANCEL' | 'OTHER'
+
+// ─────────────────────────────────────────────────────────
+// 打印机（飞鹅云）。与服务端 services/printer-settings.ts / services/ticket/index.ts 同构。
+// ─────────────────────────────────────────────────────────
+export type PrinterChannel = 'LOCAL' | 'EXPRESS'
+
+export interface PrinterEntry {
+  sn: string
+  name: string
+  channels: PrinterChannel[]
+  /** 打印份数，1–10 */
+  copies: number
+}
+
+/** 打印机运营设置（GET/PUT /admin/settings/printer）。PUT 是整包覆盖，见 PrinterSettings.tsx 顶部注释。 */
+export interface PrinterSettings {
+  enabled: boolean
+  provider: 'FEIE' | 'XPYUN'
+  printers: PrinterEntry[]
+  voice: { enabled: boolean; localText: string; expressText: string }
+  repeat: {
+    /** 同城单：付款后多少分钟未接单开始重复播报 */
+    localAfterMin: number
+    /** 邮寄单：付款后多少分钟未接单开始重复播报 */
+    expressAfterMin: number
+    /** 重复播报间隔（分钟） */
+    everyMin: number
+    /** 最多重复次数，耗尽后告警老板 */
+    maxTimes: number
+    /** true = 重复播报时重打整张全票；false = 只打精简「催接单」小票 */
+    reprint: boolean
+  }
+  /** 打印机连续离线超过多少分钟告警老板 */
+  offlineAlertMin: number
+  /** 取消/退款是否也出提醒票 */
+  printCancel: boolean
+}
+
+/** 现查一次打印机在线状态（GET /admin/printers/status） */
+export interface PrinterHealthEntry {
+  sn: string
+  name: string
+  state: 'ONLINE' | 'ABNORMAL' | 'OFFLINE' | 'UNKNOWN' | 'ERROR'
+  raw?: string
+}
+
+/** 打印记录（GET /admin/print-jobs） */
+export interface PrintJob {
+  id: number
+  orderId: number
+  orderNo: string
+  kind: 'NEW_ORDER' | 'REPEAT' | 'CANCEL' | 'REPRINT' | 'TEST' | 'CANCEL_REQUEST' | 'RESUME'
+  provider: string
+  printerSn: string
+  status: 'PENDING' | 'SENDING' | 'SENT' | 'PRINTED' | 'FAILED' | 'SKIPPED'
+  providerJobId: string | null
+  attempts: number
+  lastError: string | null
+  copies: number
+  sentAt: string | null
+  printedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** 后台绑定/测试页/重打等操作的通用返回（与服务端 EnqueueResult 同构） */
+export interface PrinterEnqueueResult {
+  enqueued: boolean
+  reason?: string
+  jobIds?: number[]
+}

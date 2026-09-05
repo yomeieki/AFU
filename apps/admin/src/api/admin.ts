@@ -24,6 +24,10 @@ import type {
   DeliveryInfo,
   DeliveryEventInfo,
   RejectReason,
+  PrinterSettings,
+  PrinterHealthEntry,
+  PrintJob,
+  PrinterEnqueueResult,
 } from '../types'
 
 // Auth
@@ -256,3 +260,33 @@ export const rejectOrder = (id: number, data: { reason: RejectReason; note?: str
 
 // 快递100 余额熔断——手动恢复
 export const resetKd100Circuit = () => client.post<ApiResponse<unknown>>('/admin/system/kd100-circuit/reset')
+
+// 打印机（飞鹅云）。PUT 是整包覆盖——调用方必须先 getPrinterSettings() 拿完整对象、改字段后原样传回。
+export const getPrinterSettings = () =>
+  client.get<ApiResponse<PrinterSettings>>('/admin/settings/printer').then((r) => r.data.data)
+export const updatePrinterSettings = (payload: PrinterSettings) =>
+  client.put<ApiResponse<PrinterSettings>>('/admin/settings/printer', payload).then((r) => r.data.data)
+
+// 绑定：key 只在这一次调用里使用，服务端不落库明文、不回显
+export const bindPrinter = (data: { sn: string; key: string; name?: string }) =>
+  client.post<ApiResponse<PrinterSettings>>('/admin/printers/bind', data).then((r) => r.data.data)
+// 解绑：仅从本地设置移除，不调飞鹅侧解绑
+export const unbindPrinter = (sn: string) =>
+  client.delete<ApiResponse<PrinterSettings>>(`/admin/printers/${encodeURIComponent(sn)}`).then((r) => r.data.data)
+export const testPrinter = (sn: string) =>
+  client.post<ApiResponse<PrinterEnqueueResult>>(`/admin/printers/${encodeURIComponent(sn)}/test`).then((r) => r.data.data)
+// 清空该机云端待打印队列（清空整个队列，不能按单删）
+export const clearPrinterQueue = (sn: string) =>
+  client.post<ApiResponse<{ ok: true }>>(`/admin/printers/${encodeURIComponent(sn)}/clear-queue`).then((r) => r.data.data)
+export const getPrinterStatus = () =>
+  client.get<ApiResponse<PrinterHealthEntry[]>>('/admin/printers/status').then((r) => r.data.data)
+
+// 打印记录：不传 orderId 返回全局最近 20 条 + total；传 orderId 返回该单最多 50 条
+export const getPrintJobs = (orderId?: number) =>
+  client.get<ApiResponse<{ list: PrintJob[]; total: number }>>('/admin/print-jobs', { params: orderId ? { orderId } : undefined }).then((r) => r.data.data)
+export const retryPrintJob = (id: number) =>
+  client.post<ApiResponse<{ ok: true; status: string } | { ok: false; reason: string }>>(`/admin/print-jobs/${id}/retry`).then((r) => r.data.data)
+
+// 订单卡「重打小票」
+export const reprintOrder = (id: number) =>
+  client.post<ApiResponse<PrinterEnqueueResult>>(`/admin/orders/${id}/reprint`).then((r) => r.data.data)
