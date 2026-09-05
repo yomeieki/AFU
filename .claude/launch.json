@@ -57,6 +57,15 @@
         "cd apps/server && PORT=3105 WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true WECHAT_QRCODE_MOCK=true LOCAL_DELIVERY_PROVIDER_MOCK=true PRINTER_PROVIDER_MOCK=true npx ts-node-dev --respawn --transpile-only src/app.ts"
       ],
       "port": 3105
+    },
+    {
+      "name": "admin-3105",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3105 npm run dev -- --port 5175 --strictPort"
+      ],
+      "port": 5175
     }
   ]
 }
