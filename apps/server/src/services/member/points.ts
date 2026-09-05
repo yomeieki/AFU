@@ -41,18 +41,33 @@ export function calcEarn(actualAmount: number, refundedAmount: number, ratePerYu
 }
 
 /**
- * 退款扣回上限：三者取最小且不小于 0——
- * 本次退款按比例应扣的量、这单还剩多少没扣回、用户当前总余额。
- * 任何一者为 0 都不该继续往下扣（不能出现负余额，也不能扣超过这单给过的分）。
+ * 退款扣回：与 earnRatePerYuan 无关，只看「这单已经退了多少比例」——
+ * 用累计目标减已扣，而不是逐笔各自 floor 再累加：¥100 得 100 分，分三次各退 ¥33.33，
+ * 逐笔 floor(100×3333/10000)=33 三次共 99，最后 1 分永远扣不回；累计公式在退满时精确扣满 pointsEarned。
+ *
+ * base：结算时的算分基数（Order.pointsBase）；旧单（该列上线前结算，值为 null）退化用 actualAmount。
+ * cumRef：结算之后累计退了多少 = refundedAmount + base − actualAmount（refundedAmount 是全订单口径，
+ *   其中「结算前已退的部分」已经体现在 base = actualAmount − 结算时 refundedAmount 里，减回来才是净增量）。
+ * targetCum：按 cumRef/base 的比例，这单总共应该扣掉多少分（累计值，不是本次增量）。
+ * 返回值 = targetCum − alreadyDeducted，再用 「这单还剩多少没扣回」「用户当前总余额」封顶，且不小于 0。
  */
 export function calcRefundDeduct(
-  refundAmount: number,
-  ratePerYuan: number,
-  earned: number,
+  pointsEarned: number,
+  pointsBase: number | null,
+  actualAmount: number,
+  refundedAmount: number,
   alreadyDeducted: number,
   balance: number
 ): number {
-  return Math.max(0, Math.min(Math.floor(refundAmount / 100) * ratePerYuan, earned - alreadyDeducted, balance))
+  const base = pointsBase != null && pointsBase > 0 ? pointsBase : actualAmount
+  if (base <= 0) {
+    // 边界：结算时基数就是 0（罕见，实践中 pointsEarned 也会是 0 从而在调用方提前 return），
+    // 没有比例可摊，只能按「已经全额退款」处理，扣掉这单剩下的全部分
+    return Math.max(0, Math.min(pointsEarned - alreadyDeducted, balance))
+  }
+  const cumRef = Math.max(0, refundedAmount + base - actualAmount)
+  const targetCum = Math.floor((pointsEarned * cumRef) / base)
+  return Math.max(0, Math.min(targetCum - alreadyDeducted, pointsEarned - alreadyDeducted, balance))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -382,6 +397,11 @@ interface RefundDeductOrder {
   userId: number
   orderNo: string
   pointsEarned: number
+  /** 结算时的算分基数，见 calcRefundDeduct 的注释；null=旧单退化用 actualAmount */
+  pointsBase: number | null
+  actualAmount: number
+  /** 本次退款落库（LEAST 封顶）之后的最新累计退款额 */
+  refundedAmount: number
 }
 interface RefundDeductRefund {
   id: number
@@ -399,7 +419,6 @@ export async function deductPointsOnRefund(
 ): Promise<void> {
   if (order.pointsEarned <= 0) return
 
-  const settings = await getMemberSettings()
   const refundIds = (await tx.refund.findMany({ where: { orderId: order.id }, select: { id: true } })).map((r) => String(r.id))
   const agg = refundIds.length
     ? await tx.pointsLedger.aggregate({
@@ -410,7 +429,7 @@ export async function deductPointsOnRefund(
   const alreadyDeducted = Math.abs(agg._sum.delta ?? 0)
 
   const user = await tx.user.findUniqueOrThrow({ where: { id: order.userId }, select: { pointsBalance: true } })
-  const target = calcRefundDeduct(refund.amount, settings.points.earnRatePerYuan, order.pointsEarned, alreadyDeducted, user.pointsBalance)
+  const target = calcRefundDeduct(order.pointsEarned, order.pointsBase, order.actualAmount, order.refundedAmount, alreadyDeducted, user.pointsBalance)
   if (target <= 0) return
 
   const actualDeducted = await deductFromEarnRows(tx, order.userId, order.id, target)

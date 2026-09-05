@@ -43,26 +43,48 @@ t('calcEarn 部分退款后按剩余实付算', () => {
   assert.strictEqual(calcEarn(1000, 300, 1), 7) // (1000-300)/100=7
 })
 
-// ── calcRefundDeduct：min(比例应扣, 该单还剩多少没扣, 用户当前余额)，不小于 0 ──
+// ── calcRefundDeduct（B5）：累计目标(targetCum) − 已扣，与 earnRatePerYuan 无关 ──
+// 签名：calcRefundDeduct(pointsEarned, pointsBase, actualAmount, refundedAmount, alreadyDeducted, balance)
+// base = pointsBase>0 ? pointsBase : actualAmount；cumRef = max(0, refundedAmount+base-actualAmount)；
+// targetCum = floor(pointsEarned*cumRef/base)；返回 max(0, min(targetCum-alreadyDeducted, pointsEarned-alreadyDeducted, balance))
 
-t('calcRefundDeduct 正常部分退款：按比例扣', () => {
-  // 退 500 分(=5元) * rate 1 = 5，该单发过 100 分未扣过，余额 100 → 扣 5
-  assert.strictEqual(calcRefundDeduct(500, 1, 100, 0, 100), 5)
+t('calcRefundDeduct 正常部分退款：按比例扣（累计口径）', () => {
+  // 结算基数 ¥100(10000分)，发了 100 分；本次退款后累计退了 ¥5(500分) → 应扣 5
+  assert.strictEqual(calcRefundDeduct(100, 10000, 10000, 500, 0, 100), 5)
 })
-t('calcRefundDeduct 上限①：比例应扣超过该单剩余可扣（连续两次部分退款不超发放量）', () => {
-  // 该单发了 100 分，已扣回 98，这次退款按比例该扣 10，但只剩 2 可扣
-  assert.strictEqual(calcRefundDeduct(1000, 1, 100, 98, 1000), 2)
+t('calcRefundDeduct 累计公式：分三次退款打满，累计恰好等于 pointsEarned（逐笔 floor 会少扣 1）', () => {
+  // ¥100 得 100 分，分三次退 ¥33.33/33.33/33.34（凑整 ¥100），累计应精确扣满 100 分，不多不少
+  let deducted = 0
+  deducted += calcRefundDeduct(100, 10000, 10000, 3333, deducted, 1000) // → 33，累计 33
+  assert.strictEqual(deducted, 33)
+  deducted += calcRefundDeduct(100, 10000, 10000, 6666, deducted, 1000) // → 33，累计 66
+  assert.strictEqual(deducted, 66)
+  deducted += calcRefundDeduct(100, 10000, 10000, 10000, deducted, 1000) // → 34，累计 100（打满）
+  assert.strictEqual(deducted, 100)
+})
+t('calcRefundDeduct 上限①：该单已扣完（pointsEarned-alreadyDeducted 封顶）', () => {
+  assert.strictEqual(calcRefundDeduct(50, 5000, 5000, 5000, 50, 999), 0)
 })
 t('calcRefundDeduct 上限②：超过用户当前总余额（已经花掉了，扣到 0 为止的上游保护）', () => {
-  // 该单发了 100 分全没扣过，按比例该扣 100，但用户只剩 30（已被别的地方花掉）
-  assert.strictEqual(calcRefundDeduct(10000, 1, 100, 0, 30), 30)
+  // 全额退款该扣 100，但用户只剩 30（已被别的地方花掉）
+  assert.strictEqual(calcRefundDeduct(100, 100, 100, 100, 0, 30), 30)
 })
-t('calcRefundDeduct 三重上限各自触顶：同时触发也不为负', () => {
-  assert.strictEqual(calcRefundDeduct(100000, 5, 50, 50, 999), 0) // 该单已扣完
-  assert.strictEqual(calcRefundDeduct(100000, 5, 50, 0, 0), 0) // 用户余额已是 0
+t('calcRefundDeduct 用户余额已是 0 → 0', () => {
+  assert.strictEqual(calcRefundDeduct(50, 5000, 5000, 0, 0, 0), 0)
 })
-t('calcRefundDeduct 退款金额 0 → 0', () => {
-  assert.strictEqual(calcRefundDeduct(0, 1, 100, 0, 100), 0)
+t('calcRefundDeduct 退款额 0（未发生退款）→ 0', () => {
+  assert.strictEqual(calcRefundDeduct(100, 10000, 10000, 0, 0, 100), 0)
+})
+t('calcRefundDeduct 旧单退化：pointsBase=null 时用 actualAmount 当基数', () => {
+  assert.strictEqual(calcRefundDeduct(100, null, 10000, 1000, 0, 100), 10)
+})
+t('calcRefundDeduct 边界 base<=0：退化为直接按 pointsEarned 扣（不除以 0）', () => {
+  assert.strictEqual(calcRefundDeduct(100, 0, 0, 0, 0, 50), 50)
+})
+t('calcRefundDeduct 与 earnRatePerYuan 无关：结算前后改比例不影响扣回（B5 核心场景）', () => {
+  // ¥100 结算时 rate=1 得 100 分；之后把 rate 改成 100 不影响任何已发生的订单——
+  // calcRefundDeduct 压根不接收 rate 参数，这条用例确认签名上就切断了这个耦合
+  assert.strictEqual(calcRefundDeduct(100, 10000, 10000, 100, 0, 100), 1)
 })
 
 // ── 优惠券 code 生成：格式 + 大量生成不重复 ────────────────────────────────
