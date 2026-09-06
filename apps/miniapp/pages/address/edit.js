@@ -197,7 +197,12 @@ Page({
     })
   },
 
-  // 导入微信收货地址（用户取消静默；拒绝授权提示去设置）
+  // 导入微信收货地址（只有用户主动取消才静默，其余一律给出可见反馈）
+  //
+  // 这个按钮在生产上曾长期是个死按钮：接口权限 2026-09-03 才开通，而在此之前
+  // fail 分支只认「auth deny」一类文案，接口未开通/未声明返回的是别的错误，
+  // 于是点了毫无反应、也没人报障（见 docs/wechat-platform-local-delivery-setup.md）。
+  // 所以这里的默认分支必须是「说点什么」，而不是「什么都不说」。
   onImportWechatAddress() {
     var self = this
     wx.chooseAddress({
@@ -213,9 +218,15 @@ Page({
       },
       fail(err) {
         var msg = (err && err.errMsg) || ''
+        // 用户自己点「取消」——唯一该静默的情况
+        if (msg.indexOf('cancel') !== -1) return
         if (msg.indexOf('auth deny') !== -1 || msg.indexOf('auth denied') !== -1 || msg.indexOf('authorize') !== -1) {
           wx.showToast({ title: '请在设置中允许获取地址', icon: 'none' })
+          return
         }
+        // 接口未开通、未在 app.json 声明、低版本基础库……顾客不需要知道是哪一种，
+        // 但必须知道「这条路走不通，请改用手填」，否则会反复点同一个按钮。
+        wx.showToast({ title: '无法读取微信地址，请手动填写', icon: 'none' })
       },
     })
   },

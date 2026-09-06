@@ -96,8 +96,14 @@ Page({
         self.setImages(self.data.images.concat(added))
         added.forEach(function(img) { self.uploadOne(img) })
       },
-      fail() {
-        // 用户取消：静默
+      fail(err) {
+        var msg = (err && (err.errMsg || err.errmsg)) || ''
+        // 用户自己点「取消」——唯一该静默的情况
+        if (msg.indexOf('cancel') !== -1) return
+        // 相册/摄像头未在公众平台「用户隐私保护指引」里勾选时，chooseMedia 同样走 fail。
+        // 页面上白纸黑字写着「请附照片，便于快速处理」，点了却毫无反应会被当成卡死，
+        // 所以这里必须出声——顾客可以改用文字描述，售后并不强制要图。
+        wx.showToast({ title: '无法打开相册，可只用文字描述', icon: 'none' })
       },
     })
   },
