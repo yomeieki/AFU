@@ -165,8 +165,17 @@ export const kd100Provider: DeliveryProvider = {
   async addTip({ taskId, amountFen }) {
     await post('addfee', { taskId, tips: (amountFen / 100).toFixed(2), remark: '商家加小费' })
   },
-  async queryCourier({ taskId }) {
-    const data = await post('queryCourier', { taskId })
+  async queryCourier({ taskId, orderId }) {
+    // ⚠️ 这个接口认的是 **orderId**（快递100 侧订单号，回调里的 orderId → Delivery.providerOrderId），
+    // 不是并呼下单返回的 taskId。2026-09-06 生产 A/B 实测（只变参数名，其余完全相同）：
+    //   { taskId }  → 30001「orderId不能为空」
+    //   { orderId } → 200 success，返回 lbsType:2 与骑手坐标
+    // 此前一直只传 taskId，所以顾客端「骑手位置」**从上线起没成功过一次**——
+    // 而失败被 routes/orders.ts 的 catch 吞成 location:null，页面只是不显示卡片、不报错，
+    // 于是没人发现。（同一家族的静默失败还有 price() 的 callbackUrl 空串，见本文件 price()。）
+    // orderId 缺失时直接放弃：占位单（下单超时的 UNKNOWN）本来就没有它，硬打一发只会白挨一个 30001。
+    if (!orderId) return null
+    const data = await post('queryCourier', { orderId, taskId })
     // 坐标系必须是 GCJ-02（lbsType=2）才能和收货坐标同系比较：
     // 收货坐标来自 wx.chooseLocation，是 GCJ-02；BD-09（lbsType=1）与之相差数百米。
     // 官方默认是 2，但响应里会带回实际值——不是 2 就当拿不到位置（顾客端整块卡片隐藏），

@@ -549,7 +549,7 @@ router.get('/:id/courier', async (req: Request, res: Response, next: NextFunctio
     const order = await prisma.order.findFirst({ where: { id, userId }, select: { id: true } })
     if (!order) throw new AppError(40401, '订单不存在', 404)
 
-    const delivery = await prisma.delivery.findFirst({ where: { activeOrderId: id }, select: { id: true, status: true, providerTaskId: true } })
+    const delivery = await prisma.delivery.findFirst({ where: { activeOrderId: id }, select: { id: true, status: true, providerTaskId: true, providerOrderId: true } })
     if (!delivery || !delivery.providerTaskId || !COURIER_LIVE_STATUSES.includes(delivery.status)) {
       success(res, { location: null })
       return
@@ -565,7 +565,7 @@ router.get('/:id/courier', async (req: Request, res: Response, next: NextFunctio
     }
     let loc: { latE6: number; lngE6: number } | null
     try {
-      loc = await getDeliveryProvider().queryCourier({ taskId: delivery.providerTaskId })
+      loc = await getDeliveryProvider().queryCourier({ taskId: delivery.providerTaskId, orderId: delivery.providerOrderId })
     } catch (e) {
       // 运力方故障时也要负缓存：否则顾客端每次轮询都会真打一次外部 API，把故障放大成订单页报错
       console.warn('[courier] 查询骑手位置失败:', (e as Error).message)

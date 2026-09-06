@@ -99,6 +99,8 @@ export interface DeliveryProvider {
   precancelOrder(i: { taskId: string }): Promise<{ cancelFeeFen: number | null }>
   cancelOrder(i: { taskId: string; reason: string }): Promise<{ cancelFeeFen: number | null; raw: unknown }>
   addTip(i: { taskId: string; amountFen: number }): Promise<void>
-  queryCourier(i: { taskId: string }): Promise<{ latE6: number; lngE6: number } | null>
+  // orderId 才是这个接口认的键（快递100 侧订单号 = Delivery.providerOrderId）；taskId 一并传只是冗余。
+  // 2026-09-06 生产实测：只传 taskId 会被拒 30001「orderId不能为空」。
+  queryCourier(i: { taskId: string; orderId: string | null }): Promise<{ latE6: number; lngE6: number } | null>
   verifyAndParseCallback(body: Record<string, string>, salt: string): { ok: true; payload: DeliveryCallbackPayload } | { ok: false; reason: 'SIGN_MISMATCH' | 'BAD_PARAM' }
 }
