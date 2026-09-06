@@ -4,6 +4,7 @@ import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { rollbackOrderStock } from '../../utils/order-stock'
+import { releaseOrderBenefits } from '../../services/member/checkout'
 import { ACTIVE_REFUND_STATUSES, finalizeRefundSuccess, initiateRefund, remainingRefundable } from '../../services/refund'
 import { deductPointsOnRefund } from '../../services/member/points'
 import { sendShipSubscribeMessage } from '../../services/subscribe-message'
@@ -346,6 +347,9 @@ router.post('/:id/reject', async (req: Request, res: Response, next: NextFunctio
         const moved = await tx.order.updateMany({ where: { id, status: 'PENDING_PAYMENT' }, data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason } })
         if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
         await rollbackOrderStock(tx, order.items)
+        // 未支付取消：把券与赠品积分还回去（spec §5.5）。紧跟在 rollbackOrderStock 之后、
+        // 且在状态翻转判 count 成功之后——releaseOrderBenefits 的幂等性依赖这个前提。
+        await releaseOrderBenefits(tx, order)
       })
     } else {
       refund = await initiateRefund({ orderId: id, amount: remainingRefundable(order), reason: cancelReason, operator: req.adminUsername ?? 'admin' })
@@ -563,6 +567,9 @@ router.put('/:id/status', async (req: Request, res: Response, next: NextFunction
         })
         if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
         await rollbackOrderStock(tx, order.items)
+        // 未支付取消：把券与赠品积分还回去（spec §5.5）。紧跟在 rollbackOrderStock 之后、
+        // 且在状态翻转判 count 成功之后——releaseOrderBenefits 的幂等性依赖这个前提。
+        await releaseOrderBenefits(tx, order)
         return tx.order.findUniqueOrThrow({ where: { id } })
       })
       return success(res, updated)

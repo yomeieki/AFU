@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import { Prisma } from '@prisma/client'
 import prisma from '../utils/prisma'
-import { loadCouponForOrder, loadGiftLines, applyOrderBenefits } from '../services/member/checkout'
+import { loadCouponForOrder, loadGiftLines, applyOrderBenefits, releaseOrderBenefits } from '../services/member/checkout'
 import { computeCheckout } from '../services/member/pricing'
 import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
@@ -705,6 +705,9 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
         })
         if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
         await rollbackOrderStock(tx, order.items)
+        // 未支付取消：把券与赠品积分还回去（spec §5.5）。紧跟在 rollbackOrderStock 之后、
+        // 且在状态翻转判 count 成功之后——releaseOrderBenefits 的幂等性依赖这个前提。
+        await releaseOrderBenefits(tx, order)
         return tx.order.findUniqueOrThrow({ where: { id } })
       })
       if (!config.mock.pay && order.payment?.paymentType === 'WECHAT' && order.payment.outTradeNo) {

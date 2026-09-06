@@ -361,3 +361,130 @@ async function giftLimitWhere(tx: Prisma.TransactionClient, g: GiftLine) {
   const pg = await tx.pointsGood.findUnique({ where: { id: g.pointsGoodId }, select: { stockLimit: true } })
   return pg?.stockLimit != null ? { issuedCount: { lt: pg.stockLimit - g.quantity + 1 } } : {}
 }
+
+// ─────────────────────────────────────────────────────────
+// 未支付取消：释放券与赠品积分（M2 Task 6，spec §5.5）
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 把这一单占用的券与积分还回去。**只服务 `PENDING_PAYMENT → CANCELLED`。**
+ *
+ * ⚠️ **调用方必须已经确认状态翻转成功**——即
+ * `tx.order.updateMany({ where: { id, status: 'PENDING_PAYMENT' }, ... })` 的 `count === 1`。
+ * 这条前提是整个函数幂等性的基础：`issuedCount` 的 decrement 靠 `{ gte: qty }` 判 count，
+ * 它本身**不是真幂等**（同一单跑两次，若期间别人又兑了一份，第二次会把别人的名额减掉）。
+ * 有了状态守卫，第二次调用根本进不来。
+ *
+ * **为什么按「状态守卫」而不是按端点名列白名单**：本项目有**四条** `PENDING_PAYMENT → CANCELLED`
+ * 路径（顾客手点 / 后台改状态 / 商家拒单的待付款分支 / 超时任务），四处形状完全一致。
+ * 按端点名列名单的写法在计划里就已经出过错——它把「拒单」整体归进「已支付、不释放」，
+ * 而 `POST /admin/orders/:id/reject` 明明有一条 `PENDING_PAYMENT` 分支，照那样写就是
+ * **待付款单被商家拒掉时顾客的券和积分永久蒸发，且没有任何日志**。
+ * 名单会漏，状态守卫不会——将来加第五条路径，只要它遵守同一个模式就自动正确。
+ *
+ * **已支付后一律不释放**（P7）：秒退、商家取消已付款单、拒单的已付款分支、全额/部分退款，
+ * 全都不经过这里。守卫条件写死 PENDING_PAYMENT 就是这条边界的执行者。
+ *
+ * 库存回滚**不在这里做**——四个调用点各自已经调了 `rollbackOrderStock(tx, order.items)`，
+ * 而 `order.items` 天然包含赠品行（赠品行就是普通 OrderItem，只是 isGift=1），赠品库存随之回滚。
+ * 2026-09-06 实测确认过这一点。
+ */
+export async function releaseOrderBenefits(
+  tx: Prisma.TransactionClient,
+  order: {
+    id: number
+    userId: number
+    couponId: number | null
+    pointsUsed: number
+    // productId 可空：商品被硬删时 OrderItem 会置空。这种行的名额无处可退，下面直接跳过。
+    items: { productId: number | null; skuId: number | null; quantity: number; isGift: boolean }[]
+  }
+): Promise<void> {
+  const now = new Date()
+
+  // ── 券 ────────────────────────────────────────────────
+  if (order.couponId) {
+    const c = await tx.userCoupon.findUnique({
+      where: { id: order.couponId },
+      select: { id: true, expiresAt: true },
+    })
+    if (c) {
+      // 过期券不还给顾客用，但也不能留在 USED 状态误导（spec §5.5）。
+      // ⚠️ 过期判定取 `<=`，与 pricing.ts 的 checkCouponUsable 和 scheduler 的 expireCouponsBatch
+      // 同口径——三处必须一致，否则到期那一毫秒会出现「这边说过期、那边说能用」。
+      const expired = c.expiresAt.getTime() <= now.getTime()
+      await tx.userCoupon.updateMany({
+        where: { id: order.couponId, status: 'USED', orderId: order.id },
+        data: expired
+          ? { status: 'EXPIRED', usedAt: null, orderId: null }
+          : { status: 'UNUSED', usedAt: null, orderId: null },
+      })
+      // count===0 = 已经释放过了（或这张券根本不是本单核销的）。不报错：释放要幂等。
+    }
+  }
+
+  // ── 赠品积分 ──────────────────────────────────────────
+  if (order.pointsUsed > 0) {
+    // 退回来的积分不该比原来更耐用（spec §5.5）：继承下单时那条 GIFT 出账行上记的
+    // 「被扣掉的入账行里最早的到期日」。applyOrderBenefits 专门为此回填过这个字段。
+    const giftRow = await tx.pointsLedger.findFirst({
+      where: { type: 'GIFT', refType: 'ORDER', refId: String(order.id) },
+      select: { expiresAt: true },
+    })
+    try {
+      // balanceAfter 必须从 update 的返回值取，不能自己算——并发下自己算会写出错误的快照值
+      const updated = await tx.user.update({
+        where: { id: order.userId },
+        data: { pointsBalance: { increment: order.pointsUsed } },
+      })
+      await tx.pointsLedger.create({
+        data: {
+          userId: order.userId,
+          type: 'GIFT_REVERT',
+          delta: order.pointsUsed,
+          balanceAfter: updated.pointsBalance,
+          // GIFT_REVERT 是入账行：remaining 要有值，它会跟 EARN 一起参与 FIFO 扣减与过期扫描
+          remaining: order.pointsUsed,
+          refType: 'ORDER',
+          refId: String(order.id),
+          remark: '取消订单退回赠品积分',
+          expiresAt: giftRow?.expiresAt ?? null,
+        },
+      })
+    } catch (e) {
+      // @@unique([type, refType, refId]) 命中 = 这一单已经退过分了。
+      // 但上面的 user.update 已经加过一次余额，必须原样减回去，否则余额会比账本多。
+      if (isUniqueViolation(e)) {
+        await tx.user.update({
+          where: { id: order.userId },
+          data: { pointsBalance: { decrement: order.pointsUsed } },
+        })
+      } else {
+        throw e
+      }
+    }
+  }
+
+  // ── 赠品名额 ──────────────────────────────────────────
+  for (const it of order.items) {
+    if (!it.isGift) continue
+    // productId 为空 = 商品被硬删。名额无处可退，跳过（不是错误）
+    if (it.productId === null) continue
+    // 按 (productId, skuId) 找回对应的 PointsGood——OrderItem 上不存 pointsGoodId
+    // （它落的是商品快照，与 PointsGood 配置解耦，配置删了历史订单也不受影响）
+    const pg = await tx.pointsGood.findFirst({
+      where: { productId: it.productId, skuId: it.skuId },
+      select: { id: true },
+    })
+    if (!pg) continue // 配置已被删除，名额无处可退，跳过
+    await tx.pointsGood.updateMany({
+      where: { id: pg.id, issuedCount: { gte: it.quantity } },
+      data: { issuedCount: { decrement: it.quantity } },
+    })
+  }
+}
+
+/** Prisma 唯一约束冲突 */
+function isUniqueViolation(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: string }).code === 'P2002'
+}

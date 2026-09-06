@@ -12,6 +12,7 @@
 import prisma from '../utils/prisma'
 import { config } from '../config'
 import { rollbackOrderStock } from '../utils/order-stock'
+import { releaseOrderBenefits } from './member/checkout'
 import { closeOrder } from './wechat-pay'
 import { notifySystemAlert } from './notify'
 import { notifyAcceptReminder, notifyLowStock } from './order-notify'
@@ -138,6 +139,9 @@ export async function cancelExpiredOrders(timeoutMin = config.order.payTimeoutMi
       })
       if (moved.count === 0) return false
       await rollbackOrderStock(tx, order.items)
+      // 未支付取消：把券与赠品积分还回去（spec §5.5）。四条 PENDING_PAYMENT → CANCELLED
+      // 路径共用同一个模式：状态翻转判 count 成功 → 回滚库存 → 释放优惠。
+      await releaseOrderBenefits(tx, order)
       return true
     })
     if (!cancelled) continue
