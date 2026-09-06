@@ -186,7 +186,14 @@
 `apps/miniapp/app.json` 已加：
 ```json
 "requiredPrivateInfos": ["chooseLocation"],
-"permission": { "scope.userLocation": { "desc": "用于在地图上选择收货位置，计算同城配送距离与配送费" } }
+"permission": { "scope.userLocation": { "desc": "在地图选择收货地址或门店位置，用于计算同城配送距离与配送费" } }
+
+> ⚠️ **`desc` 上限 30 字**（含标点）。超了会在**上传体验版时**报
+> `80058 desc of scope.userLocation exceeds 30`——不是提审才报，是上传就上不去。
+> 2026-09-06 踩过一次：有人往这句里加了「或设置门店位置」变成 32 字，体验版直接传不上。
+> 改文案时先数字数：`python3 -c "print(len('…'))"`。
+> 两个用途都必须提到：顾客选收货地址（`pages/address/edit.js`）与店主设门店坐标（`pages/merchant/index.js`），
+> 少写一个与「隐私与位置能力一致性检查」（release-checklist §2.4b）对不上。
 ```
 缺这段声明时调用会直接失败，**接口审核通过并不等于代码能跑**。
 

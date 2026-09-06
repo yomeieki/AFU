@@ -142,6 +142,12 @@
 - [ ] 真机:已发货订单「申请售后」传 1 张图 → 后台「售后」标签同意退款 → 顾客端显示商家回复
 - [ ] 真机:「我的 → 商家管理」登录后「进入管理后台」能在小程序内打开后台并已登录(需 2.3 业务域名生效)
 - [ ] 真机:收货地址「导入微信收货地址」与省市区选择器可用
+- [ ] `app.json` 的 `permission["scope.userLocation"].desc` **≤ 30 字**（含标点）:
+      `python3 -c "import json;d=json.load(open('apps/miniapp/app.json'));print(len(d['permission']['scope.userLocation']['desc']))"`
+      超了会在**上传体验版时**就报 `80058 desc of scope.userLocation exceeds 30`——
+      不是提审才报，是上传就上不去（2026-09-06 踩过：32 字，体验版传不上）。
+      文案必须同时提到两个用途：顾客选收货地址（`pages/address/edit.js`）与店主设门店坐标
+      （`pages/merchant/index.js`），少写一个与 §2.4b 的「隐私与位置能力一致性检查」对不上
 - [ ] 隐私弹窗在首次进入地址编辑页时出现
 - [ ] 拒绝后再次点地图选点会再次弹出
 - [ ] UptimeRobot 监控已建,企微告警群已收到「服务启动」测试消息
