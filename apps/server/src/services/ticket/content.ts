@@ -264,22 +264,24 @@ export function renderOrderTicket(o: TicketOrderInput): string {
 
   const receiverBlock: string[] = isLocal
     ? [
-        // PO 2026-09-06 定：收货人与电话**各占一行并放大**——这两项是骑手在袋子堆里认单、
-        // 联系顾客时唯一要看的东西，挤在一行小字里最容易看错。
-        // ⚠️ 放大后一个汉字占 4 列，32 列只能放 8 个汉字，所以标签用空格不用「：」：
-        //    `电话：139****0042` 放大后是 34 列会折行，`电话 139****0042` 正好 32 列。
+        // PO 2026-09-06 定：**姓名与地址放大、各占一行**——送货的人在袋子堆里认单、找门牌，
+        // 靠的就是这两样，挤在一行小字里最容易看错。
+        // **电话不放大**：已经脱敏了，放大也拨不出去，它只剩「跟后台核对是不是同一单」这一个用途。
+        // ⚠️ `<B>` 行只有 16 列（真机标尺实测，见 BIG_LINE_WIDTH），所以标签用空格不用「：」。
         `<B>收货人 ${esc(o.receiverName)}</B>`,
-        `<B>电话 ${maskPhone(esc(o.receiverPhone))}</B>`,
-        // 同城单省市恒为门店所在地，对厨房是纯噪音；58mm 只有 32 列，
-        // 砍掉这 6 个字等于多出小半行给楼栋门牌。区不能省——配送范围可能跨区。
-        `地址：${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}`,
+        // 同城单省市恒为门店所在地，对厨房是纯噪音；区不能省——配送范围可能跨区。
+        // 放大后会折成 2–3 行，这是有意的：地址是送货时唯一真正要看清的东西。
+        `<B>地址 ${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}</B>`,
+        `电话 ${maskPhone(esc(o.receiverPhone))}`,
         ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
         ...(o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
       ]
     : [
         `<B>收件人 ${esc(o.receiverName)}</B>`,
-        `<B>电话 ${maskPhone(esc(o.receiverPhone))}</B>`,
-        `地址：${esc(o.receiverFullAddress)}`,
+        // 邮寄地址比同城长（含省市），放大后能折到 5–6 行。仍然放大：这串字要被抄到快递单上，
+        // 抄错一位就是一件退回来的货，多费几厘米纸换少一次抄错值得。
+        `<B>地址 ${esc(o.receiverFullAddress)}</B>`,
+        `电话 ${maskPhone(esc(o.receiverPhone))}`,
       ]
 
   // 备注要突出：<CB> 居中放大加粗。规格 §8b 提到的「餐具标记」目前 Order 无对应字段
