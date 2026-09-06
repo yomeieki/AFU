@@ -319,6 +319,28 @@ DEPLOY_REF=<要部署的 SHA> bash /home/ubuntu/deploy.sh
   本项目实测只有 `package-lock.json` 因 npm 版本差异有 `libc` 字段增删，抹掉无害；
   **但每次都要看一眼**，别默认它一定无害。
 
+### ⚠️ 小程序改动：改完必须把 `main` 快进上去，否则开发者工具看不见
+
+**微信开发者工具开在主仓 `/Users/yumingyi/food-shop`，不是任何 worktree。**
+所以在 worktree 里改了 `apps/miniapp/**` 之后，只提交是不够的——工具读的是主仓的磁盘文件。
+
+2026-09-06 实测的现场：修完 `app.json` 的 `scope.userLocation.desc` 超限问题并提交，
+PO 重新上传体验版，**报的还是旧文案的 32 字**。原因就是主仓的 `main` 还停在上一个提交。
+
+判据（一条命令看两边）：
+
+```bash
+for d in . /Users/yumingyi/food-shop; do
+  python3 -c "import json;print('$d', len(json.load(open('$d/apps/miniapp/app.json'))['permission']['scope.userLocation']['desc']))"
+done
+```
+
+两边不一致就 `git -C /Users/yumingyi/food-shop merge --ff-only <你的分支>`。
+快进前先看一眼那边的 `git status --short`——那个 checkout 里可能有别人在途的活。
+
+> 服务端改动没有这个问题（生产是 git bundle 搬过去的，与主仓无关）；
+> **只有小程序**因为「工具直接读磁盘」而多这一步。
+
 > 什么时候不需要这一套：GitHub 账号恢复、或生产机配好部署密钥之后，`git fetch` 才真正可用。
 > 在那之前，任何写着「跑 deploy.sh 就行」的文档都是不完整的。
 
