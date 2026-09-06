@@ -66,6 +66,15 @@
         "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3105 npm run dev -- --port 5175 --strictPort"
       ],
       "port": 5175
+    },
+    {
+      "name": "admin-3100",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3100 npm run dev -- --port 5190 --strictPort"
+      ],
+      "port": 5190
     }
   ]
 }

@@ -1,3 +1,13 @@
+/*
+ * 选择器一律以 `.benefits`（组件根节点）开头。
+ *
+ * 真机上不需要这么写——小程序自定义组件默认 styleIsolation:'isolated'，
+ * 页面样式进不来。但预览台（tools/miniapp-preview）把组件 wxss 与页面 wxss
+ * 拼进同一个文档，没有隔离：两个结算页各自都有 `.row { padding: 12rpx 0 }`，
+ * 会把本组件的 `.row { padding: 28rpx 24rpx }` 盖掉，优惠券那两行贴着卡片边缘，
+ * 预览出来的样子是错的（2026-09-06 截图当场看到）。
+ * 加一层根作用域是最小代价的修法：真机无副作用，镜像靠特异性赢回来。
+ */
 .benefits {
   background: var(--card);
   border-radius: var(--radius-lg);
@@ -7,31 +17,33 @@
 }
 .benefits.is-disabled { opacity: 0.55; }
 
-.row {
+.benefits .row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 28rpx 24rpx;
   border-bottom: 1rpx solid var(--divider);
 }
-.row:last-child { border-bottom: none; }
-.row-label { font-size: 28rpx; color: var(--text-1); }
-.row-value { display: flex; align-items: center; }
-.val-strong { font-size: 30rpx; color: var(--brand); font-weight: 600; }
-.val-sub { font-size: 24rpx; color: var(--text-3); margin-left: 10rpx; max-width: 240rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.val-hint { font-size: 28rpx; color: var(--brand); }
-.val-muted { font-size: 28rpx; color: var(--text-3); }
-.arrow { font-size: 32rpx; color: var(--text-3); margin-left: 8rpx; }
+.benefits .row:last-child { border-bottom: none; }
+/* width 显式写死：结算页的 .row-label 带 width:88rpx，而本组件原本没声明 width——
+   特异性拦不住一个自己没声明的属性，于是「积分赠品」在预览里被挤成两行 */
+.benefits .row-label { font-size: 28rpx; color: var(--text-1); width: auto; }
+.benefits .row-value { display: flex; align-items: center; }
+.benefits .val-strong { font-size: 30rpx; color: var(--brand); font-weight: 600; }
+.benefits .val-sub { font-size: 24rpx; color: var(--text-3); margin-left: 10rpx; max-width: 240rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.benefits .val-hint { font-size: 28rpx; color: var(--brand); }
+.benefits .val-muted { font-size: 28rpx; color: var(--text-3); }
+.benefits .arrow { font-size: 32rpx; color: var(--text-3); margin-left: 8rpx; }
 
-.row-tip { justify-content: flex-start; }
-.tip-text { font-size: 26rpx; color: var(--text-3); }
-.link { font-size: 26rpx; color: var(--brand); margin-left: 16rpx; }
+.benefits .row-tip { justify-content: flex-start; }
+.benefits .tip-text { font-size: 26rpx; color: var(--text-3); }
+.benefits .link { font-size: 26rpx; color: var(--brand); margin-left: 16rpx; }
 
-.gifts { padding: 24rpx; border-bottom: 1rpx solid var(--divider); }
-.gifts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16rpx; }
-.gifts-balance { font-size: 24rpx; color: var(--text-3); }
-.gifts-scroll { white-space: nowrap; }
-.gift-card {
+.benefits .gifts { padding: 24rpx; border-bottom: 1rpx solid var(--divider); }
+.benefits .gifts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16rpx; }
+.benefits .gifts-balance { font-size: 24rpx; color: var(--text-3); }
+.benefits .gifts-scroll { white-space: nowrap; }
+.benefits .gift-card {
   display: inline-flex;
   flex-direction: column;
   width: 200rpx;
@@ -41,41 +53,41 @@
   border-radius: var(--radius-md);
   vertical-align: top;
 }
-.gift-img { width: 176rpx; height: 176rpx; border-radius: var(--radius-sm); background: var(--divider); }
-.gift-img-empty { background: var(--divider); }
-.gift-name { font-size: 24rpx; color: var(--text-1); margin-top: 10rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gift-spec { font-size: 22rpx; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gift-cost { font-size: 24rpx; color: var(--brand); margin-top: 4rpx; }
-.stepper { display: flex; align-items: center; justify-content: space-between; margin-top: 10rpx; }
-.step-btn {
+.benefits .gift-img { width: 176rpx; height: 176rpx; border-radius: var(--radius-sm); background: var(--divider); }
+.benefits .gift-img-empty { background: var(--divider); }
+.benefits .gift-name { font-size: 24rpx; color: var(--text-1); margin-top: 10rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.benefits .gift-spec { font-size: 22rpx; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.benefits .gift-cost { font-size: 24rpx; color: var(--brand); margin-top: 4rpx; }
+.benefits .stepper { display: flex; align-items: center; justify-content: space-between; margin-top: 10rpx; }
+.benefits .step-btn {
   width: 44rpx; height: 44rpx; line-height: 40rpx; text-align: center;
   border: 1rpx solid var(--border); border-radius: 50%;
   font-size: 28rpx; color: var(--text-1); background: var(--card);
 }
-.step-off { color: var(--text-disabled); }
-.step-qty { font-size: 26rpx; color: var(--text-1); }
+.benefits .step-off { color: var(--text-disabled); }
+.benefits .step-qty { font-size: 26rpx; color: var(--text-1); }
 
-.row-sum { align-items: flex-start; }
-.sum-left { display: flex; flex-direction: column; }
-.sum-item { font-size: 24rpx; color: var(--text-2); line-height: 1.6; }
-.earn { font-size: 24rpx; color: var(--success); }
+.benefits .row-sum { align-items: flex-start; }
+.benefits .sum-left { display: flex; flex-direction: column; }
+.benefits .sum-item { font-size: 24rpx; color: var(--text-2); line-height: 1.6; }
+.benefits .earn { font-size: 24rpx; color: var(--success); }
 
-.mask { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0, 0, 0, 0.45); z-index: 100; display: flex; align-items: flex-end; }
-.sheet { width: 100%; max-height: 70vh; background: var(--card); border-radius: var(--radius-xl) var(--radius-xl) 0 0; display: flex; flex-direction: column; }
-.sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 28rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
-.sheet-title { font-size: 30rpx; font-weight: 600; color: var(--text-1); }
-.sheet-close { font-size: 32rpx; color: var(--text-3); padding: 0 12rpx; }
-.sheet-body { flex: 1; padding: 16rpx 24rpx 40rpx; }
+.benefits .mask { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0, 0, 0, 0.45); z-index: 100; display: flex; align-items: flex-end; }
+.benefits .sheet { width: 100%; max-height: 70vh; background: var(--card); border-radius: var(--radius-xl) var(--radius-xl) 0 0; display: flex; flex-direction: column; }
+.benefits .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 28rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
+.benefits .sheet-title { font-size: 30rpx; font-weight: 600; color: var(--text-1); }
+.benefits .sheet-close { font-size: 32rpx; color: var(--text-3); padding: 0 12rpx; }
+.benefits .sheet-body { flex: 1; padding: 16rpx 24rpx 40rpx; }
 
-.cp { display: flex; align-items: center; padding: 24rpx 20rpx; margin-bottom: 16rpx; background: var(--brand-bg); border: 2rpx solid transparent; border-radius: var(--radius-md); }
-.cp-on { border-color: var(--brand); }
-.cp-dead { background: var(--gray-bg); opacity: 0.7; }
-.cp-none { font-size: 28rpx; color: var(--text-1); }
-.cp-amt { display: flex; align-items: baseline; width: 180rpx; flex-shrink: 0; color: var(--brand); }
-.cp-dead .cp-amt { color: var(--text-3); }
-.cp-cur { font-size: 24rpx; }
-.cp-num { font-size: 44rpx; font-weight: 700; }
-.cp-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.cp-name { font-size: 28rpx; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cp-meta { font-size: 22rpx; color: var(--text-3); line-height: 1.6; }
-.cp-why { font-size: 22rpx; color: var(--danger); margin-top: 4rpx; }
+.benefits .cp { display: flex; align-items: center; padding: 24rpx 20rpx; margin-bottom: 16rpx; background: var(--brand-bg); border: 2rpx solid transparent; border-radius: var(--radius-md); }
+.benefits .cp-on { border-color: var(--brand); }
+.benefits .cp-dead { background: var(--gray-bg); opacity: 0.7; }
+.benefits .cp-none { font-size: 28rpx; color: var(--text-1); }
+.benefits .cp-amt { display: flex; align-items: baseline; width: 180rpx; flex-shrink: 0; color: var(--brand); }
+.benefits .cp-dead .cp-amt { color: var(--text-3); }
+.benefits .cp-cur { font-size: 24rpx; }
+.benefits .cp-num { font-size: 44rpx; font-weight: 700; }
+.benefits .cp-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.benefits .cp-name { font-size: 28rpx; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.benefits .cp-meta { font-size: 22rpx; color: var(--text-3); line-height: 1.6; }
+.benefits .cp-why { font-size: 22rpx; color: var(--danger); margin-top: 4rpx; }

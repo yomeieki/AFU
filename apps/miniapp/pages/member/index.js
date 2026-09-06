@@ -72,17 +72,36 @@ var FIXED_RULES = [
 
 // docs/member-terms-copy.md 一、①「系统自动生成段」——数字来自后台设置，实时渲染。
 // 拿不到 points 时返回空数组（宁可少一段，也不写死一个可能是错的数字）。
+/**
+ * 有效期的自然表述：365 天说「1 年」，其余说「N 天」。
+ *
+ * 定稿文案是「若 **1 年** 内无消费…」，而规则说明那一段是按后台 validDays 实时渲染的
+ * （定稿开篇就禁止写死数字）。这行若也写死「1 年」，店主把有效期改成 180 天之后，
+ * 同一个页面上就会一处说 1 年、一处说 180 天。PO 2026-09-06 确认「有效期就是一年」，
+ * 所以默认渲染出来仍是「1 年」，一个字都没变；变的只是它不再可能与规则说明打架。
+ */
+function validDaysText(days) {
+  var n = Number(days)
+  if (!n || n <= 0) return ''
+  return n === 365 ? '1 年' : n + ' 天'
+}
+
 function buildAutoRules(points) {
   var rate = points && points.earnRatePerYuan
   var days = points && points.validDays
   if (rate === null || rate === undefined || days === null || days === undefined) return []
+  // 期限的说法与页头那条到期提示**共用同一个 validDaysText**：
+  // 各写一处的后果在预览截图里当场看到了——同一页上一处「1 年」一处「365 天」。
+  // 两个说法都不算错，但顾客看规则时会怀疑是不是两回事。
+  var period = validDaysText(days)
   return [
     '每消费 1 元得 ' + rate + ' 分，不足 1 元的部分不计分。',
-    '积分的有效期为最后一次消费后 ' + days + ' 天。在此期间内再次消费，全部积分的有效期自动顺延。',
-    '若连续 ' + days + ' 天未消费，账户内积分将全部清零。',
+    '积分的有效期为最后一次消费后 ' + period + '。在此期间内再次消费，全部积分的有效期自动顺延。',
+    '若连续 ' + period + '未消费，账户内积分将全部清零。',
     '使用积分时，优先扣除最早到期的那部分。',
   ]
 }
+
 
 // pointsExpireAt 是 ISO 串（服务端 maxExpiresAt.toISOString()），按本地时区取年月日
 function formatDay(iso) {
@@ -103,6 +122,8 @@ Page({
     pointsBalance: 0,
     availableCoupons: 0,
     expireDate: '',
+    validDaysText: '',
+    pointsPaused: false,
     showExpireTip: false,
     isEmpty: false,
 
@@ -150,6 +171,7 @@ Page({
         var balance = d.pointsBalance || 0
         var coupons = d.availableCoupons || 0
         var expireDate = formatDay(d.pointsExpireAt)
+        var validText = validDaysText(d.points && d.points.validDays)
         var extra = d.rulesText ? String(d.rulesText).replace(/^\s+|\s+$/g, '') : ''
         self._loading = false
         self.setData({
@@ -158,8 +180,13 @@ Page({
           pointsBalance: balance,
           availableCoupons: coupons,
           expireDate: expireDate,
-          // 余额为 0 或没有到期日时整行不显示（0 分说「将于某日全部过期」是废话）
-          showExpireTip: !!expireDate && balance > 0,
+          validDaysText: validText,
+          // 余额为 0 或没有到期日时整行不显示（0 分说「将于某日全部过期」是废话）。
+          // 拿不到 validDays 时同样不显示——宁可不说，也不说一个可能是错的期限。
+          showExpireTip: !!expireDate && balance > 0 && !!validText,
+          // 开关关掉时规则说明照常公示（PO 2026-09-06：「就暂停就行了，不用隐藏」），
+          // 但要明说现在是暂停状态，否则顾客会照着规则来问为什么没积分。
+          pointsPaused: !!(d.points && d.points.enabled === false),
           isEmpty: balance === 0 && coupons === 0,
           autoRules: buildAutoRules(d.points),
           rulesText: extra,

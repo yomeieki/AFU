@@ -32,7 +32,7 @@
 
       <!-- 到期提示（滚动续期口径，文案见 docs/member-terms-copy.md） -->
       <view wx:if="{{showExpireTip}}" class="expire-tip">
-        <text>若 1 年内无消费，您的 </text>
+        <text>若 {{validDaysText}}内无消费，您的 </text>
         <text class="expire-em">{{pointsBalance}}</text>
         <text> 分将于 </text>
         <text class="expire-em">{{expireDate}}</text>
@@ -74,6 +74,13 @@
     <!-- 规则说明（spec §2 合规公示项，全文可读，不折叠） -->
     <view class="card rules-card">
       <text class="rules-title">规则说明</text>
+
+      <!-- 开关关掉时不隐藏规则（PO 2026-09-06：「就暂停就行了，不用隐藏」），
+           但要明说现在不发新分——否则顾客照着「每消费 1 元得 N 分」来问为什么没积分。
+           已有积分照常能花，这是 PO 定的关关语义，一并写出来。 -->
+      <view wx:if="{{pointsPaused}}" class="rules-paused">
+        积分发放暂停中。暂停期间下单不再获得新积分；您已有的积分仍可正常使用，直到到期。
+      </view>
 
       <!-- ① 系统自动生成段：数字由后台设置实时渲染 -->
       <view class="rules-sec" wx:if="{{autoRules.length > 0}}">

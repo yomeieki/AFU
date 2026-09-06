@@ -45,7 +45,10 @@
 .item-delete { color: var(--text-3); font-size: 22rpx; }
 .tableware-row, .remark-row { display: flex; gap: 20rpx; align-items: center; padding: 10rpx 0; }
 .remark-row { align-items: flex-start; }
-.row-label { width: 88rpx; flex-shrink: 0; color: var(--text-2); font-size: 27rpx; }
+/* 116rpx 而不是 88rpx：27rpx 的字号下「需要餐具」四个字要 108rpx，88rpx 会把它折成
+   两行（真机同样折，不是预览的问题）。加宽后两个 label 仍然左对齐，只是备注输入框
+   的左边界右移 28rpx。 */
+.row-label { width: 116rpx; flex-shrink: 0; color: var(--text-2); font-size: 27rpx; }
 .remark-input { flex: 1; min-height: 72rpx; color: var(--text-1); font-size: 26rpx; line-height: 1.45; }
 .remark-placeholder { color: var(--text-disabled); }
 .spacer { height: 8rpx; }

@@ -212,3 +212,15 @@
   color: var(--text-1);
   font-weight: 600;
 }
+
+/* 积分暂停提示：用警示色但不做成错误态——这是店主的正常运营动作，不是故障 */
+.rules-paused {
+  margin-top: 16rpx;
+  padding: 16rpx 20rpx;
+  background: var(--warning-bg);
+  border: 1rpx solid var(--warning);
+  border-radius: var(--radius-md);
+  font-size: 24rpx;
+  line-height: 1.7;
+  color: var(--warning);
+}

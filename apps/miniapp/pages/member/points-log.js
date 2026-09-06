@@ -46,6 +46,20 @@ function decorate(row) {
   }
 }
 
+/**
+ * 有效期的自然表述：365 天说「1 年」，其余说「N 天」。
+ *
+ * 定稿文案是「若 **1 年** 内无消费…」，而规则说明那一段是按后台 validDays 实时渲染的
+ * （定稿开篇就禁止写死数字）。这行若也写死「1 年」，店主把有效期改成 180 天之后，
+ * 同一个页面上就会一处说 1 年、一处说 180 天。PO 2026-09-06 确认「有效期就是一年」，
+ * 所以默认渲染出来仍是「1 年」，一个字都没变；变的只是它不再可能与规则说明打架。
+ */
+function validDaysText(days) {
+  var n = Number(days)
+  if (!n || n <= 0) return ''
+  return n === 365 ? '1 年' : n + ' 天'
+}
+
 Page({
   data: {
     needLogin: false,
@@ -54,6 +68,7 @@ Page({
     summaryReady: false,
     balance: 0,
     expireAtText: '',
+    validDaysText: '',
     showExpireTip: false,
     list: [],
     page: 1,
@@ -131,14 +146,16 @@ Page({
   applySummary: function (data) {
     var balance = (data && data.pointsBalance) || 0
     var expireAt = data && data.pointsExpireAt
+    var validText = validDaysText(data && data.points && data.points.validDays)
     this.setData({
       summaryReady: true,
       balance: balance,
       expireAtText: formatTime(expireAt, false),
+      validDaysText: validText,
       // 滚动续期口径：这行说的是「全部积分」统一的到期日，取 pointsExpireAt。
       // summary 里还有个 expiringSoon，那是按批算的旧口径，续期后语义已变，
       // 不能拿它渲染「N 分即将过期」（docs/member-terms-copy.md 已定稿改口径）。
-      showExpireTip: balance > 0 && !!expireAt,
+      showExpireTip: balance > 0 && !!expireAt && !!validText,
     })
   },
 

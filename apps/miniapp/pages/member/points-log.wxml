@@ -15,7 +15,7 @@
         <text class="summary-num">{{balance}}</text>
       </view>
       <view wx:if="{{showExpireTip}}" class="summary-tip">
-        <text>若 1 年内无消费，您的</text>
+        <text>若 {{validDaysText}}内无消费，您的</text>
         <text class="summary-tip-strong">{{balance}}</text>
         <text>分将于</text>
         <text class="summary-tip-strong">{{expireAtText}}</text>
