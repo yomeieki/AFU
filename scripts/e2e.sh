@@ -198,12 +198,24 @@ CA=$(req GET /api/cart "$UT" | jq -r '.data.items | length'); assert_eq "购物�
 R=$(req POST /api/orders "$UT" "{\"addressId\":$ADDR}"); [[ "$(code "$R")" != "0" ]] && ok "二者皆无被拒" || fail "二者皆无未被拒"
 
 echo "== 16. 定时任务：超时取消回滚库存 / 催单 / 自动收货 =="
-ST0=$(req GET "/api/products/$PID" "$UT" | jq -r .data.stock)
+# 探针校验：拿不到库存就红在这里，**不能**让下面的 $((ST0+2)) 在 set -u 下
+# 因为 `null` 被当成变量名而把整个脚本打死（2026-09-06 实测：整轮一行输出都没有，
+# 比一条红断言难查得多）。规矩是「探针坏了必须红」，不是「探针坏了就崩」。
+ST0=$(req GET "/api/products/$PID" "$UT" | jq -r '.data.stock // empty')
+if [[ -z "$ST0" || ! "$ST0" =~ ^[0-9]+$ ]]; then
+  fail "第16段探针：拿不到 PID=$PID 的库存（下面的库存断言无从判断）" "读到 [$ST0]"
+  ST0=0
+fi
 R=$(req POST "/api/admin/system/run-scheduler" "$AT" '{"payTimeoutMin":0}')
 assert_eq "run-scheduler code 0" "$(code "$R")" "0"
 [[ "$(jq -r .data.cancelExpired <<<"$R")" -ge 1 ]] && ok "超时取消 $(jq -r .data.cancelExpired <<<"$R") 单" || fail "超时取消数" "$R"
 assert_eq "直购单 → CANCELLED" "$(order_status $O7)" "CANCELLED"
-ST1=$(req GET "/api/products/$PID" "$UT" | jq -r .data.stock); assert_eq "库存回滚 +2" "$ST1" "$((ST0+2))"
+ST1=$(req GET "/api/products/$PID" "$UT" | jq -r '.data.stock // empty')
+if [[ -z "$ST1" || ! "$ST1" =~ ^[0-9]+$ ]]; then
+  fail "第16段探针：回滚后拿不到库存" "读到 [$ST1]"
+else
+  assert_eq "库存回滚 +2" "$ST1" "$((ST0+2))"
+fi
 R=$(req POST "/api/orders/$O7/pay" "$UT"); assert_eq "已取消订单不可支付" "$(code "$R")" "42204"
 O8=$(make_paid_order); [[ -n "$O8" ]] && ok "订单 #$O8 已支付（待接单）" || { fail "下单/支付"; exit 1; }
 R=$(req POST "/api/admin/system/run-scheduler" "$AT" '{"remindAfterMin":0}')
@@ -2039,9 +2051,17 @@ echo "-- 列表两列 --"
 # §39 改一行造分逻辑就会让这两条变成永远红或永远绿。
 M3_BAL_DB=$(sql "SELECT points_balance FROM users WHERE id=$M2_UID;")
 M3_CPN_DB=$(sql "SELECT COUNT(*) FROM user_coupons WHERE user_id=$M2_UID AND status='UNUSED' AND expires_at > NOW();")
-R=$(req GET "/api/admin/users?keyword=&pageSize=50" "$AT")
-M3_ROW=$(jq -c --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid)' <<<"$R")
-assert_eq "列表：能在前 50 条里找到该用户（找不到则下面两条无意义）" "$([[ -n "$M3_ROW" ]] && echo yes || echo no)" "yes"
+# ⚠️ 不能只看第一页。这个断言原来写的是「前 50 条里找到」——用户列表按 createdAt desc 排，
+# 本轮造的用户理应在最前面，但 e2e 连跑多轮、或有别的会话同时在造用户时就会被挤出去，
+# 断言随即变成偶发红（2026-09-06 实测撞到）。改成有界翻页找，找不到才算真失败。
+M3_ROW=""
+for M3_PG in 1 2 3 4 5; do
+  R=$(req GET "/api/admin/users?page=$M3_PG&pageSize=50" "$AT")
+  M3_ROW=$(jq -c --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid)' <<<"$R")
+  [[ -n "$M3_ROW" ]] && break
+  [[ "$(jq -r '.data.list | length' <<<"$R")" -lt 50 ]] && break   # 已到最后一页
+done
+assert_eq "列表：翻页能找到该用户（找不到则下面两条无意义）" "$([[ -n "$M3_ROW" ]] && echo yes || echo no)" "yes"
 assert_eq "列表：pointsBalance = 库里的余额" "$(jq -r '.pointsBalance' <<<"$M3_ROW")" "$M3_BAL_DB"
 assert_eq "列表：availableCoupons = 库里 UNUSED 且未过期的张数" "$(jq -r '.availableCoupons' <<<"$M3_ROW")" "$M3_CPN_DB"
 
@@ -2049,11 +2069,21 @@ echo "-- 可用券数按**时间**判，不是只看 status --"
 # 把一张 UNUSED 券的到期日改到过去（模拟「定时任务还没扫到」）。只看 status 的实现
 # 会把它继续算进可用数——这条断言就是钉住那个差别的：把 `expiresAt: { gt: now }` 去掉，它必红。
 M3_CEXP=$(m2_coupon "$M2_UT" "M3E2E-伪过期$M3_TAG" 300 0 ALL)
-M3_CPN_BEFORE=$(jq -r --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid) | .availableCoupons' <<<"$(req GET "/api/admin/users?pageSize=50" "$AT")")
+# 同样不能只看第一页 —— 抽成一个函数，两处共用
+nc_avail() { local pg row
+  for pg in 1 2 3 4 5; do
+    row=$(req GET "/api/admin/users?page=$pg&pageSize=50" "$AT")
+    local v; v=$(jq -r --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid) | .availableCoupons' <<<"$row")
+    [[ -n "$v" ]] && { echo "$v"; return; }
+    [[ "$(jq -r '.data.list | length' <<<"$row")" -lt 50 ]] && break
+  done
+  echo ""
+}
+M3_CPN_BEFORE=$(nc_avail)
 sql "UPDATE user_coupons SET expires_at = DATE_SUB(NOW(), INTERVAL 1 DAY) WHERE id=$M3_CEXP;"
 assert_eq "时间判前置：券仍是 UNUSED，但已过期（定时任务未扫）" \
   "$(sql "SELECT CONCAT(status,'/',expires_at < NOW()) FROM user_coupons WHERE id=$M3_CEXP;")" "UNUSED/1"
-M3_CPN_AFTER=$(jq -r --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid) | .availableCoupons' <<<"$(req GET "/api/admin/users?pageSize=50" "$AT")")
+M3_CPN_AFTER=$(nc_avail)
 assert_eq "可用券数：伪过期那张不再计入（−1）" "$M3_CPN_AFTER" "$((M3_CPN_BEFORE-1))"
 
 echo "-- 积分流水 --"
@@ -2131,6 +2161,65 @@ M3_TPL_ROW=$(req GET "/api/admin/coupon-templates?source=ADMIN" "$AT" | jq -c --
 assert_eq "模板：issuedTotal = 真实发出的张数（1）" "$(jq -r '.issuedTotal' <<<"$M3_TPL_ROW")" "1"
 assert_eq "模板：issuedCount 仍是 0（它只被 POINTS/CAMPAIGN 递增）" "$(jq -r '.issuedCount' <<<"$M3_TPL_ROW")" "0"
 assert_eq "模板：usedCount = 0（这张还没核销）" "$(jq -r '.usedCount' <<<"$M3_TPL_ROW")" "0"
+
+echo "-- 支付与取消并发：抢输的一方不能把状态写回 PAID（里程碑审阅 2026-09-06 抓到）--"
+# 修复前 wechat-notify.ts 与 orders.ts 的支付分支都是 `update({ where: { id } })` 无守卫写。
+# 竞态：支付侧在事务内读到 PENDING_PAYMENT（MySQL RR 快照读、不加锁），随后取消路径提交
+# （券翻回 UNUSED、赠品积分 GIFT_REVERT 退回、名额回落、库存加回），支付侧那次无条件 UPDATE
+# 再把 CANCELLED 覆盖成 PAID —— 一张要履约的单配上已经还给顾客的券与积分，且无告警。
+#
+# ⚠️ **这一段只能用真并发测。** 第一版写成「先取消、再支付」的串行替代，
+# 结果六条断言在回退修复后照样全绿 —— 因为 orders.ts:865 那道**事务之前**的状态检查
+# 先把 CANCELLED 挡掉了，压根走不到被修的那一行。测的是别的东西。
+# 现在改成真并发：同一单同时发 pay 与 cancel，两条都在飞，谁先提交由数据库定；
+# 断言不看「谁赢」（那不确定），只看**赢家是自洽的**：
+#   PAID  → 券必须还是 USED、没有 GIFT_REVERT
+#   取消  → 券必须回 UNUSED、有 GIFT_REVERT
+# 无守卫写会产出第三种组合（PAID + 券 UNUSED + 有 GIFT_REVERT），那正是资损状态。
+M4_CC=$(m2_coupon "$M2_UT" "M4E2E-并发守卫$M3_TAG" 300 0 ALL)
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M4_CC,\"gifts\":[{\"pointsGoodId\":$M2_PG,\"quantity\":1}]}")
+M4_CO=$(jq -r '.data.orderId // empty' <<<"$R")
+assert_eq "并发守卫前置：待付款单已建（带券与赠品）" "$(sql "SELECT status FROM orders WHERE id=$M4_CO;")" "PENDING_PAYMENT"
+
+# 同时开火。两条请求各自的 HTTP 结果不做断言（谁赢不确定），只收口最终状态
+req POST "/api/orders/$M4_CO/pay" "$M2_UT" > /tmp/e2e_race_pay.json &
+req PUT  "/api/orders/$M4_CO/cancel" "$M2_UT" > /tmp/e2e_race_cancel.json &
+wait
+sleep 0.4
+
+M4_ST=$(sql "SELECT status FROM orders WHERE id=$M4_CO;")
+M4_CS=$(sql "SELECT status FROM user_coupons WHERE id=$M4_CC;")
+M4_RV=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE type='GIFT_REVERT' AND ref_id='$M4_CO';")
+echo "     （本轮实际赢家：订单=$M4_ST 券=$M4_CS GIFT_REVERT=$M4_RV 条）"
+
+# 自洽性判据：把「订单状态 + 券状态 + 有没有退回」拼成一个串，只允许两种合法组合
+M4_COMBO="$M4_ST/$M4_CS/$M4_RV"
+case "$M4_COMBO" in
+  PAID/USED/0)        M4_OK=yes ;;   # 支付赢：权益仍占用，没被释放
+  CANCELLED/UNUSED/1) M4_OK=yes ;;   # 取消赢：权益已释放
+  REFUNDING/*)        M4_OK=yes ;;   # 支付晚到被判「取消后仍付款」，走自动退款，同样自洽
+  *)                  M4_OK=no  ;;
+esac
+assert_eq "并发守卫：最终状态自洽（订单/券/退回 三者不能互相矛盾）" "$M4_OK" "yes"
+assert_eq "并发守卫：不存在「PAID 单 + 券已回 UNUSED」这种资损组合" \
+  "$([[ "$M4_ST" == "PAID" && "$M4_CS" == "UNUSED" ]] && echo 资损 || echo 正常)" "正常"
+assert_eq "并发守卫：不存在「PAID 单 + 赠品积分已退回」这种资损组合" \
+  "$([[ "$M4_ST" == "PAID" && "$M4_RV" != "0" ]] && echo 资损 || echo 正常)" "正常"
+rm -f /tmp/e2e_race_pay.json /tmp/e2e_race_cancel.json
+# 收尾：无论谁赢都把单收干净，别留给下一轮。
+# ⚠️ 不能直写 `UPDATE orders SET status='CANCELLED'` —— 那样**不回滚库存**，
+# 支付赢的那些轮每轮漏 2 件，攒几轮就把第 16 段的「库存回滚 +2」拖红
+# （2026-09-06 实测：连跑几轮后 §16 直接把整个脚本打死）。走真实路径收口。
+case "$M4_ST" in
+  PAID)
+    M4_REM=$(req GET "/api/admin/orders/$M4_CO" "$AT" | jq -r '.data.remainingRefundable // 0')
+    [[ "$M4_REM" -gt 0 ]] && req POST "/api/admin/orders/$M4_CO/refund" "$AT" \
+      "{\"amount\":$M4_REM,\"reason\":\"并发守卫收尾\",\"idempotencyKey\":\"race-$M4_CO\"}" >/dev/null ;;
+  PENDING_PAYMENT)
+    req PUT "/api/orders/$M4_CO/cancel" "$M2_UT" >/dev/null ;;
+esac
+assert_eq "并发守卫收尾：单已收口（不是 PAID / 不是待付款）" \
+  "$([[ "$(sql "SELECT status FROM orders WHERE id=$M4_CO;")" =~ ^(CANCELLED|REFUNDED|REFUNDING)$ ]] && echo yes || echo no)" "yes"
 
 echo "-- 新客券的引用关系：券模板列表标出「正被设为新客券」--"
 # 让新客券变成死配置的更常见路径是「当时选的是好的，后来在优惠券页顺手停用了」——

@@ -83,6 +83,7 @@
     id="benefits"
     channel="LOCAL"
     subtotal="{{subtotal}}"
+    shipping-fee="{{quote.fee}}"
     disabled="{{submitting || quoting}}"
     bind:change="onBenefitsChange"
   />

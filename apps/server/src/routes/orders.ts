@@ -880,7 +880,14 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
             paidAt,
           },
         })
-        await tx.order.update({ where: { id: orderId }, data: { status: 'PAID', paidAt } })
+        // 条件写，与 wechat-notify.ts 的真实回调同形：并发取消已经释放过券与赠品积分时
+        // 绝不能把状态写回 PAID（否则「已释放的权益」与「一张要履约的 PAID 单」共存）。
+        // mock 路径生产禁用，但 e2e 天天走它——两条路的语义必须一致，否则 e2e 验的不是生产行为。
+        const moved = await tx.order.updateMany({
+          where: { id: orderId, status: 'PENDING_PAYMENT' },
+          data: { status: 'PAID', paidAt },
+        })
+        if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
       })
       prisma.orderItem
         .findMany({ where: { orderId }, select: { productName: true, specText: true, quantity: true, isGift: true } })

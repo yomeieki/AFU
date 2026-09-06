@@ -1365,8 +1365,8 @@ pointsCost`（M1 未使用）。字段定义与枚举取值见 spec §4。
 | 接口 | 说明 |
 |---|---|
 | `GET /api/member/summary` | `{ pointsBalance, expiringSoon:{points,date}\|null, availableCoupons }` |
-| `GET /api/member/points/ledger?page=&pageSize=` | 流水，白名单只返回 `typeLabel/delta/refType/refId/remark/createdAt` |
-| `GET /api/member/coupons?status=available\|used\|expired` | 券列表，白名单只返回 `id/code/name/amount/threshold/channel/status/source/expiresAt/usedAt`（不返回 `issuedBy/remark/sourceRef/templateId`） |
+| `GET /api/member/points/ledger?page=&pageSize=` | 流水，白名单只返回 `typeLabel/delta/refType/refId/remark/expiresAt/orderNo/createdAt`（`expiresAt`/`orderNo` 是 M4 加的；**不返回**内部自增 `id` 与原始 `type` 码） |
+| `GET /api/member/coupons?status=available\|used\|expired` | 券列表，白名单只返回 `id/code/name/amount/threshold/channel/status/source/expiresAt/usedAt/orderId`（`orderId` 是 M4 加的，「已用于订单 …」要能点进详情，是顾客**自己的**订单 id；**不返回** `issuedBy/remark/sourceRef/templateId`） |
 | `POST /api/member/points/redeem` | `{ templateId }`，积分兑换券 |
 | `POST /api/member/coupons/claim` | `{ templateId }`，领券中心领取 |
 
@@ -1501,8 +1501,10 @@ M1 只有账本与只读端点；M2 把券与赠品接进了 `POST /orders`。**
 
 ### 积分流水的 `typeLabel` 与 `orderNo` 由服务端补
 
-- `typeLabel`：`EARN` 消费得分 / `REDEEM` 兑换券 / `GIFT` 随单赠品 / `GIFT_REVERT` 取消退回 /
-  `REFUND_DEDUCT` 退款扣回 / `EXPIRE` 过期 / `ADMIN` 手动调整（预留，本轮无入口）。
+- `typeLabel`：`EARN` 消费得分 / `REDEEM` 积分兑换 / `GIFT` 随单赠品 / `GIFT_REVERT` 取消退回 /
+  `REFUND_DEDUCT` 退款扣回 / `EXPIRE` 积分过期 / `ADMIN` 手动调整（预留，本轮无入口）。
+  **唯一来源是 `services/member/points.ts` 的 `LEDGER_TYPE_LABEL`**，顾客端与管理端共用同一份；
+  改文案改那一处，别在文档里另写一套（M3 曾各写一份，两份当场就漂移了）。
   未知 type 原样回落成字面量。**在服务端拼**是因为这套 type 已经有三个消费方，各写一份 map 必然漂移。
 - `orderNo`：`refType='ORDER'` 时 `refId` 存的是 **`Order.id`**（不是单号），服务端联查补出真实单号。
 - 排序按 `id` 倒序而非 `createdAt`：同一事务里写的多条流水（如 `GIFT` + `EARN`）时间戳相同，

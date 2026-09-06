@@ -92,7 +92,8 @@ const couponsQuerySchema = z.object({
 })
 
 // GET /api/member/coupons?status=available|used|expired
-// 输出白名单：id/code/name/amount/threshold/channel/status/source/expiresAt/usedAt
+// 输出白名单：id/code/name/amount/threshold/channel/status/source/expiresAt/usedAt/orderId
+// （orderId 是 M4 加的，「已用于订单 …」要能点进详情；它是顾客**自己的**订单 id，不是越权字段）
 // （不返回 issuedBy/remark/sourceRef/templateId）——listUserCoupons 的 select 已经是这份白名单，
 // 这里不再二次收窄，避免两处白名单各写一份、日后改漏一处。
 router.get('/coupons', memberReadLimiter, async (req: Request, res: Response, next: NextFunction) => {

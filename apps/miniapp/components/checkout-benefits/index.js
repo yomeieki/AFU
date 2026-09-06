@@ -23,6 +23,16 @@ Component({
     channel: { type: String, value: 'EXPRESS' },
     // 券前商品小计（分）。父页金额变了要重新拉——门槛与封顶都依赖它
     subtotal: { type: Number, value: 0 },
+    /**
+     * 运费/配送费（分）。**只用于「预计得分」那一行**，不参与选券与门槛判定。
+     *
+     * 必须由父页传进来：服务端发分走 `calcEarn(order.actualAmount, …)`，而 actualAmount
+     * **含运费**（docs/member-terms-copy.md 明写「实付金额包含运费」）。组件若只按
+     * `subtotal − discount` 估算，就会比实际到账少「运费元数 × rate」——
+     * 邮寄单未过包邮线时差一截，同城单配送费恒 > 0，**每一单都对不上**。
+     * 父页拿不到运费时传 0，此时估算偏低但不会偏高（宁可少说，不要许多）。
+     */
+    shippingFee: { type: Number, value: 0 },
     // 父页在提交中 / 报价中时置 true，整卡不可点
     disabled: { type: Boolean, value: false },
   },
@@ -49,6 +59,10 @@ Component({
   observers: {
     'channel, subtotal': function () {
       this._scheduleLoad()
+    },
+    // 运费变了不用重新拉优惠项（它不参与选券），但「预计得分」要跟着重算
+    shippingFee: function () {
+      if (this.data.state === 'ready' || this.data.state === 'empty') this._emit()
     },
   },
 
@@ -237,11 +251,13 @@ Component({
         }
       }
 
-      // 「预计得 N 分」：按券后展示合计估算，文案必须带「预计」——真实得分由服务端在
-      // 订单完成时结算，中间还可能发生退款按比例扣回，这里给的只能是个估计。
+      // 「预计得 N 分」：口径必须与服务端 calcEarn 一致 ——
+      //   服务端：floor(actualAmount / 100) × rate，其中 actualAmount = 小计 − 券 + 运费
+      // 少加运费就会比实际到账少「运费元数 × rate」（同城单配送费恒 > 0，每单都错）。
+      // 文案带「预计」是必须的：真实得分在订单**完成**时才结算，中间还可能退款按比例扣回。
       var earnText = ''
       if (this.data.pointsEnabled && this.data.earnRatePerYuan > 0) {
-        var payFen = this.data.subtotal - discount
+        var payFen = this.data.subtotal - discount + (this.properties.shippingFee || 0)
         if (payFen < 0) payFen = 0
         var earn = Math.floor(payFen / 100) * this.data.earnRatePerYuan
         if (earn > 0) earnText = '预计获得 ' + earn + ' 积分'

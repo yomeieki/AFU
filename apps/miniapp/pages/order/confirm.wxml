@@ -65,6 +65,7 @@
     id="benefits"
     channel="EXPRESS"
     subtotal="{{totalAmount}}"
+    shipping-fee="{{shippingFee}}"
     disabled="{{submitting}}"
     bind:change="onBenefitsChange"
   />

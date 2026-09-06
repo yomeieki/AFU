@@ -181,19 +181,57 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
         },
       })
 
+      // ⚠️ 下面两处必须是**条件写 + 判 count**，不能用 `update({ where: { id } })`。
+      //
+      // 上面那次 findUnique 在 MySQL RR 下是快照读、不加锁（与 refund.ts:344 同一条规则，
+      // 仓库里其余七处订单状态流转都遵守它，这里曾是唯一的例外）。
+      // 无守卫写会踩这条竞态：
+      //
+      //   ① 回调事务在 :143 读到 PENDING_PAYMENT，算出 wasCancelled=false
+      //   ② 在 payment.upsert 与下面这次写之间，另一条取消路径提交
+      //      （顾客自助取消 / cancelExpiredOrders / 管理员取消 / 拒单待付款分支）：
+      //      status→CANCELLED，并且**已经执行了 releaseOrderBenefits**
+      //      ——券翻回 UNUSED 且 orderId 置空、赠品积分以 GIFT_REVERT 退回余额、
+      //        赠品名额 issuedCount 减回、库存加回
+      //   ③ 无守卫的 update 拿到行锁后把 CANCELLED 直接改写成 PAID
+      //
+      // 结果：订单变成一张正常的已付款单，会被接单、出票、发货，而顾客手里那张券
+      // 已经变回可用（能再花一次）、积分已经退回、赠品名额已经还回、库存也已加回（可超卖）。
+      // 而 `wasCancelled` 是按过期快照判的，下面「取消后仍付款成功→自动全额退款」那一支
+      // **不会触发**，也没有任何告警或日志——是一条静默的资损路径。
+      //
+      // 改成条件写之后：输掉的一方 count=0，回落到 lateCancelled 分支走自动退款，
+      // 语义与「回调晚到、单子已被取消」完全一致，这本来就是那一支存在的理由。
       if (wasCancelled) {
         // 库存已在取消时回滚，这里只把订单转入退款流程，由下面自动发起全额退款
-        await tx.order.update({
-          where: { id: orderId },
+        const moved = await tx.order.updateMany({
+          where: { id: orderId, status: 'CANCELLED' },
           data: { status: 'REFUNDING', paidAt, cancelReason: '订单取消后仍付款成功，系统自动退款' },
         })
+        // count=0 说明这一瞬间状态又变了（极少见：取消后立刻被别处推进）。
+        // 不硬写，让本次回调按「已处理」返回；微信重推时会用新状态重新判一遍。
+        if (moved.count === 0) return
         lateCancelled = { orderNo: order.orderNo, actualAmount: order.actualAmount }
         return
       }
-      await tx.order.update({
-        where: { id: orderId },
+      const moved = await tx.order.updateMany({
+        where: { id: orderId, status: 'PENDING_PAYMENT' },
         data: { status: 'PAID', paidAt },
       })
+      if (moved.count === 0) {
+        // 抢输了：并发的取消已经提交并释放了券与赠品积分。此时**绝不能**把状态写成 PAID
+        // ——那会让「已释放的权益」与「一张要履约的 PAID 单」共存。
+        // 按 lateCancelled 走自动全额退款，与「回调晚到」同一套处理。
+        const now = await tx.order.findUnique({ where: { id: orderId }, select: { status: true } })
+        if (now?.status === 'CANCELLED') {
+          const back = await tx.order.updateMany({
+            where: { id: orderId, status: 'CANCELLED' },
+            data: { status: 'REFUNDING', paidAt, cancelReason: '订单取消后仍付款成功，系统自动退款（与取消并发）' },
+          })
+          if (back.count > 0) lateCancelled = { orderNo: order.orderNo, actualAmount: order.actualAmount }
+        }
+        return
+      }
     })
 
     if (lateCancelled) {
