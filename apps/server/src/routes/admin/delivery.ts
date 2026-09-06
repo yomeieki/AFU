@@ -22,6 +22,7 @@ const ADMIN_DELIVERY_SELECT = {
   providerTaskId: true, providerOrderId: true,
   courierCompany: true, courierName: true, courierMobile: true,
   quotedFee: true, actualFee: true, quoteSnapshot: true, quotedAt: true, calledProviders: true,
+  callStrategy: true, orderFees: true,
   tipFee: true, cancelFee: true, providerDistanceM: true,
   errorCode: true, failReason: true,
   calledAt: true, acceptedAt: true, pickedUpAt: true, deliveredAt: true, cancelledAt: true, cancelReason: true,

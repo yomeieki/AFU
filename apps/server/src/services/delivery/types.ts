@@ -67,6 +67,15 @@ export interface CreateDeliveryOrderResult {
   providerOrderId: string | null
   quotedFeeFen: number | null
   distanceM: number | null
+  /**
+   * 下单那一刻**每一家被呼运力各自的预扣**（batchOrder 响应 fee[]），落 Delivery.orderFees。
+   *
+   * 与 price() 返回的 quotes 结构相同但语义不同：那个是免费查价（可能是几分钟前的），
+   * 这个是运力方真金白银冻结的数——2026-09-06 首单实测，快递100 企业后台四行扣费明细
+   * 与这里的四条一一对上。中标运力接单后 actualFee 就从这里认领（见 callback.ts）。
+   * 拿不到编码的项不进列表（同 price()：宁可少一家，也不要一堆 provider:"" 的行）。
+   */
+  quotes: ProviderQuote[]
   raw: unknown
 }
 

@@ -352,6 +352,9 @@ export interface LocalDeliverySettings {
   autoCallDelayMin: number
   defaultProvider: 'KD100' | 'SELF'
   kd100: { providers: string[]; goodsType: string; defaultItemWeightG: number; insurance: boolean; autoDowngradeToSelfOnNoBalance: boolean }
+  // 呼叫策略。SOLO_LOWEST = 只呼报价最低那一家（省钱，且余额只冻结一笔）；ALL = 并呼全表（旧行为）。
+  // escalateAfterMin 分钟无人接单则自动取消重呼、升级为并呼；0 = 不自动升级。
+  callStrategy: { mode: 'SOLO_LOWEST' | 'ALL'; escalateAfterMin: number }
   limits: { maxItems: number; maxWeightKg: number }
   callTimeoutMin: number
   acceptedStuckMin: number

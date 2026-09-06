@@ -7,14 +7,19 @@ import prisma from '../../utils/prisma'
 import { config } from '../../config'
 import { getLocalSettings, isOpenNow } from '../local-settings'
 import { isCircuitTripped } from './circuit'
-import { callRider } from './orchestrator'
+import { callRider, cancelDelivery, precancelDelivery } from './orchestrator'
 import { refreshOrderQuote, QUOTE_FRESH_MS } from './quote'
+import { recordDeliveryEvent, adminEventKey } from './events'
 import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert } from '../order-notify'
-import { DELIVERY_STATUS_LABEL, TERMINAL } from './state'
+import { DELIVERY_STATUS_LABEL, TERMINAL, providerLabel } from './state'
 
 const BATCH = 100
 const ago = (min: number) => new Date(Date.now() - min * 60 * 1000)
+
+/** Delivery.calledProviders（Json 列）→ 「达达」这样的可读文案，给告警用。读不出就留空 */
+const calledLabel = (v: Prisma.JsonValue | null): string =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').map(providerLabel).join('、') : ''
 
 /** Delivery CALLING 超时无人接单（每单只推一次） */
 export async function remindCallTimeout(min?: number): Promise<number> {
@@ -152,6 +157,83 @@ export async function refreshStaleQuotes(min?: number): Promise<number> {
     } catch (e) {
       // 查价是锦上添花：失败只记一行，绝不能让一单的报价问题拖垮整轮定时任务。
       console.warn('[refreshStaleQuotes] 订单', o.id, '重查报价失败，跳过:', (e as Error)?.message ?? e)
+    }
+  }
+  return n
+}
+
+/**
+ * 只呼最低价的单等太久无人接 → **取消 D-1、并呼建 D-2**（升级）。
+ *
+ * 为什么是「取消重呼」而不是「追加再呼一家」：`Delivery.activeOrderId` 唯一索引规定
+ * 一张订单同时只允许一张在途配送单（schema.prisma），追加在结构上就不可能。
+ * 好在 cancelDelivery + callRider 两条路径本来就都在，今天店员手动「取消呼叫 → 重新呼叫」
+ * 走的就是它们，这里只是把同一套动作自动化。
+ *
+ * 升级**一步到位并呼全表**，不做「换第二便宜的再等 3 分钟」——再挑一轮就是 6 分钟，
+ * 凉菜等不起（docs/design/workbench-ui-spec.md §6b）。
+ *
+ * 三道闸：
+ *  - `escalateAfterMin <= 0`：店主关掉了自动升级，只留 callTimeoutMin 的人工提醒；
+ *  - 熔断中：撤了旧单却呼不出新单，比不升级更糟——直接跳过，等人充值后点「恢复」；
+ *  - 预估取消费 > 0：说明骑手多半已经接单了（未接单的单撤销不要钱）。这时自动撤单要真花钱，
+ *    改标 `SOLO_HELD` 交给人决定。这个标记同时让该行离开扫描范围，不会每分钟重复 precancel + 重复告警。
+ *
+ * 残余竞态：precancel 与 cancel 之间那约 1 秒里骑手恰好接单 → cancel 会真的取消已接单的骑手
+ * 并产生约 ¥2 取消费。金额会落在 D-1 行的 cancelFee 上、事件里看得见；概率极低，接受并记录。
+ */
+export async function escalateSoloCalls(min?: number): Promise<number> {
+  const s = await getLocalSettings()
+  const threshold = min ?? s.callStrategy.escalateAfterMin
+  if (threshold <= 0) return 0
+  if (isCircuitTripped()) return 0
+  const rows = await prisma.delivery.findMany({
+    // providerTaskId 非空 = 运力方那头确实有单可撤（占位/UNKNOWN 行没有它，precancel 会 42234）
+    where: { status: 'CALLING', callStrategy: 'SOLO', providerTaskId: { not: null }, calledAt: { lt: ago(threshold) } },
+    take: BATCH, select: { id: true, orderId: true, orderNo: true, deliveryNo: true, calledProviders: true, quotedFee: true },
+  })
+  let n = 0
+  for (const d of rows) {
+    try {
+      const { cancelFeeFen } = await precancelDelivery(d.orderId)
+      if ((cancelFeeFen ?? 0) > 0) {
+        const held = await prisma.delivery.updateMany({
+          where: { id: d.id, status: 'CALLING', callStrategy: 'SOLO' },
+          data: { callStrategy: 'SOLO_HELD' },
+        })
+        if (held.count === 0) continue   // 这一秒里被别人改了（接单/取消），下一轮自然不再命中
+        await recordDeliveryEvent(prisma, {
+          deliveryId: d.id, dedupeKey: adminEventKey(), source: 'SCHEDULER', operator: 'scheduler',
+          statusDesc: `预估取消费 ¥${((cancelFeeFen ?? 0) / 100).toFixed(2)} > 0，放弃自动升级并呼（多半骑手已接单），请人工决定`,
+        })
+        notifyLocalDeliveryAlert('自动升级并呼已放弃', [
+          `订单 ${d.orderNo}（${d.deliveryNo}，只呼了 ${calledLabel(d.calledProviders)}${d.quotedFee != null ? ` ¥${(d.quotedFee / 100).toFixed(2)}` : ''}）`,
+          `等待超过 ${threshold} 分钟，但预估取消费 ¥${((cancelFeeFen ?? 0) / 100).toFixed(2)}`,
+          '撤单要花钱，已保留原呼叫。可继续等待、加小费或手动取消重呼',
+        ])
+        n++
+        continue
+      }
+      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为并呼` })
+      try {
+        await callRider({
+          orderId: d.orderId, operator: 'scheduler', source: 'SCHEDULER',
+          providers: s.kd100.providers, callStrategy: 'ALL',
+        })
+        n++
+      } catch (e) {
+        // D-1 已经撤了、D-2 没呼出去：订单停在 PREPARING 且无在途单。remindLocalUncalled（10 分钟）
+        // 会兜住，但那太晚了——菜已经做好在等。这里立刻喊一声。
+        notifySystemAlert('自动升级并呼失败', [
+          `订单 ${d.orderNo}：原配送单 ${d.deliveryNo} 已取消，但并呼未能发出`,
+          (e as Error).message,
+          '该订单当前无在途配送单，请到工作台手动呼叫骑手或改自己送',
+        ], { key: `dlv-escalate:${d.id}` })
+      }
+    } catch (e) {
+      // 单行失败不能拖垮整轮：最常见的是这一秒里骑手正好接了单（precancel/cancel 撞状态），
+      // 属正常竞态，下一轮该行已不在 CALLING 里，自然不再命中。
+      console.warn('[escalateSoloCalls] 配送单', d.deliveryNo, '升级失败，跳过:', (e as Error)?.message ?? e)
     }
   }
   return n

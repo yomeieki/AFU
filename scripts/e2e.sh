@@ -1139,13 +1139,19 @@ assert_eq "Delivery 记下本单呼了哪些运力" "$(jq -c '.data.delivery.cal
 assert_eq "Delivery 复制到报价快照" "$(jq -r '.data.delivery.quoteSnapshot != null' <<<"$R")" "true"
 assert_eq "Delivery 快照带查询时间" "$(jq -r '.data.delivery.quotedAt != null' <<<"$R")" "true"
 assert_eq "运力列表传到了下单参数" "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -c '[.data[] | select(.op=="createOrder")] | last | .input.providers')" '["meituantongcheng"]'
-# ③b 不传 providers：应记全部默认运力（覆盖缺口——之前只测过「指定单家」，没测过「默认全呼」）
-EXPPROV=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c '.data.kd100.providers')
+# ③b 不传 providers + 呼叫方式=并呼：应记全部默认运力
+#    ⚠️ 这段必须先把 callStrategy.mode 压成 ALL 再测。默认值已经是 SOLO_LOWEST（只呼最低价），
+#    此时「不传 providers」的正确行为是**只呼一家**，照旧断言全表会红——那是策略生效的证据，
+#    不是回归。「不传 providers 时按策略选谁」的完整覆盖在 scripts/e2e.d/50-call-strategy.sh。
+QSETT=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
+EXPPROV=$(jq -c '.kd100.providers' <<<"$QSETT")
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.callStrategy.mode = "ALL"' <<<"$QSETT")" >/dev/null
 QO3=$(mk_local_paid); req POST "/api/admin/local/orders/$QO3/accept" "$AT" >/dev/null
 R=$(req POST "/api/admin/local/orders/$QO3/call" "$AT" '{}')
 assert_eq "不传 providers 呼叫 code 0" "$(code "$R")" "0"
 R=$(req GET "/api/admin/local/orders/$QO3/delivery" "$AT")
 assert_eq "不传 providers 时 calledProviders=设置里的默认列表" "$(jq -c '.data.delivery.calledProviders' <<<"$R")" "$EXPPROV"
+req PUT /api/admin/settings/local-delivery "$AT" "$QSETT" >/dev/null
 # ③c Important 1 覆盖：「接单并呼叫」这条组合路径上，Delivery.quoteSnapshot 也必须非空。
 #    kickOffQuote 在 doAccept 后 fire-and-forget，callRider 紧接着就跑；占位创建时读到的
 #    Order 快照（callRider 一进来就读一次）几乎必然还是空——这正是 Important 1 描述的系统性

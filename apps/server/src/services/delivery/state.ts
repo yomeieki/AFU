@@ -17,6 +17,19 @@ export const PROVIDER_STATUS_MAP: Record<string, RankEntry | SideEntry> = {
   '510': { type: 'side', status: 'ABNORMAL' },
   '720': { type: 'side', status: 'CANCELLED' },
 }
+/**
+ * 运力编码 → 中文名。用在事件文案与告警里（「只呼 达达 ¥16.23」比「只呼 dadatongcheng」
+ * 对店员有用得多）。管理端另有一份同表的 apps/admin/src/utils/providers.ts 供界面用——
+ * 两处都只是显示层，唯一真相仍是 local-settings.ts 的 KD100_PROVIDERS。
+ * 未收录的编码原样返回，不猜、不留空。
+ */
+export const PROVIDER_LABEL: Record<string, string> = {
+  dadatongcheng: '达达', fengniaotongcheng: '蜂鸟', shunfengtongcheng: '顺丰同城',
+  shansongtongcheng: '闪送', meituantongcheng: '美团', uupaotui: 'UU跑腿', gxdtongcheng: '裹小递',
+}
+export const providerLabel = (code: string | null | undefined): string =>
+  (code ? PROVIDER_LABEL[code] ?? code : '')
+
 export const DELIVERY_STATUS_LABEL: Record<string, string> = {
   PENDING: '待呼叫', CALLING: '待抢单', ACCEPTED: '骑手已接单', ARRIVING: '骑手赶来取货',
   ARRIVED: '骑手已到店', DELIVERING: '配送中', REASSIGNING: '改派中', ABNORMAL: '配送异常',

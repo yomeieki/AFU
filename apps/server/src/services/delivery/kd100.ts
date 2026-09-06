@@ -141,17 +141,35 @@ export const kd100Provider: DeliveryProvider = {
   async createOrder(input): Promise<CreateDeliveryOrderResult> {
     const settings = await import('../local-settings').then((m) => m.getLocalSettings())
     // input.providers 覆盖设置里的默认列表（规格 §10 的口子）；不传就是并呼默认那几家
-    const param = _buildOrderParam(input, input.providers?.length ? input.providers : settings.kd100.providers, settings.kd100.goodsType)
+    const called = input.providers?.length ? input.providers : settings.kd100.providers
+    const param = _buildOrderParam(input, called, settings.kd100.goodsType)
     const data = await post('batchOrder', param)
     const d = data.data ?? {}
-    const fees = (d.fee as { discountFee?: unknown; deliveryDistance?: unknown }[] | undefined) ?? []
+    const fees = (d.fee as Record<string, unknown>[] | undefined) ?? []
+    // fee[] 每项带 kuaidiCom + discountFee —— 这正是快递100 企业后台那几行预扣明细
+    // （2026-09-06 首单实测四比四全中）。此前这里只取 Math.min 把编码丢了，于是「谁接的单、
+    // 实际扣了多少」在库里无从对上；现在原样留下，供 Delivery.orderFees 与 actualFee 认领用。
+    // 拼写同 price()：文档写驼峰 kuaidiCom，回调里是全小写 kuaidicom，两种都读一遍。
+    const quotes: ProviderQuote[] = []
+    for (const f of fees) {
+      const code = String(f.kuaidiCom ?? f.kuaidicom ?? '').trim()
+      const fen = yuanToFen(f.discountFee)
+      if (!code || fen === null) continue
+      quotes.push({ provider: code, feeFen: fen, distanceM: toInt(f.deliveryDistance ?? f.distance) })
+    }
     const feesFen = fees.map((f) => yuanToFen(f.discountFee)).filter((n): n is number => n !== null)
+    // quotedFee 的语义 = **本单被冻结的钱**。并呼时每家各冻一笔（首单 7 家实测冻结 ¥75.08），
+    // 最低价那一笔是其中最小的；只呼一家时那一家就是全部，取 Math.min 与取它本身同值，
+    // 但显式写出来才说得清这一列到底是什么——它不是「中标运力的报价」，中标价在 actualFee。
+    const quotedFeeFen = called.length === 1 && feesFen.length
+      ? feesFen[0]
+      : feesFen.length ? Math.min(...feesFen) : yuanToFen(d.discountFee)
     // 距离在 fee[] 每一项里，顶层 deliveryDistance 仅作兜底
     return {
       taskId: typeof d.taskId === 'string' ? d.taskId : null,
       providerOrderId: typeof d.orderId === 'string' || typeof d.orderId === 'number' ? String(d.orderId) : null,
-      quotedFeeFen: feesFen.length ? Math.min(...feesFen) : yuanToFen(d.discountFee),
-      distanceM: toInt(fees[0]?.deliveryDistance ?? d.deliveryDistance), raw: data,
+      quotedFeeFen,
+      distanceM: toInt(fees[0]?.deliveryDistance ?? d.deliveryDistance), quotes, raw: data,
     }
   },
   async precancelOrder({ taskId }) {

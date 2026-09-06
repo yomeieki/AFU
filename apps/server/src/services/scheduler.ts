@@ -20,7 +20,7 @@ import { LOW_STOCK_THRESHOLD } from '../utils/constants'
 import {
   remindCallTimeout, remindAcceptedStuck, remindDeliveringTimeout, remindUnknownGhost,
   remindLocalUncalled, remindCancelRequestPending, autoCallRiders, autoCompleteLocalDelivered,
-  housekeepingDelivery, refreshStaleQuotes,
+  housekeepingDelivery, refreshStaleQuotes, escalateSoloCalls,
 } from './delivery/tasks'
 import {
   processQueue as printQueueSweep, repeatAnnounce as printRepeatAnnounce, printerHealthTask,
@@ -61,6 +61,9 @@ export interface SchedulerOverrides {
   cancelRequestPendingMin?: number
   autoCallDelayMin?: number
   quoteRefreshMin?: number
+  // 只呼最低价 → 并呼的升级门槛（分钟）。0 = 不自动升级。e2e 传 0 是「关掉」而不是「立刻升级」，
+  // 所以要立刻命中得传 0.01（600 毫秒），与 autoCallDelayMin 同一套约定。
+  escalateAfterMin?: number
   // 会员积分/优惠券（M1）：settleMissedPoints 下界（默认 2 分钟前，防止扫到还没跑完 confirm
   // 钩子那一瞬间的单）；e2e 要验证「漏挂钩子 2 分钟后被兜底任务补发」等不到 2 分钟，传 0 绕过。
   settleMissedPointsAfterMin?: number
@@ -85,6 +88,10 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['remindUnaccepted', () => remindUnacceptedOrders(overrides.remindAfterMin)],
     ['lowStock', pushLowStock],
     ['localCallTimeout', () => remindCallTimeout(overrides.callTimeoutMin)],
+    // 只呼最低价的单等太久 → 取消重呼并呼。排在 localAutoCall 之前：升级会先撤单再建新单，
+    // 中间那一瞬订单是「PREPARING 且无在途单」，正好是 autoCallRiders 的候选条件——
+    // 让升级在同一轮里先把 D-2 建起来，autoCallRiders 扫到时该单已有在途单，不会重复呼。
+    ['localEscalate', () => escalateSoloCalls(overrides.escalateAfterMin)],
     ['localAcceptedStuck', () => remindAcceptedStuck(overrides.acceptedStuckMin)],
     ['localDelivering', () => remindDeliveringTimeout(overrides.deliveringTimeoutMin)],
     ['localUnknown', () => remindUnknownGhost(overrides.unknownStuckMin)],

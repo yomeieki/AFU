@@ -240,6 +240,16 @@ export default function LocalSettings() {
             </select>
           </Field>
           */}
+          <Field label="呼叫方式" hint="并呼时每家各冻结一笔预扣，且最贵的常抢到（2026-09-06 首单实测多付 ¥7.09）">
+            <select className={inputCls} value={s.callStrategy.mode}
+              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'ALL' } })}>
+              <option value="SOLO_LOWEST">只呼最低价那一家（推荐）</option>
+              <option value="ALL">并呼全部运力（旧行为）</option>
+            </select>
+          </Field>
+          <Field label="无人接单几分钟后改为并呼" hint="0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
+            <input className={inputCls} type="number" min={0} max={30} value={s.callStrategy.escalateAfterMin}
+              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, escalateAfterMin: Number(e.target.value) } })} /></Field>
           <Field label="商品默认净重（克）" hint="商品未填净重时用"><input className={inputCls} type="number" min={50} value={s.kd100.defaultItemWeightG} onChange={(e) => patch({ kd100: { ...s.kd100, defaultItemWeightG: Number(e.target.value) } })} /></Field>
           <Field label="小费单次上限（元）"><input className={inputCls} inputMode="decimal" value={money.maxPerCall} onChange={(e) => setMoney({ ...money, maxPerCall: e.target.value })} /></Field>
           <Field label="小费单笔订单累计上限（元）"><input className={inputCls} inputMode="decimal" value={money.maxPerOrder} onChange={(e) => setMoney({ ...money, maxPerOrder: e.target.value })} /></Field>

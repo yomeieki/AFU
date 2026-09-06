@@ -11,12 +11,13 @@ import { AppError } from '../../middlewares/error'
 import { config } from '../../config'
 import { getLocalSettings, KD100_PROVIDERS } from '../local-settings'
 import { getDeliveryProvider } from './provider'
-import { ProviderError, CreateDeliveryOrderInput } from './types'
+import { ProviderError, CreateDeliveryOrderInput, ProviderQuote } from './types'
+import { isQuoteStale, refreshOrderQuote, QuoteSnapshot } from './quote'
 import { isCircuitTripped, tripCircuit } from './circuit'
 import { recordDeliveryEvent, adminEventKey, trunc } from './events'
 import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert } from '../order-notify'
-import { TERMINAL } from './state'
+import { TERMINAL, providerLabel } from './state'
 import { ACTIVE_REFUND_STATUSES } from '../refund'
 import { settlePoints } from '../member/points'
 
@@ -37,6 +38,88 @@ export interface CallRiderInput {
    * v1 后台界面不暴露，但接口与 Delivery.calledProviders 已经能承载它。
    */
   providers?: string[]
+  /**
+   * **内部字段，不从 HTTP 收**：覆盖本次呼叫记进 Delivery.callStrategy 的标签。
+   *
+   * 只有自动升级任务用它——升级时要显式带全表 providers 去并呼，若不覆盖就会被下面的
+   * 「传了 providers = 店员指定」判成 MANUAL，把「系统升级并呼」错记成人工操作，
+   * 而 §7.2 的观察项（升级并呼到底会不会收到 720）恰恰要靠这个标签把这批单捞出来。
+   */
+  callStrategy?: DeliveryCallStrategy
+}
+
+/** Delivery.callStrategy 的取值域。SOLO_HELD 只由升级任务写，不是一次呼叫的结果 */
+export type DeliveryCallStrategy = 'SOLO' | 'ALL' | 'MANUAL' | 'SOLO_HELD'
+
+/**
+ * 呼叫成功那条事件的文案。店员在时间线上看到的第一行就是它，所以要一眼看出
+ * 「这单呼了谁、花多少、接下来会自动发生什么」——原来固定写「并呼抢单中」，
+ * 只呼最低价上线后那句话会变成谎话。
+ */
+function callEventDesc(
+  strategy: DeliveryCallStrategy,
+  called: string[],
+  lowest: { provider: string; feeFen: number } | null,
+  escalateAfterMin: number,
+): string {
+  if (strategy === 'SOLO' && lowest) {
+    const tail = escalateAfterMin > 0 ? `（约 ${escalateAfterMin} 分钟无人接自动改为并呼）` : '（不自动升级）'
+    return `只呼最低价 ${providerLabel(lowest.provider)} ¥${(lowest.feeFen / 100).toFixed(2)}${tail}`
+  }
+  if (strategy === 'MANUAL') return `已向指定运力下单：${called.map(providerLabel).join('、')}`
+  return `已向运力方下单（并呼 ${called.length} 家抢单中）`
+}
+
+/**
+ * 决定这一次呼谁：只呼最低价那一家，还是并呼全表。
+ *
+ * 三条边界，每条都有代价不对称的理由：
+ *  - 店员在弹窗里指定了运力 → 原样照办（MANUAL），策略不插手人工决定；
+ *  - 快照过期就同步重查一次：`batchPrice` 免费、不下单、不落库，约 1 秒。「接单并呼叫」
+ *    路径上占位时快照几乎必空（见 callRider 里的注释），不重查的话那条路径永远退回并呼，
+ *    策略等于没上；
+ *  - **查不到报价 → 退回并呼，而不是拒绝呼叫**。顾客已经付过钱、菜已经做好了，
+ *    此刻宁可多花几块钱把单送出去，也不能因为查价失败把订单卡在备餐中。
+ */
+async function resolveCallProviders(
+  orderId: number,
+  s: Awaited<ReturnType<typeof getLocalSettings>>,
+  order: { quoteSnapshot: Prisma.JsonValue | null; quotedAt: Date | null },
+  input: CallRiderInput,
+): Promise<{
+  providers: string[] | undefined
+  callStrategy: DeliveryCallStrategy
+  lowest: { provider: string; feeFen: number } | null
+  /** 策略**实际据以决策**的那份快照；只在这里现查了一次时非空，用于覆盖占位行上更旧的那份 */
+  fresh: { snapshot: QuoteSnapshot; quotedAt: Date } | null
+}> {
+  if (input.callStrategy) return { providers: input.providers, callStrategy: input.callStrategy, lowest: null, fresh: null }
+  if (input.providers?.length) return { providers: input.providers, callStrategy: 'MANUAL', lowest: null, fresh: null }
+  if (s.callStrategy.mode !== 'SOLO_LOWEST') return { providers: undefined, callStrategy: 'ALL', lowest: null, fresh: null }
+
+  let snapshot: QuoteSnapshot | null = null
+  let fresh: { snapshot: QuoteSnapshot; quotedAt: Date } | null = null
+  if (!isQuoteStale(order.quotedAt)) {
+    snapshot = (order.quoteSnapshot as QuoteSnapshot | null) ?? null
+  } else {
+    try {
+      const r = await refreshOrderQuote(orderId)
+      snapshot = r.snapshot
+      // 现查的这份就是策略的依据，必须跟着落到配送单上——否则抽屉里显示的是几分钟前
+      // 那份旧报价，看不出「为什么挑了这一家」，对账时也对不上。
+      fresh = { snapshot: r.snapshot, quotedAt: r.quotedAt }
+    } catch (e) {
+      // 查价失败不是呼叫失败：记一行、退回并呼。refreshOrderQuote 自己已经把 ProviderError
+      // 包成 AppError，这里连它一起吞——见函数头「宁可多花几块钱也要把单送出去」。
+      console.warn('[callRider] 订单', orderId, '呼叫前查价失败，退回并呼:', (e as Error)?.message ?? e)
+    }
+  }
+  // 快照里的最低价那一家必须仍在设置的运力表里：店主可能刚把它摘掉，而快照是几分钟前的。
+  // 不在表里就当没选出来（退回并呼），不要拿一个已被摘掉的运力去下单。
+  const lowest = snapshot?.lowest && s.kd100.providers.includes(snapshot.lowest.provider) ? snapshot.lowest : null
+  return lowest
+    ? { providers: [lowest.provider], callStrategy: 'SOLO', lowest, fresh }
+    : { providers: undefined, callStrategy: 'ALL', lowest: null, fresh }
 }
 
 export async function callRider(input: CallRiderInput) {
@@ -56,12 +139,21 @@ export async function callRider(input: CallRiderInput) {
 
   // 去重：调用方传重复编码（如页面表单误勾两次）会被原样传进 kuaidiComList，
   // 快递100 那边行为未定义，本地也没必要留两条一样的 calledProviders。
-  const providers = input.providers?.length ? [...new Set(input.providers)] : undefined
+  const asked = input.providers?.length ? [...new Set(input.providers)] : undefined
   // 指定运力必须是已知编码：拼错一个字母，快递100 那边只会返回「没有可用运力」，
   // 到时候看起来像是运力紧张而不是参数写错——在本地就拦下来，错因才不会被掩埋。
-  const bad = (providers ?? []).filter((p) => !(KD100_PROVIDERS as readonly string[]).includes(p))
+  // ⚠️ 这道白名单必须在策略选择**之前**跑，且只校验调用方传进来的那份：拿到 40001
+  // 的应该是「店员勾了个拼错的编码」，而不是策略引擎挑出来的（它已从 s.kd100.providers 里选）。
+  const bad = (asked ?? []).filter((p) => !(KD100_PROVIDERS as readonly string[]).includes(p))
   if (bad.length) throw new AppError(40001, `未知运力编码：${bad.join(', ')}`)
+
+  // 呼谁：只呼最低价 / 并呼全表 / 店员指定。查价可能有一次网络往返（约 1 秒），
+  // 所以放在占位事务之前——占位一旦建好就占住了 activeOrderId，不该拿着它去等网络。
+  const { providers, callStrategy, lowest, fresh } = await resolveCallProviders(orderId, s, order, { ...input, providers: asked })
   const calledProviders = providers?.length ? providers : s.kd100.providers
+  // 策略若现查了一份新报价，它就是这次呼叫的依据，占位行直接用它（而不是 :45 读到的旧值）
+  const snapshotForDelivery = fresh?.snapshot ?? order.quoteSnapshot
+  const quotedAtForDelivery = fresh?.quotedAt ?? order.quotedAt
 
   // 占位事务：activeOrderId 唯一索引 = 并发防线
   const seq = (await prisma.delivery.count({ where: { orderId } })) + 1
@@ -79,9 +171,9 @@ export async function callRider(input: CallRiderInput) {
       // 这里多半为空：报价是接单时后台异步取的（kickOffQuote，一次网络往返），占位创建
       // 到这里全是本地 DB 调用，几乎必然抢在查价落库之前。不为此阻塞呼叫——高峰期那一刻
       // 店员最急。空缺会在外呼成功后的落库事务里补（:129 附近），不会一直空着。
-      quoteSnapshot: (order.quoteSnapshot ?? Prisma.DbNull) as Prisma.InputJsonValue | typeof Prisma.DbNull,
-      quotedAt: order.quotedAt,
-      calledProviders,
+      quoteSnapshot: (snapshotForDelivery ?? Prisma.DbNull) as Prisma.InputJsonValue | typeof Prisma.DbNull,
+      quotedAt: quotedAtForDelivery,
+      calledProviders, callStrategy,
     } })
     deliveryId = created.id
   } catch (e) {
@@ -139,13 +231,16 @@ export async function callRider(input: CallRiderInput) {
         // 仅在占位时为空才回填——占位时若已带着快照（例如备餐几分钟后的手动「呼叫骑手」
         // 路径），那份就是「呼叫当时看到的价」，不能被此刻可能已被 5 分钟保鲜任务
         // 刷新过的新报价覆盖，快照的意义就在于锁定呼叫那一刻。
-        const quoteBackfill = order.quoteSnapshot
+        const quoteBackfill = snapshotForDelivery
           ? null
           : await tx.order.findUnique({ where: { id: orderId }, select: { quoteSnapshot: true, quotedAt: true } })
         const landed = await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
           status: 'CALLING', statusRank: 10, calledAt: new Date(),
           providerTaskId: trunc(result!.taskId, 64), providerOrderId: trunc(result!.providerOrderId, 64),
           quotedFee: result!.quotedFeeFen, providerDistanceM: result!.distanceM,
+          // 下单那一刻各家的真预扣。空数组也要落成 JSON `[]` 而不是 DbNull——「查了但一家都没回」
+          // 与「这一版代码还不记这个」是两件事，NULL 留给后者（历史行）。
+          orderFees: result!.quotes as unknown as Prisma.InputJsonValue,
           ...(quoteBackfill?.quoteSnapshot
             ? { quoteSnapshot: quoteBackfill.quoteSnapshot as Prisma.InputJsonValue, quotedAt: quoteBackfill.quotedAt }
             : {}),
@@ -157,7 +252,7 @@ export async function callRider(input: CallRiderInput) {
           notifySystemAlert('呼叫骑手成功但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, `taskId=${result!.taskId ?? ''}`, '请到快递100 后台核对，必要时人工登记'], { key: `kd100-landing-race:${orderId}` })
           return
         }
-        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: '已向运力方下单（并呼抢单中）', operator })
+        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: callEventDesc(callStrategy, calledProviders, lowest, s.callStrategy.escalateAfterMin), operator })
       })
     } catch (e) {
       // 落库失败（如 providerTaskId 撞唯一索引）会让占位行永远停在 PENDING：

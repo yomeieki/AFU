@@ -48,6 +48,19 @@ export interface LocalDeliverySettings {
      */
     soloProvider: string | null
   }
+  /**
+   * 呼叫策略（批次 1）。2026-09-06 首单实测把这件事从「假设」变成了「账」：
+   * 并呼 7 家，最贵的闪送 ¥23.32 抢到，而最低的达达报 ¥16.23 —— 一单多付 ¥7.09；
+   * 且**每一家在下单瞬间各冻结一笔**（那一单冻了 ¥75.08，实付 ¥23.32），
+   * 按快递100 最低充值 100 元算，并呼只能同时挂 1 单，只呼最低价能挂 6 单。
+   *
+   * mode:
+   *   SOLO_LOWEST 默认。按报价快照里的最低价只呼那一家；查不到报价则退回并呼（不因此拒绝呼叫）。
+   *   ALL         今天的行为：并呼设置里的全部运力。**这是不必部署就能关掉策略的开关**。
+   * escalateAfterMin: SOLO 单等这么久仍无人接 → 取消 D-1、并呼建 D-2。0 = 不自动升级
+   *   （只靠 callTimeoutMin 的人工提醒）。调度器 60 秒一跳，所以实际升级发生在 N ~ N+1 分钟之间。
+   */
+  callStrategy: { mode: 'SOLO_LOWEST' | 'ALL'; escalateAfterMin: number }
   limits: { maxItems: number; maxWeightKg: number }
   callTimeoutMin: number
   acceptedStuckMin: number
@@ -106,6 +119,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     providers: [...KD100_PROVIDERS], goodsType: '食品', defaultItemWeightG: 300,
     insurance: false, autoDowngradeToSelfOnNoBalance: false, soloProvider: null,
   },
+  // 3 分钟：凉菜等不起再挑一轮（挑第二便宜要再等 3 分钟）。升级一步到位并呼全部，
+  // 与 docs/design/workbench-ui-spec.md §6b 一致。
+  callStrategy: { mode: 'SOLO_LOWEST', escalateAfterMin: 3 },
   limits: { maxItems: 30, maxWeightKg: 10 },
   callTimeoutMin: 10,
   acceptedStuckMin: 30,
@@ -136,6 +152,7 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
   const o = asObj(raw)
   const D = DEFAULT_LOCAL_SETTINGS
   const store = asObj(o.store), fee = asObj(o.fee), kd = asObj(o.kd100), lim = asObj(o.limits), tip = asObj(o.tip)
+  const cs = asObj(o.callStrategy)
   const paused = o.paused && typeof o.paused === 'object'
     ? { until: str(asObj(o.paused).until, '', 40) || null, reason: str(asObj(o.paused).reason, '', 60) }
     : null
@@ -177,6 +194,12 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       insurance: bool(kd.insurance, false), autoDowngradeToSelfOnNoBalance: bool(kd.autoDowngradeToSelfOnNoBalance, false),
       // 只认已知运力编码，别的（含空串）一律归 null——留着的槽也不该能被写进垃圾值
       soloProvider: typeof kd.soloProvider === 'string' && (KD100_PROVIDERS as readonly string[]).includes(kd.soloProvider) ? kd.soloProvider : null,
+    },
+    callStrategy: {
+      // 只认这两个值，别的（含未来某天写进去的错拼）一律回落默认。⚠️ 生产库里已有的
+      // local_delivery 行没有这个字段 → 回落 SOLO_LOWEST → **部署即生效**，不需要店主再点一次。
+      mode: cs.mode === 'ALL' ? 'ALL' : D.callStrategy.mode,
+      escalateAfterMin: int(cs.escalateAfterMin, D.callStrategy.escalateAfterMin, 0, 30),
     },
     limits: { maxItems: int(lim.maxItems, D.limits.maxItems, 1, 500), maxWeightKg: num(lim.maxWeightKg, D.limits.maxWeightKg, 0.5, 100) },
     callTimeoutMin: int(o.callTimeoutMin, D.callTimeoutMin, 1, 120),

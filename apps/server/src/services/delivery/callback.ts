@@ -132,6 +132,49 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
         }
         return   // 乱序迟到包：事件已留痕，不动状态、不联动订单
       }
+      // ── actualFee 认领：中标运力确定之后，把它那一笔预扣写成本单的实扣 ──
+      // 2026-09-06 首单证实了这个等式：快递100 企业后台四行扣费明细（闪送 ¥23.32「已支付」，
+      // 其余三家「未支付」）与库里 quote_snapshot 的四家报价四比四全中，实扣 = 中标方报价。
+      // 快递100 **没有任何查单/查费接口**（实打 11 个方法名全部「找不到该method」），
+      // 所以不认领的话这一列永远是 NULL，对账只能靠人去后台抄。
+      //
+      // 为什么卡在 rank>=20 而不是 `0`：并呼时 `0` 回调带的 kuaidicom 不一定是最终中标那家
+      // （:94 会把它写进 courierCompany，等 `100` 到了再覆盖）。实扣只能在「谁接了」确定之后写。
+      // 写一次为准（where actualFee:null）：后续 230/310/520 再来也不改。
+      if (moved > 0 && mapped.type === 'rank' && mapped.rank >= 20) {
+        // 本次回调带了运力就用本次的；没带则只在**本地已经越过 100** 时才敢用行上那份
+        // （statusRank>=20 说明它是被某个 rank>=20 的回调写进去的，不是 `0` 那次的并呼噪声）。
+        const winner = p.courierCompany || (delivery.statusRank >= 20 ? delivery.courierCompany : null)
+        if (winner) {
+          const findFee = (v: unknown): number | null => {
+            const arr = Array.isArray(v) ? v : null
+            const hit = arr?.find((q) => (q as { provider?: unknown })?.provider === winner) as { feeFen?: unknown } | undefined
+            return typeof hit?.feeFen === 'number' ? hit.feeFen : null
+          }
+          // orderFees（下单那一刻的真预扣）优先于 quoteSnapshot（呼叫前 ≤5 分钟的免费查价）
+          const booked = findFee(delivery.orderFees)
+          const quoted = findFee((delivery.quoteSnapshot as { quotes?: unknown } | null)?.quotes)
+          const fee = booked ?? quoted
+          if (fee != null) {
+            await tx.delivery.updateMany({ where: { id: delivery.id, actualFee: null }, data: { actualFee: fee } })
+            // 两个来源都有且差得多：说明「下单预扣 = 呼叫前报价」这个前提在动摇，
+            // 对账口径要重新看。信息级——钱已经按预扣那份记对了，不必半夜叫人。
+            if (booked != null && quoted != null && Math.abs(booked - quoted) > 50) {
+              after.push(() => notifySystemAlert('下单预扣与呼叫前报价不一致', [
+                `${deliveryNo}（订单 ${delivery.orderNo}）中标 ${winner}`,
+                `下单预扣 ¥${(booked / 100).toFixed(2)} vs 呼叫前报价 ¥${(quoted / 100).toFixed(2)}`,
+                '已按下单预扣记入实扣；若反复出现，对账口径需要复核',
+              ], { key: `dlv-fee-drift:${delivery.id}` }))
+            }
+          } else if (delivery.actualFee === null) {
+            after.push(() => notifySystemAlert('中标运力不在预扣/报价快照中', [
+              `${deliveryNo}（订单 ${delivery.orderNo}）中标运力 ${winner}`,
+              '下单预扣与报价快照里都找不到这家的金额，本单实扣无法自动记账',
+              '请到快递100 企业后台抄回实扣金额（次月账单异议窗口只有 5 个工作日）',
+            ], { key: `dlv-actual-fee-miss:${delivery.id}` }))
+          }
+        }
+      }
       // —— Order 联动（一律 LOCAL + 白名单 updateMany）——
       // 注：Order 无 shippedAt 列（LOCAL 单不写 Shipment 行），SHIPPED/回退 PREPARING 仅切换 status
       if (p.providerStatus === '310') {

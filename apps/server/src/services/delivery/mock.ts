@@ -6,7 +6,7 @@
 
 import { DeliveryProvider, ProviderError, CreateDeliveryOrderResult, ProviderQuote } from './types'
 import { _mapReturnCode, kd100Provider } from './kd100'
-import { haversineM } from '../local-settings'
+import { haversineM, getLocalSettings } from '../local-settings'
 
 /**
  * 未指定 distanceM 的指令下，mock 的默认「道路距离」= 直线 × 1.6。
@@ -23,9 +23,20 @@ function mockDistanceM(input: unknown): number {
   return Math.round(haversineM(s.latE6, s.lngE6, r.latE6, r.lngE6) * MOCK_DETOUR)
 }
 
+/**
+ * mock 默认报价用的运力编码。**必须是 KD100_PROVIDERS 里的真编码**：
+ * 「只呼最低价」的策略引擎会把快照里选出的 provider 原样交给 callRider，而它对未知编码
+ * 一律 40001 拒绝（orchestrator.ts 的白名单）。曾经写的 `mocktongcheng` 是个假编码，
+ * SOLO 策略上线后会让每一条 mock 链路都在白名单那里断掉。
+ */
+const MOCK_PROVIDER_CODE = 'dadatongcheng'
+
 export type MockDirective =
   // quotes 只对 price 有意义：让 mock 返回多家不同报价，才测得出「快照里存了几家、各是多少」
-  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number; quotes?: ProviderQuote[] }
+  // cancelFeeFen 只对 precancelOrder / cancelOrder 有意义：默认 200（¥2）保持既有 e2e 行为不变，
+  // 但「3 分钟无人接自动升级」要求预估取消费为 0 才动手（>0 转 SOLO_HELD 交人工），
+  // 所以那条链路必须能把它压成 0——写死 200 的话正常升级路径在 mock 下永远走不到。
+  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number; quotes?: ProviderQuote[]; cancelFeeFen?: number }
   | { kind: 'error'; code: '30001' | '30002' | '30003' | '30004' | '30005' | '30006' | '50000' }
   | { kind: 'timeout' }
 
@@ -77,28 +88,41 @@ export const mockProvider: DeliveryProvider = {
     const distanceM = d.kind === 'ok' && d.distanceM != null ? d.distanceM : mockDistanceM(input)
     const quotes: ProviderQuote[] = d.kind === 'ok' && d.quotes?.length
       ? d.quotes.map((q) => ({ provider: q.provider, feeFen: q.feeFen, distanceM: q.distanceM ?? distanceM }))
-      : [{ provider: 'mocktongcheng', feeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500, distanceM }]
+      : [{ provider: MOCK_PROVIDER_CODE, feeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500, distanceM }]
     // 与真实 provider 同一口径：feeFen 是这批报价里的最低价，不是随便挑一家
     return { feeFen: Math.min(...quotes.map((q) => q.feeFen)), distanceM, quotes }
   },
   async createOrder(input): Promise<CreateDeliveryOrderResult> {
     const d = act('createOrder', input)
     seq += 1
+    const distanceM = d.kind === 'ok' && d.distanceM != null ? d.distanceM : mockDistanceM(input)
+    const feeFen = d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500
+    // 真实 batchOrder 对**被呼的每一家**各返回一条预扣（并呼 N 家就是 N 条，各家金额不同）。
+    // mock 照这个形状来：呼几家就回几条，才测得出 orderFees 的条数与 actualFee 的认领。
+    // 金额分不出各家高低（mock 没有价目表），统一给 feeFen——断言看的是「哪家在不在里面」。
+    //
+    // ⚠️ 不传 providers 的兜底必须与 kd100.createOrder 一致 = **设置里的默认列表**，
+    // 不是某一个固定编码。写成单个编码时并呼单的 orderFees 只会有一条，
+    // 「并呼到底冻结了几笔」这件事在 mock 下就永远测不出来（正是本次要盯的那笔钱）。
+    const called = input.providers?.length ? input.providers : (await getLocalSettings()).kd100.providers
+    const quotes: ProviderQuote[] = d.kind === 'ok' && d.quotes?.length
+      ? d.quotes.map((q) => ({ provider: q.provider, feeFen: q.feeFen, distanceM: q.distanceM ?? distanceM }))
+      : called.map((p) => ({ provider: p, feeFen, distanceM }))
     return {
       taskId: (d.kind === 'ok' && d.taskId) || `MOCKTASK-${procTag}-${seq}`,
       providerOrderId: (d.kind === 'ok' && d.providerOrderId) || `MOCKORD-${procTag}-${seq}`,
-      quotedFeeFen: d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500,
-      distanceM: d.kind === 'ok' && d.distanceM != null ? d.distanceM : mockDistanceM(input),
+      quotedFeeFen: feeFen,
+      distanceM, quotes,
       raw: { mock: true },
     }
   },
   async precancelOrder(i) {
-    act('precancelOrder', i)
-    return { cancelFeeFen: 200 }
+    const d = act('precancelOrder', i)
+    return { cancelFeeFen: d.kind === 'ok' && d.cancelFeeFen != null ? d.cancelFeeFen : 200 }
   },
   async cancelOrder(i) {
-    act('cancelOrder', i)
-    return { cancelFeeFen: 200, raw: { mock: true } }
+    const d = act('cancelOrder', i)
+    return { cancelFeeFen: d.kind === 'ok' && d.cancelFeeFen != null ? d.cancelFeeFen : 200, raw: { mock: true } }
   },
   async addTip(i) {
     act('addTip', i)
