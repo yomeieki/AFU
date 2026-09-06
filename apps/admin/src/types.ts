@@ -87,6 +87,10 @@ export interface OrderItem {
   quantity: number
   productPrice: number
   subtotal: number
+  /** M2：随单赠品。赠品行 productPrice/subtotal 恒为 0，靠这个标区分「免费的」与「0 元 bug」 */
+  isGift?: boolean
+  /** M2：单件积分价 */
+  pointsCost?: number
 }
 
 export type OrderStatus = 'PENDING_PAYMENT' | 'PAID' | 'PREPARING' | 'SHIPPED' | 'COMPLETED' | 'CANCELLED' | 'REFUNDING' | 'REFUNDED'
@@ -144,6 +148,14 @@ export interface Order {
   totalAmount: number
   shippingFee: number
   actualAmount: number
+  /** M2：券抵扣额（分） */
+  discountAmount?: number
+  /** M2：赠品消耗的积分 */
+  pointsUsed?: number
+  /** M2：本单获得的积分 */
+  pointsEarned?: number
+  /** M2：用的哪张券（普通 Int 列，无关系字段；详情接口另给 coupon 对象） */
+  couponId?: number | null
   /** 已成功退款累计（分） */
   refundedAmount: number
   /** 可退余额（分），服务端计算 */

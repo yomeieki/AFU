@@ -20,8 +20,12 @@ export interface TicketItemInput {
   productName: string
   specText: string | null
   quantity: number
-  /** 分 */
+  /** 分。赠品行恒为 0 */
   subtotal: number
+  /** M2：随单赠品。两联都要标——赠品是一道要做、要装袋的菜，漏标就是漏发 */
+  isGift?: boolean
+  /** M2：单件积分价。配送联用它代替 ¥0.00 显示 */
+  pointsCost?: number
 }
 
 export interface TicketOrderInput {
@@ -37,6 +41,10 @@ export interface TicketOrderInput {
   /** 实付（分） */
   actualAmount: number
   remark: string | null
+  /** M2：券抵扣额（分）。>0 时配送联打一行「优惠券 −¥X」；**厨房联不打**（不印钱） */
+  discountAmount?: number
+  /** M2：赠品消耗的积分。>0 时配送联打一行；厨房联同样不打 */
+  pointsUsed?: number
   receiverName: string
   receiverPhone: string
   receiverFullAddress: string
@@ -70,6 +78,18 @@ const LINE_WIDTH = 32
  * 断点推到奇怪的位置。
  */
 const BIG_LINE_WIDTH = LINE_WIDTH / 2
+
+/**
+ * 赠品行前缀。**两联用同一个标记**。
+ *
+ * 全角「赠」+ 半角空格 = 3 列。为什么不是 `[赠]`（4 列）或 `【赠】`（6 列）：厨房联走 `<B>`
+ * 只有 16 列，减去 ` x1` 后留给菜名的不到 13 列——多占 3 列就少 1–2 个汉字，
+ * 「秘制酱牛肉」这种五字菜名会被截。
+ *
+ * 两联标记必须一致：配送联宽松、厨房联紧张，很容易演变成两处各用一套，
+ * 然后打包的人对着两张写法不同的票核对。3 列两边都放得下，那就统一。
+ */
+const GIFT_MARK = '赠 '
 
 // ── 显示宽度（纯排版对齐用，不代表传输编码）───────────────────
 function charWidth(ch: string): number {
@@ -165,9 +185,15 @@ function wrapByWidth(s: string, width: number): string[] {
  * 容量不是问题（改成两行式后邮寄单仍能装 48–106 件），信息完整才是。
  */
 function formatItemLines(item: TicketItemInput, width = LINE_WIDTH): string[] {
-  const qtyAmt = ` x${item.quantity} ${yuan(item.subtotal)}`
+  // 赠品行的金额列显示积分而不是 `¥0.00`——`subtotal` 恒为 0，打成 ¥0.00 会让打包员
+  // 以为这一行漏收了钱、回头去问店主。显示「积分80」一眼就知道是怎么回事。
+  const qtyAmt = item.isGift
+    ? ` x${item.quantity} 积分${(item.pointsCost ?? 0) * item.quantity}`
+    : ` x${item.quantity} ${yuan(item.subtotal)}`
   const nameWidth = Math.max(2, width - strWidth(qtyAmt))
-  const name = esc(item.productName)
+  // 前缀拼在 esc() **之后**——esc 只剥 < >，全角字与空格都不会被剥，但把前缀塞进 esc 的入参
+  // 会让它参与「顾客能否注入控制标签」的判断，语义就乱了
+  const name = (item.isGift ? GIFT_MARK : '') + esc(item.productName)
   const spec = item.specText ? `(${esc(item.specText)})` : ''
   // 名称+规格一行放得下：保持原来的紧凑排版
   if (strWidth(name + spec) <= nameWidth) {
@@ -186,7 +212,9 @@ function formatItemLines(item: TicketItemInput, width = LINE_WIDTH): string[] {
  * 所以降级只降规格；再放不下就减少件数（`……等 N 件`），而不是让留下来的行缺数量。
  */
 function kitchenItemLines(item: TicketItemInput, level: 0 | 1): string[] {
-  const name = esc(item.productName)
+  // 厨房联同样要标赠品：它是一道要做、要装进袋子的菜，不标就会漏发。
+  // 但**不打金额、不打优惠**——与「厨房联只有菜品和数量」一致（PO 2026-09-06 定）。
+  const name = (item.isGift ? GIFT_MARK : '') + esc(item.productName)
   const qty = ` x${item.quantity}`
   const nameWidth = Math.max(2, BIG_LINE_WIDTH - strWidth(qty))
   const spec = level === 0 && item.specText ? `(${esc(item.specText)})` : ''
@@ -291,10 +319,17 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   // 整单一张纸都不出（H2）。上限 20 字由接口与小程序共同约束（PO 2026-09-06 定，见 orders.ts）。
   const remarkBlock: string[] = o.remark ? [`<CB>备注：${esc(o.remark)}</CB>`] : []
 
+  // 优惠两行只在**配送联**出现（PO 2026-09-06 定：厨房联只有菜品和数量，不印钱）。
+  // 位置有讲究：券在「合计」与「运费」之间——顺序要和顾客在结算页看到的一致
+  // （小计 → 券 → 运费 → 实付），店员对账时能逐行对上。
+  // 赠品抵扣放在「实付」之后：它不参与这个加减法（赠品价 0、积分另算），
+  // 混进上面那三行会让人以为实付里减过它。
   const footer: string[] = [
     `合计：${yuan(o.totalAmount)}`,
+    ...(o.discountAmount && o.discountAmount > 0 ? [`优惠券：−${yuan(o.discountAmount)}`] : []),
     `运费：${yuan(o.shippingFee)}`,
     `<B>实付：${yuan(o.actualAmount)}</B>`,
+    ...(o.pointsUsed && o.pointsUsed > 0 ? [`赠品抵扣：${o.pointsUsed} 积分`] : []),
     `单号：${o.orderNo}`,
     '接单请在工作台操作',
   ]

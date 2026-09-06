@@ -1046,11 +1046,13 @@ export default function Workbench() {
               {(o ? o.items : []).map((it, i) => (
                 <div className="wb__item" key={i}>
                   <span className="wb__item-name">
-                    {it.productName}
+                    {/* 赠品必须标：它 subtotal 是 0，不标的话店员看到「¥0.00」会以为是数据错误 */}
+                    {it.isGift ? '赠 ' : ''}{it.productName}
                     {it.specText ? <span className="wb__item-spec"> {it.specText}</span> : null}
                   </span>
                   <span className="wb__qty">×{it.quantity}</span>
-                  <span className="wb__amt">¥{yuan(it.subtotal)}</span>
+                  {/* 赠品金额列显示积分而不是 ¥0.00，与小票同口径 */}
+                  <span className="wb__amt">{it.isGift ? `${(it.pointsCost ?? 0) * it.quantity} 积分` : `¥${yuan(it.subtotal)}`}</span>
                 </div>
               ))}
               {!o && <div className="wb__empty">{detailLoading ? '加载中…' : '加载失败'}</div>}
@@ -1118,8 +1120,14 @@ export default function Workbench() {
             <div className="wb__block">
               <div className="wb__block-t">金额明细</div>
               <div className="wb__line"><span>商品小计</span><span className="wb__amt">¥{yuan(o?.totalAmount ?? 0)}</span></div>
+              {/* 券在「小计」与「运费」之间——顺序与顾客在结算页看到的一致（小计→券→运费→实付），
+                  也与小票上那三行一致。店员三处对账时能逐行对上，不用换算 */}
+              {!!o?.discountAmount && <div className="wb__line"><span>优惠券</span><span className="wb__amt">-¥{yuan(o.discountAmount)}</span></div>}
               <div className="wb__line"><span>配送费/运费</span><span className="wb__amt">¥{yuan(o?.shippingFee ?? 0)}</span></div>
               <div className="wb__line"><span>顾客实付</span><span className="wb__amt">¥{yuan(o?.actualAmount ?? card.amountFen)}</span></div>
+              {/* 赠品抵扣放在「实付」之后：它不参与上面那个加减法（赠品价 0、积分另算），
+                  混进去会让店员以为实付里减过它 */}
+              {!!o?.pointsUsed && <div className="wb__line"><span>赠品抵扣</span><span className="wb__amt">{o.pointsUsed} 积分</span></div>}
               {!!o?.refundedAmount && <div className="wb__line"><span>已退款</span><span className="wb__amt">-¥{yuan(o.refundedAmount)}</span></div>}
               {local && d && (
                 <>

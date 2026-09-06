@@ -41,7 +41,7 @@ async function loadOrders() {
       ],
     },
     include: {
-      items: { select: { productName: true, quantity: true } },
+      items: { select: { productName: true, quantity: true, isGift: true } },
       shipment: { select: { expressCompany: true, expressNo: true, shippedAt: true } },
     },
     orderBy: { id: 'desc' },
@@ -54,7 +54,8 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courie
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
     waitSince: (waitSince ?? o.createdAt).toISOString(), amountFen: o.actualAmount,
-    items: { first: o.items.slice(0, 2).map((it) => `${it.productName} ×${it.quantity}`), kinds: o.items.length, units },
+    // 赠品在卡片上也要标：工作台卡片是店员接单时看的第一眼，漏标就可能整单少备一份
+    items: { first: o.items.slice(0, 2).map((it) => `${it.isGift ? '赠 ' : ''}${it.productName} ×${it.quantity}`), kinds: o.items.length, units },
     note: o.remark || null,
     receiver: { name: o.receiverName, phone: o.receiverPhone },
     express: o.deliveryType === 'EXPRESS'

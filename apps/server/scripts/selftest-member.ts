@@ -10,6 +10,7 @@ import assert from 'assert'
 import { calcEarn, calcRefundDeduct } from '../src/services/member/points'
 import { generateCouponCode } from '../src/services/member/coupons'
 import { checkCouponUsable, computeCheckout } from '../src/services/member/pricing'
+import { renderOrderTicket } from '../src/services/ticket/content'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -216,6 +217,77 @@ t('computeCheckout 实付为 0 时只算数、不抛——拒单是调用方的�
 })
 t('computeCheckout discount > subtotal 是调用方的 bug，直接抛', () => {
   assert.throws(() => computeCheckout({ subtotal: 1000, discount: 1001, shippingFee: 0 }))
+})
+
+// ── 票面：优惠与赠品的两联分工（M2 Task 9）────────────────────────────────
+//
+// 这个项目**没有任何小票的自动化测试**——apps/server/scripts/ 下没有 ticket selftest，
+// e2e §35 是通过 API 断言 PrintJob.content。而 content.ts 是纯渲染、零 DB 依赖，
+// 完全可以在这里直接 import 来断言，代价接近零。
+//
+// 锁的是 PO 2026-09-06 定的分工：配送联印全部；**厨房联只有菜品和数量**，
+// 赠品要出现（它是一道要做的菜），但不印优惠不印金额。
+
+const mkTicket = (o: Partial<Parameters<typeof renderOrderTicket>[0]> = {}) =>
+  renderOrderTicket({
+    orderNo: 'ORD20260906123456', channel: 'LOCAL',
+    createdAt: new Date('2026-09-06T02:00:00Z'), paidAt: new Date('2026-09-06T02:00:00Z'),
+    receiverName: '王女士', receiverPhone: '13905710042',
+    receiverDistrict: '西湖区', receiverDetail: '文三路123号',
+    receiverPoiName: null, receiverFullAddress: '浙江省杭州市西湖区文三路123号',
+    distanceM: null, estimatedDeliveryAt: null, remark: null,
+    discountAmount: 1000, pointsUsed: 160,
+    items: [
+      { productName: '凉拌黑木耳', specText: null, quantity: 2, subtotal: 2400 },
+      { productName: '口水鸡', specText: null, quantity: 2, subtotal: 0, isGift: true, pointsCost: 80 },
+    ],
+    totalAmount: 2400, shippingFee: 300, actualAmount: 1700,
+    ...o,
+  })
+/** 同城票是双联：第一个 <CUT> 之前是配送联，之后是厨房联 */
+const slips = (s: string) => { const p = s.split('<CUT>'); return { delivery: p[0], kitchen: p[1] ?? '' } }
+
+t('票面：同城是双联（两个 <CUT>）', () => {
+  assert.strictEqual((mkTicket().match(/<CUT>/g) ?? []).length, 2)
+})
+t('票面：邮寄是单联', () => {
+  assert.strictEqual((mkTicket({ channel: 'EXPRESS' }).match(/<CUT>/g) ?? []).length, 1)
+})
+t('配送联：打「优惠券：−¥10.00」', () => {
+  assert.ok(slips(mkTicket()).delivery.includes('优惠券：−¥10.00'))
+})
+t('配送联：打「赠品抵扣：160 积分」', () => {
+  assert.ok(slips(mkTicket()).delivery.includes('赠品抵扣：160 积分'))
+})
+t('配送联：赠品行带「赠 」标', () => {
+  assert.ok(slips(mkTicket()).delivery.includes('赠 口水鸡'))
+})
+t('配送联：赠品金额列显示积分而不是 ¥0.00（否则打包员以为漏收钱）', () => {
+  const d = slips(mkTicket()).delivery
+  assert.ok(d.includes('积分160'), '应显示 积分160')
+  assert.ok(!d.includes('¥0.00'), '不该出现 ¥0.00')
+})
+t('厨房联：赠品行也带「赠 」标（是一道要做的菜，漏标就漏发）', () => {
+  assert.ok(slips(mkTicket()).kitchen.includes('赠 口水鸡'))
+})
+t('厨房联：**一个金额都没有**（不含 ¥）', () => {
+  assert.ok(!slips(mkTicket()).kitchen.includes('¥'))
+})
+t('厨房联：不含「优惠券」', () => {
+  assert.ok(!slips(mkTicket()).kitchen.includes('优惠券'))
+})
+t('厨房联：不含「实付」「合计」', () => {
+  const k = slips(mkTicket()).kitchen
+  assert.ok(!k.includes('实付') && !k.includes('合计'))
+})
+t('无券无赠品时，优惠两行都不打（不留空行）', () => {
+  const d = slips(mkTicket({ discountAmount: 0, pointsUsed: 0, items: [{ productName: '凉拌黑木耳', specText: null, quantity: 2, subtotal: 2400 }] })).delivery
+  assert.ok(!d.includes('优惠券') && !d.includes('赠品抵扣'))
+})
+t('两联用同一个赠品标记（不一致会让店员对着两张写法不同的票核对）', () => {
+  const s = slips(mkTicket())
+  const mark = '赠 '
+  assert.ok(s.delivery.includes(mark) && s.kitchen.includes(mark))
 })
 
 console.log(`\n${pass} passed${process.exitCode ? ', 有失败' : ''}`)

@@ -153,7 +153,12 @@ type OrderForTicket = {
   receiverDistrict: string; receiverDetail: string
   receiverPoiName: string | null; distanceM: number | null; estimatedDeliveryAt: Date | null
   announceCount: number
-  items: { productName: string; specText: string | null; quantity: number; subtotal: number }[]
+  // 会员优惠（M2）。⚠️ 这三处（类型 / ORDER_SELECT / toTicketInput）是 TicketOrderInput 的
+  // **唯一生产者**——调用方只传 orderId，出票层自己按 ORDER_SELECT 重新查库。少列一个字段，
+  // 票面就永远打不出它，而且不会有任何编译错误提示你。
+  discountAmount: number
+  pointsUsed: number
+  items: { productName: string; specText: string | null; quantity: number; subtotal: number; isGift: boolean; pointsCost: number }[]
 }
 
 const ORDER_SELECT = {
@@ -162,7 +167,8 @@ const ORDER_SELECT = {
   receiverName: true, receiverPhone: true, receiverFullAddress: true,
   receiverDistrict: true, receiverDetail: true,
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
-  items: { select: { productName: true, specText: true, quantity: true, subtotal: true } },
+  discountAmount: true, pointsUsed: true,
+  items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
 
 function toTicketInput(order: OrderForTicket): TicketOrderInput {
@@ -184,6 +190,8 @@ function toTicketInput(order: OrderForTicket): TicketOrderInput {
     receiverPoiName: order.receiverPoiName,
     distanceM: order.distanceM,
     estimatedDeliveryAt: order.estimatedDeliveryAt,
+    discountAmount: order.discountAmount,
+    pointsUsed: order.pointsUsed,
   }
 }
 
