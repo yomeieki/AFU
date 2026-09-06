@@ -1819,6 +1819,196 @@ S38_TV=$(num "$(jq -r '.data.list[0].uniqueVisitors // "null"' <<<"$S38_ONE")")
 
 sql "DELETE FROM scan_logs WHERE source IN ('e2e-dup','e2e-anon','e2e-tz');"
 
+echo "== 39. 会员优惠：下单用券与赠品、未支付取消释放（M2）=="
+# 按 spec §9「券」「赠品」「未支付取消」「越权」四组写。变量一律 M2_ 前缀。
+# 造用户的 code **前 8 位必须互不相同**——mock 登录用 code.slice(0,8) 派生 openid，
+# 前 8 位相同就是同一个用户，会把「越权」那条测成永远通过的空断言（2026-09-06 踩过）。
+M2_TAG=$RANDOM
+M2_ORIG_SHIP=$(req GET /api/admin/settings/shipping "$AT" | jq -c .data)
+
+m2_login() { req POST /api/auth/wechat-login "" "{\"code\":\"$1\"}" | jq -r '.data.token'; }
+m2_uid()   { echo "$1" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.userId'; }
+m2_addr()  { req POST /api/addresses "$1" '{"receiverName":"M2","receiverPhone":"13800009999","province":"浙江省","city":"杭州市","district":"西湖区","detail":"x","isDefault":1}' | jq -r '.data.id // .data.addressId'; }
+# 造券：建 CAMPAIGN 模板 → 顾客自己领。走真实发放路径，不直接 INSERT user_coupons
+m2_coupon() { # $1=token $2=名称 $3=面额 $4=门槛 $5=渠道
+  local tid
+  tid=$(req POST /api/admin/coupon-templates "$AT" "{\"name\":\"$2\",\"amount\":$3,\"threshold\":$4,\"channel\":\"$5\",\"validDays\":30,\"source\":\"CAMPAIGN\"}" | jq -r '.data.id')
+  req POST /api/member/coupons/claim "$1" "{\"templateId\":$tid}" | jq -r '.data.id'
+}
+m2_grant() { # $1=userId $2=分数
+  sql "INSERT INTO points_ledgers (user_id,type,delta,balance_after,remaining,ref_type,ref_id,remark,expires_at,created_at)
+       VALUES ($1,'EARN',$2,$2,$2,'ORDER','m2e2e-$M2_TAG-$1','e2e造分',DATE_ADD(NOW(),INTERVAL 200 DAY),NOW());
+       UPDATE users SET points_balance=$2 WHERE id=$1;"
+}
+
+M2_UT=$(m2_login "alpha$M2_TAG-m2")
+M2_UID=$(m2_uid "$M2_UT")
+M2_ADDR=$(m2_addr "$M2_UT")
+m2_grant "$M2_UID" 1000
+assert_eq "前置：造分成功（catch sql() 静默失败）" "$(sql "SELECT points_balance FROM users WHERE id=$M2_UID;")" "1000"
+
+echo "-- 券①：包邮线按**券前**小计判（用券后低于线，运费仍应为 0）--"
+# 这一条是整段最要紧的：判错了就是「顾客用了券反而要付运费」，而且每一单都错。
+M2_SUB=$(req GET "/api/products/$PID" "$UT" | jq -r '.data.price')
+req PUT /api/admin/settings/shipping "$AT" "{\"fee\":500,\"freeThreshold\":$M2_SUB,\"minOrderAmount\":0}" >/dev/null
+assert_eq "券①前置：包邮线已设成恰好等于本单小计" "$(req GET /api/admin/settings/shipping "$AT" | jq -r '.data.freeThreshold')" "$M2_SUB"
+M2_C1=$(m2_coupon "$M2_UT" "M2E2E-包邮线$M2_TAG" 300 0 ALL)
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C1}")
+M2_O1=$(jq -r '.data.orderId // empty' <<<"$R")
+assert_eq "券①：下单成功" "$(code "$R")" "0"
+assert_eq "券①：运费仍为 0（包邮按券前小计判，顾客不因用券失去包邮）" "$(jq -r '.data.shippingFee' <<<"$R")" "0"
+assert_eq "券①：实付 = 小计 − 券" "$(jq -r '.data.actualAmount' <<<"$R")" "$((M2_SUB-300))"
+req PUT /api/admin/settings/shipping "$AT" "$M2_ORIG_SHIP" >/dev/null
+
+echo "-- 券②：渠道不符 42251 --"
+M2_C2=$(m2_coupon "$M2_UT" "M2E2E-同城专享$M2_TAG" 300 0 LOCAL)
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C2}")
+assert_eq "券②：LOCAL 券用在邮寄单 → 42251" "$(code "$R")" "42251"
+assert_eq "券②：消息说明是渠道问题" "$(jq -r '.message | contains("同城")' <<<"$R")" "true"
+
+echo "-- 券③：过期券 42251 --"
+M2_C3=$(m2_coupon "$M2_UT" "M2E2E-过期$M2_TAG" 300 0 ALL)
+sql "UPDATE user_coupons SET expires_at = DATE_SUB(NOW(), INTERVAL 1 DAY) WHERE id=$M2_C3;"
+assert_eq "券③前置：券确实已过期" "$(sql "SELECT expires_at < NOW() FROM user_coupons WHERE id=$M2_C3;")" "1"
+# ⚠️ 必须先赋值再断言，不能写成 `"$(code "$(req ... "{...}")")"` 的三层嵌套——
+# 嵌套 $() 里再套引号会把 JSON 的引号吃掉，大括号被 shell 展开成多个词，
+# 请求体到服务端时已经碎了（2026-09-06 踩过：日志里是 `"directItem":"productId":1`）。
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C3}")
+assert_eq "券③：过期券 → 42251" "$(code "$R")" "42251"
+assert_eq "券③：消息说的是「已过期」" "$(jq -r '.message' <<<"$R")" "优惠券已过期"
+
+echo "-- 券④：actualAmount 归零 → 42251（0 元订单走不了微信支付）--"
+# 券面额上限 100000 分（¥1000，服务端「挡住把元当分填」的校验），不能用一个超大数。
+# 造「券额恰好等于商品小计」+ 运费 0 → 实付归零。前置断言确认小计没超过券面额上限。
+assert_eq "券④前置：本单小计在券面额上限内（否则这条构造不出归零场景）" "$([[ "$M2_SUB" -le 100000 ]] && echo yes || echo no)" "yes"
+M2_C4=$(m2_coupon "$M2_UT" "M2E2E-全额$M2_TAG" "$M2_SUB" 0 ALL)
+assert_eq "券④前置：券确实建出来了" "$([[ -n "$M2_C4" && "$M2_C4" != "null" ]] && echo yes || echo no)" "yes"
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C4}")
+assert_eq "券④：券额 ≥ 小计且免运费 → 42251" "$(code "$R")" "42251"
+assert_eq "券④：消息说的是「超过可抵扣范围」不是「过期/已用」" "$(jq -r '.message | contains("抵扣")' <<<"$R")" "true"
+
+echo "-- 券⑤：越权——B 不能用 A 的券 --"
+M2_UT2=$(m2_login "bravo$M2_TAG-m2")
+M2_UID2=$(m2_uid "$M2_UT2")
+assert_eq "券⑤前置：确实是两个不同用户（前 8 位不同的 code）" "$([[ "$M2_UID" != "$M2_UID2" ]] && echo yes || echo no)" "yes"
+M2_ADDR2=$(m2_addr "$M2_UT2")
+M2_C5=$(m2_coupon "$M2_UT" "M2E2E-归属$M2_TAG" 300 0 ALL)
+R=$(req POST /api/orders "$M2_UT2" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR2,\"couponId\":$M2_C5}")
+assert_eq "券⑤：B 用 A 的券 → 42251" "$(code "$R")" "42251"
+assert_eq "券⑤：消息说「不存在」，不暴露「这张券存在但不是你的」" "$(jq -r '.message' <<<"$R")" "优惠券不存在"
+
+echo "-- 券⑥：并发用同一张券，恰一成一败 --"
+M2_C6=$(m2_coupon "$M2_UT" "M2E2E-并发$M2_TAG" 300 0 ALL)
+M2_R1=$(mktemp); M2_R2=$(mktemp)
+req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C6}" > "$M2_R1" &
+req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C6}" > "$M2_R2" &
+wait
+M2_OK=$(( $(code "$(cat "$M2_R1")") == 0 ? 1 : 0 ))
+M2_OK=$(( M2_OK + ( $(code "$(cat "$M2_R2")") == 0 ? 1 : 0 ) ))
+# 断言「恰好一个成功」而不是断言失败方的具体错误码：失败方可能是 42251（券被抢），
+# 也可能是 Prisma 的死锁/超时（P2028/P2034）——加了 consumePoints 的多行锁之后更有可能。
+# 锁死具体错误码会偶发红，而「不能两单都成功」才是这条要守的东西。
+assert_eq "券⑥：并发两单恰好一单成功" "$M2_OK" "1"
+assert_eq "券⑥：券最终只被核销一次" "$(sql "SELECT COUNT(*) FROM orders WHERE coupon_id=$M2_C6 AND status<>'CANCELLED';")" "1"
+rm -f "$M2_R1" "$M2_R2"
+
+echo "-- 赠品①：超 perOrderLimit → 42252 --"
+M2_PG=$(req POST /api/admin/points-goods "$AT" "{\"productId\":$PID,\"pointsCost\":10,\"perOrderLimit\":1}" | jq -r '.data.id // empty')
+if [[ -z "$M2_PG" ]]; then M2_PG=$(sql "SELECT id FROM points_goods WHERE product_id=$PID LIMIT 1;"); fi
+assert_eq "赠品前置：赠品配置存在" "$([[ -n "$M2_PG" ]] && echo yes || echo no)" "yes"
+sql "UPDATE points_goods SET per_order_limit=1, points_cost=10, status='ON', stock_limit=NULL WHERE id=$M2_PG;"
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"gifts\":[{\"pointsGoodId\":$M2_PG,\"quantity\":2}]}")
+assert_eq "赠品①：超每单限购 → 42252" "$(code "$R")" "42252"
+
+echo "-- 赠品②：库存被真实扣减 + 名额 +1 --"
+M2_ST0=$(sql "SELECT stock FROM products WHERE id=$PID;")
+M2_IC0=$(sql "SELECT issued_count FROM points_goods WHERE id=$M2_PG;")
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"gifts\":[{\"pointsGoodId\":$M2_PG,\"quantity\":1}]}")
+M2_OG=$(jq -r '.data.orderId // empty' <<<"$R")
+assert_eq "赠品②：下单成功" "$(code "$R")" "0"
+assert_eq "赠品②：库存扣 2（付费 1 + 赠品 1）" "$(sql "SELECT stock FROM products WHERE id=$PID;")" "$((M2_ST0-2))"
+assert_eq "赠品②：名额 +1" "$(sql "SELECT issued_count FROM points_goods WHERE id=$M2_PG;")" "$((M2_IC0+1))"
+assert_eq "赠品②：赠品行 isGift=1 且小计为 0" "$(sql "SELECT CONCAT(is_gift,':',subtotal) FROM order_items WHERE order_id=$M2_OG AND is_gift=1;")" "1:0"
+assert_eq "赠品②：pointsUsed 落到订单上" "$(jq -r '.data.pointsUsed' <<<"$R")" "10"
+
+echo "-- 未支付取消：券回 UNUSED、积分回账、名额回落、库存回滚 --"
+M2_C7=$(m2_coupon "$M2_UT" "M2E2E-释放$M2_TAG" 300 0 ALL)
+M2_BAL0=$(sql "SELECT points_balance FROM users WHERE id=$M2_UID;")
+M2_ST1=$(sql "SELECT stock FROM products WHERE id=$PID;")
+M2_IC1=$(sql "SELECT issued_count FROM points_goods WHERE id=$M2_PG;")
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C7,\"gifts\":[{\"pointsGoodId\":$M2_PG,\"quantity\":1}]}")
+M2_OR=$(jq -r '.data.orderId // empty' <<<"$R")
+assert_eq "释放前置：单已建且用了券与赠品" "$(code "$R")" "0"
+req PUT "/api/orders/$M2_OR/cancel" "$M2_UT" >/dev/null
+assert_eq "释放：券回 UNUSED" "$(sql "SELECT status FROM user_coupons WHERE id=$M2_C7;")" "UNUSED"
+assert_eq "释放：券解绑订单" "$(sql "SELECT IFNULL(order_id,'NULL') FROM user_coupons WHERE id=$M2_C7;")" "NULL"
+assert_eq "释放：有 GIFT_REVERT 入账行" "$(sql "SELECT COUNT(*) FROM points_ledgers WHERE type='GIFT_REVERT' AND ref_type='ORDER' AND ref_id='$M2_OR';")" "1"
+assert_eq "释放：GIFT_REVERT 继承了到期日（不是永不过期的积分）" "$(sql "SELECT expires_at IS NOT NULL FROM points_ledgers WHERE type='GIFT_REVERT' AND ref_id='$M2_OR';")" "1"
+assert_eq "释放：余额回到取消前" "$(sql "SELECT points_balance FROM users WHERE id=$M2_UID;")" "$M2_BAL0"
+assert_eq "释放：名额回落" "$(sql "SELECT issued_count FROM points_goods WHERE id=$M2_PG;")" "$M2_IC1"
+assert_eq "释放：库存回滚（含赠品行）" "$(sql "SELECT stock FROM products WHERE id=$PID;")" "$M2_ST1"
+
+echo "-- 未支付取消：商家拒单的待付款分支也要释放（计划把这条错标成「不释放」）--"
+M2_C8=$(m2_coupon "$M2_UT" "M2E2E-拒单$M2_TAG" 300 0 ALL)
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C8}")
+M2_ORJ=$(jq -r '.data.orderId // empty' <<<"$R")
+assert_eq "拒单前置：待付款单已建" "$(sql "SELECT status FROM orders WHERE id=$M2_ORJ;")" "PENDING_PAYMENT"
+req POST "/api/admin/orders/$M2_ORJ/reject" "$AT" '{"reason":"OTHER","note":"e2e"}' >/dev/null
+assert_eq "拒单：待付款单被拒后券回 UNUSED（不是被吃掉）" "$(sql "SELECT status FROM user_coupons WHERE id=$M2_C8;")" "UNUSED"
+
+echo "-- 未支付取消：已过期的券置 EXPIRED 而不是 UNUSED --"
+M2_C9=$(m2_coupon "$M2_UT" "M2E2E-过期释放$M2_TAG" 300 0 ALL)
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_C9}")
+M2_ORE=$(jq -r '.data.orderId // empty' <<<"$R")
+sql "UPDATE user_coupons SET expires_at = DATE_SUB(NOW(), INTERVAL 1 DAY) WHERE id=$M2_C9;"
+assert_eq "过期释放前置：券确实已过期" "$(sql "SELECT expires_at < NOW() FROM user_coupons WHERE id=$M2_C9;")" "1"
+req PUT "/api/orders/$M2_ORE/cancel" "$M2_UT" >/dev/null
+assert_eq "过期释放：券 → EXPIRED（过期券不还给顾客用，也不留在 USED 误导）" "$(sql "SELECT status FROM user_coupons WHERE id=$M2_C9;")" "EXPIRED"
+
+echo "-- 已支付后退款不释放（P7）--"
+M2_CA=$(m2_coupon "$M2_UT" "M2E2E-退款$M2_TAG" 300 0 ALL)
+R=$(req POST /api/orders "$M2_UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$M2_ADDR,\"couponId\":$M2_CA,\"gifts\":[{\"pointsGoodId\":$M2_PG,\"quantity\":1}]}")
+M2_ORF=$(jq -r '.data.orderId // empty' <<<"$R")
+req POST "/api/orders/$M2_ORF/pay" "$M2_UT" >/dev/null
+assert_eq "P7 前置：单已支付" "$(sql "SELECT status FROM orders WHERE id=$M2_ORF;")" "PAID"
+M2_REM=$(req GET "/api/admin/orders/$M2_ORF" "$AT" | jq -r '.data.remainingRefundable')
+req POST "/api/admin/orders/$M2_ORF/refund" "$AT" "{\"amount\":$M2_REM,\"reason\":\"e2e全额退\"}" >/dev/null
+assert_eq "P7：全额退款后券**仍是 USED**（退了就等于开出白嫖通道）" "$(sql "SELECT status FROM user_coupons WHERE id=$M2_CA;")" "USED"
+assert_eq "P7：无 GIFT_REVERT（赠品积分不退）" "$(sql "SELECT COUNT(*) FROM points_ledgers WHERE type='GIFT_REVERT' AND ref_id='$M2_ORF';")" "0"
+
+# ── 收尾 ────────────────────────────────────────────────────────────────
+# 两条踩过的坑，都不是产品问题而是清理写错：
+#
+# ① **删积分流水必须连余额一起归零**。第一版只 `DELETE FROM points_ledgers`，把造分的 EARN 行
+#    删掉了却留着 `users.points_balance=1000` → §37 的一致性校验当场红
+#    （余额 990 / Σremaining 20 / 差 970）。这个校验就是干这个的，它抓对了。
+#
+# ② **本段留下的待付款单必须自己收掉**。它们会活到**下一轮** e2e，被那一轮更早的 §16
+#    `run-scheduler {"payTimeoutMin":0}` 超时取消并回滚库存，让「库存回滚 +2」莫名其妙地多回滚。
+#    跨轮污染最难查——本轮全绿，下一轮红在一个跟你毫无关系的段落里。
+req PUT /api/admin/settings/shipping "$AT" "$M2_ORIG_SHIP" >/dev/null
+sql "UPDATE coupon_templates SET status='OFF' WHERE name LIKE 'M2E2E-%$M2_TAG';"
+req DELETE "/api/admin/points-goods/$M2_PG" "$AT" >/dev/null
+# 先把本段两个用户的待付款单收掉（走 SQL 直接置 CANCELLED 并回滚库存太容易漏，
+# 这里只把它们从「待付款」摘出来——本段已经验过释放逻辑，这里的目的只是不留给下一轮）
+sql "UPDATE orders SET status='CANCELLED', cancelled_at=NOW(), cancel_reason='e2e-39 收尾'
+     WHERE user_id IN ($M2_UID, $M2_UID2) AND status='PENDING_PAYMENT';"
+sql "DELETE FROM points_ledgers WHERE user_id IN ($M2_UID, $M2_UID2);
+     UPDATE users SET points_balance=0 WHERE id IN ($M2_UID, $M2_UID2);"
+assert_eq "收尾自检：本段用户的积分余额与流水都已归零（防跨轮污染）" \
+  "$(sql "SELECT COALESCE(SUM(points_balance),0) FROM users WHERE id IN ($M2_UID, $M2_UID2);")" "0"
+assert_eq "收尾自检：本段没有留下待付款单" \
+  "$(sql "SELECT COUNT(*) FROM orders WHERE user_id IN ($M2_UID, $M2_UID2) AND status='PENDING_PAYMENT';")" "0"
+# ③ **打印机 mock 的状态在进程内存里，`TRUNCATE print_jobs` 清不掉它**。
+#    本段有一笔真实支付（P7 那条），付款会触发出票——留下的 mock 队列与 PrintJob 行会活到
+#    下一轮，让 §45/§47 的「重试第几次」「云端积压几条」这类计数型断言全部偏移。
+#    第一版漏了这一条，第二轮当场红 4 条（attempts 多 1、积压多 1），而且红在跟本段
+#    毫无关系的段落里——这正是跨轮污染最难查的地方。
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+sql "DELETE FROM print_jobs WHERE order_id IN (SELECT id FROM orders WHERE user_id IN ($M2_UID, $M2_UID2));"
+assert_eq "收尾自检：本段没有留下打印作业" \
+  "$(sql "SELECT COUNT(*) FROM print_jobs WHERE order_id IN (SELECT id FROM orders WHERE user_id IN ($M2_UID, $M2_UID2));")" "0"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"

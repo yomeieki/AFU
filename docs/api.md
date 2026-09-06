@@ -1320,10 +1320,101 @@ pointsCost`（M1 未使用）。字段定义与枚举取值见 spec §4。
 | 42253 | 该券已领完或已达每人上限 |
 | 42254 | 券模板已停用 |
 
+---
+
+## 附录 E-2：会员结算链路（M2）
+
+M1 只有账本与只读端点；M2 把券与赠品接进了 `POST /orders`。**42251/42252 从「留给 M2」变成真有触发路径。**
+
+### 顾客端新增
+
+| 端点 | 说明 |
+|---|---|
+| `GET /member/checkout-options?channel=LOCAL\|EXPRESS&subtotal=<分>` | 结算页选项：积分余额、券列表（每张带 `usable` 与 `discount`，或 `reason` + `message`）、可换赠品 |
+| `GET /member/mall` | 积分商城：可换券模板 + 全部赠品。**不按渠道过滤**，带 `channel` 供前端分组 |
+| `GET /member/campaign` | 领券中心：CAMPAIGN 模板 + `remaining`（`totalLimit` 为空则 null）+ `claimedByMe` |
+
+`checkout-options` 的 `usable`/`discount` **由服务端算好**，小程序只显示、不本地重算（spec §6）。
+不可用的券**也返回**，带 `reason`（`NOT_OWNER`/`USED`/`EXPIRED`/`CHANNEL`/`THRESHOLD`）与中文 `message`——
+结算页要把它们灰掉并说明原因，藏起来顾客会以为券丢了。
+
+`subtotal` 由前端传，**只用于展示**：下单时 `POST /orders` 会用自己算出来的小计重新判一遍，
+传假值最多让顾客看到一个乐观的预览。
+
+### `POST /orders` 新增
+
+请求体（都可选，不传时行为与 M2 之前逐字节一致）：
+
+    couponId?: number
+    gifts?: [{ pointsGoodId: number, quantity: 1..9 }]   // 最多 5 种，同一种不得重复提交
+
+响应新增 `discountAmount` / `pointsUsed` / `couponName`。
+
+**计价顺序（spec §5.1，逐字执行）**：
+
+    小计   = Σ 非赠品行
+    折扣   = 券 ? min(券面额, 小计) : 0      ← 门槛比对**小计**
+    运费   = 按**券前小计**判包邮/起送/同城起送
+    实付   = 小计 − 折扣 + 运费
+
+顾客**不会因为用券失去包邮或跌破起送线**。`actualAmount === 0` 直接拒（42251「该券金额已超过
+本单可抵扣范围」）——0 元订单走不了微信支付，会掉进没有支付回调的死角。
+
+赠品行 `isGift=1, productPrice=0, subtotal=0, pointsCost=单件积分价`，**照常扣真实库存、加真实销量**，
+并**计入同城的件数与重量上限**（42230 的意义是「一个骑手拎不动」，与谁付钱无关）。
+
+### 订单响应新增字段
+
+顾客端与管理端的列表与详情都加了 `discountAmount` / `pointsUsed` / `pointsEarned`，
+`items[]` 每行加 `isGift` / `pointsCost`；**详情**另给 `coupon` 对象（列表不给，避免 N+1）：
+
+- 顾客端 `coupon: { name, code, amount } | null`
+- 管理端 `coupon: { name, code, amount, threshold, source, issuedBy, remark } | null`
+
+管理端列表另加 `userId`（M3 的「发赔偿券」按用户维度发放）。
+
+⚠️ **`pointsSettledAt` 与 `pointsBase` 不再下发给顾客**。两个都是内部记账（前者是兜底任务的
+「已处理」标记，后者是退款按比例扣回的分母），从 M1 起一直在往外发，M2 由 `withPayExpire` 收掉。
+
+### 未支付取消释放（`releaseOrderBenefits`）
+
+**只服务 `PENDING_PAYMENT → CANCELLED`，四条路径全部接了**：
+
+| 入口 | 位置 |
+|---|---|
+| 顾客手点 `PUT /orders/:id/cancel` | `routes/orders.ts` |
+| 商家拒单 `POST /admin/orders/:id/reject` 的**待付款分支** | `routes/admin/orders.ts` |
+| 后台改状态 `PUT /admin/orders/:id/status` | `routes/admin/orders.ts` |
+| 超时任务 `cancelExpiredOrders` | `services/scheduler.ts` |
+
+四处形状一致：状态翻转 `updateMany` 判 count 成功 → `rollbackOrderStock` → 释放。
+**按状态守卫而不是按端点名单**——名单会漏（计划原文就漏了「拒单」那条，照它写会让待付款单被
+商家拒掉时顾客的券和积分永久蒸发）。
+
+释放内容：券回 `UNUSED`（**若已过期则置 `EXPIRED`**，过期券不还给顾客用也不留在 USED 误导）；
+赠品积分写 `GIFT_REVERT` 入账行并**继承下单时那条 GIFT 行的到期日**（退回来的积分不该比原来更耐用）；
+`PointsGood.issuedCount` 递减。库存回滚由调用方已有的 `rollbackOrderStock` 负责（`order.items`
+天然含赠品行）。
+
+### 已支付后一律不释放（P7）
+
+退款路径**一处都不调** `releaseOrderBenefits`。刻意的不对称：
+
+    库存 回滚 · 销量 回滚 · 优惠券 不退 · 赠品积分 不退 · 赠品名额 不回落
+
+库存防的是超卖（货是实物，退了就该能再卖），名额防的是薅（下单即退就能占掉限量）。
+
+### 管理端新增
+
+`GET/POST/PUT /admin/coupon-templates`（**无 DELETE**，spec 只有停用；`source` 建后不可改）、
+`GET /admin/coupon-templates/:id/issued?page=`、`GET/POST/PUT/DELETE /admin/points-goods`。
+
+金额上限沿用「挡住把元当分填」：券面额 ≤ 100000 分（¥1000）、门槛 ≤ 10000000 分。
+
+---
+
 ### 已知待办（交接给后续里程碑）
 
-- 券的实际使用（下单抵扣、赠品加购、`GET /member/checkout-options`）、`releaseOrderBenefits`
-  （未支付取消释放券与赠品积分）— 全部在 M2。
 - 券模板/赠品管理页、用户页积分与券列、赔偿券发放按钮 — M3。
 - 会员中心/积分商城/我的券/领券中心/积分明细五个小程序页面、封面入口接线 — M4。
 - `docs/staff-guide.md`「优惠券与积分」章节、`docs/miniapp-release-checklist.md` 的规则公示检查项 — M5。
