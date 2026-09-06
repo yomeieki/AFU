@@ -33,6 +33,26 @@ req() {
 }
 code() { jq -r '.code' <<<"$1"; }
 
+# ── 手工触发一次定时任务，撞上后台心跳时重试 ────────────────────────────────────
+# ⚠️ 2026-09-06 实测踩过：`runSchedulerTick` 有模块级 `running` 守卫，后台 60 秒心跳
+# 正在跑时，手工触发**直接 `return {}`**，而 HTTP 仍是 `code 0`——
+# 「跑了但没找到活」与「压根没跑」在响应里完全无法区分。
+# 于是 `.data.localXxx` 全变 null，而 `[[ "null" -ge 1 ]]` 在 `set -u` 下会把 null
+# 当成未定义变量，**掐死整个脚本**（实测死在 §30 第 1021 行，退出码还是 0，
+# 所以 §31 往后连同整个 e2e.d 都沉默地没跑）。
+# 两道防线：这里重试拿到非空响应；下面所有数值断言一律 `// -1` 兜底（见 ② 组注释）。
+sched() {
+  local r i
+  for i in 1 2 3 4 5 6 7 8; do
+    r=$(req POST /api/admin/system/run-scheduler "$AT" "${1:-\{\}}")
+    # 空对象 = 被 running 守卫挡了。非空（或压根不是对象=报错体）就交出去。
+    [[ "$(jq -r 'if (.data|type)=="object" and (.data|length)==0 then "empty" else "ok" end' <<<"$r")" == "ok" ]] && { echo "$r"; return 0; }
+    sleep 1
+  done
+  fail "run-scheduler 连续 8 次都被后台心跳的 running 守卫挡住（每次都返回空 {}）" "$r"
+  echo "$r"
+}
+
 echo "== 0. 健康检查 =="
 H=$(curl -s -w '\n%{http_code}' "$BASE/health"); HB=$(head -1 <<<"$H"); HC=$(tail -1 <<<"$H")
 assert_eq "GET /health 200" "$HC" "200"
@@ -166,7 +186,7 @@ R=$(req POST "/api/orders/$O6/after-sale" "$UT" '{"reason":"OTHER"}'); assert_eq
 R=$(req POST "/api/orders/$O6/after-sale" "$UT" "{\"reason\":\"SHORTAGE\",\"description\":\"少了一份\",\"images\":[\"$URL\"]}")
 AS1=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$AS1" ]] && ok "售后单 #$AS1 创建" || fail "创建售后单" "$R"
 R=$(req POST "/api/orders/$O6/after-sale" "$UT" '{"reason":"DAMAGED"}'); assert_eq "重复申请被拒 42208" "$(code "$R")" "42208"
-R=$(req GET "/api/admin/orders/pending-count" "$AT"); [[ "$(jq -r .data.afterSaleCount <<<"$R")" -ge 1 ]] && ok "afterSaleCount ≥1" || fail "afterSaleCount"
+R=$(req GET "/api/admin/orders/pending-count" "$AT"); [[ "$(jq -r '.data.afterSaleCount // -1' <<<"$R")" -ge 1 ]] && ok "afterSaleCount ≥1" || fail "afterSaleCount"
 R=$(req GET "/api/admin/after-sales?status=PENDING" "$AT")
 [[ "$(jq -r "[.data.list[] | select(.id==$AS1)] | length" <<<"$R")" == "1" ]] && ok "售后列表含 #${AS1}（reasonLabel=$(jq -r ".data.list[] | select(.id==$AS1) | .reasonLabel" <<<"$R")）" || fail "售后列表"
 R=$(req POST "/api/admin/after-sales/$AS1/approve" "$AT" '{"amount":1,"reply":"已退 0.01"}')
@@ -185,8 +205,8 @@ R=$(req POST "/api/admin/orders/$O6/refund" "$AT" '{"amount":1,"reason":"缺货"
 assert_eq "订单仍 COMPLETED" "$(order_status $O6)" "COMPLETED"
 
 echo "== 14. 后台 keyword 搜索（手机号/姓名）=="
-R=$(req GET "/api/admin/orders?keyword=13800000000" "$AT"); [[ "$(jq -r .data.total <<<"$R")" -ge 1 ]] && ok "按手机号搜到 $(jq -r .data.total <<<"$R") 单" || fail "手机号搜索"
-R=$(curl -s -G "$BASE/api/admin/orders" --data-urlencode "keyword=E2E测试" -H "Authorization: Bearer $AT"); [[ "$(jq -r .data.total <<<"$R")" -ge 1 ]] && ok "按姓名搜到" || fail "姓名搜索"
+R=$(req GET "/api/admin/orders?keyword=13800000000" "$AT"); [[ "$(jq -r '.data.total // -1' <<<"$R")" -ge 1 ]] && ok "按手机号搜到 $(jq -r .data.total <<<"$R") 单" || fail "手机号搜索"
+R=$(curl -s -G "$BASE/api/admin/orders" --data-urlencode "keyword=E2E测试" -H "Authorization: Bearer $AT"); [[ "$(jq -r '.data.total // -1' <<<"$R")" -ge 1 ]] && ok "按姓名搜到" || fail "姓名搜索"
 [[ "$(jq -r '.data.list[0].remark' <<<"$R")" != "" ]] && ok "列表含 remark 字段" || fail "remark 字段缺失"
 
 echo "== 15. 立即购买 directItem（不经购物车）=="
@@ -206,9 +226,9 @@ if [[ -z "$ST0" || ! "$ST0" =~ ^[0-9]+$ ]]; then
   fail "第16段探针：拿不到 PID=$PID 的库存（下面的库存断言无从判断）" "读到 [$ST0]"
   ST0=0
 fi
-R=$(req POST "/api/admin/system/run-scheduler" "$AT" '{"payTimeoutMin":0}')
+R=$(sched '{"payTimeoutMin":0}')
 assert_eq "run-scheduler code 0" "$(code "$R")" "0"
-[[ "$(jq -r .data.cancelExpired <<<"$R")" -ge 1 ]] && ok "超时取消 $(jq -r .data.cancelExpired <<<"$R") 单" || fail "超时取消数" "$R"
+[[ "$(jq -r '.data.cancelExpired // -1' <<<"$R")" -ge 1 ]] && ok "超时取消 $(jq -r .data.cancelExpired <<<"$R") 单" || fail "超时取消数" "$R"
 assert_eq "直购单 → CANCELLED" "$(order_status $O7)" "CANCELLED"
 ST1=$(req GET "/api/products/$PID" "$UT" | jq -r '.data.stock // empty')
 if [[ -z "$ST1" || ! "$ST1" =~ ^[0-9]+$ ]]; then
@@ -218,13 +238,13 @@ else
 fi
 R=$(req POST "/api/orders/$O7/pay" "$UT"); assert_eq "已取消订单不可支付" "$(code "$R")" "42204"
 O8=$(make_paid_order); [[ -n "$O8" ]] && ok "订单 #$O8 已支付（待接单）" || { fail "下单/支付"; exit 1; }
-R=$(req POST "/api/admin/system/run-scheduler" "$AT" '{"remindAfterMin":0}')
-[[ "$(jq -r .data.remindUnaccepted <<<"$R")" -ge 1 ]] && ok "催单 $(jq -r .data.remindUnaccepted <<<"$R") 单" || fail "催单数" "$R"
+R=$(sched '{"remindAfterMin":0}')
+[[ "$(jq -r '.data.remindUnaccepted // -1' <<<"$R")" -ge 1 ]] && ok "催单 $(jq -r .data.remindUnaccepted <<<"$R") 单" || fail "催单数" "$R"
 [[ "$(req GET "/api/admin/orders/$O8" "$AT" | jq -r .data.acceptRemindedAt)" != "null" ]] && ok "acceptRemindedAt 已写" || fail "acceptRemindedAt"
-R=$(req POST "/api/admin/system/run-scheduler" "$AT" '{"remindAfterMin":0}'); assert_eq "不重复催单" "$(jq -r .data.remindUnaccepted <<<"$R")" "0"
+R=$(sched '{"remindAfterMin":0}'); assert_eq "不重复催单" "$(jq -r .data.remindUnaccepted <<<"$R")" "0"
 req POST "/api/admin/orders/$O8/ship" "$AT" '{"expressCompany":"顺丰速运","expressNo":"SF1"}' >/dev/null
-R=$(req POST "/api/admin/system/run-scheduler" "$AT" '{"autoCompleteDays":0}')
-[[ "$(jq -r .data.autoComplete <<<"$R")" -ge 1 ]] && ok "自动收货 $(jq -r .data.autoComplete <<<"$R") 单" || fail "自动收货数" "$R"
+R=$(sched '{"autoCompleteDays":0}')
+[[ "$(jq -r '.data.autoComplete // -1' <<<"$R")" -ge 1 ]] && ok "自动收货 $(jq -r .data.autoComplete <<<"$R") 单" || fail "自动收货数" "$R"
 assert_eq "订单 → COMPLETED" "$(order_status $O8)" "COMPLETED"
 
 echo "== 17. web-view 一次性换码 =="
@@ -338,7 +358,7 @@ R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal"
 assert_eq "查价成功 → 距离取实测值" "$(jq -r .data.distanceM <<<"$R")" "4200"
 assert_eq "查价成功 → distanceSource=MEASURED" "$(jq -r .data.distanceSource <<<"$R")" "MEASURED"
 assert_eq "运费按实测距离分档（4.2km → 500）" "$(jq -r .data.fee <<<"$R")" "500"
-[[ "$(jq -r .data.straightDistanceM <<<"$R")" -lt 2000 ]] && ok "straightDistanceM 仍是直线口径（没被实测值顶掉）" || fail "straightDistanceM 被污染" "$R"
+[[ "$(jq -r '.data.straightDistanceM // -1' <<<"$R")" -lt 2000 ]] && ok "straightDistanceM 仍是直线口径（没被实测值顶掉）" || fail "straightDistanceM 被污染" "$R"
 # 查价失败：不报错、退回估算，且估算恰为 直线 × 1.7（detourFactor 兜底值）
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 # 连排 3 条：后台报价保鲜若偷走一条，还剩给本断言用的
@@ -414,7 +434,7 @@ LO1=$(jq -r '.data.orderId // empty' <<<"$R"); [[ -n "$LO1" ]] && ok "同城下�
 assert_eq "运费=报价 fee" "$(jq -r .data.shippingFee <<<"$R")" "$QFEE"
 R=$(req GET "/api/orders/$LO1" "$UT")
 assert_eq "订单 deliveryType=LOCAL" "$(jq -r .data.deliveryType <<<"$R")" "LOCAL"
-[[ "$(jq -r .data.distanceM <<<"$R")" -gt 0 ]] && ok "distanceM 已快照" || fail "distanceM" "$R"
+[[ "$(jq -r '.data.distanceM // -1' <<<"$R")" -gt 0 ]] && ok "distanceM 已快照" || fail "distanceM" "$R"
 [[ "$(jq -r .data.distanceSource <<<"$R")" =~ ^(MEASURED|ESTIMATED)$ ]] && ok "distanceSource 已快照" || fail "distanceSource" "$R"
 [[ "$(jq -r .data.estimatedDeliveryAt <<<"$R")" != "null" ]] && ok "estimatedDeliveryAt 已写" || fail "estimatedDeliveryAt"
 assert_eq "shipment 为空（LOCAL 不写 Shipment）" "$(jq -r .data.shipment <<<"$R")" "null"
@@ -423,7 +443,7 @@ req PUT /api/admin/settings/shipping "$AT" '{"fee":999900,"freeThreshold":0,"min
 R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":2}"); LCID3=$(jq -r '.data.id // empty' <<<"$R")
 lquote $LADDR
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$LCID3],\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\"}")
-LO2=$(jq -r '.data.orderId // empty' <<<"$R"); [[ "$(jq -r .data.shippingFee <<<"$R")" -lt 999900 ]] && ok "LOCAL 运费与全局邮寄运费无关" || fail "LOCAL 叠加了全局运费" "$R"
+LO2=$(jq -r '.data.orderId // empty' <<<"$R"); [[ "$(jq -r '.data.shippingFee // -1' <<<"$R")" -lt 999900 ]] && ok "LOCAL 运费与全局邮寄运费无关" || fail "LOCAL 叠加了全局运费" "$R"
 # 只断言「比 9999 元小」太弱：算错成任何一个小数都能过。钉死在本次同城报价的 fee 上。
 assert_eq "LOCAL 运费 = 本次同城报价 fee" "$(jq -r .data.shippingFee <<<"$R")" "$LQFEE"
 req PUT /api/admin/settings/shipping "$AT" '{"fee":0,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
@@ -441,7 +461,7 @@ docker exec -i food-shop-mysql mysql -ufoodshop_user -pfoodshop_password "$DB_NA
 R=$(req POST "/api/orders/$LO1/cancel-request" "$UT" '{}'); assert_eq "超窗口 42229" "$(code "$R")" "42229"
 R=$(req GET "/api/admin/orders?pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "0" ]] && ok "后台订单列表默认不含同城单" || fail "后台列表混入同城单"
 R=$(req GET "/api/admin/orders?deliveryType=LOCAL&pageSize=50" "$AT"); [[ "$(jq -r "[.data.list[] | select(.id==$LO1)] | length" <<<"$R")" == "1" ]] && ok "deliveryType=LOCAL 可查到" || fail "LOCAL 筛选" "$R"
-R=$(req GET /api/admin/orders/pending-count "$AT"); [[ "$(jq -r .data.localPendingCount <<<"$R")" -ge 1 ]] && ok "localPendingCount≥1" || fail "localPendingCount" "$R"
+R=$(req GET /api/admin/orders/pending-count "$AT"); [[ "$(jq -r '.data.localPendingCount // -1' <<<"$R")" -ge 1 ]] && ok "localPendingCount≥1" || fail "localPendingCount" "$R"
 
 # —— quoteToken 与 LOCAL 下单拒绝路径（下单端点自己判一遍，/local/quote 判过不算）——
 # 只断言「运费=报价 fee」是恒真的：重算值本来就等于报价值，token 被完整校验或被完全忽略都会通过。
@@ -992,17 +1012,17 @@ assert_eq "库存回滚" "$(req GET "/api/products/$PID" "$UT" | jq -r .data.sto
 
 echo "== 30. 同城定时任务 =="
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
-sched() { req POST /api/admin/system/run-scheduler "$AT" "$1"; }
+# sched() 已提前到文件头 req() 之后定义（带撞车重试），此处不再重复定义。
 SCH1=$(mk_local_paid); req POST "/api/admin/local/orders/$SCH1/accept" "$AT" >/dev/null
 # 备餐超时未呼叫（每单一次）
-R=$(sched '{"localUncalledMin":0}'); [[ "$(jq -r .data.localUncalled <<<"$R")" -ge 1 ]] && ok "localUncalled ≥1" || fail "localUncalled" "$R"
+R=$(sched '{"localUncalledMin":0}'); [[ "$(jq -r '.data.localUncalled // -1' <<<"$R")" -ge 1 ]] && ok "localUncalled ≥1" || fail "localUncalled" "$R"
 R=$(sched '{"localUncalledMin":0}'); assert_eq "localUncalled 第二跑归零（每单一次）" "$(jq -r .data.localUncalled <<<"$R")" "0"
 # 自动呼叫（override 开启；settings 默认 0=手动。用 0.01 分钟=600ms 而非 0，
 # 因为 autoCallRiders 现在无条件以 delay<=0 作为手动模式的门槛——见下方手动模式断言。
 # 实测 accept 到这里的自然间隔仅约 60ms，远不够 600ms 阈值，故显式 sleep 1s 垫够间隔）
 sleep 1
 R=$(sched '{"autoCallDelayMin":0.01}')
-[[ "$(jq -r .data.localAutoCall <<<"$R")" -ge 1 ]] && ok "autoCall ≥1" || fail "autoCall" "$R"
+[[ "$(jq -r '.data.localAutoCall // -1' <<<"$R")" -ge 1 ]] && ok "autoCall ≥1" || fail "autoCall" "$R"
 assert_eq "SCH1 被自动呼叫 → CALLING" "$(dstat $SCH1)" "CALLING"
 R=$(sched '{"autoCallDelayMin":0.01}'); assert_eq "已有在途单不重呼" "$(jq -r .data.localAutoCall <<<"$R")" "0"
 # 有 cancelRequest 的候选不参与自动呼叫（即便超过延迟时长、无在途配送单也不能呼）
@@ -1012,29 +1032,29 @@ sleep 1
 sched '{"autoCallDelayMin":0.01}' >/dev/null
 assert_eq "有 cancelRequest 的候选未被自动呼叫（无配送单）" "$(req GET "/api/admin/local/orders/$SCHCR/delivery" "$AT" | jq -r .data.delivery)" "null"
 # 待抢单超时（每单一次）
-R=$(sched '{"callTimeoutMin":0}'); [[ "$(jq -r .data.localCallTimeout <<<"$R")" -ge 1 ]] && ok "callTimeout ≥1" || fail "callTimeout" "$R"
+R=$(sched '{"callTimeoutMin":0}'); [[ "$(jq -r '.data.localCallTimeout // -1' <<<"$R")" -ge 1 ]] && ok "callTimeout ≥1" || fail "callTimeout" "$R"
 R=$(sched '{"callTimeoutMin":0}'); assert_eq "callTimeout 第二跑归零" "$(jq -r .data.localCallTimeout <<<"$R")" "0"
 # 接单后卡住 → 配送中超时
 SCT1=$(req GET "/api/admin/local/orders/$SCH1/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
 SCD1=$(req GET "/api/admin/local/orders/$SCH1/delivery" "$AT" | jq -r .data.delivery.deliveryNo)
 kd_cb "$SCD1" "$SCT1" 100 '骑手已接单' '2026-09-04 14:00:00' >/dev/null
-R=$(sched '{"acceptedStuckMin":0}'); [[ "$(jq -r .data.localAcceptedStuck <<<"$R")" -ge 1 ]] && ok "acceptedStuck ≥1" || fail "acceptedStuck" "$R"
+R=$(sched '{"acceptedStuckMin":0}'); [[ "$(jq -r '.data.localAcceptedStuck // -1' <<<"$R")" -ge 1 ]] && ok "acceptedStuck ≥1" || fail "acceptedStuck" "$R"
 R=$(sched '{"acceptedStuckMin":0}'); assert_eq "acceptedStuck 第二跑归零" "$(jq -r .data.localAcceptedStuck <<<"$R")" "0"
 kd_cb "$SCD1" "$SCT1" 310 '骑手已取货' '2026-09-04 14:05:00' >/dev/null
-R=$(sched '{"deliveringTimeoutMin":0}'); [[ "$(jq -r .data.localDelivering <<<"$R")" -ge 1 ]] && ok "delivering ≥1" || fail "delivering" "$R"
+R=$(sched '{"deliveringTimeoutMin":0}'); [[ "$(jq -r '.data.localDelivering // -1' <<<"$R")" -ge 1 ]] && ok "delivering ≥1" || fail "delivering" "$R"
 R=$(sched '{"deliveringTimeoutMin":0}'); assert_eq "delivering 第二跑归零" "$(jq -r .data.localDelivering <<<"$R")" "0"
 kd_cb "$SCD1" "$SCT1" 520 '已送达' '2026-09-04 14:30:00' >/dev/null   # 收尾到终态
 # UNKNOWN 幽灵单提醒
 SCH2=$(mk_local_paid); req POST "/api/admin/local/orders/$SCH2/accept" "$AT" >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"timeout"}}' >/dev/null
 req POST "/api/admin/local/orders/$SCH2/call" "$AT" >/dev/null
-R=$(sched '{"unknownStuckMin":0}'); [[ "$(jq -r .data.localUnknown <<<"$R")" -ge 1 ]] && ok "unknown ≥1" || fail "unknown" "$R"
+R=$(sched '{"unknownStuckMin":0}'); [[ "$(jq -r '.data.localUnknown // -1' <<<"$R")" -ge 1 ]] && ok "unknown ≥1" || fail "unknown" "$R"
 R=$(sched '{"unknownStuckMin":0}'); assert_eq "unknown 第二跑归零" "$(jq -r .data.localUnknown <<<"$R")" "0"
 req POST "/api/admin/local/orders/$SCH2/delivery/void" "$AT" >/dev/null
 # 取消申请挂起提醒
 SCH3=$(mk_local_paid); req POST "/api/admin/local/orders/$SCH3/accept" "$AT" >/dev/null
 req POST "/api/orders/$SCH3/cancel-request" "$UT" '{"note":"e2e 挂起"}' >/dev/null
-R=$(sched '{"cancelRequestPendingMin":0}'); [[ "$(jq -r .data.localCancelReq <<<"$R")" -ge 1 ]] && ok "cancelReq ≥1" || fail "cancelReq" "$R"
+R=$(sched '{"cancelRequestPendingMin":0}'); [[ "$(jq -r '.data.localCancelReq // -1' <<<"$R")" -ge 1 ]] && ok "cancelReq ≥1" || fail "cancelReq" "$R"
 R=$(sched '{"cancelRequestPendingMin":0}'); assert_eq "cancelReq 第二跑归零" "$(jq -r .data.localCancelReq <<<"$R")" "0"
 # housekeeping 存在且不炸
 R=$(sched '{}'); [[ "$(jq -r '.data | has("localHousekeeping")' <<<"$R")" == "true" ]] && ok "housekeeping 已注册" || fail "housekeeping" "$R"
@@ -1088,7 +1108,7 @@ kd_cb "$WBD" "$WBT" 520 '已送达' '2026-09-04 15:20:00' >/dev/null
 S=$(snap); assert_eq "520 后入已完成" "$(col_has done $WBL1 "$S")" "true"
 assert_eq "打印机占位" "$(jq -r .data.printer.status <<<"$S")" "NOT_CONNECTED"
 assert_eq "熔断未触发" "$(jq -r .data.circuit.tripped <<<"$S")" "false"
-[[ "$(jq -r .data.stats.todayOrders <<<"$S")" -ge 1 ]] && ok "今日单数 ≥1" || fail "stats" "$S"
+[[ "$(jq -r '.data.stats.todayOrders // -1' <<<"$S")" -ge 1 ]] && ok "今日单数 ≥1" || fail "stats" "$S"
 
 echo "== 32. 配送报价快照（§6b 取数）=="
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
@@ -1178,7 +1198,7 @@ assert_eq "查价失败仍转备餐中" "$(jq -r .data.status <<<"$R")" "PREPARI
 # 「第二轮归零」就变成偶发红。保鲜这几条断言只看条数，不需要任何指令。
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 R=$(sched '{"quoteRefreshMin":0}')
-[[ "$(jq -r .data.localQuoteRefresh <<<"$R")" -ge 1 ]] && ok "报价保鲜 ≥1" || fail "报价保鲜" "$R"
+[[ "$(jq -r '.data.localQuoteRefresh // -1' <<<"$R")" -ge 1 ]] && ok "报价保鲜 ≥1" || fail "报价保鲜" "$R"
 R=$(sched '{}'); assert_eq "刚刷过的单不重复查" "$(jq -r .data.localQuoteRefresh <<<"$R")" "0"
 assert_eq "已有在途配送单的单不参与保鲜" "$(req GET "/api/admin/local/orders/$QO1/delivery" "$AT" | jq -r '.data.quote.quotedAt')" "$QAT2"
 
