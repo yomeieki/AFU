@@ -1976,6 +1976,128 @@ req POST "/api/admin/orders/$M2_ORF/refund" "$AT" "{\"amount\":$M2_REM,\"reason\
 assert_eq "P7：全额退款后券**仍是 USED**（退了就等于开出白嫖通道）" "$(sql "SELECT status FROM user_coupons WHERE id=$M2_CA;")" "USED"
 assert_eq "P7：无 GIFT_REVERT（赠品积分不退）" "$(sql "SELECT COUNT(*) FROM points_ledgers WHERE type='GIFT_REVERT' AND ref_id='$M2_ORF';")" "0"
 
+echo "== 48. 管理端会员：用户维度四个端点（M3）=="
+# 复用 §39 造好的两个用户（M2_UID / M2_UID2）与已支付订单 M2_ORF——它们是这一段唯一需要的
+# 前置，重造一遍只会多一批要清理的数据。变量一律 M3_ 前缀。
+M3_TAG=$RANDOM
+
+echo "-- 列表两列 --"
+# 断言盯**真值**不盯标签：从库里读出余额与可用券数再比。写死一个数字的话，
+# §39 改一行造分逻辑就会让这两条变成永远红或永远绿。
+M3_BAL_DB=$(sql "SELECT points_balance FROM users WHERE id=$M2_UID;")
+M3_CPN_DB=$(sql "SELECT COUNT(*) FROM user_coupons WHERE user_id=$M2_UID AND status='UNUSED' AND expires_at > NOW();")
+R=$(req GET "/api/admin/users?keyword=&pageSize=50" "$AT")
+M3_ROW=$(jq -c --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid)' <<<"$R")
+assert_eq "列表：能在前 50 条里找到该用户（找不到则下面两条无意义）" "$([[ -n "$M3_ROW" ]] && echo yes || echo no)" "yes"
+assert_eq "列表：pointsBalance = 库里的余额" "$(jq -r '.pointsBalance' <<<"$M3_ROW")" "$M3_BAL_DB"
+assert_eq "列表：availableCoupons = 库里 UNUSED 且未过期的张数" "$(jq -r '.availableCoupons' <<<"$M3_ROW")" "$M3_CPN_DB"
+
+echo "-- 可用券数按**时间**判，不是只看 status --"
+# 把一张 UNUSED 券的到期日改到过去（模拟「定时任务还没扫到」）。只看 status 的实现
+# 会把它继续算进可用数——这条断言就是钉住那个差别的：把 `expiresAt: { gt: now }` 去掉，它必红。
+M3_CEXP=$(m2_coupon "$M2_UT" "M3E2E-伪过期$M3_TAG" 300 0 ALL)
+M3_CPN_BEFORE=$(jq -r --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid) | .availableCoupons' <<<"$(req GET "/api/admin/users?pageSize=50" "$AT")")
+sql "UPDATE user_coupons SET expires_at = DATE_SUB(NOW(), INTERVAL 1 DAY) WHERE id=$M3_CEXP;"
+assert_eq "时间判前置：券仍是 UNUSED，但已过期（定时任务未扫）" \
+  "$(sql "SELECT CONCAT(status,'/',expires_at < NOW()) FROM user_coupons WHERE id=$M3_CEXP;")" "UNUSED/1"
+M3_CPN_AFTER=$(jq -r --argjson uid "$M2_UID" '.data.list[] | select(.id == $uid) | .availableCoupons' <<<"$(req GET "/api/admin/users?pageSize=50" "$AT")")
+assert_eq "可用券数：伪过期那张不再计入（−1）" "$M3_CPN_AFTER" "$((M3_CPN_BEFORE-1))"
+
+echo "-- 积分流水 --"
+R=$(req GET "/api/admin/users/$M2_UID/points-ledger?pageSize=5" "$AT")
+assert_eq "流水：返回 0" "$(code "$R")" "0"
+assert_eq "流水：total = 库里该用户的行数" "$(jq -r '.data.total' <<<"$R")" "$(sql "SELECT COUNT(*) FROM points_ledgers WHERE user_id=$M2_UID;")"
+assert_eq "流水：pageSize 生效（最多 5 行）" "$(jq -r '.data.list | length <= 5' <<<"$R")" "true"
+# typeLabel 是服务端拼的中文。断言比对**具体一行的 type 与它的标签**，不是「有没有这个字段」——
+# 后者在标签全变成空串时照样通过。
+M3_LEDGER_ALL=$(req GET "/api/admin/users/$M2_UID/points-ledger?pageSize=50" "$AT")
+M3_GIFT_LBL=$(jq -r 'first(.data.list[] | select(.type=="GIFT") | .typeLabel) // "MISSING"' <<<"$M3_LEDGER_ALL")
+assert_eq "流水：GIFT 的中文标签是「随单赠品」" "$M3_GIFT_LBL" "随单赠品"
+# refType='ORDER' 的行必须补出订单号：refId 存的是 Order.id，店主看的是 orderNo
+M3_LEDGER_ORDER=$(jq -c --arg oid "$M2_ORF" '[.data.list[] | select(.refType=="ORDER" and .refId==$oid)] | .[0] // {}' <<<"$M3_LEDGER_ALL")
+assert_eq "流水：ORDER 行补出了真实订单号" \
+  "$(jq -r '.orderNo // "MISSING"' <<<"$M3_LEDGER_ORDER")" "$(sql "SELECT order_no FROM orders WHERE id=$M2_ORF;")"
+assert_eq "流水：用户不存在 → 40401" "$(code "$(req GET "/api/admin/users/99999999/points-ledger" "$AT")")" "40401"
+
+echo "-- 定向发券 --"
+M3_TPL=$(req POST /api/admin/coupon-templates "$AT" "{\"name\":\"M3E2E-赔偿券$M3_TAG\",\"amount\":800,\"threshold\":0,\"channel\":\"ALL\",\"validDays\":30,\"source\":\"ADMIN\"}" | jq -r '.data.id')
+M3_ORDNO=$(sql "SELECT order_no FROM orders WHERE id=$M2_ORF;")
+R=$(req POST "/api/admin/users/$M2_UID/coupons" "$AT" "{\"templateId\":$M3_TPL,\"remark\":\"e2e少发补偿\",\"orderNo\":\"$M3_ORDNO\"}")
+assert_eq "发券：返回 0" "$(code "$R")" "0"
+M3_NEWC=$(jq -r '.data.id' <<<"$R")
+assert_eq "发券：issuedBy 记的是登录名" "$(sql "SELECT issued_by FROM user_coupons WHERE id=$M3_NEWC;")" "$ADMIN_USER"
+assert_eq "发券：remark 落库" "$(sql "SELECT remark FROM user_coupons WHERE id=$M3_NEWC;")" "e2e少发补偿"
+assert_eq "发券：sourceRef = 关联订单号" "$(sql "SELECT source_ref FROM user_coupons WHERE id=$M3_NEWC;")" "$M3_ORDNO"
+assert_eq "发券：source = ADMIN" "$(sql "SELECT source FROM user_coupons WHERE id=$M3_NEWC;")" "ADMIN"
+
+echo "-- 发券的四条拒绝路径 --"
+# ⚠️ 三层嵌套的 $( code "$( req … "{json}" )" ) 会把 JSON 里的引号吃掉，请求体被拆成
+# 几个 curl 参数，服务端收到半截 JSON 回 50001——这一段第一版就是这么红的三条。
+# 一律先赋值给变量再判。
+R=$(req POST "/api/admin/users/$M2_UID/coupons" "$AT" "{\"templateId\":$M3_TPL,\"remark\":\"   \"}")
+assert_eq "发券：remark 只有空白 → 40001" "$(code "$R")" "40001"
+# POINTS 模板：从这条路发会绕开 issuedCount 那道并发防线，限量券就变成无限量
+M3_TPL_P=$(req POST /api/admin/coupon-templates "$AT" "{\"name\":\"M3E2E-积分券$M3_TAG\",\"amount\":300,\"threshold\":0,\"channel\":\"ALL\",\"validDays\":30,\"source\":\"POINTS\",\"pointsCost\":100}" | jq -r '.data.id')
+R=$(req POST "/api/admin/users/$M2_UID/coupons" "$AT" "{\"templateId\":$M3_TPL_P,\"remark\":\"应被拒\"}")
+assert_eq "发券：POINTS 模板 → 40001（只认 source=ADMIN）" "$(code "$R")" "40001"
+# 别人的订单号：不校验的话一个笔误会让赔偿记录指到别人的订单上
+# 不能查 M2_UID2 的单——它在 §39 里只负责「用别人的券被拒」，从没下成过单，
+# 查出来是空串，请求体里的 orderNo 变成 ""（falsy）→ 校验被跳过 → 发券成功，
+# 这条断言与它下面那条会一起变成「测了个寂寞」。改查任一不属于 M2_UID 的单。
+M3_OTHER_NO=$(sql "SELECT order_no FROM orders WHERE user_id <> $M2_UID ORDER BY id DESC LIMIT 1;")
+assert_eq "发券前置：确实拿到了另一个用户的订单号" "$([[ -n "$M3_OTHER_NO" && "$M3_OTHER_NO" != "$M3_ORDNO" ]] && echo yes || echo no)" "yes"
+R=$(req POST "/api/admin/users/$M2_UID/coupons" "$AT" "{\"templateId\":$M3_TPL,\"remark\":\"错单号\",\"orderNo\":\"$M3_OTHER_NO\"}")
+assert_eq "发券：订单不属于该用户 → 40001" "$(code "$R")" "40001"
+assert_eq "发券：消息说的是「订单不属于该用户」" "$(jq -r '.message' <<<"$R")" "订单不属于该用户"
+req PUT "/api/admin/coupon-templates/$M3_TPL" "$AT" '{"status":"OFF"}' >/dev/null
+R=$(req POST "/api/admin/users/$M2_UID/coupons" "$AT" "{\"templateId\":$M3_TPL,\"remark\":\"停用后\"}")
+assert_eq "发券：模板停用后 → 42254（与 redeemByPoints 同一个码）" "$(code "$R")" "42254"
+
+echo "-- 券记录：管理端可见 issuedBy/remark，顾客端不可见 --"
+R=$(req GET "/api/admin/users/$M2_UID/coupons" "$AT")
+M3_ADMIN_VIEW=$(jq -c --argjson cid "$M3_NEWC" '.data[] | select(.id == $cid)' <<<"$R")
+assert_eq "券记录：能查到刚发的那张" "$([[ -n "$M3_ADMIN_VIEW" ]] && echo yes || echo no)" "yes"
+assert_eq "券记录：管理端看得到 issuedBy" "$(jq -r '.issuedBy' <<<"$M3_ADMIN_VIEW")" "$ADMIN_USER"
+assert_eq "券记录：管理端看得到 remark" "$(jq -r '.remark' <<<"$M3_ADMIN_VIEW")" "e2e少发补偿"
+assert_eq "券记录：status= 过滤生效（只回 UNUSED）" \
+  "$(req GET "/api/admin/users/$M2_UID/coupons?status=UNUSED" "$AT" | jq -r '[.data[] | select(.status != "UNUSED")] | length')" "0"
+# 越权字段白名单：顾客端拿得到这张券，但**拿不到** issuedBy/remark。
+# 判的是「字段不存在」而不是「值为空」——服务端若改成 `issuedBy: null` 照样是泄不出去，
+# 但一旦哪天 select 里加回这两个字段，这条会立刻红。
+# 顾客端的取值是 available|used|expired（zod enum），不是库里的 UNUSED/USED/EXPIRED——
+# 传错会 40001，.data 为 null，下面三条一起变成看不懂的红。
+M3_USER_VIEW=$(req GET "/api/member/coupons?status=available" "$M2_UT" | jq -c --argjson cid "$M3_NEWC" '.data.list[] | select(.id == $cid)')
+assert_eq "顾客端：能看到这张 ADMIN 券（发出去了就得能用）" "$([[ -n "$M3_USER_VIEW" ]] && echo yes || echo no)" "yes"
+assert_eq "顾客端：看不到 issuedBy（字段本身不存在）" "$(jq -r 'has("issuedBy")' <<<"$M3_USER_VIEW")" "false"
+assert_eq "顾客端：看不到 remark（备注里可能写着对顾客不友好的话）" "$(jq -r 'has("remark")' <<<"$M3_USER_VIEW")" "false"
+
+echo "-- 券模板列表：issuedTotal 与 issuedCount 是两个数 --"
+# ADMIN 路径不递增模板上的 issuedCount（那个列是限量券的并发防线），
+# 后台「已发」列若拿它显示会永远是 0。这条钉住两者的分叉。
+M3_TPL_ROW=$(req GET "/api/admin/coupon-templates?source=ADMIN" "$AT" | jq -c --argjson tid "$M3_TPL" '.data[] | select(.id == $tid)')
+assert_eq "模板：issuedTotal = 真实发出的张数（1）" "$(jq -r '.issuedTotal' <<<"$M3_TPL_ROW")" "1"
+assert_eq "模板：issuedCount 仍是 0（它只被 POINTS/CAMPAIGN 递增）" "$(jq -r '.issuedCount' <<<"$M3_TPL_ROW")" "0"
+assert_eq "模板：usedCount = 0（这张还没核销）" "$(jq -r '.usedCount' <<<"$M3_TPL_ROW")" "0"
+
+echo "-- 积分赠品：unitPrice 随列表一起给 --"
+# 不给的话后台算不出「等值消费 / 回报率」，编辑态只能按商品名回查商品列表再按 id 匹配
+M3_PG_ROW=$(req GET /api/admin/points-goods "$AT" | jq -c --argjson gid "$M2_PG" '.data[] | select(.id == $gid)')
+M3_PG_PID=$(sql "SELECT product_id FROM points_goods WHERE id=$M2_PG;")
+M3_PG_PRICE=$(sql "SELECT price FROM products WHERE id=$M3_PG_PID;")
+assert_eq "赠品前置：拿到了这条赠品对应的商品售价" "$([[ -n "$M3_PG_PRICE" ]] && echo yes || echo no)" "yes"
+assert_eq "赠品：unitPrice = 该商品当前售价" "$(jq -r '.unitPrice' <<<"$M3_PG_ROW")" "$M3_PG_PRICE"
+# productStatus 是 Product.status 的原值。前端曾按 ON/OFF 建查表 → 运行期整页白屏。
+assert_eq "赠品：productStatus 是 ON_SHELF/OFF_SHELF 原值，不是 ON/OFF" \
+  "$(jq -r '.productStatus | test("^(ON_SHELF|OFF_SHELF|DELETED|MISSING)$")' <<<"$M3_PG_ROW")" "true"
+
+# 本段造的模板与券留在库里不影响后续断言（都带 M3E2E- 前缀、只属于 §39 的测试用户），
+# 但伪过期那张会被下一轮的可用券数断言当成基线的一部分——它是按库里真值比的，不受影响。
+# 真正要清的是模板：停用的 ADMIN 模板会一直出现在「优惠券」页里。
+sql "DELETE FROM user_coupons WHERE template_id IN ($M3_TPL, $M3_TPL_P);
+     DELETE FROM coupon_templates WHERE id IN ($M3_TPL, $M3_TPL_P);"
+assert_eq "收尾自检：本段的券模板已清干净" \
+  "$(sql "SELECT COUNT(*) FROM coupon_templates WHERE id IN ($M3_TPL, $M3_TPL_P);")" "0"
+
 # ── 收尾 ────────────────────────────────────────────────────────────────
 # 两条踩过的坑，都不是产品问题而是清理写错：
 #

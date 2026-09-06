@@ -1413,8 +1413,73 @@ M1 只有账本与只读端点；M2 把券与赠品接进了 `POST /orders`。**
 
 ---
 
+## 附录 E-3：管理端用户维度（M3）
+
+后台的会员相关页面（优惠券 / 积分赠品 / 会员设置 / 用户管理）落在 M3。除了 E-2 已列的
+券模板与赠品 CRUD，这一轮新增四个**用户维度**的端点，全部挂在 `/admin/users` 下。
+
+### 端点
+
+| 端点 | 说明 |
+|---|---|
+| `GET /admin/users` | 每行新增 `pointsBalance` 与 `availableCoupons` |
+| `GET /admin/users/:id/points-ledger?page=&pageSize=` | 积分流水，分页倒序，`pageSize` 上限 50 |
+| `GET /admin/users/:id/coupons?status=` | 该用户全部券（含已用/已过期） |
+| `POST /admin/users/:id/coupons` | 定向发券（赔偿券）。`{ templateId, remark, orderNo? }` |
+
+用户不存在一律 `40401`，`:id` 非正整数 `40001`。
+
+### `availableCoupons` 按**时间**判，不是只看 `status`
+
+计数条件是 `status='UNUSED' AND expiresAt > now()`。过期是定时任务批量翻的，
+任务扫到之前那些券还挂着 `UNUSED`——只看 `status` 会把它们算进可用数。
+一次 `groupBy` 数完本页所有用户，不在 map 里逐用户 `count()`。
+
+### 积分流水的 `typeLabel` 与 `orderNo` 由服务端补
+
+- `typeLabel`：`EARN` 消费得分 / `REDEEM` 兑换券 / `GIFT` 随单赠品 / `GIFT_REVERT` 取消退回 /
+  `REFUND_DEDUCT` 退款扣回 / `EXPIRE` 过期 / `ADMIN` 手动调整（预留，本轮无入口）。
+  未知 type 原样回落成字面量。**在服务端拼**是因为这套 type 已经有三个消费方，各写一份 map 必然漂移。
+- `orderNo`：`refType='ORDER'` 时 `refId` 存的是 **`Order.id`**（不是单号），服务端联查补出真实单号。
+- 排序按 `id` 倒序而非 `createdAt`：同一事务里写的多条流水（如 `GIFT` + `EARN`）时间戳相同，
+  按它排序不稳定，翻页会漏行/重行。
+
+### 定向发券只认 `source='ADMIN'` 的模板
+
+| 情形 | 返回 |
+|---|---|
+| 模板不存在 | `40401` |
+| `source ≠ ADMIN` | `40001` 只能发放「手动发放」类型的券模板 |
+| 模板已停用 | `42254`（与 `redeemByPoints` 同码） |
+| `remark` 空白 | `40001` 请填写发放原因 |
+| `orderNo` 不属于该用户 | `40001` 订单不属于该用户 |
+
+`POINTS` / `CAMPAIGN` 模板带 `totalLimit` 的库存语义，从这条路发会绕开
+`issuedCount` 那道并发防线（本端点不递增它），限量券就变成无限量；`NEWCOMER` 靠
+「每人一张」的查重发放，手动补发会打破那条不变式。
+
+`remark` **必填**：这个端点凭空造出真金白银，「为什么发」不写清楚，一个月后没人说得清。
+`issuedBy` 记登录名，`orderNo` 落到 `sourceRef`。管理端**可以**读 `issuedBy`/`remark`，
+顾客端 `GET /member/coupons` 的输出白名单里没有这两个字段（备注里可能写着对顾客不友好的话），
+e2e 第 48 段用 `has("issuedBy") == false` 锁住。
+
+限流：`adminIssueLimiter` 30 次/分钟，**按管理员名计数而非 IP**——店里几个人共用出口 IP，
+按 IP 会互相挤占；要防的恰恰是某一个账号短时间刷券。
+
+### 两个为后台页面补的字段
+
+- `GET /admin/coupon-templates` 新增 **`issuedTotal`**（真实发出的张数）与已有的 `usedCount`。
+  模板上的 `issuedCount` 是限量券的并发防线，只有 `POINTS`/`CAMPAIGN` 两条自助路径递增，
+  `ADMIN`/`NEWCOMER` 模板上它永远是 0——后台「已发」列必须用 `issuedTotal`。
+  对前两者两个数恒等（递增与发券同事务），所以「已发 / 总量」拿它当分子同样正确。
+- `GET /admin/points-goods` 新增 **`unitPrice`**（商品或所选规格的当前售价，商品已删为 null）。
+  后台要在积分价输入框旁实时显示「≈ 消费 ¥X 可得 · 回报率 N%」——积分价是店主可调的，
+  没有这条提示只能凭感觉填。另注意 `productStatus` 是 `Product.status` 的**原值**
+  `ON_SHELF`/`OFF_SHELF`（外加 `DELETED`/`MISSING`），不是券模板/赠品自身开关的 `ON`/`OFF`。
+
+---
+
 ### 已知待办（交接给后续里程碑）
 
-- 券模板/赠品管理页、用户页积分与券列、赔偿券发放按钮 — M3。
 - 会员中心/积分商城/我的券/领券中心/积分明细五个小程序页面、封面入口接线 — M4。
 - `docs/staff-guide.md`「优惠券与积分」章节、`docs/miniapp-release-checklist.md` 的规则公示检查项 — M5。
