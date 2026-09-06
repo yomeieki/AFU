@@ -118,9 +118,27 @@ function distanceText(m: number | null | undefined): string {
   return m >= 1000 ? `${(m / 1000).toFixed(1)}公里` : `${m}米`
 }
 
+/**
+ * 切纸前的补白行数。
+ *
+ * ⚠️ 2026-09-06 真机标定（SN 222601993，FP-V58-WHC）：**切刀在打印头下游约 5.5 行处**。
+ * `<CUT>` 是就地切，末行此时还没走到切刀位置，于是刀落在票的中间——标定票的切点稳定落在
+ * 「垫6」这一行中间，两段完全一致。后果是**每一张票都缺末尾几行**：订单票丢「实付」与
+ * 「接单请在工作台操作」，测试页只有 4 行正文，整张都在切刀上游、直接被拦腰截断。
+ * 这不是偶发，是所有票的必然行为，只是票越长越不容易被发现。
+ *
+ * 补 7 行 = 6 行（把内容顶出切刀范围）+ 1 行余量。
+ *
+ * ⚠️ 补白必须是**含一个空格的行**，不能用空字符串：`['a','','']` 经 `join('<BR>')` 得到
+ * 连续的 `<BR><BR><BR>`，飞鹅会把它折叠掉，补白等于没写（第一次标定就栽在这里，
+ * 补 0/2/4/6 行四段表现完全一样）。
+ */
+const CUT_PAD_LINES = 7
+
 /** 组装含 `<BR>` 换行标签的整票内容；lines 里每一项已是一「行」（不含 `<BR>`） */
 function assemble(lines: string[]): string {
-  return lines.filter((l) => l !== undefined && l !== null).join('<BR>') + '<BR><CUT>'
+  const body = lines.filter((l) => l !== undefined && l !== null)
+  return [...body, ...Array(CUT_PAD_LINES).fill(' ')].join('<BR>') + '<BR><CUT>'
 }
 
 /**
@@ -134,7 +152,10 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     `<CB>${isLocal ? '同城配送' : '全国邮寄'}</CB>`,
     ...(o.seq !== null && o.seq !== undefined ? [`<C>今日第 ${o.seq} 单</C>`] : []),
     ...(o.announceNo !== null && o.announceNo !== undefined ? [`<C>第 ${o.announceNo} 次催单</C>`] : []),
-    `订单号：${o.orderNo}`,
+    // PO 2026-09-06 定：顶部只放**加大的后 4 位**。完整单号 20 个字符在 58mm（32 列）上占掉
+    // 大半行，而店里认单靠的是「今日第 N 单」和后 4 位，没人会去逐位核对前缀。
+    // 完整单号没有删掉，挪到 footer 的小字里——客服对单、查退款仍然需要它。
+    `<CB>#${o.orderNo.slice(-4)}</CB>`,
     `下单：${fmtDateTime(o.createdAt)}`,
     `付款：${fmtDateTime(o.paidAt)}`,
   ]
@@ -163,6 +184,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     `合计：${yuan(o.totalAmount)}`,
     `运费：${yuan(o.shippingFee)}`,
     `<B>实付：${yuan(o.actualAmount)}</B>`,
+    `单号：${o.orderNo}`,
     '接单请在工作台操作',
   ]
 
