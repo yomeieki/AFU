@@ -11,6 +11,8 @@ import systemRouter from './system'
 import usersRouter from './users'
 import uploadRouter from './upload'
 import settingsRouter from './settings'
+import couponTemplatesRouter from './coupon-templates'
+import pointsGoodsRouter from './points-goods'
 import { verifyAdminToken } from '../../middlewares/auth'
 import { config } from '../../config'
 import kd100MockRouter from './kd100-mock'
@@ -42,6 +44,8 @@ router.use('/workbench', workbenchRouter)
 router.use('/users', usersRouter)
 router.use('/upload', uploadRouter)
 router.use('/settings', settingsRouter)
+router.use('/coupon-templates', couponTemplatesRouter)
+router.use('/points-goods', pointsGoodsRouter)
 // printer.ts 自带完整相对路径（/settings/printer、/printers/*、/print-jobs*、/orders/:id/reprint），
 // 挂在根上、放在 settingsRouter/ordersRouter 之后：两边都没有同名路由，穿透互不冲突（见该文件头注释）。
 router.use('/', printerRouter)

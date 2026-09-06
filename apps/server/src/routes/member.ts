@@ -13,6 +13,9 @@ import { success } from '../utils/response'
 import { memberReadLimiter, memberWriteLimiter } from '../middlewares/rate-limit'
 import { getPointsSummary, listLedger } from '../services/member/points'
 import { redeemByPoints, claimCampaign, listUserCoupons, countAvailable, toCouponView, CouponListStatus } from '../services/member/coupons'
+import { loadCheckoutOptions } from '../services/member/checkout'
+import { getMemberSettings } from '../services/member/settings'
+import prisma from '../utils/prisma'
 
 const router = Router()
 
@@ -105,6 +108,125 @@ router.post('/coupons/claim', memberWriteLimiter, async (req: Request, res: Resp
     const { templateId } = templateIdSchema.parse(req.body)
     const coupon = await claimCampaign(userId, templateId)
     success(res, toCouponView(coupon))
+  } catch (e) {
+    next(e)
+  }
+})
+
+const checkoutOptionsSchema = z.object({
+  channel: z.enum(['LOCAL', 'EXPRESS']),
+  // 小计由前端传：它是「这一单当前选了哪些商品」的结果，服务端在结算页阶段并不知道购物车选中项。
+  // ⚠️ 这个值**只用于展示**——算券可不可用、抵多少，让顾客在点「提交」之前就看到准确数字。
+  // 真正下单时 `POST /orders` 会用**自己算出来的**小计重新判一遍（Task 4/5），
+  // 所以这里传假值最多让顾客看到一个乐观的预览，换不来任何实际优惠。
+  subtotal: z.coerce.number().int().min(0).max(100000000),
+})
+
+// GET /api/member/checkout-options?channel=&subtotal= — 结算页的券与赠品
+router.get('/checkout-options', memberReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { channel, subtotal } = checkoutOptionsSchema.parse(req.query)
+    success(res, await loadCheckoutOptions(req.userId!, channel, subtotal))
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/member/mall — 积分商城：可用积分换的券模板 + 全部随单赠品
+router.get('/mall', memberReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!
+    const [user, settings, templates, goods] = await Promise.all([
+      prisma.user.findUnique({ where: { id: userId }, select: { pointsBalance: true } }),
+      getMemberSettings(),
+      prisma.couponTemplate.findMany({
+        where: { source: 'POINTS', status: 'ON', pointsCost: { not: null } },
+        select: { id: true, name: true, description: true, amount: true, threshold: true, channel: true, validDays: true, pointsCost: true },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      }),
+      prisma.pointsGood.findMany({
+        where: { status: 'ON' },
+        select: { id: true, productId: true, skuId: true, pointsCost: true, perOrderLimit: true, stockLimit: true, issuedCount: true },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      }),
+    ])
+
+    // 商城页**不按渠道过滤赠品**，而是把 channel 原样带出去让前端分组展示：
+    // 顾客是在「逛商城」而不是在结算，这时藏掉另一条渠道的东西只会让人以为东西没了。
+    // 真正的渠道限制在结算页（loadCheckoutOptions）和下单时执行。
+    const productIds = [...new Set(goods.map((g) => g.productId))]
+    const skuIds = goods.map((g) => g.skuId).filter((v): v is number => v !== null)
+    const [products, skus] = await Promise.all([
+      productIds.length
+        ? prisma.product.findMany({
+            where: { id: { in: productIds }, deletedAt: null, status: 'ON_SHELF' },
+            select: { id: true, name: true, coverImage: true, stock: true, channel: true },
+          })
+        : Promise.resolve([]),
+      skuIds.length
+        ? prisma.productSku.findMany({ where: { id: { in: skuIds } }, select: { id: true, specText: true, stock: true } })
+        : Promise.resolve([]),
+    ])
+    const productById = new Map(products.map((x) => [x.id, x]))
+    const skuById = new Map(skus.map((s) => [s.id, s]))
+
+    const gifts = goods.flatMap((g) => {
+      const product = productById.get(g.productId)
+      if (!product) return []
+      const sku = g.skuId !== null ? skuById.get(g.skuId) : undefined
+      if (g.skuId !== null && !sku) return []
+      const stock = sku ? sku.stock : product.stock
+      const remaining = g.stockLimit === null ? null : g.stockLimit - g.issuedCount
+      if (stock <= 0 || (remaining !== null && remaining <= 0)) return []
+      return [{
+        id: g.id, productId: g.productId, skuId: g.skuId, name: product.name, image: product.coverImage,
+        specText: sku?.specText ?? null, channel: product.channel,
+        pointsCost: g.pointsCost, perOrderLimit: g.perOrderLimit, stock, remaining,
+      }]
+    })
+
+    success(res, {
+      pointsBalance: user?.pointsBalance ?? 0,
+      points: { enabled: settings.points.enabled, earnRatePerYuan: settings.points.earnRatePerYuan },
+      coupons: templates,
+      gifts,
+    })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/member/campaign — 领券中心：CAMPAIGN 模板 + 剩余量 + 本人已领张数
+router.get('/campaign', memberReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!
+    const templates = await prisma.couponTemplate.findMany({
+      where: { source: 'CAMPAIGN', status: 'ON' },
+      select: {
+        id: true, name: true, description: true, amount: true, threshold: true,
+        channel: true, validDays: true, totalLimit: true, perUserLimit: true, issuedCount: true,
+      },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    })
+    // 「本人已领 N 张」按模板分组数一次，而不是逐张模板查一遍
+    const mine = templates.length
+      ? await prisma.userCoupon.groupBy({
+          by: ['templateId'],
+          where: { userId, templateId: { in: templates.map((t) => t.id) } },
+          _count: { _all: true },
+        })
+      : []
+    const mineByTemplate = new Map(mine.map((m) => [m.templateId, m._count._all]))
+
+    success(res, {
+      list: templates.map(({ totalLimit, issuedCount, ...t }) => ({
+        ...t,
+        // 剩余量：totalLimit 为空 = 不限量。issuedCount 本身不外露——它是运营数据，
+        // 顾客只需要知道「还剩多少」和「自己领了几张」。
+        remaining: totalLimit === null ? null : Math.max(0, totalLimit - issuedCount),
+        claimedByMe: mineByTemplate.get(t.id) ?? 0,
+      })),
+    })
   } catch (e) {
     next(e)
   }
