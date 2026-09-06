@@ -8,7 +8,27 @@ echo "== 47. 出票 · 复核第二轮（组三：R5/R8/R9/UNKNOWN；R4/R7/M4/M1
 # 结果见本次交付报告，不在这里重复。
 
 echo "-- R5：恢复补发只挑「这次离线期间」的行，不会把离线之前就已正常发出、还没确认的行也重发一遍 --"
-req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-R5","channels":["LOCAL","EXPRESS"],"copies":1}],"offlineAlertMin":5,"printCancel":true}' >/dev/null
+# ⚠️ `repeat.maxTimes:0` 是这一段能稳定下来的前提，不是可有可无的装饰（2026-09-06 查偶发红）。
+# 本段把打印机配成**只有 G3-R5 一台**，而 `repeatAnnounce`（未接单重复播报）扫的是**全库**
+# `status='PAID'` 的历史残留单（orders 表从不清，审计库攒了两千多条），选中后
+# `enqueueOrderTicket(REPEAT)` 把票路由到「当前配置的打印机」——也就是 G3-R5。于是**任何一次
+# 落在下面这个离线窗口里的 scheduler tick**，都会往 G3-R5 的 mock 云端队列里塞几张跟本段毫无
+# 关系的催单票：`waiting` 不再是 1，恢复后它们还各自补发一次，物理也不再是 6 ——
+# 正是偶发失败的那两条断言（其余 5 条照常绿，这个特征可用来认症状）。
+# 而「哪一次 tick 落在窗口里」由两个与本段无关的时钟决定，所以是偶发而不是必现：
+#   ① e2e 自己的显式 tick —— e2e.sh:1409 特意把 repeat-min-wait 设成 0 主动播报一次，
+#      若它在 R5 前约 40 秒把 everyMin=2 分钟的冷却刷掉就绿，冷却恰好在这 40 秒里到期就红
+#      （实测某轮：§35 那次 75s 被挡、R5 这次 117s——差 3 秒没过线、紧接着 P7a 那次 120s 整）；
+#   ② 服务端自己的 60s 心跳（services/scheduler.ts 的 TICK_MS），落进这 8 秒窗口就红
+#      （实测某轮它落在 §44，5 张催单票就记在 D44-DUAL 头上，差 12 秒没落到 R5）。
+# 从前这行不写 `repeat`，sanitize 填的是默认值（expressAfterMin=10 / everyMin=2 / maxTimes=5），
+# 等于把本段的成败押在上面那两个时钟的相位上。maxTimes:0 让 `announceCount >= maxTimes` 恒成立，
+# repeatAnnounce 走不到 enqueueOrderTicket，两个时钟怎么落都不会有票混进 G3-R5。
+# 断言一个字没放松（仍是 waiting==1、物理==6）——关掉的是与本段无关的噪声源，不是被测的性质。
+# 最小复现（一单不下，只把残留单的催单冷却清零再跑一轮调度）：不带这个 repeat 块 waiting 0→4，
+# 带上 0→0。同一类隐患也在 R7-MAJ / R5-GAP（同样「单台打印机 + 断言精确物理张数」），只是它们
+# 排在 P7a 之后、冷却刚被刷新，暂时轮不到它们接住；要一起钉死就照抄这个 repeat 块。
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"G3-R5","channels":["LOCAL","EXPRESS"],"copies":1}],"repeat":{"localAfterMin":60,"expressAfterMin":60,"everyMin":60,"maxTimes":0,"reprint":false},"offlineAlertMin":5,"printCancel":true}' >/dev/null
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
 req POST /api/admin/system/printer-mock/state "$AT" '{"sn":"G3-R5","state":"ONLINE"}' >/dev/null
 
