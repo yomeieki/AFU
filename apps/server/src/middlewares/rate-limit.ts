@@ -120,6 +120,29 @@ export const memberWriteLimiter = rateLimit({
   message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
 })
 
+/**
+ * 管理端定向发券（`POST /admin/users/:id/coupons`）：这是后台唯一一个**直接生成真金白银**
+ * 的写端点，且不消耗任何库存（ADMIN 券没有 totalLimit 防线），所以必须自己有一道闸。
+ *
+ * 按**管理员名**计数而不是按 IP：店里几个人共用一个出口 IP，按 IP 会互相挤占；
+ * 而误操作/脚本刷券要防的恰恰是「某一个账号」在短时间内发出一堆券。
+ * `req.adminUsername` 在 `verifyAdminToken` 之后恒有值，`ipKeyGenerator` 只是与
+ * `memberKeyGenerator` 同款的兜底写法（顺序装反时不至于把所有人算成同一个 key）。
+ *
+ * 30/分钟：手动发赔偿券一次点一个用户，正常速度远够；真出现刷券时 30 张的损失可控。
+ */
+const adminUsernameKeyGenerator = (req: Request) =>
+  req.adminUsername ? `a:${req.adminUsername}` : ipKeyGenerator(req.ip ?? '')
+
+export const adminIssueLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(30, 500),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: adminUsernameKeyGenerator,
+  message: { code: 42901, message: '发券过于频繁，请稍后再试', data: null },
+})
+
 export const kdCallbackLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: devCeiling(120, 2000),

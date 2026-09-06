@@ -144,6 +144,8 @@ export interface AfterSaleSummary {
 export interface Order {
   id: number
   orderNo: string
+  /** 仅 GET /admin/orders/:id 返回。M3「发赔偿券」要用——发券端点是用户维度的 */
+  userId?: number
   status: OrderStatus
   totalAmount: number
   shippingFee: number
@@ -182,6 +184,19 @@ export interface Order {
   shipment?: Shipment | null
   latestRefund?: RefundSummary | null
   afterSale?: AfterSaleSummary | null
+  /** M2/M3：本单用的那张券的快照，仅详情接口返回；没用券为 null */
+  coupon?: OrderCoupon | null
+}
+
+/** 订单详情里的券快照。比顾客端多 source/issuedBy/remark——售后要看「是不是我们自己补的」 */
+export interface OrderCoupon {
+  name: string
+  code: string
+  amount: number
+  threshold: number
+  source: CouponSource
+  issuedBy: string | null
+  remark: string | null
 }
 
 /** 售后单（后台列表，含订单摘要） */
@@ -227,6 +242,10 @@ export interface AdminUser {
   lastLoginAt: string | null
   createdAt: string
   orderCount: number
+  /** M3：当前积分余额 */
+  pointsBalance: number
+  /** M3：可用券张数（UNUSED 且未过期，服务端按时间判，不依赖定时任务跑没跑） */
+  availableCoupons: number
 }
 
 export interface UserOrder {
@@ -491,4 +510,170 @@ export interface PrinterEnqueueResult {
   enqueued: boolean
   reason?: string
   jobIds?: number[]
+}
+
+// ─────────────────────────────────────────────────────────
+// 会员：券模板 / 用户券 / 积分赠品 / 积分流水 / 会员设置（M3）
+// 字段与 spec §4 的模型逐字对应，金额一律是**分**
+// ─────────────────────────────────────────────────────────
+
+/** 券的发放路径。决定这张模板能从哪条口子发出去，建后不可改 */
+export type CouponSource = 'ADMIN' | 'POINTS' | 'CAMPAIGN' | 'NEWCOMER'
+/** 券的适用渠道。ALL = 两种配送都能用 */
+export type CouponChannel = 'ALL' | 'LOCAL' | 'EXPRESS'
+export type CouponStatus = 'UNUSED' | 'USED' | 'EXPIRED'
+/** 上下架。券模板与积分赠品共用这一组字面量 */
+export type OnOff = 'ON' | 'OFF'
+
+export interface CouponTemplate {
+  id: number
+  name: string
+  description: string | null
+  /** 面额（分） */
+  amount: number
+  /** 门槛（分），0 = 无门槛 */
+  threshold: number
+  channel: CouponChannel
+  source: CouponSource
+  /** 领到后多少天过期 */
+  validDays: number
+  /** 仅 source='POINTS' 有值 */
+  pointsCost: number | null
+  totalLimit: number | null
+  perUserLimit: number | null
+  /**
+   * ⚠️ **不要拿这个当「已发」显示，用 `issuedTotal`。**
+   * 它是限量券的并发防线（`updateMany` 条件递增），只有 POINTS / CAMPAIGN 两条自助
+   * 路径会递增；ADMIN 定向发放与 NEWCOMER 新客券都不递增，拿它显示会永远是 0。
+   */
+  issuedCount: number
+  /** 真实发出去的张数（服务端按 UserCoupon 行数统计）。「已发」列用这个 */
+  issuedTotal: number
+  /** 其中已核销的张数 */
+  usedCount: number
+  sortOrder: number
+  status: OnOff
+  createdAt: string
+  updatedAt: string
+}
+
+/** 某个用户名下的一张券。管理端可见 issuedBy/remark，顾客端不可见 */
+export interface UserCouponRow {
+  id: number
+  templateId: number
+  code: string
+  name: string
+  amount: number
+  threshold: number
+  channel: CouponChannel
+  status: CouponStatus
+  source: CouponSource
+  /** 发放来源引用：ADMIN 券填的是补偿针对的订单号 */
+  sourceRef: string | null
+  /** 哪个管理员发的，仅 ADMIN 券有值 */
+  issuedBy: string | null
+  /** 发放原因，仅 ADMIN 券有值 */
+  remark: string | null
+  expiresAt: string
+  usedAt: string | null
+  orderId: number | null
+  /** 核销在哪一单，服务端联查补上 */
+  orderNo: string | null
+  createdAt: string
+}
+
+/** 券模板的发放记录一行（GET /admin/coupon-templates/:id/issued） */
+export interface CouponIssuedRow {
+  id: number
+  code: string
+  status: CouponStatus
+  source: CouponSource
+  issuedBy: string | null
+  remark: string | null
+  sourceRef: string | null
+  expiresAt: string
+  usedAt: string | null
+  orderId: number | null
+  createdAt: string
+  user: { id: number; nickname: string | null }
+}
+
+/**
+ * 随单赠品配置：顾客在结算页用积分加购、跟着付费订单一起履约的商品。
+ * `productId`/`skuId` 建后不可改（改了就是换了一件商品，等于另一条配置）。
+ */
+export interface PointsGood {
+  id: number
+  productId: number
+  skuId: number | null
+  /** 单件积分价 */
+  pointsCost: number
+  /** 每单最多加购几件 */
+  perOrderLimit: number
+  /** 总发放上限，null = 不限 */
+  stockLimit: number | null
+  /** 已发放件数，配合 stockLimit 判剩余 */
+  issuedCount: number
+  sortOrder: number
+  status: OnOff
+  createdAt: string
+  updatedAt: string
+  // 以下由服务端联查补上（PointsGood 没有 product/sku 关系字段）
+  productName: string | null
+  productImage: string | null
+  /** 商品当前状态：ON/OFF 是上下架，DELETED 已删，MISSING 查不到。
+   *  后两者与 OFF 在顾客侧都是隐形的，页面必须显式标出来 */
+  productStatus: 'ON' | 'OFF' | 'DELETED' | 'MISSING'
+  productChannel: string | null
+  specText: string | null
+  /** 商品（或所选规格）的当前库存 */
+  stock: number
+}
+
+/** 积分流水类型。中文标签由服务端给（typeLabel），前端不再自己 map */
+export type PointsLedgerType =
+  | 'EARN'
+  | 'REDEEM'
+  | 'GIFT'
+  | 'GIFT_REVERT'
+  | 'REFUND_DEDUCT'
+  | 'EXPIRE'
+  | 'ADMIN'
+
+export interface PointsLedgerRow {
+  id: number
+  type: PointsLedgerType | string
+  /** 服务端拼好的中文标签；未知 type 会原样回落成字面量 */
+  typeLabel: string
+  /** 正 = 入账，负 = 出账 */
+  delta: number
+  balanceAfter: number
+  refType: string
+  refId: string
+  /** refType='ORDER' 时服务端联查补上，其余为 null */
+  orderNo: string | null
+  remark: string | null
+  /** 入账行才有意义：这批分什么时候过期 */
+  expiresAt: string | null
+  createdAt: string
+}
+
+/**
+ * 会员总开关与参数（KV 存储，服务端 60s 缓存）。
+ * `points.enabled=false` 的语义是 **只停发新分**，已有积分照常能花（PO 2026-09-05 裁决）。
+ */
+export interface MemberSettings {
+  points: {
+    enabled: boolean
+    /** 每消费 1 元得多少分 */
+    earnRatePerYuan: number
+    /** 积分有效期（天） */
+    validDays: number
+  }
+  newcomer: {
+    /** 新客券模板 id，null = 不发新客券 */
+    templateId: number | null
+  }
+  /** 规则说明页的补充文案 */
+  rulesText: string
 }

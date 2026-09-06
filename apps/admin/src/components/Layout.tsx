@@ -18,6 +18,9 @@ import {
   LayoutGrid,
   History,
   Printer,
+  Ticket,
+  Gift,
+  Star,
   LucideIcon,
 } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
@@ -33,6 +36,10 @@ const navItems: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/scan-stats', label: '扫码统计', icon: ScanLine },
   { to: '/banners', label: '轮播管理', icon: Image },
   { to: '/shop-settings', label: '店铺设置', icon: Store },
+  // 会员三项平铺，不做二级分组（M3 D1）：侧栏总共十几项，多一层展开只是多一次点击
+  { to: '/coupons', label: '优惠券', icon: Ticket },
+  { to: '/points-goods', label: '积分赠品', icon: Gift },
+  { to: '/member-settings', label: '会员设置', icon: Star },
   { to: '/local/orders', label: '同城订单', icon: History },
   { to: '/local/settings', label: '同城设置', icon: Bike },
   { to: '/printer-settings', label: '打印机设置', icon: Printer },

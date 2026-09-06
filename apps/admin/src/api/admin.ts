@@ -28,6 +28,12 @@ import type {
   PrinterHealthEntry,
   PrintJob,
   PrinterEnqueueResult,
+  CouponTemplate,
+  CouponIssuedRow,
+  UserCouponRow,
+  PointsGood,
+  PointsLedgerRow,
+  MemberSettings,
 } from '../types'
 
 // Auth
@@ -290,3 +296,56 @@ export const retryPrintJob = (id: number) =>
 // 订单卡「重打小票」
 export const reprintOrder = (id: number) =>
   client.post<ApiResponse<PrinterEnqueueResult>>(`/admin/orders/${id}/reprint`).then((r) => r.data.data)
+
+// ─────────────────────────────────────────────────────────
+// 会员：券模板 / 积分赠品 / 会员设置 / 用户维度（M3）
+// ─────────────────────────────────────────────────────────
+
+// 券模板**没有删除**：已发出去的 UserCoupon 带四个快照字段，删模板只会让发放记录悬空。
+// 停用（status='OFF'）只挡再发放，顾客手里那张照常能用。
+export const getCouponTemplates = (params?: { source?: string; status?: string }) =>
+  client.get<ApiResponse<CouponTemplate[]>>('/admin/coupon-templates', { params }).then((r) => r.data.data)
+export const createCouponTemplate = (data: Partial<CouponTemplate> & { source: string }) =>
+  client.post<ApiResponse<CouponTemplate>>('/admin/coupon-templates', data).then((r) => r.data.data)
+// source 不可改（建后固定），传了服务端也会忽略——它决定这张模板走哪条发放路径
+export const updateCouponTemplate = (id: number, data: Partial<CouponTemplate>) =>
+  client.put<ApiResponse<CouponTemplate>>(`/admin/coupon-templates/${id}`, data).then((r) => r.data.data)
+export const getCouponTemplateIssued = (id: number, params?: { page?: number; pageSize?: number }) =>
+  client
+    .get<ApiResponse<PaginatedData<CouponIssuedRow>>>(`/admin/coupon-templates/${id}/issued`, { params })
+    .then((r) => r.data.data)
+
+// 积分赠品。有 DELETE（与券模板不同）：OrderItem 落的是商品快照，不引用 PointsGood.id
+export const getPointsGoods = () =>
+  client.get<ApiResponse<PointsGood[]>>('/admin/points-goods').then((r) => r.data.data)
+export const createPointsGood = (data: {
+  productId: number
+  skuId?: number | null
+  pointsCost: number
+  perOrderLimit?: number
+  stockLimit?: number | null
+  sortOrder?: number
+  status?: string
+}) => client.post<ApiResponse<PointsGood>>('/admin/points-goods', data).then((r) => r.data.data)
+// productId/skuId 不可改（改了就是换了一件商品）——要换就删了重建
+export const updatePointsGood = (id: number, data: Partial<Omit<PointsGood, 'productId' | 'skuId'>>) =>
+  client.put<ApiResponse<PointsGood>>(`/admin/points-goods/${id}`, data).then((r) => r.data.data)
+export const deletePointsGood = (id: number) =>
+  client.delete<ApiResponse<{ ok: true }>>(`/admin/points-goods/${id}`).then((r) => r.data.data)
+
+// 会员设置。PUT 是整包覆盖（同 printer）——先 get 拿完整对象、改字段后原样传回
+export const getMemberSettings = () =>
+  client.get<ApiResponse<MemberSettings>>('/admin/settings/member').then((r) => r.data.data)
+export const updateMemberSettings = (payload: MemberSettings) =>
+  client.put<ApiResponse<MemberSettings>>('/admin/settings/member', payload).then((r) => r.data.data)
+
+// 用户维度：积分流水（分页）、名下券（一次全给，不分页）、定向发券
+export const getUserPointsLedger = (userId: number, params?: { page?: number; pageSize?: number }) =>
+  client
+    .get<ApiResponse<PaginatedData<PointsLedgerRow>>>(`/admin/users/${userId}/points-ledger`, { params })
+    .then((r) => r.data.data)
+export const getUserCoupons = (userId: number, params?: { status?: string }) =>
+  client.get<ApiResponse<UserCouponRow[]>>(`/admin/users/${userId}/coupons`, { params }).then((r) => r.data.data)
+// 只能用 source='ADMIN' 的模板；remark 必填（这个端点凭空造钱，得留下「为什么发」）
+export const issueUserCoupon = (userId: number, data: { templateId: number; remark: string; orderNo?: string }) =>
+  client.post<ApiResponse<UserCouponRow>>(`/admin/users/${userId}/coupons`, data).then((r) => r.data.data)

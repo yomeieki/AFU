@@ -52,17 +52,37 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       where: { ...(source ? { source } : {}), ...(status ? { status } : {}) },
       orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
     })
-    // usedCount = 该模板已被**核销**的张数（不是已发放数——issuedCount 是发放数，模板上就有）。
-    // 一次 groupBy 数完，不要在 map 里逐张模板查（N+1）。
-    const used = list.length
+    // 一次 groupBy 按 (模板, 状态) 数完，派生出下面两个数；别在 map 里逐张模板查（N+1）。
+    const grouped = list.length
       ? await prisma.userCoupon.groupBy({
-          by: ['templateId'],
-          where: { templateId: { in: list.map((t) => t.id) }, status: 'USED' },
+          by: ['templateId', 'status'],
+          where: { templateId: { in: list.map((t) => t.id) } },
           _count: { _all: true },
         })
       : []
-    const usedByTemplate = new Map(used.map((u) => [u.templateId, u._count._all]))
-    success(res, list.map((t) => ({ ...t, usedCount: usedByTemplate.get(t.id) ?? 0 })))
+    // issuedTotal = 真实发出去的张数；usedCount = 其中已核销的张数。
+    //
+    // ⚠️ 为什么不直接用模板上的 `issuedCount` 当「已发」：那个列是**限量券的并发防线**
+    // （`updateMany` 条件递增），只有 POINTS / CAMPAIGN 两条自助路径会递增它。
+    // ADMIN 定向发放与 NEWCOMER 新客券都不递增（它们没有 totalLimit 语义，
+    // 递增反而会让人以为 totalLimit 在这两条路上生效——实际没有任何地方拦），
+    // 于是后台「已发」列在这两类模板上会永远显示 0。这里按真实行数统计。
+    // 对 POINTS / CAMPAIGN 两者恒等（递增与发券同事务，一起成功一起回滚），
+    // 所以「已发 / 总量」这一对拿 issuedTotal 当分子同样正确。
+    const issuedByTemplate = new Map<number, number>()
+    const usedByTemplate = new Map<number, number>()
+    for (const g of grouped) {
+      issuedByTemplate.set(g.templateId, (issuedByTemplate.get(g.templateId) ?? 0) + g._count._all)
+      if (g.status === 'USED') usedByTemplate.set(g.templateId, (usedByTemplate.get(g.templateId) ?? 0) + g._count._all)
+    }
+    success(
+      res,
+      list.map((t) => ({
+        ...t,
+        issuedTotal: issuedByTemplate.get(t.id) ?? 0,
+        usedCount: usedByTemplate.get(t.id) ?? 0,
+      }))
+    )
   } catch (e) {
     next(e)
   }

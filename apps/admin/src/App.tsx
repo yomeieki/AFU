@@ -15,6 +15,9 @@ import ShopSettings from './pages/ShopSettings'
 import LocalSettings from './pages/LocalSettings'
 import LocalOrders from './pages/LocalOrders'
 import PrinterSettings from './pages/PrinterSettings'
+import Coupons from './pages/Coupons'
+import PointsGoods from './pages/PointsGoods'
+import MemberSettings from './pages/MemberSettings'
 import Workbench from './pages/Workbench'
 import { ToastHost } from './components/ui/Toast'
 import { ConfirmDialogHost } from './components/ui/ConfirmDialog'
@@ -58,6 +61,9 @@ export default function App() {
           <Route path="scan-stats" element={<ScanStats />} />
           <Route path="banners" element={<Banners />} />
           <Route path="shop-settings" element={<ShopSettings />} />
+          <Route path="coupons" element={<Coupons />} />
+          <Route path="points-goods" element={<PointsGoods />} />
+          <Route path="member-settings" element={<MemberSettings />} />
           <Route path="local/orders" element={<LocalOrders />} />
           <Route path="local/settings" element={<LocalSettings />} />
           <Route path="printer-settings" element={<PrinterSettings />} />
