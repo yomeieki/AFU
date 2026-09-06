@@ -518,6 +518,44 @@ payments 表的 wx_transaction_id 字段加唯一索引，当微信重复回调�
 | 赠品的积分价 | `order_items.points_cost` | 删掉赠品配置,历史订单照常显示 |
 | 积分的发放基数 | `orders.points_base` | 店主改 `earnRatePerYuan`,历史单的退款扣回口径不变 |
 
+### 3.10 时间列一律 UTC
+
+**库里存的是 UTC 墙钟，不是北京时间。** Prisma 往 `DATETIME` 列写的是 UTC，而 MySQL 自己的
+`NOW()` 取会话时区。2026-09-06 生产实测：`NOW() = 20:25:39` 而 `UTC_TIMESTAMP() = 12:25:39`。
+
+排查现场时**查出来的时间要 +8 小时才是本地时间**。首单 `ORD20260906918208` 的
+`created_at` 是 `11:59`，实际发生在 **19:59**——这个坑值得单独记一笔，因为它不会报错，
+只会让人把时间线读错 8 小时。
+
+两条规则：
+
+1. **裸 SQL 插入必须显式给时间**，写 `created_at = UTC_TIMESTAMP(3)`，不要依赖列默认值。
+   全库 23 张表的 `created_at` 默认值都是 `CURRENT_TIMESTAMP(3)`，它取的是**会话时区**——
+   生产会话时区是 `SYSTEM`(CST) 时，裸 SQL 插进去的行会比 Prisma 写的行**早 8 小时**。
+   目前所有插入都由 Prisma 显式给值，所以还没出过事；将来任何一处裸 SQL 插入都会踩到。
+2. 服务端的自然日分桶一律走 `utils/local-day.ts`（按 `Asia/Shanghai` 提取），
+   **不要在 SQL 里用 `NOW()/CURDATE()/DATE()`** ——它们依赖会话时区。当前服务端原生 SQL 里没有
+   这类用法，这条是为了保持它没有。
+
+> 前端同理：管理端一律走 `apps/admin/src/utils/time.ts`（由 `scripts/check-admin-timezone.mjs`
+> 在 build 时把守），小程序走 `apps/miniapp/utils/time.js`。两处都固定按北京时间渲染，
+> 不跟随浏览器/设备时区——否则同一张单在不同时区的电脑上会显示不同的时间。
+
+**可选的加固（运维动作，需店主授权）**：把生产 MySQL 全局时区钉成 UTC，
+让列默认值与 Prisma 写入一致，`NOW()` 也就等于 `UTC_TIMESTAMP()`：
+
+```sql
+SET GLOBAL time_zone = '+00:00';
+-- 并写入 /etc/mysql/mysql.conf.d/mysqld.cnf 的 [mysqld] 段，重启后仍生效：
+--   default-time-zone='+00:00'
+```
+
+- 影响面：只影响 `DATETIME` 列的**默认值**与手工 `mysql` 会话里 `NOW()` 的显示。
+  Prisma 对 `DATETIME` 不做时区换算，与会话时区无关，**已有数据一个字节都不会变**。
+- 验收：`sudo mysql -N -e "SELECT NOW(), UTC_TIMESTAMP()"` 两列相等。
+- 回滚：`SET GLOBAL time_zone = 'SYSTEM'` + 删掉配置行。
+- 代价：运维习惯要改——之后手工查询看到的 `NOW()` 是 UTC。
+
 ---
 
 ## 四、Prisma Schema

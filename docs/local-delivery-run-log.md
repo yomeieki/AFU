@@ -487,3 +487,98 @@ query / queryOrder / orderQuery / queryorder / getOrder / orderDetail
 而配置是 15 → 公式估 20:46，**晚 18 分钟**。方向安全（宁可报晚）但不准。
 短期一行设置可改；长期可用 `queryCourier` 的骑手实时位置自己算
 （`lbsType=2` 已在本轮首次验证，坐标系不用担心）。
+
+---
+
+# 【整改】批次 1–4 —— 2026-09-07
+
+> 方案：`docs/superpowers/plans/2026-09-06-local-delivery-remediation.md`
+> 分支：`claude/local-delivery-remediation`（未部署，等店主逐项授权）
+
+## 已完成（本地已验证，**尚未上生产**）
+
+| 批次 | 内容 | 验证 |
+|---|---|---|
+| 1 | 默认只呼最低价 + 3 分钟自动升级并呼 + `actualFee` 自动认领 | e2e 新增 39 条断言全绿 |
+| 2 | 工作台显示中标运力/各家报价/实扣/骑手位置；三处 ETA 口径统一；后台时区 | e2e 新增 33 条断言全绿；时区四时区实测一致 |
+| 3 | 封面与同城页加「我的订单」入口；小程序时间按北京时间 | ES5 闸门过；四时区实测一致 |
+| 4 | `docs/database.md` §3.10「时间列一律 UTC」 | —— |
+
+**e2e 口径**（同一台服务器、同一个 `food_shop_audit` 库、串行跑）：
+
+| 代码 | 通过 | 失败 |
+|---|---|---|
+| `main`（基线） | 956 | 4 |
+| 批次 1 | 995 | 4 |
+| 批次 1+2 | **1028** | **0** |
+
+⚠️ 那 4 条失败是 `45-printer-offline.sh` 的打印机用例，**与本次改动无关**（把服务端代码换回
+`main` 后一字不差地照样红），而且在第三次跑时自己变绿了——说明它们**依赖执行顺序/库内残留状态**，
+是 flaky，不是被本次改动修好的。别把「1028/0」当成打印机那几条已经稳了。
+
+## 上生产之后必须盯的（观察项，不是待修 bug）
+
+### 1. 单家 `batchOrder` 到底认不认
+
+文档没写并呼接口只带一家运力时的行为。**首个真实 SOLO 单要当场确认三件事**：
+
+- `kuaidiComList` 只有一个元素时是否被接受（不是 40001/30001）；
+- 响应 `fee[]` 是否只回 1 条；
+- `0` 回调是否照常到达。
+
+若被拒，回退实现 `method=order` + `kuaidiCom`（`research:161-176`），改动只在 `kd100.ts createOrder` 内。
+
+```bash
+ssh ubuntu@162.14.114.95 "sudo mysql -N food_shop -e \
+  'SELECT delivery_no,call_strategy,called_providers,quoted_fee,actual_fee,courier_company,order_fees \
+   FROM deliveries ORDER BY id DESC LIMIT 2'"
+```
+期望：`call_strategy=SOLO`、`called_providers` 一家、`order_fees` 一条、
+骑手接单后 `actual_fee = quoted_fee`；**快递100 后台只有一笔预扣**（这条最关键，
+它是「余额占用从 N 倍降到 1 倍」的直接证据）。
+
+### 2. 升级并呼会不会收到 720（首单 n=1 尚未证伪）
+
+首单并呼 7 家、1 家中标、6 家落空，`delivery_events` 里**没有任何 720**。样本只有 1。
+只呼最低价上线后并呼只在升级时发生，样本会更难攒——**每一张 `call_strategy=ALL` 的升级单
+都要在这里记一行**：
+
+| 日期 | 配送单 | 并呼几家 | 有无 720 | 备注 |
+|---|---|---|---|---|
+| | | | | |
+
+```sql
+SELECT e.delivery_id, e.status_desc, e.created_at FROM delivery_events e
+WHERE e.status_desc LIKE '%720%' OR e.provider_status = 720 ORDER BY e.id DESC LIMIT 20;
+```
+
+### 3. 升级竞态（概率极低，出现即记录）
+
+预估取消费与真取消之间约 1 秒，骑手恰好在这一秒接单 → 会真的取消已接单的骑手并扣约 ¥2。
+金额会落在被取消那张单的 `cancel_fee` 上、事件里看得见。出现一次就在这里记一行，
+连着出现两次就要重新考虑「先 precancel 再 cancel」这个两步法。
+
+### 4. 跑满 10 单后复盘 `riderSpeedKmh` 与运费表
+
+```sql
+-- 每单成本 vs 顾客付的运费
+SELECT o.order_no, d.delivery_no, d.call_strategy, d.courier_company,
+       o.distance_m, o.shipping_fee/100 AS paid, d.quoted_fee/100 AS quoted, d.actual_fee/100 AS actual,
+       d.tip_fee/100 AS tip, d.cancel_fee/100 AS cancel,
+       (o.shipping_fee - COALESCE(d.actual_fee, d.quoted_fee, 0) - d.tip_fee - d.cancel_fee)/100 AS margin
+FROM deliveries d JOIN orders o ON o.id = d.order_id
+WHERE o.is_test = 0 ORDER BY d.id DESC LIMIT 50;
+
+-- 骑手均速复盘（取货→送达）
+SELECT d.delivery_no, d.provider_distance_m, TIMESTAMPDIFF(SECOND, d.picked_up_at, d.delivered_at)/60 AS ride_min,
+       d.provider_distance_m/1000 / (TIMESTAMPDIFF(SECOND, d.picked_up_at, d.delivered_at)/3600) AS kmh
+FROM deliveries d WHERE d.status='DELIVERED' AND d.picked_up_at IS NOT NULL ORDER BY d.id DESC LIMIT 30;
+```
+
+## 部署时的两处提醒
+
+1. **迁移**：`20260908000000_call_strategy` 加两列，都可空、旧代码不读，
+   所以**代码回滚不需要回滚数据库**。
+2. **部署即生效**：生产库已有的 `local_delivery` 设置行没有 `callStrategy` 字段 →
+   sanitize 回落默认 → **一部署就是「只呼最低价」**，不需要店主再点一次。
+   想先按兵不动，就在部署前把设置里的「呼叫方式」改成「并呼全部运力」。
