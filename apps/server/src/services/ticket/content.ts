@@ -56,6 +56,20 @@ export interface TicketOrderInput {
 
 const TICKET_BYTE_LIMIT = 5000
 const LINE_WIDTH = 32
+/**
+ * `<B>` 包裹的行的可用列数。
+ *
+ * 飞鹅的 `<B>` 是**放大一倍**（不是加粗——加粗是 `<BOLD>`），所以一行只能放下普通行一半的内容。
+ *
+ * ✅ 2026-09-06 真机标尺实测（SN 222601993）：同一串 **32 个数字**，在 `<B>` 模式下**正好折成
+ * 两行、每行 16 个**；对照组普通字号那行撑到第 31 列才折。所以 `<B>` 行的可用宽度就是 16 列。
+ * （标尺票是意外做成的：`'…下面是<B>16格'` 这行的 `<B>` 忘了闭合，后面几行全被带成放大模式，
+ * 反而一次同时给出了两种字号的折行位置，比原设计的"两条线比长短"更直接。）
+ *
+ * 厨房联的商品行整行套在 `<B>` 里，若仍按 32 列排版，纸上会折成两行、右侧补的空格还会把
+ * 断点推到奇怪的位置。
+ */
+const BIG_LINE_WIDTH = LINE_WIDTH / 2
 
 // ── 显示宽度（纯排版对齐用，不代表传输编码）───────────────────
 function charWidth(ch: string): number {
@@ -84,11 +98,31 @@ function padRightWidth(s: string, width: number): string {
 }
 
 // 顾客/商家可控字段（remark、收件信息、商品名/规格、打印机备注名）在拼进票面前一律先剥掉尖括号。
-// 飞鹅票面用 <TAG> 做控制指令（<CUT> 切纸、<CB>/<B> 加粗、<BR> 换行等，见 assemble()），顾客能自填的
+// 飞鹅票面用 <TAG> 做控制指令（<CUT> 切纸、<BR> 换行、<C> 居中、<B> 放大一倍、
+// <CB> 居中放大、<BOLD> 加粗，见 assemble()），顾客能自填的
 // 字段一旦原样带过 `<` `>`，就能在商品明细之前插入一次 <CUT>（金额/明细被切到下一段，极易被漏看）、
 // 或塞进飞鹅内容校验不认识的标签把整单送不出去。直接剥字符而不是转义/替换成全角——票面本就没有
 // 反向解析的需求，剥比转义更简单也更不容易被绕过（转义字符本身还是可能被拼接出新的 `<`/`>`）。
 const esc = (s: string) => s.replace(/[<>]/g, '')
+
+/**
+ * 票面手机号脱敏（PO 2026-09-06 定）：小票会被贴在袋子上、看完随手扔进垃圾桶，
+ * 顾客手机号不该以明文躺在上面。保留前 3 后 4，中间一律 `****`。
+ *
+ * **完整号码仍在两处**：后台订单详情（店家自己查）、骑手平台（呼叫骑手时按接口原样传，
+ * 不经过票面）。所以要联系顾客是有路径的，只是不走这张纸。
+ *
+ * ⚠️ 代价说清楚：**光看这张票打不出电话**。若哪天改成店家自配送、且送货的人手上只有票，
+ * 需要在这里放开——那时应该只放开配送联、并且明确这是个知情的取舍，而不是悄悄改回去。
+ *
+ * 非 11 位（座机、异常数据）不猜结构：长度 ≤7 时原样返回（遮了等于全遮，没意义），
+ * 否则同样保留前 3 后 4。
+ */
+function maskPhone(raw: string): string {
+  const s = raw.trim()
+  if (s.length <= 7) return s
+  return `${s.slice(0, 3)}****${s.slice(-4)}`
+}
 
 const yuan = (fen: number) => `¥${(fen / 100).toFixed(2)}`
 
@@ -151,16 +185,19 @@ function formatItemLines(item: TicketItemInput, width = LINE_WIDTH): string[] {
  * （做 2 份还是 5 份），而 ` x2` 只占 4 个字符、省掉它几乎不省空间。占地方的是规格，
  * 所以降级只降规格；再放不下就减少件数（`……等 N 件`），而不是让留下来的行缺数量。
  */
-function kitchenItemLines(item: TicketItemInput, level: 0 | 1, width = LINE_WIDTH): string[] {
+function kitchenItemLines(item: TicketItemInput, level: 0 | 1): string[] {
   const name = esc(item.productName)
   const qty = ` x${item.quantity}`
-  const nameWidth = Math.max(2, width - strWidth(qty))
+  const nameWidth = Math.max(2, BIG_LINE_WIDTH - strWidth(qty))
   const spec = level === 0 && item.specText ? `(${esc(item.specText)})` : ''
+  // 菜名 + 数量放大（后厨隔着灶台要看清的就这两样），**规格用普通字号**：
+  // 规格是辅助信息，放大后 16 列会把「微辣」这种词从中间劈开（实测 `(200克/去骨/微` / `辣)`），
+  // 普通字号 32 列基本一行放得下，反而更好读。
   if (strWidth(name + spec) <= nameWidth) {
     return [`<B>${padRightWidth(name + spec, nameWidth) + qty}</B>`]
   }
   const first = `<B>${padRightWidth(truncWidth(name, nameWidth), nameWidth) + qty}</B>`
-  return spec ? [first, ...wrapByWidth(spec, width - 2).map((l) => `<B>  ${l}</B>`)] : [first]
+  return spec ? [first, ...wrapByWidth(spec, LINE_WIDTH - 2).map((l) => '  ' + l)] : [first]
 }
 
 function distanceText(m: number | null | undefined): string {
@@ -227,7 +264,12 @@ export function renderOrderTicket(o: TicketOrderInput): string {
 
   const receiverBlock: string[] = isLocal
     ? [
-        `收货人：${esc(o.receiverName)}　电话：${esc(o.receiverPhone)}`,
+        // PO 2026-09-06 定：收货人与电话**各占一行并放大**——这两项是骑手在袋子堆里认单、
+        // 联系顾客时唯一要看的东西，挤在一行小字里最容易看错。
+        // ⚠️ 放大后一个汉字占 4 列，32 列只能放 8 个汉字，所以标签用空格不用「：」：
+        //    `电话：139****0042` 放大后是 34 列会折行，`电话 139****0042` 正好 32 列。
+        `<B>收货人 ${esc(o.receiverName)}</B>`,
+        `<B>电话 ${maskPhone(esc(o.receiverPhone))}</B>`,
         // 同城单省市恒为门店所在地，对厨房是纯噪音；58mm 只有 32 列，
         // 砍掉这 6 个字等于多出小半行给楼栋门牌。区不能省——配送范围可能跨区。
         `地址：${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}`,
@@ -235,7 +277,8 @@ export function renderOrderTicket(o: TicketOrderInput): string {
         ...(o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
       ]
     : [
-        `收件人：${esc(o.receiverName)}　电话：${esc(o.receiverPhone)}`,
+        `<B>收件人 ${esc(o.receiverName)}</B>`,
+        `<B>电话 ${maskPhone(esc(o.receiverPhone))}</B>`,
         `地址：${esc(o.receiverFullAddress)}`,
       ]
 
