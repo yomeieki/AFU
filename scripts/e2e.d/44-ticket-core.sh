@@ -38,6 +38,55 @@ D44_PAD_TAIL='<BR> <BR> <BR> <BR> <BR> <BR> <BR> <BR><CUT>'
   && ok "切纸补白：没有连续 <BR>（空补白会被飞鹅折叠，等于没补）" \
   || fail "切纸补白：出现连续 <BR>，补白行是空的、会被折叠掉" "...${D44_H2_CONTENT: -80}"
 
+echo "-- 同城双联：一次打印两段（配送联 + 厨房联），厨房联不含地址与金额 --"
+# PO 2026-09-06 定：同城出双联。**邮寄仍是单联**——上面 H2 那单走的是邮寄，已断言只有 1 个 <CUT>，
+# 两条合起来才说明「按渠道区分」真的生效，只测一边测不出来。
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D44-DUAL","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+D44_DUAL_OID=$(mk_local_paid)
+if [[ -n "$D44_DUAL_OID" ]]; then
+  sleep 0.3
+  D44_DUAL=$(PJOBS "$D44_DUAL_OID" | jq -r '.data.list[0].content')
+  D44_DUAL_CUTS=$(grep -o '<CUT>' <<<"$D44_DUAL" | wc -l | tr -d ' ')
+  assert_eq "同城双联：票面有 2 个 <CUT>（配送联 + 厨房联）" "$D44_DUAL_CUTS" "2"
+
+  # 用第一个 <CUT> 切开两段分别断言——只在整票上 grep 分不出信息到底落在哪一联，
+  # 而「厨房联不能有地址金额」正是这次改动的全部意义所在。
+  D44_DELIV=${D44_DUAL%%<CUT>*}
+  D44_KITCH=${D44_DUAL#*<CUT>}
+  [[ "$D44_DELIV" == *"<CB>同城配送</CB>"* ]] && ok "同城双联：第一联是配送联" || fail "同城双联：第一联标题不对" "${D44_DELIV:0:120}"
+  [[ "$D44_KITCH" == *"<CB>厨房联</CB>"* ]] && ok "同城双联：第二联是厨房联" || fail "同城双联：第二联标题不对" "${D44_KITCH:0:120}"
+  [[ "$D44_DELIV" == *"地址："* ]] && ok "配送联：有地址（骑手要用）" || fail "配送联：缺地址" "${D44_DELIV:0:200}"
+  [[ "$D44_DELIV" == *"实付："* ]] && ok "配送联：有实付金额" || fail "配送联：缺实付" "${D44_DELIV:0:200}"
+  [[ "$D44_KITCH" != *"地址："* ]] && ok "厨房联：**不含地址**（顾客住址不进后厨）" || fail "厨房联：仍含地址" "$D44_KITCH"
+  [[ "$D44_KITCH" != *"实付："* ]] && ok "厨房联：**不含金额**" || fail "厨房联：仍含金额" "$D44_KITCH"
+  [[ "$D44_KITCH" != *"电话："* ]] && ok "厨房联：不含顾客电话" || fail "厨房联：仍含电话" "$D44_KITCH"
+  # 两联各自都要有补白——只补一联的话，被切断的就是厨房联
+  D44_DUAL_PADS=$(grep -o '<BR> <BR> <BR> <BR> <BR> <BR> <BR> <BR><CUT>' <<<"$D44_DUAL" | wc -l | tr -d ' ')
+  assert_eq "同城双联：两联各自都有切纸补白（只补一联会让厨房联被切断）" "$D44_DUAL_PADS" "2"
+  # PO 2026-09-06：票面不再显示今日订单数
+  [[ "$D44_DUAL" != *"今日第"* ]] && ok "票面不显示「今日第 N 单」" || fail "票面仍有「今日第 N 单」" "$D44_DUAL"
+else
+  fail "同城双联：造同城单失败，本组断言未执行" "mk_local_paid 返回空"
+fi
+
+echo "-- 商品规格不再被静默截断（长规格独占一行）--"
+# 修复前：formatItemLine 把「名称+规格」硬压进 22 列，超出部分直接丢弃且不加省略号。
+# 真机复现过「500克/切片/微辣」与「500克/切片/微辣/真空装」打出来一模一样 → 打包发错货。
+if [[ -n "$D44_DUAL_OID" ]]; then
+  sql "UPDATE order_items SET spec_text='500克/切片/微辣/真空装/加赠调料包' WHERE order_id=$D44_DUAL_OID;"
+  # 前置自检：sql() 把 stderr 丢进 /dev/null，UPDATE 写错列名/语法会**静默失败**，
+  # 后面那条断言就会在「规格压根没被改长」的前提下轻松通过——本次会话已经被这个坑咬过一次。
+  D44_SPEC_SET=$(sql "SELECT COUNT(*) FROM order_items WHERE order_id=$D44_DUAL_OID AND spec_text LIKE '%加赠调料包%';")
+  assert_eq "长规格：前置——UPDATE 真的写进去了（catch sql() 静默失败）" "${D44_SPEC_SET:-0}" "1"
+  R=$(req POST "/api/admin/orders/$D44_DUAL_OID/reprint" "$AT")
+  sleep 0.3
+  D44_SPEC=$(PJOBS "$D44_DUAL_OID" | jq -r '[.data.list[] | select(.kind=="REPRINT")][0].content')
+  [[ "$D44_SPEC" == *"加赠调料包"* ]] \
+    && ok "长规格完整保留（末尾的「加赠调料包」没被砍掉）" \
+    || fail "长规格被截断——两个不同 SKU 会打成一样，打包会发错货" "$D44_SPEC"
+fi
+
 echo "-- B6：立即发送与定时兜扫的竞争，同一 PrintJob 只应被物理发送一次 --"
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D44-B6","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null

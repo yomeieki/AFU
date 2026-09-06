@@ -165,7 +165,7 @@ const ORDER_SELECT = {
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true } },
 } as const
 
-function toTicketInput(order: OrderForTicket, seq: number | null): TicketOrderInput {
+function toTicketInput(order: OrderForTicket): TicketOrderInput {
   return {
     channel: order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS',
     orderNo: order.orderNo,
@@ -184,40 +184,16 @@ function toTicketInput(order: OrderForTicket, seq: number | null): TicketOrderIn
     receiverPoiName: order.receiverPoiName,
     distanceM: order.distanceM,
     estimatedDeliveryAt: order.estimatedDeliveryAt,
-    seq,
   }
 }
 
 /**
- * M12：当日流水号——按 Asia/Shanghai 自然日、数到本单 paidAt 为止的「正常单」数量。
- * 「正常单」排除测试单（isTest）与从未真正成交的单（待付款/已取消）——店员数的是「今天来了
- * 几个真实顾客」，跟系统内部生成过多少条订单记录是两回事。用固定 UTC+8（中国不实行夏令时）
- * 换算自然日边界，不依赖服务器进程本身的时区设置。
- */
-function shanghaiDayStart(d: Date): Date {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d)
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '1970-01-01'
-  return new Date(`${get('year')}-${get('month')}-${get('day')}T00:00:00+08:00`)
-}
-async function dailyOrderSeq(paidAt: Date | null): Promise<number | null> {
-  if (!paidAt) return null
-  return prisma.order.count({
-    where: {
-      isTest: false,
-      status: { notIn: ['PENDING_PAYMENT', 'CANCELLED'] },
-      paidAt: { gte: shanghaiDayStart(paidAt), lte: paidAt },
-    },
-  })
-}
-
-/**
- * @param dailySeq 当日流水号（「今日第 N 单」），只在渲染整张全票时有意义，由调用方按需算好传入
- * @param announceNo REPEAT 专属的「第几次催单」，跟 dailySeq 是两件事（M12：旧实现把这个当成
- *   了当日流水号打在票面上，店员会读错）
+ * @param announceNo REPEAT 专属的「第几次催单」。M12 修过一次「把播报次数当当日流水号打」的
+ *   误读；PO 2026-09-06 决定票面不再显示今日订单数，当日流水号连同 dailyOrderSeq 查询一起删了。
  */
 function renderForKind(
   kind: PrintJobKind, order: OrderForTicket, settings: PrinterSettings,
-  dailySeq: number | null, announceNo: number, waitedMin?: number
+  announceNo: number, waitedMin?: number
 ): string {
   const channel: PrinterChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
   if (kind === 'CANCEL') {
@@ -233,7 +209,7 @@ function renderForKind(
     return renderReminderTicket({ orderNo: order.orderNo, channel, waitedMin: waitedMin ?? 0, announceNo })
   }
   // NEW_ORDER / REPRINT / repeat.reprint=true 时的 REPEAT，都是整张全票
-  const input = toTicketInput(order, dailySeq)
+  const input = toTicketInput(order)
   if (kind === 'REPEAT') input.announceNo = announceNo
   return renderOrderTicket(input)
 }
@@ -296,10 +272,6 @@ export async function enqueueOrderTicket(
   const printers = printersForChannel(settings, channel)
   const providerName = activeProviderName(settings)
   const baseSeq = opts.seq ?? (kind === 'NEW_ORDER' || kind === 'CANCEL' ? 0 : Date.now())
-  // M12：只在真的会渲染整张全票时才查当日流水号——CANCEL/CANCEL_REQUEST/RESUME/TEST 用不上，
-  // REPEAT 在 repeat.reprint=false（精简催单票）时也用不上，没必要都搭上一次 DB 查询。
-  const needsDailySeq = kind === 'NEW_ORDER' || kind === 'REPRINT' || (kind === 'REPEAT' && settings.repeat.reprint)
-  const dailySeq = needsDailySeq ? await dailyOrderSeq(order.paidAt) : null
 
   const jobIds: number[] = []
 
@@ -311,7 +283,7 @@ export async function enqueueOrderTicket(
       const row = await prisma.printJob.create({
         data: {
           orderId: order.id, orderNo: order.orderNo, kind, provider: providerName, printerSn: '',
-          status: 'SKIPPED', content: renderForKind(kind, order, settings, dailySeq, baseSeq, opts.waitedMin),
+          status: 'SKIPPED', content: renderForKind(kind, order, settings, baseSeq, opts.waitedMin),
           lastError: '未配置该渠道的打印机', dedupeKey,
         },
       })
@@ -323,7 +295,7 @@ export async function enqueueOrderTicket(
   }
 
   for (const printer of printers) {
-    const content = renderForKind(kind, order, settings, dailySeq, baseSeq, opts.waitedMin)
+    const content = renderForKind(kind, order, settings, baseSeq, opts.waitedMin)
     const dedupeKey = buildDedupeKey(orderId, kind, baseSeq, printer.sn)
     let row
     try {

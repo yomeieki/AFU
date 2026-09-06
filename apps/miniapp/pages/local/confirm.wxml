@@ -69,7 +69,7 @@
     </view>
     <view class="remark-row">
       <text class="row-label">备注</text>
-      <textarea class="remark-input" value="{{remark}}" maxlength="255" auto-height placeholder="如需餐具、放门口等请注明；备注会同步给骑手" placeholder-class="remark-placeholder" bindinput="onRemarkInput" />
+      <textarea class="remark-input" value="{{remark}}" maxlength="20" auto-height placeholder="20 字以内，如放门口、不要辣" placeholder-class="remark-placeholder" bindinput="onRemarkInput" />
     </view>
   </view>
 

@@ -47,10 +47,10 @@ export interface TicketOrderInput {
   receiverPoiName?: string | null
   distanceM?: number | null
   estimatedDeliveryAt?: Date | null
-  /** 当日流水号（调用方按需计算传入，缺省不打印这一行） */
-  seq?: number | null
-  /** REPEAT（未接单重复播报）第几次催单——只在打整张全票时（repeat.reprint=true）跟 seq 并排打印，
-   *  避免跟当日流水号混成一件事（M12：旧实现把播报次数当当日流水打，店员会读错） */
+  /** REPEAT（未接单重复播报）第几次催单，只在打整张全票时（repeat.reprint=true）打印。
+   *  ⚠️ 曾经跟「今日第 N 单」并排显示，M12 修过一次「把播报次数当流水号」的误读；
+   *  PO 2026-09-06 决定票面不再显示今日订单数，那一行连同 dailyOrderSeq 查询一起删了，
+   *  所以现在这里不会再有混淆对象——但字段名仍然刻意叫 announceNo，别改回 seq。 */
   announceNo?: number | null
 }
 
@@ -104,13 +104,63 @@ function fmtDateTime(d: Date | null | undefined): string {
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`
 }
 
-function formatItemLine(item: TicketItemInput, width = LINE_WIDTH): string {
+/** 按显示宽度折行；不省略、不丢字。空串返回空数组 */
+function wrapByWidth(s: string, width: number): string[] {
+  if (width <= 0 || !s) return []
+  const out: string[] = []
+  let cur = ''
+  let w = 0
+  for (const ch of s) {
+    const cw = charWidth(ch)
+    if (w + cw > width) { out.push(cur); cur = ''; w = 0 }
+    cur += ch
+    w += cw
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+/**
+ * 商品明细行。返回 1 或 2+ 行——**规格放不下时独占后续行，不再被截掉**。
+ *
+ * ⚠️ 2026-09-06 修：原实现是 `truncWidth(名称 + 规格, 22列)`，超出部分**静默丢弃、连省略号都没有**。
+ * 邮寄 SKU 属性一多就出事，真机复现：
+ *     秘制酱牛肉(500克/切片/微辣)       → `秘制酱牛肉(500克/切片/ x1 ¥41.00`
+ *     秘制酱牛肉(500克/切片/微辣/真空装) → `秘制酱牛肉(500克/切片/ x2 ¥42.00`
+ * **两个不同的 SKU 打出来一模一样**，打包的人分不出来；「微辣/不辣」这种属性直接消失 → 发错货。
+ * 容量不是问题（改成两行式后邮寄单仍能装 48–106 件），信息完整才是。
+ */
+function formatItemLines(item: TicketItemInput, width = LINE_WIDTH): string[] {
   const qtyAmt = ` x${item.quantity} ${yuan(item.subtotal)}`
-  const qtyAmtWidth = strWidth(qtyAmt)
-  const nameWidth = Math.max(2, width - qtyAmtWidth)
+  const nameWidth = Math.max(2, width - strWidth(qtyAmt))
+  const name = esc(item.productName)
   const spec = item.specText ? `(${esc(item.specText)})` : ''
-  const name = truncWidth(esc(item.productName) + spec, nameWidth)
-  return padRightWidth(name, nameWidth) + qtyAmt
+  // 名称+规格一行放得下：保持原来的紧凑排版
+  if (strWidth(name + spec) <= nameWidth) {
+    return [padRightWidth(name + spec, nameWidth) + qtyAmt]
+  }
+  // 放不下：第一行「名称 + 数量金额」，规格缩进两格另起行（长规格继续折行，不丢字）
+  const first = padRightWidth(truncWidth(name, nameWidth), nameWidth) + qtyAmt
+  return spec ? [first, ...wrapByWidth(spec, width - 2).map((l) => '  ' + l)] : [first]
+}
+
+/**
+ * 厨房联的商品行：菜名、规格、数量，**没有金额**。level 0=完整，1=省掉规格。
+ *
+ * **数量任何情况下都不省。** 一度设计过第三级「只留菜名」，是错的：数量是后厨最关键的信息
+ * （做 2 份还是 5 份），而 ` x2` 只占 4 个字符、省掉它几乎不省空间。占地方的是规格，
+ * 所以降级只降规格；再放不下就减少件数（`……等 N 件`），而不是让留下来的行缺数量。
+ */
+function kitchenItemLines(item: TicketItemInput, level: 0 | 1, width = LINE_WIDTH): string[] {
+  const name = esc(item.productName)
+  const qty = ` x${item.quantity}`
+  const nameWidth = Math.max(2, width - strWidth(qty))
+  const spec = level === 0 && item.specText ? `(${esc(item.specText)})` : ''
+  if (strWidth(name + spec) <= nameWidth) {
+    return [`<B>${padRightWidth(name + spec, nameWidth) + qty}</B>`]
+  }
+  const first = `<B>${padRightWidth(truncWidth(name, nameWidth), nameWidth) + qty}</B>`
+  return spec ? [first, ...wrapByWidth(spec, width - 2).map((l) => `<B>  ${l}</B>`)] : [first]
 }
 
 function distanceText(m: number | null | undefined): string {
@@ -141,20 +191,35 @@ function assemble(lines: string[]): string {
   return [...body, ...Array(CUT_PAD_LINES).fill(' ')].join('<BR>') + '<BR><CUT>'
 }
 
+const HR = '-'.repeat(LINE_WIDTH)
+
 /**
- * 渲染完整订单小票（NEW_ORDER / REPRINT / repeat.reprint=true 时的 REPEAT 均用这个）。
- * 超过 5000 字节时优雅截断：保留头部（标题/序号/订单信息/收货信息/备注）与尾部（合计/提示语）不动，
- * 只压缩中段的商品明细，用「…等 N 件」占位，直到整票能放进限制里。
+ * 渲染订单小票（NEW_ORDER / REPRINT / repeat.reprint=true 时的 REPEAT 均用这个）。
+ *
+ * **同城出双联**（PO 2026-09-06 定）：一次打印任务里放两段内容、中间 `<CUT>` 切开——
+ * 第一段「配送联」带地址电话金额贴袋子，第二段「厨房联」只有菜品和备注、**不印地址不印钱**。
+ * 后厨看到的信息越少越不容易出错，顾客住址电话也不必在后厨到处传。
+ * 这比「copies=2 印两张一样的」好，还顺带解决了另一个问题：`copies` 是**每台打印机一个值**
+ * （`PrinterEntry.copies`，且 `validatePrinterSettings` 拒绝重复 SN），一台机器同城邮寄共用时
+ * 设成 2 会让**邮寄单也白打一张**。双联落地后 `copies` 回到 1。
+ *
+ * **邮寄仍是单联**——邮寄是照单拣货打包，没有"后厨"这个环节。
+ *
+ * 超 5000 字节时的降级顺序（PO 2026-09-06 定：**保全配送联**）：
+ *   ① 厨房联省掉规格 → ② 厨房联减少件数（「……等 N 件」）→ ③ 配送联减少件数 → ④ 压缩备注
+ * ①② 先动是因为 PO 选了「配送联优先保全」（骑手要逐件核对）。
+ * **厨房联的数量列在任何一级都不省**——见 kitchenItemLines 的注释。
+ *
+ * 触发门槛：按 6 字菜名算要 22 件以上。生产现有订单**全是 1 件**，这套降级大概率永不执行。
  */
 export function renderOrderTicket(o: TicketOrderInput): string {
   const isLocal = o.channel === 'LOCAL'
   const header: string[] = [
     `<CB>${isLocal ? '同城配送' : '全国邮寄'}</CB>`,
-    ...(o.seq !== null && o.seq !== undefined ? [`<C>今日第 ${o.seq} 单</C>`] : []),
     ...(o.announceNo !== null && o.announceNo !== undefined ? [`<C>第 ${o.announceNo} 次催单</C>`] : []),
-    // PO 2026-09-06 定：顶部只放**加大的后 4 位**。完整单号 20 个字符在 58mm（32 列）上占掉
-    // 大半行，而店里认单靠的是「今日第 N 单」和后 4 位，没人会去逐位核对前缀。
-    // 完整单号没有删掉，挪到 footer 的小字里——客服对单、查退款仍然需要它。
+    // PO 2026-09-06 定：顶部只放**加大的后 4 位**。完整单号 20 字符在 32 列纸上占大半行，
+    // 而店里认单靠这 4 位，没人逐位核对前缀。完整单号挪到 footer 小字——客服对单、查退款仍需要。
+    // 同日一并去掉了「今日第 N 单」（PO：不显示今日订单数），连带省掉每张票一次 dailyOrderSeq 查询。
     `<CB>#${o.orderNo.slice(-4)}</CB>`,
     `下单：${fmtDateTime(o.createdAt)}`,
     `付款：${fmtDateTime(o.paidAt)}`,
@@ -173,11 +238,12 @@ export function renderOrderTicket(o: TicketOrderInput): string {
         `收件人：${esc(o.receiverName)}　电话：${esc(o.receiverPhone)}`,
         `地址：${esc(o.receiverFullAddress)}`,
       ]
+
   // 备注要突出：<CB> 居中放大加粗。规格 §8b 提到的「餐具标记」目前 Order 无对应字段
   // （精细餐具选项是 §12 明确的二期项），先不渲染，等那个字段落地后在这里补一行。
-  // remark 是顾客自填的自由文本（上限 255 字符），必须先 esc 再拼进票面——不然顾客填一个
-  // <CUT> 就能在商品明细之前提前切纸（金额/明细落到第二段），填 <QR> 之类飞鹅不认识的标签
-  // 会让内容校验失败、整单一张纸都不出（H2）。
+  // remark 是顾客自填的自由文本，必须先 esc 再拼进票面——不然顾客填一个 <CUT> 就能在商品明细
+  // 之前提前切纸（金额/明细落到下一段），填 <QR> 之类飞鹅不认识的标签会让内容校验失败、
+  // 整单一张纸都不出（H2）。上限 20 字由接口与小程序共同约束（PO 2026-09-06 定，见 orders.ts）。
   const remarkBlock: string[] = o.remark ? [`<CB>备注：${esc(o.remark)}</CB>`] : []
 
   const footer: string[] = [
@@ -189,37 +255,67 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   ]
 
   const buildItemLines = (items: TicketItemInput[], omitted: number): string[] => {
-    const lines = items.map((it) => formatItemLine(it))
+    const lines = items.flatMap((it) => formatItemLines(it))
     if (omitted > 0) lines.push(`……等 ${omitted} 件`)
     return lines
   }
 
-  const fixed = [...header, ...receiverBlock, ...remarkBlock, ...footer]
-  const fits = (itemLines: string[]) => Buffer.byteLength(assemble([...header, ...receiverBlock, ...remarkBlock, ...itemLines, ...footer]), 'utf8') <= TICKET_BYTE_LIMIT
+  /** 厨房联整段（不含 assemble 的补白与 CUT）。level 见 kitchenItemLines；keep=null 表示全列 */
+  const buildKitchen = (level: 0 | 1, keep: number | null): string[] => {
+    const items = keep === null ? o.items : o.items.slice(0, keep)
+    const omitted = keep === null ? 0 : o.items.length - keep
+    return [
+      '<CB>厨房联</CB>',
+      `<CB>#${o.orderNo.slice(-4)}</CB>`,
+      HR,
+      ...items.flatMap((it) => kitchenItemLines(it, level)),
+      ...(omitted > 0 ? [`<B>……等 ${omitted} 件</B>`] : []),
+      ...(o.remark ? [HR, `<CB>备注：${esc(o.remark)}</CB>`] : []),
+    ]
+  }
+
+  const deliveryOf = (itemLines: string[]) =>
+    assemble([...header, ...receiverBlock, ...remarkBlock, ...itemLines, ...footer])
+  const totalBytes = (itemLines: string[], kitchen: string[] | null) =>
+    Buffer.byteLength(deliveryOf(itemLines), 'utf8') +
+    (kitchen ? Buffer.byteLength(assemble(kitchen), 'utf8') : 0)
 
   let itemLines = buildItemLines(o.items, 0)
-  if (!fits(itemLines)) {
-    // 商品明细本身就超限：逐步减少展示件数，直到（含占位行）能放进去
-    let keep = o.items.length
-    while (keep > 0) {
-      keep--
-      const candidate = buildItemLines(o.items.slice(0, keep), o.items.length - keep)
-      if (fits(candidate)) { itemLines = candidate; break }
-      itemLines = candidate
+  let kitchen: string[] | null = isLocal ? buildKitchen(0, null) : null
+
+  if (totalBytes(itemLines, kitchen) > TICKET_BYTE_LIMIT) {
+    // ①②③ 先降级厨房联（PO：保全配送联）
+    if (isLocal) {
+      kitchen = buildKitchen(1, null)
+      if (totalBytes(itemLines, kitchen) > TICKET_BYTE_LIMIT) {
+        let keep = o.items.length
+        while (keep > 0) {
+          keep--
+          kitchen = buildKitchen(1, keep)
+          if (totalBytes(itemLines, kitchen) <= TICKET_BYTE_LIMIT) break
+        }
+      }
     }
-    if (keep === 0 && !fits(itemLines)) {
-      // 极端情况：连头尾固定段加一行占位都放不下（备注超长等）。最后手段是把备注截短，
-      // 不牺牲订单号/收货信息这类不可省略的关键信息。
-      const fixedBytes = Buffer.byteLength(assemble(fixed), 'utf8')
-      const over = fixedBytes - TICKET_BYTE_LIMIT
-      if (over > 0 && o.remark) {
+    // ④ 还是超：减少配送联的展示件数
+    if (totalBytes(itemLines, kitchen) > TICKET_BYTE_LIMIT) {
+      let keep = o.items.length
+      while (keep > 0) {
+        keep--
+        const candidate = buildItemLines(o.items.slice(0, keep), o.items.length - keep)
+        itemLines = candidate
+        if (totalBytes(candidate, kitchen) <= TICKET_BYTE_LIMIT) break
+      }
+      // ⑤ 最后手段：压缩备注。不牺牲单号/收货信息这类不可省略的关键信息。
+      if (totalBytes(itemLines, kitchen) > TICKET_BYTE_LIMIT && o.remark) {
+        const over = totalBytes(itemLines, kitchen) - TICKET_BYTE_LIMIT
         const shrink = Math.max(0, o.remark.length - Math.ceil(over / 2))
         remarkBlock[0] = `<CB>备注：${truncWidth(esc(o.remark), shrink)}…</CB>`
+        if (isLocal) kitchen = buildKitchen(1, 0)
       }
     }
   }
 
-  return assemble([...header, ...receiverBlock, ...remarkBlock, ...itemLines, ...footer])
+  return deliveryOf(itemLines) + (kitchen ? assemble(kitchen) : '')
 }
 
 /** 未接单重复播报的精简「催接单」小票（D7；repeat.reprint=false 时用这个，而不是整张全票）。

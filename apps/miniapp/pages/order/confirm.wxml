@@ -50,9 +50,10 @@
       <text class="row-label">备注</text>
       <input
         class="remark-input"
-        placeholder="选填，如配送时间要求"
+        placeholder="选填，20 字以内"
         placeholder-class="remark-placeholder"
         value="{{remark}}"
+        maxlength="20"
         bindinput="onRemarkInput"
       />
     </view>

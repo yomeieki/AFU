@@ -89,7 +89,11 @@ const createOrderSchema = z
     addressId: z.number().int().positive('请选择收货地址'),
     deliveryType: z.enum(['EXPRESS', 'LOCAL']).default('EXPRESS'),
     quoteToken: z.string().max(512).optional(),
-    remark: z.string().max(255).optional(),
+    // 备注上限 20 字（PO 2026-09-06 定）。不是字节预算问题——255 字也只让同城双联从 54 件降到
+    // 34 件，远超实际量。真正的原因是**票面可读性**：备注用 <CB> 渲染（居中放大加粗，一个字占
+    // 两列），255 字在 58mm 纸上要占约 17 行放大字，把订单信息全挤没，而且配送联厨房联各印一遍。
+    // 数据库仍是 varchar(255)，故意不收窄——不需要迁移，已有数据也不会因为收紧入口变非法。
+    remark: z.string().max(20).optional(),
   })
   .refine((v) => !!v.cartItemIds !== !!v.directItem, { message: '请选择商品' })
 
