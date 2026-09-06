@@ -575,6 +575,17 @@ export async function processQueue(): Promise<{ retried: number; confirmed: numb
     try {
       const provider = getProvider(job.provider as PrinterProviderName)
       const result = await provider.queryJob(job.providerJobId)
+      // ⚠️ 2026-09-06 开盖实验（E2）实测的已知缺陷，**没有修，因为飞鹅没给能修的信号**：
+      //
+      //   `printed=true` 只证明打印机「消费」了这个作业，**不证明纸完整地吐出来了**。
+      //   开着纸仓盖下发一张 → 飞鹅 `Open_queryOrderState` 返回 `data:true` → 这里翻成 PRINTED，
+      //   而物理上只出了半截（PO 目视确认）。因为它不是 FAILED，`retryRecoveredPrinterJobs`
+      //   的补打永远不会捞它——票被记成「已打印」却实际残缺，且无痕。
+      //
+      //   飞鹅接口里没有任何「打完整了没有」的字段，所以这里判不出来，别在这一行想办法。
+      //   可行的缓解在健康检测那一侧：打印机从 ABNORMAL 恢复时，把**异常窗口期内**被标 PRINTED
+      //   的作业挑出来提醒老板核对（后台已有「重打小票」按钮可以一键补）。未实现，见
+      //   docs/superpowers/notes/ 的 E2 记录。
       if (result.printed) {
         const moved = await prisma.printJob.updateMany({
           where: { id: job.id, status: 'SENT' },

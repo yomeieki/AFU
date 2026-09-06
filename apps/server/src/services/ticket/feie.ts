@@ -109,7 +109,15 @@ async function post(apiname: string, params: Record<string, string>): Promise<Fe
 }
 
 /** 「在线，工作状态正常。」ONLINE ／「在线，工作状态不正常。」ABNORMAL（缺纸/开盖）／「离线。」OFFLINE
- *  [推断/待核实——三个前缀字符串来自调研摘要与规格 §8b，未见官方逐字文档页，真机联调时核对措辞是否一致] */
+ *
+ *  ✅ 三个字符串已全部真机核实（SN 222601993，国内站），原「[推断/待核实]」标记撤销：
+ *    - ONLINE   `"在线，工作状态正常。"`   2026-09-06 只读探针
+ *    - ABNORMAL `"在线，工作状态不正常。"` 2026-09-06 开盖实验（E2）
+ *    - OFFLINE  `"离线。"`                 2026-09-05 断电实验（E1）
+ *  逗号是全角 U+FF0C、句号是 U+3002（逐字核对过码位，别改成半角）。
+ *
+ *  `Open_printerInfo` 的 `status` 是同一件事的第二个信号，实测取值：**0=离线 / 1=正常 / 2=异常**。
+ *  这里没用它——`queryStatus` 的字符串是规格里指定的判据，两处都解析等于多一个要同步的地方。 */
 function parseStatus(raw: string): PrinterOnlineState {
   const s = (raw || '').trim()
   if (s.startsWith('在线，工作状态正常')) return 'ONLINE'
