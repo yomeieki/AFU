@@ -375,7 +375,26 @@ nginx -t && nginx -s reload
 
 模板要点：
 - `location /api/wechat/pay/` 单独反代且不限流、不缓冲 body——同时覆盖支付回调 `/notify` 与退款回调 `/refund-notify`（**升级到自动退款后必须是这个前缀**，老配置只写了 `/notify`）
-- `location /api/kd/` 单独反代，同样不限流、不缓冲 body——快递100 配送单回调专用，`scripts/nginx.conf` 模板里**已经配好这一段**（不是「沿用 `/api/` 通用规则即可」，而是必须存在的独立 `location`）：回调请求需要透传原始字节做验签，通用 `location /api/` 那条会做限流与缓冲，用来对付面向浏览器的普通接口，放在回调上会有干扰验签或丢突发请求的风险。**换域名/迁移服务器时把这段和 `/api/wechat/pay/` 一起原样复制过去，不要只复制 `location /api/` 那一条**。
+- `location /api/kd/` 单独反代，**不限流 + `gzip off`**——快递100 配送单回调专用，必须存在的独立 `location`（**2026-09-06 补装到生产**，此前一直缺，回调都落在通用 `/api/` 上）。
+
+  ⚠️ **这一段的理由此前写错了**：原文说「回调请求需要透传原始字节做验签」——那是 `/api/wechat/pay/` 的理由，被照抄了过来。快递100 验签算的是 `MD5(param + 每单独立的 callbackSalt)`，`param` 取自 `express.urlencoded` 解析后的**表单字段值**（`services/delivery/kd100.ts` 的 `verifyAndParseCallback`），nginx 缓不缓冲都不改变它。所以模板里**故意没有** `proxy_request_buffering off`。
+
+  真正的两条理由：
+  1. **限流**：通用 `/api/` 有 `limit_req burst=20`。被 nginx 挡掉的回调**不会**被无限重推——快递100 只重推 2 次、间隔 1 分钟，推完就放弃，配送状态从此永久卡住，而店员看不出是回调丢了。（同一类风险还有应用层的 `kdCallbackLimiter`：它被触发时**返回 200 且 body 是成功形状**，对方会当 ack 成功，回调静默丢失，见 `middlewares/rate-limit.ts:146-153`。）
+  2. **gzip**：通用 `/api/` 有 `gzip_types application/json`，而回调的 ack 应答正是 JSON；压过之后若对方不解压就会判 ack 失败并重推。2026-09-06 实测确认这条风险是真的：同样带 `Accept-Encoding: gzip` 请求 `/api/products` 会返回 `content-encoding: gzip`。模板里写的是**显式 `gzip off`**，而不是依赖「http 级恰好没设 `gzip_types`（默认只压 `text/html`）」这个巧合——那行注释哪天被人取消，回调就会静默地重新开始被压。
+
+  **换域名/迁移服务器时把这段和 `/api/wechat/pay/` 一起原样复制过去，不要只复制 `location /api/` 那一条**。
+
+- ⚠️ **模板不能直接 `cp` 覆盖生产**：模板里限流 zone 名是 `api_limit`，而生产 `/etc/nginx/conf.d/food-shop.conf` 用的是 `fs_api`（zone 在别处定义）。直接覆盖会 `nginx -t` 失败（这一条会响亮地失败，不会静默出错，但会让人以为模板坏了）。正确做法是**按段落对照着补**，补完 `nginx -t` 再 reload。
+
+  验证这一段真的生效（不触发任何业务告警，用 GET，路由只收 POST）：
+  ```bash
+  sudo nginx -T | grep -A9 'location /api/kd/'
+  # 应无 content-encoding：
+  curl -s -D- -o /dev/null -H 'Accept-Encoding: gzip' https://api.yuegui-hotel.online/api/kd/D999999-99 | grep -i content-encoding
+  # 对照组，应有 content-encoding: gzip：
+  curl -s -D- -o /dev/null -H 'Accept-Encoding: gzip' https://api.yuegui-hotel.online/api/products | grep -i content-encoding
+  ```
 - `location /uploads/` 存量本地图片过渡期直出；COS 迁移完成一个部署周期后可删
 
 ### 部署后回调链路演练（curl，不依赖真实骑手触发）
