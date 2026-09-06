@@ -242,6 +242,9 @@ const COUPON_SELECT = {
   source: true,
   expiresAt: true,
   usedAt: true,
+  // 「已用于订单 …」要能点进订单详情（详情页接的就是 Order.id）。这是顾客**自己的**订单 id，
+  // 不是越权字段；issuedBy/remark/sourceRef/templateId 仍然不在这份白名单里。
+  orderId: true,
 } satisfies Prisma.UserCouponSelect
 
 /**

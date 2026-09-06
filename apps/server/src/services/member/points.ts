@@ -17,7 +17,14 @@ import { getMemberSettings } from './settings'
 export type LedgerType = 'EARN' | 'REDEEM' | 'GIFT' | 'GIFT_REVERT' | 'REFUND_DEDUCT' | 'EXPIRE' | 'ADMIN'
 export type LedgerRefType = 'ORDER' | 'COUPON' | 'REFUND' | 'LEDGER'
 
-const LEDGER_TYPE_LABEL: Record<string, string> = {
+/**
+ * 积分流水类型的中文标签，**全站唯一一份**。
+ *
+ * 顾客端 `/member/points/ledger` 与后台「积分明细」抽屉都用它。M3 曾经在
+ * `routes/admin/users.ts` 里另建了一份，两份当场就不一致（REDEEM 一边写「积分兑换」
+ * 一边写「兑换券」）——那正是「各写一份 map 必然漂移」的现场演示，所以收成这一处。
+ */
+export const LEDGER_TYPE_LABEL: Record<string, string> = {
   EARN: '消费得分',
   REDEEM: '积分兑换',
   GIFT: '随单赠品',
@@ -541,6 +548,10 @@ export interface LedgerListItem {
   refType: string
   refId: string
   remark: string | null
+  /** 入账行（EARN/GIFT_REVERT）才有意义：这批分什么时候过期。顾客端「有效期至」用它 */
+  expiresAt: Date | null
+  /** refType='ORDER' 时联查补出的单号（且必须是本人的单）；其余为 null */
+  orderNo: string | null
   createdAt: Date
 }
 
@@ -553,12 +564,30 @@ export async function listLedger(userId: number, page = 1, pageSize = 20): Promi
       orderBy: { id: 'desc' },
       skip: (p - 1) * size,
       take: size,
-      select: { id: true, type: true, delta: true, refType: true, refId: true, remark: true, createdAt: true },
+      select: { id: true, type: true, delta: true, refType: true, refId: true, remark: true, expiresAt: true, createdAt: true },
     }),
     prisma.pointsLedger.count({ where: { userId } }),
   ])
+  // refType='ORDER' 的行里 refId 存的是 **Order.id**，不是单号。小程序跳详情用的就是 id
+  // （`/pages/order/detail?id=`），但页面上要显示的是顾客认得的单号，所以联查补一个 orderNo。
+  // 一次 findMany 捞完本页，不逐行查。
+  const orderIds = [
+    ...new Set(
+      rows.filter((r) => r.refType === 'ORDER').map((r) => Number(r.refId)).filter((n) => Number.isInteger(n) && n > 0)
+    ),
+  ]
+  // 限定 userId：refId 是库里的裸值，理论上不会串到别人的单，但这是顾客端出口，
+  // 加一道「只认自己的单」比信任上游便宜得多。查不到就当没有单号（页面显示 refType 兜底）。
+  const orders = orderIds.length
+    ? await prisma.order.findMany({ where: { id: { in: orderIds }, userId }, select: { id: true, orderNo: true } })
+    : []
+  const orderNoById = new Map(orders.map((o) => [o.id, o.orderNo]))
   return {
-    list: rows.map((r) => ({ ...r, typeLabel: LEDGER_TYPE_LABEL[r.type] ?? r.type })),
+    list: rows.map((r) => ({
+      ...r,
+      typeLabel: LEDGER_TYPE_LABEL[r.type] ?? r.type,
+      orderNo: r.refType === 'ORDER' ? (orderNoById.get(Number(r.refId)) ?? null) : null,
+    })),
     total,
     page: p,
     pageSize: size,

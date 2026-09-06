@@ -5,6 +5,9 @@ import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { adminIssueLimiter } from '../../middlewares/rate-limit'
 import { issueCoupon } from '../../services/member/coupons'
+// 中文标签只有一份（services/member/points.ts）。这里曾经另建过一份，
+// 两份当场就不一致（REDEEM 一边「积分兑换」一边「兑换券」）——别再复制。
+import { LEDGER_TYPE_LABEL } from '../../services/member/points'
 
 const router = Router()
 
@@ -25,22 +28,6 @@ async function requireUser(req: Request): Promise<number> {
   return userId
 }
 
-/**
- * 积分流水的中文标签。**在服务端拼而不是丢给前端**：这套 type 字面量已经有三个消费方
- * （后台用户页、小程序积分明细、将来的导出），各写一份 map 必然漂移出三套说法。
- *
- * 未知 type 回落成原字面量而不是「其他」：真出现没见过的类型时，屏幕上直接显示
- * `ADMIN` 比显示「其他」更容易让人查出是谁写进来的。
- */
-const LEDGER_TYPE_LABEL: Record<string, string> = {
-  EARN: '消费得分',
-  REDEEM: '兑换券',
-  GIFT: '随单赠品',
-  GIFT_REVERT: '取消退回',
-  REFUND_DEDUCT: '退款扣回',
-  EXPIRE: '过期',
-  ADMIN: '手动调整',
-}
 
 // GET /api/admin/users — 用户列表（分页 + 昵称/手机号搜索）
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {

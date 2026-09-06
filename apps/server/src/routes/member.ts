@@ -23,11 +23,31 @@ const router = Router()
 router.get('/summary', memberReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const [points, availableCoupons] = await Promise.all([getPointsSummary(userId), countAvailable(userId)])
+    const [points, availableCoupons, settings] = await Promise.all([
+      getPointsSummary(userId),
+      countAvailable(userId),
+      getMemberSettings(),
+    ])
     // M16：docs/member-terms-copy.md 的常驻文案「若 1 年内无消费，您的 {balance} 分将于
     // {expiresAt} 全部过期」需要 pointsExpireAt 渲染——getPointsSummary 早已算出这个值
     // （PointsSummary.pointsExpireAt），只是这里漏透传，前端拿到的字段一直是 undefined。
-    success(res, { pointsBalance: points.balance, expiringSoon: points.expiringSoon, pointsExpireAt: points.pointsExpireAt, availableCoupons })
+    success(res, {
+      pointsBalance: points.balance,
+      expiringSoon: points.expiringSoon,
+      pointsExpireAt: points.pointsExpireAt,
+      availableCoupons,
+      // 会员中心的「规则说明」是 spec §2 的**合规公示项**，文案里的比例与有效期
+      // 必须是后台设置的实时值（docs/member-terms-copy.md 一开头就点名：
+      // 「不要写死数字……写死了就会出现『文案说 100 分、实际发 50 分』这种最难解释的场面」）。
+      // 顾客端此前拿不到 earnRatePerYuan / validDays / rulesText，只能写死——所以这里透传。
+      // 只出这三项，不整包透传 settings：newcomer.templateId 是运营信息，顾客不需要知道。
+      points: {
+        enabled: settings.points.enabled,
+        earnRatePerYuan: settings.points.earnRatePerYuan,
+        validDays: settings.points.validDays,
+      },
+      rulesText: settings.rulesText,
+    })
   } catch (e) {
     next(e)
   }
@@ -52,6 +72,10 @@ router.get('/points/ledger', memberReadLimiter, async (req: Request, res: Respon
         refType: r.refType,
         refId: r.refId,
         remark: r.remark,
+        // 入账行的到期日（顾客端「有效期至」）与 ORDER 行的单号（listLedger 已限定本人的单联查出来）。
+        // 仍然不放 id 与原始 type 码——那两个是内部口径。
+        expiresAt: r.expiresAt,
+        orderNo: r.orderNo,
         createdAt: r.createdAt,
       })),
       total,

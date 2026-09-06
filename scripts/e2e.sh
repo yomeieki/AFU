@@ -1272,6 +1272,59 @@ for k in pointsSettledAt pointsBase; do
   assert_eq "orderList[0] 不含内部字段 $k" "$(jq -r ".data.list[0] | has(\"$k\")" <<<"$M2_LIST")" "false"
 done
 
+
+# ── 会员顾客端字段契约（M4 前置）─────────────────────────────────────────
+# M4 的五个会员页按这些名字取值。三处是 M4 Wave 0 补的：小程序在此之前**拿不到**
+# 规则公示要的比例与有效期，只能写死数字——而 docs/member-terms-copy.md 开篇就禁止写死
+# （「文案说 100 分、实际发 50 分」是最难解释的场面）。锁在这里，改名会当场红。
+M4_SUM=$(req GET /api/member/summary "$UT")
+for k in pointsBalance expiringSoon pointsExpireAt availableCoupons points rulesText; do
+  assert_eq "memberSummary.$k 存在" "$(jq -r ".data | has(\"$k\")" <<<"$M4_SUM")" "true"
+done
+for k in enabled earnRatePerYuan validDays; do
+  assert_eq "memberSummary.points.$k 存在（规则说明要实时渲染，不许写死）" \
+    "$(jq -r ".data.points | has(\"$k\")" <<<"$M4_SUM")" "true"
+done
+# 值也要对得上后台设置——只判「字段存在」的话，服务端把它写成 undefined 照样通过
+M4_SET=$(req GET /api/admin/settings/member "$AT")
+assert_eq "memberSummary.points.earnRatePerYuan = 后台设置的真值" \
+  "$(jq -r '.data.points.earnRatePerYuan' <<<"$M4_SUM")" "$(jq -r '.data.points.earnRatePerYuan' <<<"$M4_SET")"
+assert_eq "memberSummary.points.validDays = 后台设置的真值" \
+  "$(jq -r '.data.points.validDays' <<<"$M4_SUM")" "$(jq -r '.data.points.validDays' <<<"$M4_SET")"
+# 运营信息不外露：新客券模板 id 顾客不需要知道
+assert_eq "memberSummary 不含 newcomer（运营信息）" "$(jq -r '.data | has("newcomer")' <<<"$M4_SUM")" "false"
+
+M4_LED=$(req GET "/api/member/points/ledger?pageSize=5" "$UT")
+assert_eq "积分流水前置：该用户有流水（否则下面几条是空断言）" \
+  "$(jq -r '.data.list | length > 0' <<<"$M4_LED")" "true"
+for k in typeLabel delta refType refId remark expiresAt orderNo createdAt; do
+  assert_eq "pointsLedger[0].$k 存在" "$(jq -r ".data.list[0] | has(\"$k\")" <<<"$M4_LED")" "true"
+done
+# 顾客端不该看到内部自增 id 与原始 type 码（白名单口径，M1 定的）
+for k in id type; do
+  assert_eq "pointsLedger[0] 不含内部字段 $k" "$(jq -r ".data.list[0] | has(\"$k\")" <<<"$M4_LED")" "false"
+done
+# ORDER 行的 orderNo 必须是**本人**的真单号：refId 是裸值，联查限定了 userId
+M4_LED_ORD=$(jq -c 'first(.data.list[] | select(.refType=="ORDER" and .orderNo != null)) // {}' <<<"$M4_LED")
+# 用顾客自己的订单接口回读真值来比。不用 sql()——它在本文件里到第 1439 行才定义，
+# 在这里调是 command not found（第一版就是这么红的）。走 API 反而更好：
+# 它同时验证了「这个 refId 确实是这位顾客能看到的单」。
+M4_LED_REFID=$(jq -r '.refId // 0' <<<"$M4_LED_ORD")
+M4_LED_REAL=$(req GET "/api/orders/$M4_LED_REFID" "$UT" | jq -r '.data.orderNo // "MISSING"')
+assert_eq "pointsLedger 的 ORDER 行补出了真实单号" \
+  "$(jq -r '.orderNo // "MISSING"' <<<"$M4_LED_ORD")" "$M4_LED_REAL"
+
+# 我的券：「已用于订单 …」要能点进详情（详情页接的就是 Order.id）
+M4_CPN=$(req GET "/api/member/coupons?status=available" "$UT")
+assert_eq "memberCoupons 返回 0" "$(code "$M4_CPN")" "0"
+assert_eq "memberCoupons[].orderId 在白名单里（无券时跳过判定）" \
+  "$(jq -r 'if (.data.list | length) > 0 then (.data.list[0] | has("orderId")) else true end' <<<"$M4_CPN")" "true"
+# 越权字段：管理端可见的三个，顾客端一个都不能有
+for k in issuedBy remark sourceRef templateId; do
+  assert_eq "memberCoupons[] 不含 $k（无券时跳过判定）" \
+    "$(jq -r "if (.data.list | length) > 0 then (.data.list[0] | has(\"$k\")) else false end" <<<"$M4_CPN")" "false"
+done
+
 echo "== 35. 出票与打印机（规格 §8b）=="
 # 每个子测试都用当次新建的订单/打印机编号，不依赖固定 ID：本段要能零间隔连跑两轮。
 # 本段会用 $PID 连下 6-7 个新订单；本机开发库不在两轮 e2e 之间重置库存，$PID 前面 5/6/7/8/15
