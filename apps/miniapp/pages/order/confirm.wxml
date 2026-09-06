@@ -59,11 +59,29 @@
     </view>
   </view>
 
+  <!-- 会员优惠（M4）。subtotal 传**券前**商品小计：服务端拿它判门槛，
+       传券后的值会让「满 50 减 10」在小计正好 50 时判不通过 -->
+  <checkout-benefits
+    id="benefits"
+    channel="EXPRESS"
+    subtotal="{{totalAmount}}"
+    disabled="{{submitting}}"
+    bind:change="onBenefitsChange"
+  />
+
   <!-- Amount -->
   <view class="section card">
     <view class="row">
       <text class="row-label">商品金额</text>
       <text class="row-value">¥{{pricefmt.fen(totalAmount)}}</text>
+    </view>
+    <view wx:if="{{discount > 0}}" class="row">
+      <text class="row-label">优惠券</text>
+      <text class="row-value discount">−¥{{pricefmt.fen(discount)}}</text>
+    </view>
+    <view wx:if="{{pointsUsed > 0}}" class="row">
+      <text class="row-label">积分赠品</text>
+      <text class="row-value">{{pointsUsed}} 积分</text>
     </view>
     <view class="row">
       <text class="row-label">运费</text>

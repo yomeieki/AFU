@@ -1,1 +1,181 @@
-.page { min-height: 100vh; }
+.page {
+  min-height: 100vh;
+  background-color: var(--bg);
+  padding-bottom: 40rpx;
+}
+
+/* 四态占位（与 points-log / coupons 同一套类名，五个会员页保持一致） */
+.state-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 140rpx 48rpx;
+}
+.state-text {
+  font-size: 28rpx;
+  color: var(--text-3);
+  text-align: center;
+}
+.state-btn {
+  margin-top: 40rpx;
+}
+
+.claim-list {
+  padding: 20rpx 24rpx 0;
+}
+
+/* 活动券卡：上半是面额 + 名称/说明，下半是剩余量与领取按钮。
+   按钮单独占一行，名称就不必和它抢那点横向空间（375rpx 屏上尤其明显） */
+.claim-card {
+  margin-bottom: 20rpx;
+  padding: 24rpx;
+  background: var(--card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+.claim-top {
+  display: flex;
+  align-items: stretch;
+}
+
+.claim-face {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 180rpx;
+  padding: 16rpx 8rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-bg);
+  border-radius: var(--radius-md);
+}
+.claim-amount {
+  display: flex;
+  align-items: baseline;
+}
+.face-symbol {
+  font-size: 26rpx;
+  font-weight: 700;
+  color: var(--brand);
+}
+.face-int {
+  font-size: 56rpx;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--brand);
+}
+.face-dec {
+  font-size: 26rpx;
+  font-weight: 700;
+  color: var(--brand);
+}
+.claim-threshold {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: var(--brand);
+  text-align: center;
+}
+
+.claim-info {
+  flex: 1;
+  min-width: 0;
+  margin-left: 20rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.claim-title-row {
+  display: flex;
+  align-items: center;
+}
+.claim-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-tag {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  padding: 3rpx 10rpx;
+  border-radius: 6rpx;
+  font-size: 20rpx;
+  line-height: 1.4;
+}
+.channel-tag.local {
+  background: var(--brand-bg-deep);
+  color: var(--brand);
+}
+.channel-tag.express {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.claim-desc {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.claim-valid {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+}
+
+.claim-foot {
+  display: flex;
+  align-items: center;
+  margin-top: 20rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx dashed var(--divider);
+}
+.claim-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.claim-remaining {
+  font-size: 24rpx;
+  color: var(--warning);
+}
+.claim-claimed {
+  margin-top: 4rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+}
+/* 比全局 .btn-primary 矮一号：这是列表里的行内按钮，不是页底主操作 */
+.claim-btn {
+  flex-shrink: 0;
+  margin-left: 20rpx;
+  height: 64rpx;
+  padding: 0 40rpx;
+  font-size: 28rpx;
+}
+
+/* 领完 / 已达上限：面额区一起褪色，只留一个不可点的按钮会显得卡片还「活着」 */
+.claim-card.is-off .claim-face {
+  background: var(--gray-bg);
+}
+.claim-card.is-off .face-symbol,
+.claim-card.is-off .face-int,
+.claim-card.is-off .face-dec,
+.claim-card.is-off .claim-threshold {
+  color: var(--text-disabled);
+}
+.claim-card.is-off .claim-name {
+  color: var(--text-3);
+}
+
+.list-foot {
+  padding: 16rpx 12rpx 0;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: var(--text-3);
+}

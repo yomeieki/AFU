@@ -22,6 +22,12 @@ Page({
     payAmount: 0,
     belowMinOrder: false,
     minOrderTip: '',
+    // 会员优惠（M4）。四个值全部来自 checkout-benefits 组件的 change 事件，
+    // 本页**不自己算 discount**——封顶与门槛判定在服务端，前端复制一份就是两套口径。
+    couponId: null,
+    gifts: [],
+    discount: 0,
+    pointsUsed: 0,
     submitting: false,
     // 商品/地址（loadData）加载失败
     loadFailed: false,
@@ -98,7 +104,7 @@ Page({
     if (this.data.metaFailed) {
       this.setData({
         shippingFee: 0,
-        payAmount: subtotal,
+        payAmount: subtotal - this.data.discount,
         belowMinOrder: false,
         minOrderTip: '',
       })
@@ -109,16 +115,33 @@ Page({
     var threshold = Number(s.freeThreshold) || 0
     var min = Number(s.minOrderAmount) || 0
 
+    // ⚠️ 包邮线与起送线**都按券前小计 `subtotal` 判**，不减 discount。
+    // 与服务端一致（M2 e2e 券①专门锁了这条）：顾客不该因为用了券而失去包邮、
+    // 或者跌到起送线以下。判错了每一单都错。
     var shippingFee = 0
     if (fee > 0 && !(threshold > 0 && subtotal >= threshold)) shippingFee = fee
 
     var below = min > 0 && subtotal > 0 && subtotal < min
+    // 券只抵扣商品金额，不抵扣运费（docs/member-terms-copy.md 明写）
+    var pay = subtotal - this.data.discount + shippingFee
     this.setData({
       shippingFee: shippingFee,
-      payAmount: subtotal + shippingFee,
+      payAmount: pay < 0 ? 0 : pay,
       belowMinOrder: below,
       minOrderTip: below ? '还差 ¥' + formatPrice(min - subtotal) + ' 起送' : '',
     })
+  },
+
+  // 组件只抛四个值，本页不看它内部状态
+  onBenefitsChange(e) {
+    var d = e.detail || {}
+    this.setData({
+      couponId: d.couponId === undefined ? null : d.couponId,
+      gifts: d.gifts || [],
+      discount: d.discount || 0,
+      pointsUsed: d.pointsUsed || 0,
+    })
+    this.applyShipping()
   },
 
   loadData() {
@@ -240,16 +263,32 @@ Page({
     } else {
       payload.cartItemIds = this.data.cartItemIds
     }
+    // 没选券/没加赠品时这两个键是 undefined，不会被序列化——请求体与改前逐字节一致
+    if (this.data.couponId) payload.couponId = this.data.couponId
+    if (this.data.gifts && this.data.gifts.length) payload.gifts = this.data.gifts
     createOrder(payload)
       .then(function(res) {
+        // 服务端 actualAmount 才是真金额。本地 payAmount 只是展示，两者不等说明口径漂了——
+        // 以服务端为准并留个 warn，这是发现漂移的探针（对不上时顾客付的是服务端那个数）。
+        if (typeof res.actualAmount === 'number' && res.actualAmount !== self.data.payAmount) {
+          console.warn('[confirm] payAmount 与服务端 actualAmount 不一致', self.data.payAmount, res.actualAmount)
+        }
         wx.showToast({ title: '下单成功，请在 ' + self.data.payTimeoutMin + ' 分钟内完成支付', icon: 'none', duration: 1500 })
         if (self.data.mode !== 'direct') getApp().updateCartCount()
         setTimeout(function() {
           wx.redirectTo({ url: '/pages/order/detail?id=' + res.orderId + '&autopay=1' })
         }, 800)
       })
-      .catch(function() {
+      .catch(function(err) {
         self.setData({ submitting: false })
+        // 42250 积分不足 / 42251 券不可用 / 42252 赠品不可用：这三种都是「优惠项在别处
+        // 变了」，选择已经过期。request.js 已经把 message 弹过 toast 了，这里只负责
+        // 让组件重新拉一次，顾客看到的就是刷新后的真实可选项，而不是一个反复失败的按钮。
+        var code = err && err.code
+        if (code === 42250 || code === 42251 || code === 42252) {
+          var c = self.selectComponent('#benefits')
+          if (c) c.refresh()
+        }
       })
   },
 })

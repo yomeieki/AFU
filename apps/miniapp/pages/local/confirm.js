@@ -63,6 +63,11 @@ Page({
     needTableware: false,
     remark: '',
     payAmount: 0,
+    // 会员优惠（M4）。四个值全部来自 checkout-benefits 组件，本页不自己算 discount。
+    couponId: null,
+    gifts: [],
+    discount: 0,
+    pointsUsed: 0,
     submitting: false,
     feeFlash: false,
     subscribeTemplateIds: [],
@@ -207,7 +212,10 @@ Page({
         } else {
           patch.blockReason = ''
           patch.quoteToken = quote.quoteToken
-          patch.payAmount = self.data.subtotal + (quote.fee || 0)
+          // 券只抵扣商品金额，不抵扣配送费。
+          // ⚠️ 传给 /local/quote 的 subtotal 仍是**券前**小计（见 refreshQuote 入口，一行没动）：
+          // 服务端 `q.fee > quoted.fee` 那道防线依赖两边口径一致，起送线也按券前判。
+          patch.payAmount = self.data.subtotal - self.data.discount + (quote.fee || 0)
         }
         // m1: 报价成功后复位，后续 42901 仍可自动重试一次
         self._retriedRateLimit = false
@@ -358,6 +366,29 @@ Page({
     this.refreshQuote('retry')
   },
 
+  /**
+   * payAmount 只有两个写入点：refreshQuote 的成功分支，和这里。
+   *
+   * **降级分支一行不改**：quoteError / blockReason / 报价失败时 payAmount 是 null，
+   * 底部合计整块不显示。这里必须守住同一条规矩——报价还没成功就把 payAmount 写成
+   * 一个数，等于在「运费未知」的状态下给顾客看一个收不到的金额。
+   */
+  onBenefitsChange: function(e) {
+    var d = e.detail || {}
+    var patch = {
+      couponId: d.couponId === undefined ? null : d.couponId,
+      gifts: d.gifts || [],
+      discount: d.discount || 0,
+      pointsUsed: d.pointsUsed || 0,
+    }
+    if (this.data.quoteToken && !this.data.blockReason && !this.data.quoteError) {
+      var fee = (this.data.quote && this.data.quote.fee) || 0
+      var pay = this.data.subtotal - patch.discount + fee
+      patch.payAmount = pay < 0 ? 0 : pay
+    }
+    this.setData(patch)
+  },
+
   onSubmit: function() {
     if (this.data.quoteError) {
       this.refreshQuote('retry')
@@ -384,6 +415,9 @@ Page({
       deliveryType: 'LOCAL',
       quoteToken: this.data.quoteToken,
       remark: remark ? remark.slice(0, 255) : undefined,
+      // 没选券/没加赠品时是 undefined，不会被序列化——请求体与改前一致
+      couponId: this.data.couponId || undefined,
+      gifts: this.data.gifts && this.data.gifts.length ? this.data.gifts : undefined,
     }, true)
       .then(function(res) {
         wx.showToast({ title: '下单成功，请在 ' + self.data.payTimeoutMin + ' 分钟内完成支付', icon: 'none', duration: 1500 })
@@ -400,6 +434,16 @@ Page({
   handleSubmitError: function(err) {
     var self = this
     var code = err.code
+    // 42250 积分不足 / 42251 券不可用 / 42252 赠品不可用：优惠项在别处变了，选择过期。
+    // 只刷组件，**不清 quoteToken、不改 blockReason**——报价本身没问题，
+    // 清掉会逼顾客重新走一遍报价（还可能因为限流被挡），而问题只出在优惠那一格。
+    // createOrder 这里传的是 silent:true，request.js 不会替我们弹 toast，所以自己弹。
+    if (code === 42250 || code === 42251 || code === 42252) {
+      wx.showToast({ title: err.message || '优惠已变化，请重新选择', icon: 'none', duration: 2500 })
+      var benefits = this.selectComponent('#benefits')
+      if (benefits) benefits.refresh()
+      return
+    }
     if (code === 42239 || code === 42227) {
       wx.showToast({ title: code === 42239 ? '配送费需要重新确认' : '配送费已更新，请确认后重新提交', icon: 'none', duration: 2500 })
       this.setData({ feeFlash: true })

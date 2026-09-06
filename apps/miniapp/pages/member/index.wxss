@@ -1,1 +1,214 @@
-.page { min-height: 100vh; }
+.page {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 20rpx 24rpx 40rpx;
+  box-sizing: border-box;
+}
+
+/* ---------- 未登录 / 加载中 / 加载失败 三态共用容器 ---------- */
+.state-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 160rpx 48rpx;
+  gap: 20rpx;
+}
+.state-icon {
+  width: 96rpx;
+  height: 96rpx;
+  margin-bottom: 8rpx;
+}
+.state-title {
+  font-size: 32rpx;
+  color: var(--text-1);
+  font-weight: 600;
+}
+.state-desc {
+  font-size: 28rpx;
+  color: var(--text-3);
+}
+.state-btn {
+  margin-top: 20rpx;
+}
+/* 加载失败必须一眼与空态区分：红字 + 可点重试 */
+.state-error {
+  font-size: 28rpx;
+  color: var(--danger);
+  text-align: center;
+  line-height: 1.6;
+}
+.state-retry {
+  margin-top: 12rpx;
+  padding: 12rpx 40rpx;
+  font-size: 28rpx;
+  color: var(--brand);
+  border: 2rpx solid var(--brand-light);
+  border-radius: 999rpx;
+}
+.state-retry-hover {
+  background: var(--brand-bg);
+}
+
+/* ---------- 页头卡 ---------- */
+.head-card {
+  background: var(--brand-gradient);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 32rpx;
+  color: #fff;
+}
+.head-label {
+  display: block;
+  font-size: 26rpx;
+  opacity: 0.9;
+}
+.head-balance {
+  display: flex;
+  align-items: baseline;
+  margin-top: 8rpx;
+}
+.balance-num {
+  font-size: 76rpx;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.balance-unit {
+  margin-left: 8rpx;
+  font-size: 26rpx;
+  opacity: 0.9;
+}
+.expire-tip {
+  margin-top: 16rpx;
+  padding: 12rpx 20rpx;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+.expire-em {
+  font-weight: 700;
+}
+.head-coupon {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 24rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid rgba(255, 255, 255, 0.25);
+}
+.coupon-label {
+  font-size: 26rpx;
+  opacity: 0.9;
+}
+.coupon-value {
+  display: flex;
+  align-items: baseline;
+}
+.coupon-num {
+  font-size: 40rpx;
+  font-weight: 700;
+}
+.coupon-unit {
+  margin-left: 6rpx;
+  font-size: 24rpx;
+  opacity: 0.9;
+}
+
+/* 空数据：仍然是一张有内容的卡，只是多一条引导 */
+.head-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid rgba(255, 255, 255, 0.25);
+}
+.head-empty-text {
+  flex: 1;
+  margin-right: 20rpx;
+  font-size: 24rpx;
+  line-height: 1.5;
+  opacity: 0.92;
+}
+.head-empty-btn {
+  flex-shrink: 0;
+  padding: 12rpx 28rpx;
+  background: #fff;
+  color: var(--brand);
+  font-size: 26rpx;
+  font-weight: 600;
+  border-radius: 999rpx;
+}
+.head-empty-btn-hover {
+  opacity: 0.85;
+}
+
+/* ---------- 四宫格 ---------- */
+.entry-card {
+  display: flex;
+  margin-top: 20rpx;
+  padding: 28rpx 0;
+}
+.entry-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12rpx;
+}
+.entry-item-hover {
+  opacity: 0.7;
+}
+.entry-icon-wrap {
+  width: 80rpx;
+  height: 80rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--brand-bg);
+}
+.entry-icon {
+  width: 44rpx;
+  height: 44rpx;
+}
+.entry-label {
+  font-size: 24rpx;
+  color: var(--text-2);
+}
+
+/* ---------- 规则说明 ---------- */
+.rules-card {
+  margin-top: 20rpx;
+  padding: 32rpx;
+}
+.rules-title {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: var(--text-1);
+  padding-bottom: 20rpx;
+  border-bottom: 2rpx solid var(--divider);
+}
+.rules-sec {
+  margin-top: 24rpx;
+}
+.rules-h {
+  display: block;
+  margin-bottom: 8rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.rules-p {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 26rpx;
+  line-height: 1.75;
+  color: var(--text-2);
+}
+.rules-p-strong {
+  color: var(--text-1);
+  font-weight: 600;
+}

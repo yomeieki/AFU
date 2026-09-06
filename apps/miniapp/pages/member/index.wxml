@@ -1,1 +1,102 @@
-<view class="page"></view>
+<view class="page">
+
+  <!-- ① 未登录：占位 + 点击登录（绝不留白屏） -->
+  <view wx:if="{{needLogin}}" class="state-wrap">
+    <view class="state-icon icon icon-info"></view>
+    <text class="state-title">登录后查看积分与优惠券</text>
+    <text class="state-desc">积分在订单完成后自动发放</text>
+    <button class="btn-primary state-btn" hover-class="none" bindtap="onLogin">点击登录</button>
+  </view>
+
+  <!-- ② 加载中 -->
+  <view wx:elif="{{loading}}" class="state-wrap">
+    <text class="state-desc">加载中...</text>
+  </view>
+
+  <!-- ③ 加载失败：红字 + 重试，与「暂无数据」是两块不同的界面 -->
+  <view wx:elif="{{loadError}}" class="state-wrap">
+    <view class="state-icon icon icon-info"></view>
+    <text class="state-error">{{loadErrorText}}</text>
+    <view class="state-retry" hover-class="state-retry-hover" bindtap="onRetry">点此重试</view>
+  </view>
+
+  <block wx:else>
+
+    <!-- 页头卡 -->
+    <view class="head-card">
+      <text class="head-label">我的积分</text>
+      <view class="head-balance">
+        <text class="balance-num">{{pointsBalance}}</text>
+        <text class="balance-unit">分</text>
+      </view>
+
+      <!-- 到期提示（滚动续期口径，文案见 docs/member-terms-copy.md） -->
+      <view wx:if="{{showExpireTip}}" class="expire-tip">
+        <text>若 1 年内无消费，您的 </text>
+        <text class="expire-em">{{pointsBalance}}</text>
+        <text> 分将于 </text>
+        <text class="expire-em">{{expireDate}}</text>
+        <text> 全部过期</text>
+      </view>
+
+      <view class="head-coupon">
+        <text class="coupon-label">可用优惠券</text>
+        <view class="coupon-value">
+          <text class="coupon-num">{{availableCoupons}}</text>
+          <text class="coupon-unit">张</text>
+        </view>
+      </view>
+
+      <!-- ④ 空数据：0 分 0 券也要像个页面 -->
+      <view wx:if="{{isEmpty}}" class="head-empty">
+        <text class="head-empty-text">还没有积分和优惠券，下单完成后自动到账</text>
+        <view class="head-empty-btn" hover-class="head-empty-btn-hover" bindtap="goShop">去下单赚积分</view>
+      </view>
+    </view>
+
+    <!-- 四宫格入口 -->
+    <view class="card entry-card">
+      <view
+        class="entry-item"
+        wx:for="{{entries}}"
+        wx:key="url"
+        hover-class="entry-item-hover"
+        bindtap="goEntry"
+        data-url="{{item.url}}"
+      >
+        <view class="entry-icon-wrap">
+          <view class="entry-icon icon {{item.icon}}"></view>
+        </view>
+        <text class="entry-label">{{item.label}}</text>
+      </view>
+    </view>
+
+    <!-- 规则说明（spec §2 合规公示项，全文可读，不折叠） -->
+    <view class="card rules-card">
+      <text class="rules-title">规则说明</text>
+
+      <!-- ① 系统自动生成段：数字由后台设置实时渲染 -->
+      <view class="rules-sec" wx:if="{{autoRules.length > 0}}">
+        <text class="rules-p" wx:for="{{autoRules}}" wx:key="*this">{{item}}</text>
+      </view>
+
+      <!-- ② 固定文案段 -->
+      <view class="rules-sec" wx:for="{{fixedRules}}" wx:key="title">
+        <text class="rules-h">{{item.title}}</text>
+        <text
+          class="rules-p {{p.strong ? 'rules-p-strong' : ''}}"
+          wx:for="{{item.paragraphs}}"
+          wx:for-item="p"
+          wx:key="text"
+        >{{p.text}}</text>
+      </view>
+
+      <!-- 后台补充的规则文本（可能为空，空则不渲染） -->
+      <view class="rules-sec" wx:if="{{rulesText}}">
+        <text class="rules-p">{{rulesText}}</text>
+      </view>
+    </view>
+
+  </block>
+
+</view>

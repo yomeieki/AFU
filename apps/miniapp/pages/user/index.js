@@ -1,11 +1,16 @@
 const { wechatLogin } = require('../../api/auth')
 const { callShop } = require('../../utils/contact')
+var memberApi = require('../../api/member')
 
 Page({
   data: {
     isLoggedIn: false,
     nickname: '',
     avatarUrl: '',
+    // 页头积分/券条。'—' 既是初值也是「拉取失败」态：条目仍可点，
+    // 点进会员页会自己重拉并显示自己的失败态，这里不该拦人。
+    pointsText: '—',
+    couponText: '—',
   },
 
   onLoad() {
@@ -14,6 +19,40 @@ Page({
 
   onShow() {
     this._syncLoginState()
+    if (this.data.isLoggedIn) {
+      this._loadMemberSummary()
+    } else {
+      this.setData({ pointsText: '—', couponText: '—' })
+    }
+  },
+
+  // silent：这是页头的附属信息，拉不到就显示「—」，不该在「我的」页盖一层全局 toast
+  _loadMemberSummary: function() {
+    var self = this
+    if (this._summaryLoading) return
+    this._summaryLoading = true
+    memberApi
+      .getSummary(true)
+      .then(function(data) {
+        var d = data || {}
+        self._summaryLoading = false
+        self.setData({
+          pointsText: d.pointsBalance == null ? '—' : String(d.pointsBalance),
+          couponText: d.availableCoupons == null ? '—' : String(d.availableCoupons),
+        })
+      })
+      .catch(function() {
+        self._summaryLoading = false
+        self.setData({ pointsText: '—', couponText: '—' })
+      })
+  },
+
+  goMemberCenter: function() {
+    wx.navigateTo({ url: '/pages/member/index' })
+  },
+
+  goCoupons: function() {
+    wx.navigateTo({ url: '/pages/member/coupons' })
   },
 
   _syncLoginState() {
@@ -54,6 +93,8 @@ Page({
               avatarUrl: data.avatarUrl || '',
             })
             wx.showToast({ title: '登录成功', icon: 'success' })
+            // 本页登录不会再触发 onShow，不补这一下积分/券条会一直停在「—」
+            self._loadMemberSummary()
           })
           .catch(function() {
             wx.hideLoading()

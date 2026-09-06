@@ -8,6 +8,11 @@
     <text class="status-order-no">{{order.orderNo}}</text>
   </view>
 
+  <!-- 本单得分：仅已完成且真有得分时出现 -->
+  <view class="points-earned" wx:if="{{order.pointsEarnedText}}">
+    <text>{{order.pointsEarnedText}}</text>
+  </view>
+
   <!-- Address -->
   <view class="card">
     <view class="address-row">
@@ -92,11 +97,14 @@
           <view wx:else class="item-img-ph img-placeholder"></view>
         </view>
         <view class="item-info">
-          <text class="item-name">{{item.productName}}</text>
+          <view class="item-name-row">
+            <text class="item-gift-tag" wx:if="{{item.isGift}}">赠</text>
+            <text class="item-name">{{item.productName}}</text>
+          </view>
           <text class="item-spec" wx:if="{{item.specText}}">{{item.specText}}</text>
-          <text class="item-price">¥{{item.priceText}} × {{item.quantity}}</text>
+          <text class="item-price">{{item.priceLineText}}</text>
         </view>
-        <text class="item-subtotal">¥{{item.subtotalText}}</text>
+        <text class="item-subtotal">{{item.subtotalLineText}}</text>
       </view>
     </view>
   </view>
@@ -107,6 +115,14 @@
       <text class="amount-label">商品金额</text>
       <text class="amount-value">¥{{order.totalAmountText}}</text>
     </view>
+    <view class="amount-row" wx:if="{{order.discountAmount > 0}}">
+      <text class="amount-label">优惠券</text>
+      <text class="amount-value discount">−¥{{order.discountAmountText}}</text>
+    </view>
+    <view class="amount-row" wx:if="{{order.pointsUsed > 0}}">
+      <text class="amount-label">积分赠品</text>
+      <text class="amount-value">{{order.pointsUsed}} 分</text>
+    </view>
     <view class="amount-row">
       <text class="amount-label">运费</text>
       <text class="amount-value">{{order.shippingFee === 0 ? '免运费' : '¥' + order.shippingFeeText}}</text>
@@ -114,6 +130,9 @@
     <view class="amount-row" wx:if="{{order.refundedAmount > 0}}">
       <text class="amount-label">已退款</text>
       <text class="amount-value refunded">-¥{{order.refundedAmountText}}</text>
+    </view>
+    <view class="amount-note" wx:if="{{order.benefitNotRefundedNote}}">
+      <text>{{order.benefitNotRefundedNote}}</text>
     </view>
     <view class="amount-row total-row">
       <text class="amount-label">合计</text>

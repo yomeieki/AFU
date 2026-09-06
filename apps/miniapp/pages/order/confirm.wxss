@@ -222,3 +222,8 @@
   padding: 2rpx 12rpx;
   align-self: flex-start;
 }
+
+/* 券抵扣行：与「合计」同为负向金额，用品牌色而不是危险色——它是好事不是错误 */
+.row-value.discount {
+  color: var(--brand);
+}

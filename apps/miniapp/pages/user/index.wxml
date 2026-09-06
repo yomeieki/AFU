@@ -4,16 +4,37 @@
   <view class="user-header">
     <view class="header-deco header-deco-1"></view>
     <view class="header-deco header-deco-2"></view>
-    <view class="avatar-wrap">
-      <image wx:if="{{isLoggedIn && avatarUrl}}" class="avatar-img" src="{{avatarUrl}}" mode="aspectFill" />
-      <view wx:else class="avatar-placeholder">
-        <text class="avatar-icon">👤</text>
+    <view class="user-header-main">
+      <view class="avatar-wrap">
+        <image wx:if="{{isLoggedIn && avatarUrl}}" class="avatar-img" src="{{avatarUrl}}" mode="aspectFill" />
+        <view wx:else class="avatar-placeholder">
+          <text class="avatar-icon">👤</text>
+        </view>
+      </view>
+      <view class="user-info">
+        <text wx:if="{{isLoggedIn}}" class="user-name">{{nickname}}</text>
+        <text wx:else class="user-name">未登录</text>
+        <button wx:if="{{!isLoggedIn}}" class="login-btn" bindtap="onLogin">点击登录</button>
       </view>
     </view>
-    <view class="user-info">
-      <text wx:if="{{isLoggedIn}}" class="user-name">{{nickname}}</text>
-      <text wx:else class="user-name">未登录</text>
-      <button wx:if="{{!isLoggedIn}}" class="login-btn" bindtap="onLogin">点击登录</button>
+
+    <!-- 积分/券入口条：数字拉失败显示「—」，格子照样可点（会员页自己有失败态） -->
+    <view wx:if="{{isLoggedIn}}" class="member-bar">
+      <view class="member-cell" hover-class="member-cell-hover" hover-stay-time="60" bindtap="goMemberCenter">
+        <text class="member-cell-label">积分</text>
+        <text class="member-cell-value">{{pointsText}}</text>
+        <text class="member-cell-arrow">›</text>
+      </view>
+      <view class="member-cell-divider"></view>
+      <view class="member-cell" hover-class="member-cell-hover" hover-stay-time="60" bindtap="goCoupons">
+        <text class="member-cell-label">优惠券</text>
+        <text class="member-cell-value">{{couponText}}</text>
+        <text class="member-cell-arrow">›</text>
+      </view>
+    </view>
+    <view wx:else class="member-bar member-bar-guest" hover-class="member-cell-hover" hover-stay-time="60" bindtap="onLogin">
+      <text class="member-guest-text">登录后查看积分与优惠券</text>
+      <text class="member-cell-arrow">›</text>
     </view>
   </view>
 
@@ -54,6 +75,11 @@
       <view class="menu-item" hover-class="menu-item-hover" bindtap="goLocal">
         <view class="menu-icon icon icon-truck"></view>
         <text class="menu-label">同城配送</text>
+        <view class="menu-arrow icon icon-arrow"></view>
+      </view>
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="goCoupons">
+        <view class="menu-icon icon icon-doc"></view>
+        <text class="menu-label">我的券</text>
         <view class="menu-arrow icon icon-arrow"></view>
       </view>
       <view class="menu-item" hover-class="menu-item-hover" bindtap="goToAddresses">

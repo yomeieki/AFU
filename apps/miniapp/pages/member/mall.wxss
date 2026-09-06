@@ -1,1 +1,312 @@
-.page { min-height: 100vh; }
+.page {
+  background-color: var(--bg);
+  min-height: 100vh;
+  padding-bottom: 40rpx;
+}
+
+/* 未登录门 */
+.gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 160rpx 60rpx 0;
+}
+.gate-icon {
+  width: 96rpx;
+  height: 96rpx;
+}
+.gate-title {
+  margin-top: 28rpx;
+  font-size: 32rpx;
+  color: var(--text-1);
+  font-weight: 600;
+}
+.gate-sub {
+  margin-top: 16rpx;
+  font-size: 26rpx;
+  color: var(--text-3);
+  text-align: center;
+  line-height: 1.6;
+}
+.gate-btn {
+  margin-top: 48rpx;
+  width: 360rpx;
+}
+
+/* 积分余额条 */
+.balance-bar {
+  display: flex;
+  align-items: baseline;
+  padding: 32rpx 32rpx 28rpx;
+  background: var(--brand-gradient);
+}
+.balance-label {
+  font-size: 26rpx;
+  color: rgba(255, 255, 255, 0.9);
+  margin-right: 16rpx;
+}
+.balance-num {
+  font-size: 52rpx;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.1;
+}
+
+/* Tabs */
+.tab-bar {
+  display: flex;
+  background: var(--card);
+  border-bottom: 1rpx solid var(--divider);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.tab-item {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 26rpx 0;
+  font-size: 28rpx;
+  color: var(--text-2);
+}
+.tab-item.active {
+  color: var(--brand);
+  font-weight: 600;
+}
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 48rpx;
+  height: 6rpx;
+  border-radius: 6rpx;
+  background: var(--brand-gradient);
+}
+
+/* 加载中 / 加载失败 */
+.state-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 120rpx 48rpx;
+}
+.state-text {
+  font-size: 28rpx;
+  color: var(--text-3);
+}
+.retry-btn {
+  margin-top: 32rpx;
+  width: 260rpx;
+}
+
+.list {
+  padding: 20rpx 24rpx 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+/* 渠道标 */
+.channel-tag {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  padding: 3rpx 10rpx;
+  border-radius: 6rpx;
+  font-size: 20rpx;
+  line-height: 1.4;
+}
+.channel-tag.local {
+  background: var(--brand-bg);
+  color: var(--brand);
+}
+.channel-tag.express {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* 积分价 + 按钮行 */
+.action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16rpx;
+}
+.cost {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.cost-num {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: var(--warning);
+}
+.cost-unit {
+  margin-left: 6rpx;
+  font-size: 24rpx;
+  color: var(--text-3);
+}
+.act-btn {
+  flex-shrink: 0;
+  min-width: 152rpx;
+  padding: 0 28rpx;
+  height: 60rpx;
+  line-height: 60rpx;
+  text-align: center;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  font-weight: 600;
+  box-sizing: border-box;
+}
+.act-btn-primary {
+  background: var(--brand-gradient);
+  color: #fff;
+}
+.act-btn-hover {
+  opacity: 0.85;
+}
+.act-btn-plain {
+  background: var(--brand-bg);
+  color: var(--brand);
+  border: 2rpx solid var(--brand-light);
+}
+
+/* 换券卡 */
+.coupon-card {
+  display: flex;
+  align-items: stretch;
+  padding: 24rpx;
+}
+.coupon-left {
+  flex-shrink: 0;
+  width: 190rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-right: 20rpx;
+  border-right: 2rpx dashed var(--border);
+}
+.coupon-amount {
+  display: flex;
+  align-items: baseline;
+}
+.coupon-int {
+  font-size: 56rpx;
+  line-height: 1.1;
+}
+.coupon-threshold {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+  text-align: center;
+}
+.coupon-right {
+  flex: 1;
+  min-width: 0;
+  padding-left: 24rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.coupon-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.coupon-desc {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: var(--text-2);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.coupon-valid {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+}
+
+/* 赠品卡 */
+.gift-card {
+  padding: 24rpx;
+}
+.gift-main {
+  display: flex;
+  align-items: stretch;
+}
+.gift-img {
+  flex-shrink: 0;
+  width: 160rpx;
+  height: 160rpx;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.gift-info {
+  flex: 1;
+  min-width: 0;
+  padding-left: 20rpx;
+  display: flex;
+  flex-direction: column;
+}
+.gift-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gift-spec {
+  align-self: flex-start;
+  margin-top: 8rpx;
+  padding: 2rpx 12rpx;
+  border-radius: 6rpx;
+  background: var(--bg);
+  font-size: 22rpx;
+  color: var(--text-3);
+}
+.gift-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8rpx;
+}
+.gift-limit {
+  font-size: 22rpx;
+  color: var(--text-3);
+}
+.gift-remaining {
+  margin-left: 16rpx;
+  font-size: 22rpx;
+  color: var(--warning);
+}
+/* 赠品不是 0 元兑换单，这行必须留着 */
+.gift-note {
+  margin-top: 16rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid var(--divider);
+  font-size: 22rpx;
+  color: var(--text-2);
+}

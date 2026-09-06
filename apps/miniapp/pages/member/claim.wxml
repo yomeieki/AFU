@@ -1,1 +1,76 @@
-<view class="page"></view>
+<wxs src="../../utils/price.wxs" module="pricefmt" />
+<view class="page">
+
+  <!-- 未登录：不是空态也不是失败，单独一块（房规 §5） -->
+  <view wx:if="{{needLogin}}" class="state-wrap">
+    <view class="state-text">登录后领取优惠券</view>
+    <button class="btn-primary state-btn" hover-class="none" bindtap="onLogin">点击登录</button>
+  </view>
+
+  <!-- 加载中 -->
+  <view wx:elif="{{loading}}" class="state-wrap">
+    <text class="state-text">加载中...</text>
+  </view>
+
+  <!-- 加载失败（与「暂无活动」是两块界面，别混） -->
+  <view wx:elif="{{loadFailed}}" class="state-wrap">
+    <text class="state-text">{{loadFailedText}}</text>
+    <button class="btn-plain state-btn" hover-class="none" bindtap="onRetry">重新加载</button>
+  </view>
+
+  <!-- 空数据 -->
+  <empty-state
+    wx:elif="{{list.length === 0}}"
+    type="generic"
+    text="暂无活动"
+    actionText="看看我的券"
+    bind:action="goCoupons"
+  />
+
+  <view wx:else class="claim-list">
+    <view wx:for="{{list}}" wx:key="id" class="claim-card {{item.disabled ? 'is-off' : ''}}">
+
+      <view class="claim-top">
+        <!-- 面额区：三段式排版同全站（utils/price.wxs） -->
+        <view class="claim-face">
+          <view class="claim-amount">
+            <text class="face-symbol">¥</text>
+            <text class="face-int">{{pricefmt.int(pricefmt.fen(item.amount))}}</text>
+            <text class="face-dec">{{pricefmt.dec(pricefmt.fen(item.amount))}}</text>
+          </view>
+          <text class="claim-threshold">{{item.thresholdText}}</text>
+        </view>
+
+        <view class="claim-info">
+          <view class="claim-title-row">
+            <text class="claim-name">{{item.name}}</text>
+            <text wx:if="{{item.channelLabel}}" class="channel-tag {{item.channelClass}}">{{item.channelLabel}}</text>
+          </view>
+          <text wx:if="{{item.description}}" class="claim-desc">{{item.description}}</text>
+          <text class="claim-valid">{{item.validText}}</text>
+        </view>
+      </view>
+
+      <view class="claim-foot">
+        <view class="claim-meta">
+          <text wx:if="{{item.remainingText}}" class="claim-remaining">{{item.remainingText}}</text>
+          <text wx:if="{{item.claimedText}}" class="claim-claimed">{{item.claimedText}}</text>
+        </view>
+        <button
+          class="claim-btn {{item.disabled ? 'btn-disabled' : 'btn-primary'}}"
+          hover-class="none"
+          disabled="{{item.disabled || item.claiming}}"
+          bindtap="onClaim"
+          data-idx="{{index}}"
+        >{{item.claiming ? '领取中' : item.btnText}}</button>
+      </view>
+
+    </view>
+
+    <!-- 文案逐字取自 docs/member-terms-copy.md，别改写 -->
+    <view class="list-foot">
+      <text>优惠券只抵扣商品金额，不抵扣运费。每笔订单限用一张，不可叠加。</text>
+    </view>
+  </view>
+
+</view>

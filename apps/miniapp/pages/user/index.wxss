@@ -8,12 +8,18 @@
 .user-header {
   position: relative;
   background: var(--brand-gradient);
-  padding: 70rpx 40rpx 60rpx;
+  padding: 70rpx 40rpx 40rpx;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* 头像 + 昵称原来那一行：整条积分/券条要落在它下面，所以头部改成竖排、这里包一层横排 */
+.user-header-main {
+  position: relative;
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 30rpx;
-  overflow: hidden;
 }
 .header-deco {
   position: absolute;
@@ -76,6 +82,60 @@
   padding: 8rpx 32rpx;
   border: 1rpx solid rgba(255, 255, 255, 0.5);
   width: fit-content;
+}
+
+/* 积分/券入口条（页头卡内，压在品牌渐变上，所以用半透明白而不是 --card） */
+.member-bar {
+  position: relative;
+  margin-top: 36rpx;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  background-color: rgba(255, 255, 255, 0.2);
+  border: 1rpx solid rgba(255, 255, 255, 0.35);
+  border-radius: var(--radius-lg);
+  box-sizing: border-box;
+}
+.member-cell {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10rpx;
+  padding: 24rpx 12rpx;
+}
+.member-cell-hover {
+  opacity: 0.7;
+}
+.member-cell-divider {
+  width: 1rpx;
+  height: 44rpx;
+  background-color: rgba(255, 255, 255, 0.4);
+}
+.member-cell-label {
+  font-size: 26rpx;
+  color: rgba(255, 255, 255, 0.85);
+}
+.member-cell-value {
+  font-size: 34rpx;
+  font-weight: bold;
+  color: #fff;
+}
+.member-cell-arrow {
+  font-size: 30rpx;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.8);
+}
+/* 未登录：整条一格，点哪都走 onLogin */
+.member-bar-guest {
+  justify-content: center;
+  gap: 10rpx;
+  padding: 24rpx 12rpx;
+}
+.member-guest-text {
+  font-size: 26rpx;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 /* Menu section */

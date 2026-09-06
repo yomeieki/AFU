@@ -271,6 +271,19 @@ function decorateOrder(order) {
     shippingFeeText: formatPrice(order.shippingFee),
     actualAmountText: formatPrice(order.actualAmount),
     refundedAmountText: formatPrice(order.refundedAmount || 0),
+    discountAmountText: formatPrice(order.discountAmount || 0),
+    // 退款不退回券与积分：只在「真的退过款」且「本单真的用过券或积分」时才出现。
+    // 措辞与 docs/member-terms-copy.md 的「订单退款后，本单使用的优惠券不予退回」同口径，
+    // 提前讲清楚比事后解释便宜（spec §10 的顾客投诉对策）。
+    benefitNotRefundedNote:
+      (order.refundedAmount || 0) > 0 && ((order.discountAmount || 0) > 0 || (order.pointsUsed || 0) > 0)
+        ? '退款不退回优惠券与积分'
+        : '',
+    // 得分只在订单完成后才是既成事实；pointsEarned 为 0 的小额单不解释，免得白占一行。
+    pointsEarnedText:
+      order.status === 'COMPLETED' && (order.pointsEarned || 0) > 0
+        ? '本单获得 ' + order.pointsEarned + ' 积分'
+        : '',
     payDeadlineText: order.status === 'PENDING_PAYMENT' ? deadlineText(order.payExpireAt) : '',
     createdAtText: t(order.createdAt),
     paidAtText: order.paidAt ? t(order.paidAt) : null,
@@ -278,9 +291,15 @@ function decorateOrder(order) {
     refunds: refunds,
     afterSale: afterSale,
     items: order.items.map(function(item) {
+      // 赠品行的 productPrice / subtotal 服务端恒为 0（积分不进商品行金额）。
+      // 照直渲染成 ¥0.00 会被顾客当成 0 元 bug 来投诉，所以价格换成积分价、小计留「—」。
+      var isGift = !!item.isGift
       return Object.assign({}, item, {
-        priceText: formatPrice(item.productPrice),
-        subtotalText: formatPrice(item.subtotal),
+        isGift: isGift,
+        priceLineText: isGift
+          ? '积分 ' + (item.pointsCost || 0) + ' × ' + item.quantity
+          : '¥' + formatPrice(item.productPrice) + ' × ' + item.quantity,
+        subtotalLineText: isGift ? '—' : '¥' + formatPrice(item.subtotal),
       })
     }),
   })

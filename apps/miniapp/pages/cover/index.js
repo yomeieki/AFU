@@ -77,11 +77,23 @@ Page({
     wx.switchTab({ url: '/pages/index/index' })
   },
 
-  // TODO(会员 M4)：三个页面做出来后把 toast 换成 navigateTo：
-  //   member → /pages/member/index   coupon → /pages/member/coupons   points → /pages/member/mall
-  // 提审前必须换完——「点了只弹 toast」是审核判「功能不完整」的典型模式。
-  goMember: function () {
-    wx.showToast({ title: '即将开通', icon: 'none' })
+  // 三个会员热区共用，按 data-key 分流。
+  // 这里**不做登录判断**：本页是 pages[0]，冷启动时 app._tryLogin() 可能还没回来，
+  // 在这儿判会把已登录的人误判成未登录。三个目标页各自有登录门。
+  goMember: function (e) {
+    var key = e && e.currentTarget && e.currentTarget.dataset.key
+    var map = {
+      member: '/pages/member/index',
+      coupon: '/pages/member/coupons',
+      points: '/pages/member/mall',
+    }
+    var url = map[key]
+    if (!url) {
+      // 只可能是 wxml 的 data-key 写错/漏写，属于开发期错误，别静默吞掉
+      console.error('[cover] 未知的会员热区 data-key：', key)
+      return
+    }
+    wx.navigateTo({ url: url })
   },
 
   // 图是打进包里的本地资源，正常不会触发；真触发了说明路径写错，

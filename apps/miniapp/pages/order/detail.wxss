@@ -120,12 +120,32 @@
   gap: 8rpx;
   overflow: hidden;
 }
+.item-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  overflow: hidden;
+}
 .item-name {
   font-size: 28rpx;
   color: var(--text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 名字可以省略号，「赠」标不能被挤掉——它是这一行为什么是 0 元的唯一解释 */
+.item-name-row .item-name {
+  flex: 1;
+  min-width: 0;
+}
+.item-gift-tag {
+  flex-shrink: 0;
+  padding: 2rpx 10rpx;
+  border-radius: 6rpx;
+  font-size: 20rpx;
+  line-height: 1.4;
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 .item-price {
   font-size: 24rpx;
@@ -454,6 +474,26 @@
 /* 已退款金额 */
 .amount-value.refunded {
   color: var(--danger);
+}
+/* 券抵扣 */
+.amount-value.discount {
+  color: var(--brand);
+}
+/* 退款不退回券与积分（金额卡内的灰字说明，不是 .amount-row，不参与分隔线） */
+.amount-note {
+  padding: 10rpx 0 2rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+/* 本单得分：状态卡下方独立一条 */
+.points-earned {
+  margin: 16rpx 24rpx 0;
+  padding: 18rpx 30rpx;
+  border-radius: var(--radius-md);
+  background: var(--brand-bg);
+  font-size: 26rpx;
+  color: var(--brand-dark);
 }
 /* 售后 */
 .after-sale-status.PENDING, .after-sale-status.APPROVED { color: var(--warning); }

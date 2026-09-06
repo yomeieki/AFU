@@ -1,4 +1,4 @@
-const { request } = require('../utils/request')
+var request = require('../utils/request').request
 
 // 会员积分与优惠券的八个端点。页面一律走这里，不自己拼 URL。
 // 查询串手拼（与 api/order.js 同款）——小程序没有 URLSearchParams。

@@ -1,1 +1,148 @@
-.page { min-height: 100vh; }
+.page {
+  background-color: var(--bg);
+  min-height: 100vh;
+  padding-bottom: 30rpx;
+}
+
+/* 顶部余额条：跟随页面滚动吸顶（列表用页面级 onReachBottom 翻页） */
+.summary {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--card);
+  border-bottom: 1rpx solid var(--divider);
+  padding: 24rpx 28rpx;
+}
+.summary-row {
+  display: flex;
+  align-items: baseline;
+}
+.summary-label {
+  font-size: 26rpx;
+  color: var(--text-2);
+  margin-right: 16rpx;
+}
+.summary-num {
+  font-size: 48rpx;
+  font-weight: 700;
+  color: var(--brand);
+  line-height: 1.2;
+}
+.summary-tip {
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+/* 两个变量用间距自己撑开，不依赖 WXML 里的空白字符 */
+.summary-tip-strong {
+  padding: 0 6rpx;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* 未登录 / 加载中 / 加载失败共用的占位块 */
+.state-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 140rpx 48rpx;
+}
+.state-text {
+  font-size: 28rpx;
+  color: var(--text-3);
+}
+.state-btn {
+  margin-top: 40rpx;
+}
+
+/* 流水列表 */
+.log-list {
+  padding: 20rpx 24rpx 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+.log-item {
+  display: flex;
+  align-items: center;
+  padding: 24rpx;
+}
+.log-item-hover {
+  transform: scale(0.99);
+}
+.log-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+}
+.log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.log-type {
+  font-size: 30rpx;
+  color: var(--text-1);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-delta {
+  flex-shrink: 0;
+  margin-left: 20rpx;
+  font-size: 34rpx;
+  font-weight: 700;
+}
+.log-delta.plus {
+  color: var(--success);
+}
+.log-delta.minus {
+  color: var(--danger);
+}
+.log-time {
+  font-size: 24rpx;
+  color: var(--text-3);
+}
+.log-remark {
+  font-size: 24rpx;
+  color: var(--text-2);
+}
+.log-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8rpx 20rpx;
+  margin-top: 4rpx;
+}
+.log-order {
+  font-size: 22rpx;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-expire {
+  font-size: 22rpx;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-radius: 6rpx;
+  padding: 2rpx 12rpx;
+}
+.log-arrow {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  font-size: 36rpx;
+  color: var(--text-disabled);
+}
+
+.footer-tip {
+  padding: 24rpx 0 32rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: var(--text-3);
+}

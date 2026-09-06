@@ -1,1 +1,311 @@
-.page { min-height: 100vh; }
+.page {
+  min-height: 100vh;
+  background-color: var(--bg);
+  padding-bottom: 40rpx;
+}
+
+/* 四态占位（与 points-log 同一套类名，五个会员页保持一致） */
+.state-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 140rpx 48rpx;
+}
+.state-text {
+  font-size: 28rpx;
+  color: var(--text-3);
+  text-align: center;
+}
+.state-btn {
+  margin-top: 40rpx;
+}
+
+/* 顶部固定区：领券入口 + Tab */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--card);
+  border-bottom: 1rpx solid var(--divider);
+}
+.claim-entry {
+  display: flex;
+  align-items: center;
+  padding: 22rpx 24rpx;
+  background: var(--brand-bg);
+}
+.claim-entry-hover {
+  background: var(--brand-bg-deep);
+}
+.claim-entry-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.claim-entry-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.claim-entry-sub {
+  margin-top: 4rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+}
+.claim-entry-go {
+  flex-shrink: 0;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: var(--brand);
+}
+.claim-entry-arrow {
+  flex-shrink: 0;
+  width: 28rpx;
+  height: 28rpx;
+  margin-left: 4rpx;
+}
+
+.tab-list {
+  display: flex;
+  flex-direction: row;
+}
+.tab-item {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24rpx 0;
+  font-size: 28rpx;
+  color: var(--text-2);
+}
+.tab-item.active {
+  color: var(--brand);
+  font-weight: 600;
+}
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 48rpx;
+  height: 6rpx;
+  border-radius: 6rpx;
+  background: var(--brand-gradient);
+}
+
+/* 空态：插画下面挂两条出路 */
+.empty-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.empty-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 24rpx;
+  margin-top: -40rpx;
+  padding: 0 48rpx 40rpx;
+}
+.empty-btn {
+  height: 72rpx;
+  padding: 0 36rpx;
+  font-size: 28rpx;
+}
+
+/* 券卡：左面额 + 右信息，中间齿孔虚线 */
+.coupon-list {
+  padding: 20rpx 24rpx 0;
+}
+.coupon-card {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  margin-bottom: 20rpx;
+  background: var(--card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+.coupon-card-hover {
+  background: var(--divider);
+}
+/* 票根缺口。压在虚线两端，颜色取页面底色，所以卡片不能 overflow:hidden */
+.coupon-card::before,
+.coupon-card::after {
+  content: '';
+  position: absolute;
+  left: 210rpx;
+  width: 22rpx;
+  height: 22rpx;
+  margin-left: -11rpx;
+  border-radius: 50%;
+  background: var(--bg);
+}
+.coupon-card::before {
+  top: -11rpx;
+}
+.coupon-card::after {
+  bottom: -11rpx;
+}
+
+.coupon-face {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 210rpx;
+  padding: 28rpx 12rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-bg);
+  border-right: 2rpx dashed var(--brand-light);
+  border-top-left-radius: var(--radius-md);
+  border-bottom-left-radius: var(--radius-md);
+}
+.coupon-amount {
+  display: flex;
+  align-items: baseline;
+}
+.face-symbol {
+  font-size: 26rpx;
+  font-weight: 700;
+  color: var(--brand);
+}
+.face-int {
+  font-size: 56rpx;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--brand);
+}
+.face-dec {
+  font-size: 26rpx;
+  font-weight: 700;
+  color: var(--brand);
+}
+.coupon-threshold {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: var(--brand);
+  text-align: center;
+}
+
+.coupon-body {
+  flex: 1;
+  min-width: 0;
+  padding: 24rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.coupon-title-row {
+  display: flex;
+  align-items: center;
+}
+.coupon-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-tag {
+  flex-shrink: 0;
+  margin-left: 12rpx;
+  padding: 3rpx 10rpx;
+  border-radius: 6rpx;
+  font-size: 20rpx;
+  line-height: 1.4;
+}
+.channel-tag.local {
+  background: var(--brand-bg-deep);
+  color: var(--brand);
+}
+.channel-tag.express {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.coupon-expire {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: var(--text-2);
+}
+.coupon-code {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: var(--text-3);
+  word-break: break-all;
+}
+.coupon-used-row {
+  display: flex;
+  align-items: center;
+  margin-top: 14rpx;
+  padding-top: 14rpx;
+  border-top: 1rpx solid var(--divider);
+}
+.coupon-used-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 24rpx;
+  color: var(--brand);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.coupon-used-arrow {
+  flex-shrink: 0;
+  width: 26rpx;
+  height: 26rpx;
+}
+
+/* 已用 / 已过期：面额区没有价值了，先褪掉品牌色 */
+.coupon-card.is-dim .coupon-face {
+  background: var(--gray-bg);
+  border-right-color: var(--text-disabled);
+}
+.coupon-card.is-dim .face-symbol,
+.coupon-card.is-dim .face-int,
+.coupon-card.is-dim .face-dec,
+.coupon-card.is-dim .coupon-threshold {
+  color: var(--text-disabled);
+}
+
+/* 已过期：整卡置灰，右侧压一枚戳 */
+.coupon-card.is-expired .coupon-name {
+  color: var(--text-3);
+}
+.coupon-card.is-expired .coupon-expire,
+.coupon-card.is-expired .coupon-code {
+  color: var(--text-disabled);
+}
+.coupon-card.is-expired .channel-tag {
+  background: var(--gray-bg);
+  color: var(--text-3);
+}
+.coupon-card.is-expired .coupon-body {
+  padding-right: 150rpx;
+}
+.coupon-stamp {
+  position: absolute;
+  right: 24rpx;
+  top: 50%;
+  transform: translateY(-50%) rotate(-12deg);
+  padding: 4rpx 14rpx;
+  border: 3rpx solid var(--text-disabled);
+  border-radius: 8rpx;
+  font-size: 22rpx;
+  letter-spacing: 2rpx;
+  color: var(--text-disabled);
+}
+
+.list-foot {
+  padding: 16rpx 12rpx 0;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: var(--text-3);
+}

@@ -1,1 +1,109 @@
-<view class="page"></view>
+<wxs src="../../utils/price.wxs" module="pricefmt" />
+<view class="page">
+
+  <!-- 未登录：占位 + 登录按钮，绝不留白屏 -->
+  <view wx:if="{{needLogin}}" class="gate">
+    <view class="gate-icon icon icon-info"></view>
+    <text class="gate-title">登录后查看积分商城</text>
+    <text class="gate-sub">用积分兑换优惠券，或在下单时加购随单赠品</text>
+    <button class="btn-primary gate-btn" hover-class="none" bindtap="onLogin">点击登录</button>
+  </view>
+
+  <block wx:else>
+
+    <!-- 积分余额 -->
+    <view class="balance-bar">
+      <text class="balance-label">我的积分</text>
+      <text class="balance-num">{{pointsBalance}}</text>
+    </view>
+
+    <!-- Tabs -->
+    <view class="tab-bar">
+      <view class="tab-item {{activeTab === 0 ? 'active' : ''}}" bindtap="onTabChange" data-idx="0">
+        <text>换优惠券</text>
+      </view>
+      <view class="tab-item {{activeTab === 1 ? 'active' : ''}}" bindtap="onTabChange" data-idx="1">
+        <text>随单赠品</text>
+      </view>
+    </view>
+
+    <!-- 加载中 -->
+    <view wx:if="{{loading}}" class="state-wrap">
+      <text class="state-text">加载中...</text>
+    </view>
+
+    <!-- 加载失败：可重试，与「暂无」是两块不同的界面 -->
+    <view wx:elif="{{loadError}}" class="state-wrap">
+      <text class="state-text">积分商城加载失败</text>
+      <view class="btn-plain retry-btn" hover-class="none" bindtap="onRetry">重新加载</view>
+    </view>
+
+    <!-- Tab 一：换优惠券 -->
+    <view wx:elif="{{activeTab === 0}}" class="list">
+      <empty-state wx:if="{{coupons.length === 0}}" type="generic" text="暂无可兑换的优惠券" />
+      <view wx:for="{{coupons}}" wx:key="id" class="coupon-card card">
+        <view class="coupon-left">
+          <view class="coupon-amount">
+            <text class="price-symbol">¥</text>
+            <text class="price-int coupon-int">{{pricefmt.int(item.amountText)}}</text>
+            <text class="price-dec">{{pricefmt.dec(item.amountText)}}</text>
+          </view>
+          <text class="coupon-threshold">{{item.thresholdText}}</text>
+        </view>
+        <view class="coupon-right">
+          <view class="title-row">
+            <text class="coupon-name">{{item.name}}</text>
+            <text wx:if="{{item.channelTag}}" class="channel-tag {{item.channelClass}}">{{item.channelTag}}</text>
+          </view>
+          <text wx:if="{{item.description}}" class="coupon-desc">{{item.description}}</text>
+          <text class="coupon-valid">{{item.validText}}</text>
+          <view class="action-row">
+            <view class="cost">
+              <text class="cost-num">{{item.pointsCost}}</text>
+              <text class="cost-unit">积分</text>
+            </view>
+            <view
+              class="act-btn {{item.affordable ? 'act-btn-primary' : 'btn-disabled'}}"
+              hover-class="{{item.affordable ? 'act-btn-hover' : 'none'}}"
+              bindtap="onRedeem"
+              data-idx="{{index}}"
+            >兑换</view>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- Tab 二：随单赠品（只展示，不在本页兑换） -->
+    <view wx:else class="list">
+      <empty-state wx:if="{{gifts.length === 0}}" type="product" text="暂无随单赠品" />
+      <view wx:for="{{gifts}}" wx:key="id" class="gift-card card">
+        <view class="gift-main">
+          <image wx:if="{{item.image}}" class="gift-img" src="{{item.image}}" mode="aspectFill" />
+          <view wx:else class="gift-img img-placeholder"></view>
+          <view class="gift-info">
+            <view class="title-row">
+              <text class="gift-name">{{item.name}}</text>
+              <text wx:if="{{item.channelTag}}" class="channel-tag {{item.channelClass}}">{{item.channelTag}}</text>
+            </view>
+            <text wx:if="{{item.specText}}" class="gift-spec">{{item.specText}}</text>
+            <view class="gift-meta">
+              <text class="gift-limit">{{item.limitText}}</text>
+              <text wx:if="{{item.remainingText}}" class="gift-remaining">{{item.remainingText}}</text>
+            </view>
+            <view class="action-row">
+              <view class="cost">
+                <text class="cost-num">{{item.pointsCost}}</text>
+                <text class="cost-unit">积分</text>
+              </view>
+              <view class="act-btn act-btn-plain" hover-class="none" bindtap="onGoOrder" data-idx="{{index}}">去下单</view>
+            </view>
+          </view>
+        </view>
+        <view class="gift-note">
+          <text>结算时用积分加购，随订单一起送达</text>
+        </view>
+      </view>
+    </view>
+
+  </block>
+</view>

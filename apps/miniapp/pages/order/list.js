@@ -45,6 +45,16 @@ function countdownText(expireAt) {
   return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s)
 }
 
+// 卡片封面那一行优先取非赠品：一张「买了什么」的卡片被一件赠品当封面，
+// 顾客既认不出这是哪一单，也容易以为自己只买了赠品。整单都是赠品时才回落到第一行。
+function coverItem(items) {
+  if (!items || items.length === 0) return undefined
+  for (var i = 0; i < items.length; i++) {
+    if (!items[i].isGift) return items[i]
+  }
+  return items[0]
+}
+
 function decorate(order) {
   var extra = ''
   var statusLabels = order.deliveryType === 'LOCAL' ? LOCAL_STATUS_LABEL : EXPRESS_STATUS_LABEL
@@ -55,7 +65,7 @@ function decorate(order) {
   return Object.assign({}, order, {
     statusLabel: statusLabels[order.status] || order.status,
     actualAmountText: formatPrice(order.actualAmount),
-    firstItem: order.items && order.items[0],
+    firstItem: coverItem(order.items),
     moreCount: order.items && order.items.length > 1 ? order.items.length - 1 : 0,
     extraText: extra,
     countdown: countdownText(order.payExpireAt),

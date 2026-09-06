@@ -1,1 +1,100 @@
-<view class="page"></view>
+<wxs src="../../utils/price.wxs" module="pricefmt" />
+<view class="page">
+
+  <!-- 未登录：不是空态也不是失败，单独一块（房规 §5） -->
+  <view wx:if="{{needLogin}}" class="state-wrap">
+    <view class="state-text">登录后查看你的优惠券</view>
+    <button class="btn-primary state-btn" hover-class="none" bindtap="onLogin">点击登录</button>
+  </view>
+
+  <block wx:else>
+
+    <!-- 顶部固定区：领券入口 + Tab。入口常驻，因为看完自己的券最常见的下一步就是「去哪再领」 -->
+    <view class="header">
+      <view class="claim-entry" hover-class="claim-entry-hover" bindtap="goClaim">
+        <view class="claim-entry-main">
+          <text class="claim-entry-title">领券中心</text>
+          <text class="claim-entry-sub">看看现在有哪些券可以领</text>
+        </view>
+        <text class="claim-entry-go">去领券</text>
+        <view class="icon icon-arrow claim-entry-arrow"></view>
+      </view>
+
+      <view class="tab-list">
+        <view
+          wx:for="{{tabs}}"
+          wx:key="status"
+          class="tab-item {{activeTab === index ? 'active' : ''}}"
+          bindtap="onTabChange"
+          data-idx="{{index}}"
+        >{{item.label}}</view>
+      </view>
+    </view>
+
+    <!-- 加载中 -->
+    <view wx:if="{{loading}}" class="state-wrap">
+      <text class="state-text">加载中...</text>
+    </view>
+
+    <!-- 加载失败（与「暂无券」是两块界面，别混） -->
+    <view wx:elif="{{loadFailed}}" class="state-wrap">
+      <text class="state-text">{{loadFailedText}}</text>
+      <button class="btn-plain state-btn" hover-class="none" bindtap="onRetry">重新加载</button>
+    </view>
+
+    <!-- 空数据 -->
+    <view wx:elif="{{list.length === 0}}" class="empty-wrap">
+      <empty-state type="generic" text="{{emptyText}}" />
+      <!-- 两条出路只在「可用」页签给：在「已用/已过期」下劝人去领券是答非所问 -->
+      <view wx:if="{{activeTab === 0}}" class="empty-actions">
+        <view class="btn-primary empty-btn" hover-class="none" bindtap="goClaim">去领券</view>
+        <view class="btn-plain empty-btn" hover-class="none" bindtap="goMall">去积分商城</view>
+      </view>
+    </view>
+
+    <!-- 券列表 -->
+    <view wx:else class="coupon-list">
+      <view
+        wx:for="{{list}}"
+        wx:key="id"
+        class="coupon-card {{item.dim ? 'is-dim' : ''}} {{item.isExpired ? 'is-expired' : ''}}"
+        hover-class="{{item.orderId ? 'coupon-card-hover' : 'none'}}"
+        bindtap="goOrder"
+        data-order-id="{{item.orderId}}"
+      >
+        <!-- 面额区：三段式排版同全站（utils/price.wxs） -->
+        <view class="coupon-face">
+          <view class="coupon-amount">
+            <text class="face-symbol">¥</text>
+            <text class="face-int">{{pricefmt.int(pricefmt.fen(item.amount))}}</text>
+            <text class="face-dec">{{pricefmt.dec(pricefmt.fen(item.amount))}}</text>
+          </view>
+          <text class="coupon-threshold">{{item.thresholdText}}</text>
+        </view>
+
+        <view class="coupon-body">
+          <view class="coupon-title-row">
+            <text class="coupon-name">{{item.name}}</text>
+            <text wx:if="{{item.channelLabel}}" class="channel-tag {{item.channelClass}}">{{item.channelLabel}}</text>
+          </view>
+          <text class="coupon-expire">有效期至 {{item.expiresText}}</text>
+          <!-- 券码给门店/客服核对用，长按可复制 -->
+          <text class="coupon-code" user-select="{{true}}">券码 {{item.code}}</text>
+
+          <view wx:if="{{item.isUsed}}" class="coupon-used-row">
+            <text class="coupon-used-text">已用于订单{{item.usedText ? ' · ' + item.usedText : ''}}</text>
+            <view wx:if="{{item.orderId}}" class="icon icon-arrow coupon-used-arrow"></view>
+          </view>
+        </view>
+
+        <view wx:if="{{item.isExpired}}" class="coupon-stamp">已过期</view>
+      </view>
+
+      <!-- 文案逐字取自 docs/member-terms-copy.md，别改写 -->
+      <view class="list-foot">
+        <text>优惠券只抵扣商品金额，不抵扣运费。每笔订单限用一张，不可叠加。</text>
+      </view>
+    </view>
+
+  </block>
+</view>

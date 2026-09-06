@@ -59,6 +59,9 @@
 
       <view class="order-footer">
         <view class="order-amount-wrap">
+          <!-- 合计仍是实付，「已用券」只解释它为什么比商品金额小。
+               外层沿用 order-amount-label 只为它的右间距与基线对齐（list.wxss 不在本次可改文件内）。 -->
+          <view class="order-amount-label" wx:if="{{item.discountAmount > 0}}"><text class="order-item-spec">已用券</text></view>
           <text class="order-amount-label">合计</text>
           <text class="price-symbol">¥</text>
           <text class="price-int order-amount-int">{{pricefmt.int(item.actualAmountText)}}</text>

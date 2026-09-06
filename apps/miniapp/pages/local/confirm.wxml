@@ -73,6 +73,20 @@
     </view>
   </view>
 
+  <!-- 会员优惠（M4）。放在备注之后、底部合计之前。
+       subtotal 传**券前**小计，与传给 /local/quote 的那个是同一个值——
+       服务端的起送线与「报价是否被篡改」两道判定都按券前小计。
+       报价中/提交中时整卡不可点（disabled）：那两个时刻合计本来就处于不确定态。
+       同城页没有逐项金额卡（配送费在配送信息块里显示），优惠的明细由组件自己那行
+       「优惠券 −¥X · 赠品 N 积分」承担，不另造一个金额区。 -->
+  <checkout-benefits
+    id="benefits"
+    channel="LOCAL"
+    subtotal="{{subtotal}}"
+    disabled="{{submitting || quoting}}"
+    bind:change="onBenefitsChange"
+  />
+
   <view class="spacer"></view>
 </view>
 

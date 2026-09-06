@@ -1,0 +1,94 @@
+<view class="benefits {{disabled ? 'is-disabled' : ''}}">
+
+  <!-- 失败：不阻塞下单。措辞要说清「还能下单」，否则顾客以为整个流程坏了 -->
+  <view wx:if="{{state === 'failed'}}" class="row row-tip">
+    <text class="tip-text">优惠信息暂不可用，可直接下单</text>
+    <text class="link" catchtap="onRetry">重试</text>
+  </view>
+
+  <!-- 空：收成一行，不占大块空白 -->
+  <view wx:elif="{{state === 'empty'}}" class="row row-tip">
+    <text class="tip-text">暂无可用优惠</text>
+  </view>
+
+  <view wx:elif="{{state === 'loading'}}" class="row row-tip">
+    <text class="tip-text">优惠加载中...</text>
+  </view>
+
+  <block wx:else>
+    <!-- ① 优惠券 -->
+    <view wx:if="{{coupons.length > 0}}" class="row" bindtap="onOpenPicker">
+      <text class="row-label">优惠券</text>
+      <view class="row-value">
+        <text wx:if="{{selectedCouponId !== null}}" class="val-strong">−¥{{discountText}}</text>
+        <text wx:if="{{selectedCouponId !== null}}" class="val-sub">{{selectedCouponName}}</text>
+        <text wx:elif="{{usableCount > 0}}" class="val-hint">{{usableCount}} 张可用</text>
+        <text wx:else class="val-muted">暂无可用</text>
+        <text class="arrow">›</text>
+      </view>
+    </view>
+
+    <!-- ② 积分赠品 -->
+    <view wx:if="{{gifts.length > 0}}" class="gifts">
+      <view class="gifts-head">
+        <text class="row-label">积分赠品</text>
+        <text class="gifts-balance">积分 {{pointsBalance}}</text>
+      </view>
+      <scroll-view class="gifts-scroll" scroll-x enable-flex>
+        <view class="gift-card" wx:for="{{gifts}}" wx:key="id">
+          <image class="gift-img" src="{{item.image}}" mode="aspectFill" wx:if="{{item.image}}" />
+          <view class="gift-img gift-img-empty" wx:else></view>
+          <text class="gift-name">{{item.name}}</text>
+          <text class="gift-spec" wx:if="{{item.specText}}">{{item.specText}}</text>
+          <text class="gift-cost">积分 {{item.pointsCost}}</text>
+          <view class="stepper">
+            <text class="step-btn {{item.qty <= 0 ? 'step-off' : ''}}" data-id="{{item.id}}" catchtap="onGiftMinus">−</text>
+            <text class="step-qty">{{item.qty}}</text>
+            <text class="step-btn" data-id="{{item.id}}" catchtap="onGiftPlus">+</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+
+    <!-- ③ 优惠合计 + 预计得分 -->
+    <view wx:if="{{discount > 0 || pointsUsed > 0 || earnText}}" class="row row-sum">
+      <view class="sum-left">
+        <text wx:if="{{discount > 0}}" class="sum-item">优惠券 −¥{{discountText}}</text>
+        <text wx:if="{{pointsUsed > 0}}" class="sum-item">赠品 {{pointsUsed}} 积分</text>
+      </view>
+      <text wx:if="{{earnText}}" class="earn">{{earnText}}</text>
+    </view>
+  </block>
+
+  <!-- 选券弹层：可用在前（服务端已排好序），不可用灰掉并说明原因 -->
+  <view wx:if="{{pickerOpen}}" class="mask" bindtap="onClosePicker">
+    <view class="sheet" catchtap="onStopPropagation">
+      <view class="sheet-head">
+        <text class="sheet-title">选择优惠券</text>
+        <text class="sheet-close" catchtap="onClosePicker">✕</text>
+      </view>
+      <scroll-view class="sheet-body" scroll-y>
+        <view class="cp {{selectedCouponId === null ? 'cp-on' : ''}}" catchtap="onClearCoupon">
+          <text class="cp-none">不使用优惠券</text>
+        </view>
+        <view
+          wx:for="{{coupons}}"
+          wx:key="id"
+          class="cp {{item.usable ? '' : 'cp-dead'}} {{selectedCouponId === item.id ? 'cp-on' : ''}}"
+          data-id="{{item.id}}"
+          catchtap="onPickCoupon"
+        >
+          <view class="cp-amt">
+            <text class="cp-cur">¥</text><text class="cp-num">{{item.amountText}}</text>
+          </view>
+          <view class="cp-main">
+            <text class="cp-name">{{item.name}}</text>
+            <text class="cp-meta">{{item.thresholdText}}<text wx:if="{{item.channelText}}"> · {{item.channelText}}</text></text>
+            <text class="cp-meta">有效期至 {{item.expiresText}}</text>
+            <text wx:if="{{!item.usable}}" class="cp-why">{{item.message}}</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+</view>

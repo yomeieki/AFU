@@ -1,0 +1,81 @@
+.benefits {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin: 20rpx 24rpx;
+  overflow: hidden;
+}
+.benefits.is-disabled { opacity: 0.55; }
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28rpx 24rpx;
+  border-bottom: 1rpx solid var(--divider);
+}
+.row:last-child { border-bottom: none; }
+.row-label { font-size: 28rpx; color: var(--text-1); }
+.row-value { display: flex; align-items: center; }
+.val-strong { font-size: 30rpx; color: var(--brand); font-weight: 600; }
+.val-sub { font-size: 24rpx; color: var(--text-3); margin-left: 10rpx; max-width: 240rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.val-hint { font-size: 28rpx; color: var(--brand); }
+.val-muted { font-size: 28rpx; color: var(--text-3); }
+.arrow { font-size: 32rpx; color: var(--text-3); margin-left: 8rpx; }
+
+.row-tip { justify-content: flex-start; }
+.tip-text { font-size: 26rpx; color: var(--text-3); }
+.link { font-size: 26rpx; color: var(--brand); margin-left: 16rpx; }
+
+.gifts { padding: 24rpx; border-bottom: 1rpx solid var(--divider); }
+.gifts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16rpx; }
+.gifts-balance { font-size: 24rpx; color: var(--text-3); }
+.gifts-scroll { white-space: nowrap; }
+.gift-card {
+  display: inline-flex;
+  flex-direction: column;
+  width: 200rpx;
+  margin-right: 16rpx;
+  padding: 12rpx;
+  background: var(--bg);
+  border-radius: var(--radius-md);
+  vertical-align: top;
+}
+.gift-img { width: 176rpx; height: 176rpx; border-radius: var(--radius-sm); background: var(--divider); }
+.gift-img-empty { background: var(--divider); }
+.gift-name { font-size: 24rpx; color: var(--text-1); margin-top: 10rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gift-spec { font-size: 22rpx; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gift-cost { font-size: 24rpx; color: var(--brand); margin-top: 4rpx; }
+.stepper { display: flex; align-items: center; justify-content: space-between; margin-top: 10rpx; }
+.step-btn {
+  width: 44rpx; height: 44rpx; line-height: 40rpx; text-align: center;
+  border: 1rpx solid var(--border); border-radius: 50%;
+  font-size: 28rpx; color: var(--text-1); background: var(--card);
+}
+.step-off { color: var(--text-disabled); }
+.step-qty { font-size: 26rpx; color: var(--text-1); }
+
+.row-sum { align-items: flex-start; }
+.sum-left { display: flex; flex-direction: column; }
+.sum-item { font-size: 24rpx; color: var(--text-2); line-height: 1.6; }
+.earn { font-size: 24rpx; color: var(--success); }
+
+.mask { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0, 0, 0, 0.45); z-index: 100; display: flex; align-items: flex-end; }
+.sheet { width: 100%; max-height: 70vh; background: var(--card); border-radius: var(--radius-xl) var(--radius-xl) 0 0; display: flex; flex-direction: column; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 28rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
+.sheet-title { font-size: 30rpx; font-weight: 600; color: var(--text-1); }
+.sheet-close { font-size: 32rpx; color: var(--text-3); padding: 0 12rpx; }
+.sheet-body { flex: 1; padding: 16rpx 24rpx 40rpx; }
+
+.cp { display: flex; align-items: center; padding: 24rpx 20rpx; margin-bottom: 16rpx; background: var(--brand-bg); border: 2rpx solid transparent; border-radius: var(--radius-md); }
+.cp-on { border-color: var(--brand); }
+.cp-dead { background: var(--gray-bg); opacity: 0.7; }
+.cp-none { font-size: 28rpx; color: var(--text-1); }
+.cp-amt { display: flex; align-items: baseline; width: 180rpx; flex-shrink: 0; color: var(--brand); }
+.cp-dead .cp-amt { color: var(--text-3); }
+.cp-cur { font-size: 24rpx; }
+.cp-num { font-size: 44rpx; font-weight: 700; }
+.cp-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.cp-name { font-size: 28rpx; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-meta { font-size: 22rpx; color: var(--text-3); line-height: 1.6; }
+.cp-why { font-size: 22rpx; color: var(--danger); margin-top: 4rpx; }
