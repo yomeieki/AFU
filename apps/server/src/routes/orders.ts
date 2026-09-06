@@ -2,6 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import { Prisma } from '@prisma/client'
 import prisma from '../utils/prisma'
+import { loadCouponForOrder, loadGiftLines, applyOrderBenefits } from '../services/member/checkout'
+import { computeCheckout } from '../services/member/pricing'
 import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { validatePayConfig, createJsapiOrder, generatePayParams, closeOrder } from '../services/wechat-pay'
@@ -94,8 +96,19 @@ const createOrderSchema = z
     // 两列），255 字在 58mm 纸上要占约 17 行放大字，把订单信息全挤没，而且配送联厨房联各印一遍。
     // 数据库仍是 varchar(255)，故意不收窄——不需要迁移，已有数据也不会因为收紧入口变非法。
     remark: z.string().max(20).optional(),
+    // 会员优惠（M2）。两个都可选——不传时整条链路的行为与改前逐字节一致。
+    couponId: z.number().int().positive().optional(),
+    gifts: z
+      .array(z.object({ pointsGoodId: z.number().int().positive(), quantity: z.number().int().min(1).max(9) }))
+      .max(5, '一单最多加购 5 种赠品')
+      .optional(),
   })
   .refine((v) => !!v.cartItemIds !== !!v.directItem, { message: '请选择商品' })
+  // 同一种赠品出现两次会让 perOrderLimit 判定失效（两行各自都不超限、合起来超）。
+  // 在这里挡掉比在业务层聚合更简单，也让前端拿到明确的提示。
+  .refine((v) => !v.gifts || new Set(v.gifts.map((g) => g.pointsGoodId)).size === v.gifts.length, {
+    message: '同一种赠品请合并数量，不要重复提交',
+  })
 
 interface OrderLine {
   productId: number
@@ -108,7 +121,7 @@ interface OrderLine {
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const { cartItemIds, directItem, addressId, deliveryType, quoteToken, remark } = createOrderSchema.parse(req.body)
+    const { cartItemIds, directItem, addressId, deliveryType, quoteToken, remark, couponId, gifts } = createOrderSchema.parse(req.body)
 
     // 1. 组装下单行：购物车项 或 立即购买单品（不经购物车，避免与已加购数量合并）
     let lines: OrderLine[]
@@ -176,6 +189,43 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         subtotal,
       }
     })
+    // ── 会员优惠（M2）：券与赠品的**只读**校验，必须在 totalAmount 成形之后 ──────────
+    //
+    // 放在这里而不是更早：券的门槛判定要比对商品小计，而小计是上面那段 map 累加出来的。
+    // 这里做的全是预检；真正的并发防线在下面事务里的条件更新（applyOrderBenefits）。
+    const giftResult = await loadGiftLines(userId, channel, gifts ?? [])
+    const giftLines = giftResult.lines
+    const pointsUsed = giftResult.pointsUsed
+    const coupon = couponId ? await loadCouponForOrder(userId, couponId, channel, totalAmount) : null
+
+    // ⚠️ 赠品与付费行指向同一商品时，上面两处库存校验各自独立通过（付费行判 1 件、赠品判 1 件），
+    // 但库存只有 1 件。事务内第二次 updateMany 会判 count===0 整单回滚——**安全但文案误导**，
+    // 顾客明明看到有货却被告知「库存不足，请刷新重试」。这里按 (productId, skuId) 聚合后再判一次，
+    // 让顾客在提交前就拿到准确的原因。
+    if (giftLines.length > 0) {
+      const need = new Map<string, number>()
+      const stockOf = new Map<string, { stock: number; label: string }>()
+      for (const l of lines) {
+        const k = `${l.productId}:${l.skuId ?? 0}`
+        need.set(k, (need.get(k) ?? 0) + l.quantity)
+        stockOf.set(k, {
+          stock: l.sku?.stock ?? l.product.stock,
+          label: l.sku ? `${l.product.name}（${l.sku.specText}）` : l.product.name,
+        })
+      }
+      for (const g of giftLines) {
+        const k = `${g.productId}:${g.skuId ?? 0}`
+        need.set(k, (need.get(k) ?? 0) + g.quantity)
+        if (!stockOf.has(k)) continue // 赠品独有的商品，loadGiftLines 已经单独判过库存
+      }
+      for (const [k, qty] of need) {
+        const s = stockOf.get(k)
+        if (s && s.stock < qty) {
+          throw new AppError(42201, `${s.label} 库存不足（剩余 ${s.stock}，本单含赠品共需 ${qty}）`)
+        }
+      }
+    }
+
     // 两套计费互不叠加：EXPRESS 走 services/settings.ts；LOCAL 走 services/local-settings.ts
     let shippingFee = 0
     let localSnapshot: {
@@ -232,8 +282,15 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       const q = calcLocalFee(s, distanceM, totalAmount)
       if (!q.inRange) throw new AppError(42220, `超出配送范围（约 ${(distanceM / 1000).toFixed(1)} km，最远 ${s.radiusKm} km）`)
       if (q.belowMin) throw new AppError(42210, `同城配送满 ¥${(s.fee.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`)
-      const totalItems = lines.reduce((n, l) => n + l.quantity, 0)
-      const totalWeightKg = lines.reduce((w, l) => w + ((l.product.netWeightG ?? s.kd100.defaultItemWeightG) * l.quantity) / 1000, 0)
+      // 赠品**计入**件数与重量（PO 2026-09-06 定 / 计划 D2）。42230 的意义是「一个骑手拎不动」，
+      // 与谁付钱无关——赠品是真的要装进同一个袋子、由同一个骑手带走的东西。
+      // ⚠️ 重量要读赠品自己的 netWeightG：loadGiftLines 的 product select 特意带了这一列，
+      // 少了它所有赠品都会按 defaultItemWeightG 兜底，42230 的判定就失真了。
+      const totalItems =
+        lines.reduce((n, l) => n + l.quantity, 0) + giftLines.reduce((n, g) => n + g.quantity, 0)
+      const totalWeightKg =
+        lines.reduce((w, l) => w + ((l.product.netWeightG ?? s.kd100.defaultItemWeightG) * l.quantity) / 1000, 0) +
+        giftLines.reduce((w, g) => w + ((g.netWeightG ?? s.kd100.defaultItemWeightG) * g.quantity) / 1000, 0)
       if (totalItems > s.limits.maxItems || totalWeightKg > s.limits.maxWeightKg) {
         throw new AppError(42230, `单次配送最多 ${s.limits.maxItems} 件 / ${s.limits.maxWeightKg} kg，请分单或电话联系商家`)
       }
@@ -263,9 +320,36 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       }
       shippingFee = calcShippingFee(totalAmount, shipping)
     }
-    const actualAmount = totalAmount + shippingFee
+    // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 券 → 运费（**按券前小计**判包邮/起送）→ 实付。
+    // 上面两条渠道分支里的 calcLocalFee / calcShippingFee / belowMin / minOrderAmount
+    // 收到的都是券前 totalAmount，**一个字都没动**——顾客不因为用券失去包邮或跌破起送线。
+    const discount = coupon?.discount ?? 0
+    const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee })
+    // 0 元订单走不了微信支付，会掉进「没有支付回调」的死角（spec §5.1 与 §10 风险表第一行）。
+    // 这一步必须在这里拒——computeCheckout 是纯函数，它只负责算对，拒不拒是业务判断。
+    if (actualAmount === 0) throw new AppError(42251, '该券金额已超过本单可抵扣范围')
 
-    // 5. 事务：创建订单 + 减库存 + 增销量 + 清购物车
+    // 赠品行：不进小计（productPrice/subtotal 恒为 0），但**照常扣真实库存、加真实销量**——
+    // 它是真的从货架上拿走的一份货（spec §5.3）。
+    const giftItemsData = giftLines.map((g) => ({
+      productId: g.productId,
+      skuId: g.skuId,
+      specText: g.specText,
+      productName: g.productName,
+      productImage: g.productImage,
+      productPrice: 0,
+      quantity: g.quantity,
+      subtotal: 0,
+      isGift: true,
+      pointsCost: g.pointsCost,
+    }))
+
+    // 5. 事务：创建订单 + 减库存 + 增销量 + 落实优惠 + 清购物车
+    //
+    // ⚠️ 显式 timeout：Prisma 交互式事务默认 5 秒。M2 往这个事务里又加了券核销、consumePoints
+    // （1 次 findMany + 最多 2 轮 × N 次 updateMany + user.update + ledger.create）、GIFT 行
+    // expiresAt 回填、以及每个赠品各一次名额占用 + 库存扣减。默认值下晚高峰会出现「下单偶发
+    // P2028」这种极难复现的故障——它不会稳定重现，因此也不会被任何测试抓到。
     const order = await prisma.$transaction(async (tx) => {
       let orderNo = generateOrderNo()
       for (let i = 0; i < 3; i++) {
@@ -292,19 +376,27 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           receiverDetail: address.detail,
           receiverFullAddress: address.fullAddress,
           ...localSnapshot,
-          items: { create: orderItemsData },
+          couponId: coupon?.id ?? null,
+          discountAmount: discount,
+          pointsUsed,
+          items: { create: [...orderItemsData, ...giftItemsData] },
         },
       })
 
-      // 原子减库存（updateMany 带 stock >= quantity 条件，防超卖）
-      for (const line of lines) {
+      // 原子减库存（updateMany 带 stock >= quantity 条件，防超卖）。
+      // 赠品行一并遍历——它扣真实库存、加真实销量，与付费行走同一段逻辑（spec §5.3）。
+      const stockLines = [
+        ...lines.map((l) => ({ productId: l.productId, skuId: l.skuId, quantity: l.quantity, label: l.sku ? `${l.product.name}（${l.sku.specText}）` : l.product.name })),
+        ...giftLines.map((g) => ({ productId: g.productId, skuId: g.skuId, quantity: g.quantity, label: g.specText ? `${g.productName}（${g.specText}）` : g.productName })),
+      ]
+      for (const line of stockLines) {
         if (line.skuId) {
           const skuUpdated = await tx.productSku.updateMany({
             where: { id: line.skuId, stock: { gte: line.quantity } },
             data: { stock: { decrement: line.quantity } },
           })
           if (skuUpdated.count === 0) {
-            throw new AppError(42201, `${line.product.name}（${line.sku!.specText}）库存不足，请刷新重试`)
+            throw new AppError(42201, `${line.label} 库存不足，请刷新重试`)
           }
           await tx.product.update({
             where: { id: line.productId },
@@ -316,16 +408,20 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
             data: { stock: { decrement: line.quantity }, salesCount: { increment: line.quantity } },
           })
           if (updated.count === 0) {
-            throw new AppError(42201, `${line.product.name} 库存不足，请刷新重试`)
+            throw new AppError(42201, `${line.label} 库存不足，请刷新重试`)
           }
         }
       }
+
+      // 券核销 / 积分扣减 / 赠品名额——三步都用条件更新判 count，是并发防线。
+      // 放在库存扣减之后：库存是最可能失败的一步，先做能让大多数冲突更早回滚。
+      await applyOrderBenefits(tx, { orderId: newOrder.id, userId, coupon, giftLines, pointsUsed })
 
       if (cartItemIds) {
         await tx.cart.deleteMany({ where: { id: { in: cartItemIds }, userId } })
       }
       return newOrder
-    })
+    }, { timeout: 15000 })
 
     success(res, {
       orderId: order.id,
@@ -333,6 +429,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       totalAmount: order.totalAmount,
       shippingFee: order.shippingFee,
       actualAmount: order.actualAmount,
+      discountAmount: order.discountAmount,
+      pointsUsed: order.pointsUsed,
+      couponName: coupon?.name ?? null,
       status: order.status,
       payExpireAt: payExpireAtOf(order.createdAt, config.order.payTimeoutMin),
       subscribeTemplateIds: getSubscribeTemplateIds(),
@@ -754,7 +853,7 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
         await tx.order.update({ where: { id: orderId }, data: { status: 'PAID', paidAt } })
       })
       prisma.orderItem
-        .findMany({ where: { orderId }, select: { productName: true, specText: true, quantity: true } })
+        .findMany({ where: { orderId }, select: { productName: true, specText: true, quantity: true, isGift: true } })
         .then((items) => {
           notifyOrderPaid({ ...order, paidAt }, items)
           if (req.openid) sendPaidSubscribeMessage(req.openid, { ...order, paidAt }, items[0]?.productName)

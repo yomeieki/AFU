@@ -14,12 +14,16 @@ interface NotifyOrderInfo {
   receiverName: string
   receiverPhone: string
   paidAt: Date
+  /** 券抵扣额（分），M2 起有值 */
+  discountAmount?: number
 }
 
 interface NotifyItemInfo {
   productName: string
   specText?: string | null
   quantity: number
+  /** M2：随单赠品。打包的人必须看到，漏发赠品跟漏发商品一样是事故 */
+  isGift?: boolean
 }
 
 function fmtYuan(fen: number) {
@@ -33,11 +37,18 @@ function fmtTime(d: Date) {
 function buildContent(order: NotifyOrderInfo, items: NotifyItemInfo[]) {
   const lines = items.map((it) => {
     const spec = it.specText ? `（${it.specText}）` : ''
-    return `- ${it.productName}${spec} × ${it.quantity}`
+    // 赠品前缀不能省：它在订单里金额为 0，不标出来打包的人很容易当成「多出来的一行」跳过
+    return `- ${it.isGift ? '【赠品】' : ''}${it.productName}${spec} × ${it.quantity}`
   })
+  // PO 2026-09-06 定：**只显示抵扣额，不显示券名**。券名可能是「客服补偿」「配送延误赔偿」
+  // 这类字样，打包员不需要知道这一单为什么被补偿过。
+  const discountLine = order.discountAmount && order.discountAmount > 0
+    ? [`已用券 −¥${fmtYuan(order.discountAmount)}`]
+    : []
   return [
     `**🔔 新订单待发货**`,
     `订单号：${order.orderNo}`,
+    ...discountLine,
     `金额：**¥${fmtYuan(order.actualAmount)}**`,
     ...lines,
     `收货人：${order.receiverName} ${order.receiverPhone}`,

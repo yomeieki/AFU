@@ -218,7 +218,7 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
     prisma.order
       .findUnique({
         where: { id: orderId },
-        include: { items: { select: { productName: true, specText: true, quantity: true } }, user: { select: { openid: true } } },
+        include: { items: { select: { productName: true, specText: true, quantity: true, isGift: true } }, user: { select: { openid: true } } },
       })
       .then((paid) => {
         if (paid && paid.status === 'PAID') {
@@ -235,6 +235,9 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
                 receiverName: paid.receiverName,
                 receiverPhone: paid.receiverPhone,
                 paidAt: paid.paidAt ?? new Date(),
+                // M2：券抵扣额。这里是**真实微信支付回调**的推送路径，与 orders.ts 的 mock 支付
+                // 路径并列——两条都要带，只改一条的话生产环境的打包员永远看不到「已用券」。
+                discountAmount: paid.discountAmount,
               },
               paid.items
             )
