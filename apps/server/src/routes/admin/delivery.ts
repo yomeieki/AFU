@@ -8,6 +8,8 @@ import {
   callRider, voidUnknownDelivery, precancelDelivery, cancelDelivery, addTip, selfDeliver, markDelivered,
 } from '../../services/delivery/orchestrator'
 import { refreshOrderQuote, kickOffQuote, isQuoteStale } from '../../services/delivery/quote'
+import { getCourierLocationByOrder } from '../../services/delivery/courier-location'
+import { getLocalSettings, haversineM } from '../../services/local-settings'
 import { enqueueOrderTicket } from '../../services/ticket'
 
 const router = Router()
@@ -137,23 +139,66 @@ router.post('/:id/delivery/void', async (req: Request, res: Response, next: Next
 router.get('/:id/delivery', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const [delivery, order] = await Promise.all([
+    const [delivery, order, allOfOrder] = await Promise.all([
       prisma.delivery.findFirst({
         where: { orderId: id },
         orderBy: { id: 'desc' },
         select: { ...ADMIN_DELIVERY_SELECT, events: { orderBy: { id: 'asc' } } },
       }),
       prisma.order.findUnique({ where: { id }, select: { quoteSnapshot: true, quotedAt: true } }),
+      // 这一单**所有**配送单，不只最近一张：自动升级会留下一张 CANCELLED 的 D-1，
+      // 它身上的取消费也是店家真花出去的钱。只看最近一张会把这笔漏掉。
+      prisma.delivery.findMany({ where: { orderId: id }, select: { quotedFee: true, actualFee: true, tipFee: true, cancelFee: true } }),
     ])
+    // 配送成本口径（前端与退款弹窗共用这一个数，不要各算各的）：
+    // 每张配送单取 实扣 ?? 下单预扣，再加上小费与取消费。actualFee 在中标运力接单后
+    // 由回调认领（callback.ts），此前只有 quotedFee 可用。
+    const costFen = allOfOrder.reduce((sum, d) => sum + (d.actualFee ?? d.quotedFee ?? 0) + d.tipFee + d.cancelFee, 0)
     success(res, {
       delivery: delivery ?? null,
       events: delivery?.events ?? [],
+      costFen,
       // 呼叫弹窗要的那一块：六家报价 + 查询时间 + 是否已过期（>5 分钟转琥珀底并标「已过期」）。
       // stale 在服务端算，免得前端各自复刻一遍阈值。
       quote: order
         ? { snapshot: order.quoteSnapshot ?? null, quotedAt: order.quotedAt?.toISOString() ?? null, stale: isQuoteStale(order.quotedAt) }
         : null,
     })
+  } catch (e) { next(e) }
+})
+
+// GET /api/admin/local/orders/:id/courier — 骑手实时位置 + 距离/ETA（管理端）
+//
+// 首单排查时发现的倒挂：queryCourier 只接到了顾客端，管理端一处都没接——店员站在店里
+// 不知道骑手到哪了，只能打电话问。取数与 20 秒缓存与顾客端共用（courier-location.ts），
+// 这里多算三个店员真正要的量：距店多远、距顾客多远、大概还要几分钟。
+//
+// 坐标系：queryCourier 已经确认返回 lbsType=2（GCJ-02，2026-09-06 首单首次验证），
+// 与收货坐标（wx.chooseLocation，也是 GCJ-02）同系，可直接算距离，不需要转换。
+// 距离用 haversine × detourFactor 估——运力方不提供「骑手到目的地的道路距离」，
+// 这里给的是个量级，文案上必须写「约」，不能让店员当成精确值去答复顾客。
+router.get('/:id/courier', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const [{ location, fetchedAt, delivery }, order, s] = await Promise.all([
+      getCourierLocationByOrder(id),
+      prisma.order.findUnique({ where: { id }, select: { receiverLatE6: true, receiverLngE6: true } }),
+      getLocalSettings(),
+    ])
+    if (!location || !delivery) {
+      success(res, { location: null, fetchedAt, toStoreM: null, toReceiverM: null, etaMinutes: null, phase: null })
+      return
+    }
+    const detour = (m: number) => Math.round(m * s.detourFactor)
+    const toStoreM = s.store.latE6 !== null && s.store.lngE6 !== null
+      ? detour(haversineM(location.latE6, location.lngE6, s.store.latE6, s.store.lngE6)) : null
+    const toReceiverM = order?.receiverLatE6 != null && order?.receiverLngE6 != null
+      ? detour(haversineM(location.latE6, location.lngE6, order.receiverLatE6, order.receiverLngE6)) : null
+    // 取货之前看「还有多久到店」，取货之后看「还有多久到顾客」——店员这两个阶段问的不是同一件事
+    const phase = delivery.status === 'DELIVERING' ? 'TO_RECEIVER' : 'TO_STORE'
+    const legM = phase === 'TO_RECEIVER' ? toReceiverM : toStoreM
+    const etaMinutes = legM === null ? null : Math.max(1, Math.round((legM / 1000 / s.riderSpeedKmh) * 60))
+    success(res, { location, fetchedAt, toStoreM, toReceiverM, etaMinutes, phase })
   } catch (e) { next(e) }
 })
 

@@ -36,7 +36,9 @@ export type MockDirective =
   // cancelFeeFen 只对 precancelOrder / cancelOrder 有意义：默认 200（¥2）保持既有 e2e 行为不变，
   // 但「3 分钟无人接自动升级」要求预估取消费为 0 才动手（>0 转 SOLO_HELD 交人工），
   // 所以那条链路必须能把它压成 0——写死 200 的话正常升级路径在 mock 下永远走不到。
-  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number; quotes?: ProviderQuote[]; cancelFeeFen?: number }
+  // courier 只对 queryCourier 有意义：给一对 GCJ-02 坐标（与真实 lbsType=2 同系），
+  // 让「骑手距店/距顾客多远」那条链路可测；不给就照旧返回 null。
+  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number; quotes?: ProviderQuote[]; cancelFeeFen?: number; courier?: { latE6: number; lngE6: number } }
   | { kind: 'error'; code: '30001' | '30002' | '30003' | '30004' | '30005' | '30006' | '50000' }
   | { kind: 'timeout' }
 
@@ -128,8 +130,11 @@ export const mockProvider: DeliveryProvider = {
     act('addTip', i)
   },
   async queryCourier(i) {
-    act('queryCourier', i)
-    return null
+    const d = act('queryCourier', i)
+    // 默认仍回 null（「拿不到位置」是真实世界里最常见的一种结果，也是既有用例的期望），
+    // 但要能指令化地给出坐标——否则「工作台显示骑手距店多远」整条链路在 mock 下测不了，
+    // 而这正是 queryCourier 传错参数半个月没人发现的那类静默失败最需要护栏的地方。
+    return d.kind === 'ok' && d.courier ? { latE6: d.courier.latE6, lngE6: d.courier.lngE6 } : null
   },
   verifyAndParseCallback: kd100Provider.verifyAndParseCallback,
 }

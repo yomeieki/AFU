@@ -26,10 +26,18 @@ function yuan(fen: number) {
   return (fen / 100).toFixed(2)
 }
 
-/** 该单配送成本（分）：已呼骑手运费（以实收为准，未结算取报价）+ 小费 + 取消费 */
-function deliveryCostFen(d: DeliveryInfo | null | undefined): number {
-  if (!d) return 0
-  return (d.actualFee ?? d.quotedFee ?? 0) + d.tipFee + d.cancelFee
+/**
+ * 该单配送成本（分）。**优先用服务端算好的 costFen**：它按这一单的**全部**配送单聚合，
+ * 而这里能拿到的 `delivery` 只是最近那一张——「3 分钟无人接自动升级并呼」会留下一张已取消的
+ * D-1，那张上的取消费也是真花出去的钱，只看最近一张会把它漏掉。
+ *
+ * 退回本地计算只为兼容服务端还没返回这个字段的情况（部署顺序错开的那几秒）。
+ */
+function deliveryCostFen(data: { costFen?: number; delivery: DeliveryInfo | null } | null | undefined): number {
+  if (!data) return 0
+  if (typeof data.costFen === 'number') return data.costFen
+  const d = data.delivery
+  return d ? (d.actualFee ?? d.quotedFee ?? 0) + d.tipFee + d.cancelFee : 0
 }
 
 /**
@@ -48,7 +56,7 @@ export default function LocalOrders() {
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<number | null>(null)
   const [deliveryCache, setDeliveryCache] = useState<
-    Record<number, { delivery: DeliveryInfo | null; events: DeliveryEventInfo[] }>
+    Record<number, { delivery: DeliveryInfo | null; events: DeliveryEventInfo[]; costFen: number }>
   >({})
   const [deliveryLoading, setDeliveryLoading] = useState<number | null>(null)
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
@@ -163,7 +171,7 @@ export default function LocalOrders() {
           <div className="divide-y divide-gray-100">
             {list.map((o) => {
               const dc = deliveryCache[o.id]
-              const cost = deliveryCostFen(dc?.delivery)
+              const cost = deliveryCostFen(dc)
               return (
                 <div key={o.id} className="p-4 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
@@ -246,7 +254,7 @@ export default function LocalOrders() {
       {refundTarget && (
         <RefundDialog
           order={refundTarget}
-          deliveryCostFen={deliveryCostFen(deliveryCache[refundTarget.id]?.delivery) || undefined}
+          deliveryCostFen={deliveryCostFen(deliveryCache[refundTarget.id]) || undefined}
           onClose={() => setRefundTarget(null)}
           onDone={() => {
             setRefundTarget(null)

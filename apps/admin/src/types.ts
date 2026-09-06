@@ -362,6 +362,31 @@ export interface LocalDeliverySettings {
   tip: { maxPerCall: number; maxPerOrder: number }
 }
 
+/** 单家运力的一条报价/预扣。provider = 快递100 kuaidicom 编码，与中标运力同一套编码 */
+export interface ProviderQuote {
+  provider: string
+  feeFen: number
+  distanceM: number | null
+}
+
+/** 呼叫当次的报价快照（server services/delivery/quote.ts 的 QuoteSnapshot） */
+export interface QuoteSnapshot {
+  at: string
+  provider: string
+  quotes: ProviderQuote[]
+  lowest: { provider: string; feeFen: number } | null
+}
+
+/** 骑手实时位置 + 距离/ETA（管理端 GET /admin/local/orders/:id/courier） */
+export interface CourierLive {
+  location: { latE6: number; lngE6: number } | null
+  fetchedAt: string | null
+  toStoreM: number | null
+  toReceiverM: number | null
+  etaMinutes: number | null
+  phase: 'TO_STORE' | 'TO_RECEIVER' | null
+}
+
 /** 配送单（同城）。与服务端 Prisma Delivery 模型同构，仅取前端用得到的字段。 */
 export interface DeliveryInfo {
   id: number
@@ -373,11 +398,24 @@ export interface DeliveryInfo {
   courierCompany: string | null
   courierName: string | null
   courierMobile: string | null
+  // ⚠️ quotedFee 是**下单那一刻被冻结的钱**，不是「中标运力的报价」。并呼时每家各冻一笔，
+  // 这一列取其中最低的那笔；中标方到底扣了多少在 actualFee（由回调按中标运力认领）。
+  // 首单就是在这里显示错的：并呼 7 家、闪送 ¥23.32 中标，而页面显示 ¥16.23（达达的报价）。
   quotedFee: number | null
   actualFee: number | null
   tipFee: number
   cancelFee: number
   providerDistanceM: number | null
+  /** 呼叫当次的各家报价快照（结构见 server services/delivery/quote.ts） */
+  quoteSnapshot: QuoteSnapshot | null
+  quotedAt: string | null
+  /** 本单实际呼了哪些运力（kuaidicom 编码） */
+  calledProviders: string[] | null
+  /** SOLO | ALL | MANUAL | SOLO_HELD；null = 策略上线前的历史单 */
+  callStrategy: string | null
+  /** 下单那一刻**各家各自的预扣**（batchOrder 的 fee[]），比呼叫前的报价快照更权威 */
+  orderFees: ProviderQuote[] | null
+  providerOrderId: string | null
   errorCode: string | null
   failReason: string | null
   calledAt: string | null

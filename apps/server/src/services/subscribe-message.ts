@@ -177,27 +177,57 @@ export function sendRefundSubscribeMessage(
 }
 
 /** 配送通知（快递100 回调 310：骑手已取货出发）。模板字段见 .env WECHAT_TMPL_DELIVER_FIELDS */
+/**
+ * 「预计到达」的取数。运力方**不提供真实 ETA**（快递100 没有这个接口），所以只能自己估，
+ * 三处口径必须一致（顾客结算页 / 小票 / 这条通知），否则顾客会在三个地方看到三个时间。
+ *
+ * 原来这里写死「取货时刻 + 30 分钟」——2026-09-06 首单实测 20:06 取货、20:28 送达，
+ * 而这条通知说 20:37，比实际晚 9 分钟，也和订单上的 estimatedDeliveryAt（20:46）对不上。
+ *
+ * 现在取两者里**更晚**的那个：
+ *  - `order.estimatedDeliveryAt`：下单那一刻按 prepMinutes + 距离/均速 算的（local-settings.ts）；
+ *  - 此刻 + 本单实际道路距离/均速：骑手已经在路上了，这个更贴近现实。
+ * 取更晚的一个是**故意的**：报晚了顾客早收到是惊喜，报早了是投诉。
+ */
+async function estimateArrival(order: { estimatedDeliveryAt?: Date | null }, providerDistanceM?: number | null): Promise<Date> {
+  const now = Date.now()
+  let byDistance = now + 30 * 60 * 1000   // 拿不到距离时退回原来的固定 30 分钟
+  if (providerDistanceM != null && providerDistanceM > 0) {
+    const { getLocalSettings } = await import('./local-settings')
+    const s = await getLocalSettings()
+    byDistance = now + (providerDistanceM / 1000 / s.riderSpeedKmh) * 3600 * 1000
+  }
+  const planned = order.estimatedDeliveryAt ? order.estimatedDeliveryAt.getTime() : 0
+  return new Date(Math.max(byDistance, planned))
+}
+
 export function sendDeliverSubscribeMessage(
   openid: string,
-  order: { id: number; orderNo: string },
-  courier: { courierName?: string | null; courierMobile?: string | null },
+  order: { id: number; orderNo: string; estimatedDeliveryAt?: Date | null },
+  courier: { courierName?: string | null; courierMobile?: string | null; providerDistanceM?: number | null },
   productName?: string
 ): void {
   const { deliverTemplateId, deliverFields } = config.subscribe
   if (!deliverTemplateId || !deliverFields) return
+  // fire-and-forget，与本函数其余部分一致：通知失败绝不能影响回调主流程
+  void estimateArrival(order, courier.providerDistanceM).then((eta) => {
   const data = buildData(
     {
       orderNo: order.orderNo,
       productName: productName ?? '',
       courierName: courier.courierName || '配送员',
       courierMobile: courier.courierMobile ?? '',
-      // 骑手出发后的粗略预估；真实 ETA 运力方不给，宁可写宽不写窄
-      estimatedTime: fmtTime(new Date(Date.now() + 30 * 60 * 1000)),
+      estimatedTime: fmtTime(eta),
     },
     parseFieldMap(deliverFields)
   )
-  if (!data) return
-  void send(openid, deliverTemplateId, `pages/order/detail?id=${order.id}`, data, '配送通知')
+    if (!data) return
+    void send(openid, deliverTemplateId, `pages/order/detail?id=${order.id}`, data, '配送通知')
+  }).catch((e) => {
+    // send() 本身就是静默的（模板 ID/字段编号填错时顾客收不到、后台也不报错），
+    // 至少别让「算 ETA 时抛了」这一步也无声无息。
+    console.warn('[subscribe] 配送通知预计到达时间计算失败，本条未发出:', (e as Error)?.message ?? e)
+  })
 }
 
 /** 供小程序读取：当前配置的模板 ID（顾客端 wx.requestSubscribeMessage 用） */

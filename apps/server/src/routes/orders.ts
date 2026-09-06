@@ -21,7 +21,7 @@ import {
 } from '../services/local-settings'
 import { DELIVERY_STATUS_LABEL } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
-import { getDeliveryProvider } from '../services/delivery/provider'
+import { getCourierLocationByOrder } from '../services/delivery/courier-location'
 import { settlePoints } from '../services/member/points'
 
 const router = Router()
@@ -534,45 +534,21 @@ function customerDeliveryView(d: { status: string; courierName: string | null; c
   }
 }
 
-// 骑手位置 20 秒进程内缓存：避免顾客端轮询把 queryCourier 打爆
-const courierCache = new Map<number, { at: number; loc: { latE6: number; lngE6: number } | null }>()
-const COURIER_CACHE_TTL_MS = 20 * 1000
-const COURIER_LIVE_STATUSES = ['ACCEPTED', 'ARRIVING', 'ARRIVED', 'DELIVERING']
-
 // GET /api/orders/:id/courier — 骑手位置（本人订单；仅在途单且已上路才查）
 // 注册在 GET /:id 之前防吞：虽然 /:id 只匹配单段路径本不会吞掉 /:id/courier，
 // 但两个路由都以 /:id 开头，放在前面更直观，也避免未来改动引入吞噬风险。
+//
+// 取数与 20 秒缓存搬到了 services/delivery/courier-location.ts，与管理端共用一份
+// （两份缓存 + 两份负缓存迟早会 drift）。**响应契约保持不变**：仍然只有 location 一个字段，
+// e2e §34 的契约锁照旧——顾客端不需要知道这份位置是什么时候取的，管理端才需要。
 router.get('/:id/courier', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
     const userId = req.userId!
     const order = await prisma.order.findFirst({ where: { id, userId }, select: { id: true } })
     if (!order) throw new AppError(40401, '订单不存在', 404)
-
-    const delivery = await prisma.delivery.findFirst({ where: { activeOrderId: id }, select: { id: true, status: true, providerTaskId: true, providerOrderId: true } })
-    if (!delivery || !delivery.providerTaskId || !COURIER_LIVE_STATUSES.includes(delivery.status)) {
-      success(res, { location: null })
-      return
-    }
-    // 顺手清理过期项，避免 Map 随进程寿命无限增长（本店量级无害，但没有回收逻辑总不太好）
-    for (const [key, v] of courierCache) {
-      if (Date.now() - v.at >= COURIER_CACHE_TTL_MS) courierCache.delete(key)
-    }
-    const cached = courierCache.get(delivery.id)
-    if (cached && Date.now() - cached.at < COURIER_CACHE_TTL_MS) {
-      success(res, { location: cached.loc })
-      return
-    }
-    let loc: { latE6: number; lngE6: number } | null
-    try {
-      loc = await getDeliveryProvider().queryCourier({ taskId: delivery.providerTaskId, orderId: delivery.providerOrderId })
-    } catch (e) {
-      // 运力方故障时也要负缓存：否则顾客端每次轮询都会真打一次外部 API，把故障放大成订单页报错
-      console.warn('[courier] 查询骑手位置失败:', (e as Error).message)
-      loc = null
-    }
-    courierCache.set(delivery.id, { at: Date.now(), loc })
-    success(res, { location: loc })
+    const { location } = await getCourierLocationByOrder(id)
+    success(res, { location })
   } catch (e) {
     next(e)
   }

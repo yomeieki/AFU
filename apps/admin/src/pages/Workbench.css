@@ -107,6 +107,11 @@
 .wb__item-spec { color:var(--text-2); font-size:12px; }
 .wb__qty { width:44px; text-align:right; flex:none; font-variant-numeric:tabular-nums; }
 .wb__amt { width:78px; text-align:right; flex:none; font-variant-numeric:tabular-nums; }
+/* 次要说明（「最低」「位置更新于 …」「待接单」）。不占单独一行，跟在主值旁边小一号 */
+.wb__muted { color:var(--text-2); font-size:12px; font-weight:400; }
+/* 各家报价那几行的金额列：比 wb__amt 宽且不定宽——金额后面还要跟距离（「¥16.23 · 9.0 km」），
+   套 78px 的固定宽会把它挤到换行 */
+.wb__fee { text-align:right; flex:none; font-variant-numeric:tabular-nums; white-space:nowrap; }
 /* 颜色由渲染处按卡片渠道传行内 style（邮寄单不该被染成同城红，避免「红」一色二义，§3） */
 .wb__tel { font-weight:600; text-decoration:none; }
 .wb__actions { display:flex; flex-wrap:wrap; gap:8px; }
@@ -143,6 +148,13 @@
 .wb__what b { color:var(--text-2); font-weight:600; }
 .wb__amber { background:var(--note-bg); border:1px solid var(--note-line); color:var(--warn);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }
+/* 呼叫弹窗里的报价块。过期（>5 分钟）转琥珀底——不是错误，是「这个数字可能已经不作数了」，
+   与 wb__amber 用同一套提示色，店员一眼归到同一类。 */
+.wb__quote { border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; }
+.wb__quote--stale { background:var(--note-bg); border-color:var(--note-line); }
+.wb__quote-head { display:flex; align-items:center; justify-content:space-between;
+  color:var(--text-2); font-size:12px; margin-bottom:4px; }
+.wb__quote--stale .wb__quote-head { color:var(--warn); font-weight:600; }
 .wb__redbar { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }
 .wb__opt { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line);

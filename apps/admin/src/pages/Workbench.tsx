@@ -11,19 +11,21 @@ import { useNavigate } from 'react-router-dom'
 import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
-  Channel, DeliveryEventInfo, DeliveryInfo, LocalDeliverySettings, Order, OrderItem, RejectReason,
-  WorkbenchCard, WorkbenchSnapshot,
+  Channel, CourierLive, DeliveryEventInfo, DeliveryInfo, LocalDeliverySettings, Order, OrderItem,
+  QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
 } from '../types'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip, callRider, cancelDelivery,
   getLocalSettings, getOrder, getOrderDelivery, getWorkbenchSnapshot, markOrderDelivered, precancelDelivery,
   rejectOrder, reprintOrder, resetKd100Circuit, selfDeliverOrder, shipOrder, voidUnknownDelivery,
+  refreshOrderQuote, getCourierLive,
 } from '../api/admin'
 import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn } from '../utils/time'
+import { providerLabel, callStrategyLabel } from '../utils/providers'
 
 type ColKey = keyof WorkbenchSnapshot['columns']
 
@@ -48,6 +50,9 @@ const TIP_STEPS = [200, 500, 1000, 2000]
 const OTHER_COMPANY = '__other__'
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
+/** 米 → 给人读的距离。1 km 以内用米（「800 m」比「0.8 km」好判断要不要等） */
+const km = (m: number | null | undefined) =>
+  m == null ? '--' : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`
 const chColor = (c: Channel) => (c === 'LOCAL' ? 'var(--local)' : 'var(--express)')
 /** 服务端错误码 42221/42225/42228/42232-42238 的 message 是写给店员看的，不能吞掉换成「操作失败」 */
 const apiMessage = (e: unknown, fallback: string) =>
@@ -138,9 +143,59 @@ interface ConfirmSpec {
   cost: string
   /** 花钱的操作额外给一块琥珀提示（§6） */
   amber?: string
+  /** 确认块与琥珀之间的自定义内容（呼叫弹窗用它放各家报价，见 CallQuoteBlock） */
+  extra?: ReactNode
   confirmText: string
   okMsg: string
   run: () => Promise<unknown>
+}
+
+/**
+ * 呼叫弹窗里的报价块（UI spec §6b）。
+ *
+ * 自己持有并刷新报价，不从外面接一个快照进来——弹窗的 spec 是点击那一刻存进 state 的，
+ * 外层 detail 再刷新也不会传导进来，接快照会得到一个点完刷新还显示旧数字的按钮。
+ *
+ * batchPrice 免费、不下单、不落库，所以刷新按钮可以随便点。
+ */
+function CallQuoteBlock({ orderId, initial }: {
+  orderId: number
+  initial: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+}) {
+  const [q, setQ] = useState(initial)
+  const [busy, setBusy] = useState(false)
+  const refresh = async () => {
+    setBusy(true)
+    try {
+      const r = await refreshOrderQuote(orderId)
+      setQ({ snapshot: r.data.data.snapshot, quotedAt: r.data.data.quotedAt, stale: false })
+    } catch { /* 查价失败不影响呼叫本身：呼叫时服务端还会自己再查一次 */ }
+    finally { setBusy(false) }
+  }
+  const quotes = q?.snapshot?.quotes ?? []
+  if (!quotes.length) {
+    return (
+      <div className="wb__quote">
+        <span className="wb__muted">暂无报价（呼叫时会自动查一次）</span>
+        <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 查价'}</button>
+      </div>
+    )
+  }
+  const min = Math.min(...quotes.map((x) => x.feeFen))
+  return (
+    <div className={`wb__quote${q?.stale ? ' wb__quote--stale' : ''}`}>
+      <div className="wb__quote-head">
+        <span>{q?.stale ? '报价已过期' : '当前报价'}</span>
+        <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 刷新'}</button>
+      </div>
+      {[...quotes].sort((a, b) => a.feeFen - b.feeFen).map((x) => (
+        <div className="wb__line" key={x.provider}>
+          <span>{providerLabel(x.provider)}{x.feeFen === min && <span className="wb__muted"> 最低</span>}</span>
+          <span className="wb__fee">¥{yuan(x.feeFen)}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: () => void; onDone: (msg: string) => void }) {
@@ -167,6 +222,7 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
       }
     >
       <WhatBlock what={spec.what} customer={spec.customer} cost={spec.cost} />
+      {spec.extra}
       {spec.amber && <div className="wb__amber">{spec.amber}</div>}
     </WbModal>
   )
@@ -684,7 +740,14 @@ export default function Workbench() {
   const [focus, setFocus] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [drawer, setDrawer] = useState<{ card: WorkbenchCard; colKey: ColKey } | null>(null)
-  const [detail, setDetail] = useState<{ order: Order; delivery: DeliveryInfo | null; events: DeliveryEventInfo[] } | null>(null)
+  const [detail, setDetail] = useState<{
+    order: Order; delivery: DeliveryInfo | null; events: DeliveryEventInfo[]
+    // 服务端早就返回 quote/costFen 了，此前前端一直原样丢掉——报价块与「配送成本」都要用
+    quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+    costFen: number
+  } | null>(null)
+  // 骑手实时位置：只在骑手真的上路的那几个状态下轮询，抽屉一关就停（见下面的 useEffect）
+  const [courier, setCourier] = useState<CourierLive | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
   const [modal, setModal] = useState<ModalState>(null)
@@ -796,7 +859,13 @@ export default function Workbench() {
     setDetailLoading(true)
     try {
       const [o, d] = await Promise.all([getOrder(orderId), channel === 'LOCAL' ? getOrderDelivery(orderId) : null])
-      setDetail({ order: o.data.data, delivery: d?.data.data.delivery ?? null, events: d?.data.data.events ?? [] })
+      setDetail({
+        order: o.data.data,
+        delivery: d?.data.data.delivery ?? null,
+        events: d?.data.data.events ?? [],
+        quote: d?.data.data.quote ?? null,
+        costFen: d?.data.data.costFen ?? 0,
+      })
     } catch (e) {
       toast.error(apiMessage(e, '订单详情加载失败'))
       // 卡片「去处理」把标志位置了 true，详情却加载失败：不复位的话下一次任意一次成功加载都会莫名弹出退款引导
@@ -811,7 +880,32 @@ export default function Workbench() {
     void loadDetail(card.orderId, card.channel)
   }
 
-  const closeDrawer = () => { setDrawer(null); setDetail(null); setModal(null); setPendingCancelRefund(false) }
+  const closeDrawer = () => { setDrawer(null); setDetail(null); setModal(null); setPendingCancelRefund(false); setCourier(null) }
+
+  /**
+   * 骑手位置轮询：30 秒一次，只在骑手真的上路的那几个状态下开（服务端还有 20 秒缓存兜着，
+   * 所以真打到快递100 的频率上限是每单每 20 秒一次）。抽屉一关、状态一离开在途，立刻停。
+   *
+   * 失败静默：位置查不到时整块隐藏就好，不该在店员正忙的时候弹一个红条——
+   * 这也是原来 queryCourier 传错参数半个月没人发现的原因，所以这里只吞 UI 提示，
+   * 服务端那侧仍然会 console.warn。
+   */
+  const courierDelivery = detail?.delivery
+  const courierLive = !!courierDelivery && ['ACCEPTED', 'ARRIVING', 'ARRIVED', 'DELIVERING'].includes(courierDelivery.status)
+  const courierOrderId = drawer?.card.orderId
+  useEffect(() => {
+    if (!courierLive || !courierOrderId) { setCourier(null); return }
+    let alive = true
+    const tick = async () => {
+      try {
+        const r = await getCourierLive(courierOrderId)
+        if (alive) setCourier(r.data.data)
+      } catch { /* 见上：位置拿不到就隐藏，不打扰店员 */ }
+    }
+    void tick()
+    const t = setInterval(() => void tick(), 30_000)
+    return () => { alive = false; clearInterval(t) }
+  }, [courierLive, courierOrderId])
 
   // 卡片上点「去处理」时详情还没到，等详情到齐再弹退款引导（金额要用可退余额，不能瞎猜）
   useEffect(() => {
@@ -889,7 +983,14 @@ export default function Workbench() {
     const active = delivery && delivery.activeOrderId === order.id && !TERMINAL_DELIVERY.includes(delivery.status)
       ? delivery : null
     const confirm = (spec: ConfirmSpec) => setModal({ kind: 'confirm', spec })
-    const CALL_AMBER = '会预扣配送费，实际约 ¥5–8。若之后取消已接单的骑手，可能产生约 ¥2 取消费。'
+    // 「实际约 ¥5–8」这句已被实测推翻（2026-09-06 首单 8.94 km 实扣 ¥23.32，1.1 km 那组
+    // 最贵的也报 ¥11.22），改成不给死数字，让店员看下面报价块里的真实金额。
+    const CALL_AMBER = '会预扣配送费，实际以中标运力的预扣为准。若之后取消已接单的骑手，可能产生约 ¥2 取消费。'
+    // 呼叫方式来自设置（默认只呼最低价）。拿不到设置时按「并呼」措辞——宁可文案保守，
+    // 也不要让店员以为只花一家的钱、结果按并呼冻结了 N 笔。
+    const solo = settings?.callStrategy?.mode === 'SOLO_LOWEST'
+    const lowest = detail?.quote?.snapshot?.lowest ?? null
+    const escalateMin = settings?.callStrategy?.escalateAfterMin ?? 0
     const btns: ReactNode[] = []
     const fill = (key: string, label: string, onClick: () => void) => (
       <FillButton key={key} channel={ch} onClick={onClick}>{label}</FillButton>
@@ -901,12 +1002,31 @@ export default function Workbench() {
     const tel = (key: string, label: string, phone: string) => (
       <a key={key} className="wb__btn wb__btn--ghost" href={`tel:${phone}`}><Phone className="w-4 h-4" />{label}</a>
     )
-    const callSpec = (title: string, confirmText: string, what: string, run: () => Promise<unknown>): ConfirmSpec => ({
-      title, channel: ch, confirmText, okMsg: '已呼叫骑手', what,
-      customer: '顾客看到「正在为您呼叫骑手」。',
-      cost: '会预扣配送费，实际以运力方结算为准。',
-      amber: CALL_AMBER, run,
-    })
+    /**
+     * 呼叫确认弹窗。文案随呼叫方式变——「只呼最低价」和「并呼」在**花多少钱**上差一个数量级
+     * （首单实测：并呼 7 家一次冻结 ¥75.08，只呼一家冻 ¥16.23），店员按下去之前必须知道是哪种。
+     * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，只能说明会先查价。
+     */
+    const callSpec = (title: string, confirmText: string, what: string, run: () => Promise<unknown>, hasQuote = true): ConfirmSpec => {
+      const named = solo && hasQuote && lowest
+      return {
+        title, channel: ch,
+        // 确认键上带运力名与金额，是「按下去要花多少钱」最后一道提示
+        confirmText: named ? `呼叫${providerLabel(lowest.provider)} ¥${yuan(lowest.feeFen)}` : confirmText,
+        okMsg: '已呼叫骑手',
+        what: solo
+          ? (hasQuote
+            ? `${what}按最低价只呼一家${escalateMin > 0 ? `，约 ${escalateMin} 分钟无人接自动改为并呼全部运力` : ''}。`
+            : `${what}接单后先查价，再按最低价只呼一家。`)
+          : `${what}并呼设置里的全部运力，谁先接算谁的。`,
+        customer: '顾客看到「正在为您呼叫骑手」。',
+        cost: solo
+          ? '只冻结这一家的配送费。'
+          : '每一家各冻结一笔预扣，只有中标那家最终扣款，其余释放。',
+        extra: hasQuote ? <CallQuoteBlock orderId={order.id} initial={detail?.quote ?? null} /> : undefined,
+        amber: CALL_AMBER, run,
+      }
+    }
     // 「作废重呼」出现在「备餐中」「等待配送员」两列，文案（含琥珀警示的钱字）必须一字不差——
     // 抽成一处，改文案不会漏改另一份（Minor）
     const voidRecallSpec: ConfirmSpec = {
@@ -931,6 +1051,7 @@ export default function Workbench() {
           '接单并呼叫骑手', '确认接单并呼叫',
           '先接单，随即向快递100 发单呼叫骑手；骑手会来店里取货。',
           () => acceptAndCallLocalOrder(order.id),
+          false,   // 这一刻还没接单、没查过价，报价块给不出数字
         ))))
       }
     }
@@ -1089,6 +1210,10 @@ export default function Workbench() {
               <div className="wb__block">
                 <div className="wb__block-t">配送员</div>
                 <div className="wb__line"><span>配送单</span><span>{d.deliveryNo}</span></div>
+                {/* 哪一家接的单——数据一直在库里（courierCompany 也在管理端白名单里），
+                    只是从来没显示过。首单时店员完全不知道是闪送接的。 */}
+                <div className="wb__line"><span>运力</span><span>{providerLabel(d.courierCompany)}</span></div>
+                <div className="wb__line"><span>呼叫方式</span><span>{callStrategyLabel(d.callStrategy, d.calledProviders, d.courierCompany)}</span></div>
                 <div className="wb__line"><span>姓名</span><span>{d.courierName ?? '未接单'}</span></div>
                 <div className="wb__line">
                   <span>电话</span>
@@ -1096,6 +1221,46 @@ export default function Workbench() {
                     ? <a className="wb__tel" style={{ color: chColor(card.channel) }} href={`tel:${d.courierMobile}`}>{d.courierMobile}</a>
                     : <span>--</span>}
                 </div>
+                {/* 骑手实时位置。距离是「直线 × 绕路系数」的估算，运力方不提供到目的地的道路距离，
+                    所以文案一律带「约」——店员会拿这个数去答复顾客，不能让它看起来像精确值。 */}
+                {courier?.location && (
+                  <div className="wb__line">
+                    <span>骑手位置</span>
+                    <span style={{ textAlign: 'right' }}>
+                      {courier.phase === 'TO_RECEIVER'
+                        ? `距顾客约 ${km(courier.toReceiverM)}`
+                        : `距店约 ${km(courier.toStoreM)}`}
+                      {courier.etaMinutes != null && `　预计 ${courier.etaMinutes} 分钟${courier.phase === 'TO_RECEIVER' ? '送达' : '到店'}`}
+                      {courier.fetchedAt && <><br /><span className="wb__muted">位置更新于 {hhmm(courier.fetchedAt)}</span></>}
+                    </span>
+                  </div>
+                )}
+                {/* 各家报价：最低价加「最低」标、中标方加「中标」标——「并呼让最贵的抢到」
+                    这件事只有把两个标放在一起才看得出来（首单：最低 ¥16.23，中标 ¥23.32）。
+                    优先用 orderFees（下单那一刻的真预扣），没有才退回呼叫前的报价快照。 */}
+                {(() => {
+                  const rows = d.orderFees?.length ? d.orderFees : (d.quoteSnapshot?.quotes ?? [])
+                  if (!rows.length) return null
+                  const min = Math.min(...rows.map((q) => q.feeFen))
+                  return (
+                    <div style={{ marginTop: 6 }}>
+                      <div className="wb__line"><span>各家报价</span><span className="wb__muted">{d.orderFees?.length ? '下单预扣' : '呼叫前报价'}</span></div>
+                      {[...rows].sort((a, b) => a.feeFen - b.feeFen).map((q) => (
+                        <div className="wb__line" key={q.provider}>
+                          <span>
+                            {providerLabel(q.provider)}
+                            {q.feeFen === min && <span className="wb__muted"> 最低</span>}
+                            {q.provider === d.courierCompany && <span style={{ color: chColor(card.channel) }}> 中标</span>}
+                          </span>
+                          <span className="wb__fee">
+                            ¥{yuan(q.feeFen)}
+                            {q.distanceM != null && <span className="wb__muted"> · {km(q.distanceM)}</span>}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
                 {d.failReason && <div className="wb__line"><span>失败原因</span><span>{d.failReason}</span></div>}
                 {showEvents && (
                   <div style={{ marginTop: 6 }}>
@@ -1126,9 +1291,20 @@ export default function Workbench() {
               {!!o?.refundedAmount && <div className="wb__line"><span>已退款</span><span className="wb__amt">-¥{yuan(o.refundedAmount)}</span></div>}
               {local && d && (
                 <>
-                  <div className="wb__line"><span>运力报价</span><span className="wb__amt">{d.quotedFee != null ? `¥${yuan(d.quotedFee)}` : '--'}</span></div>
+                  {/* 「下单预扣」而不是「运力报价」：并呼时每家各冻一笔，这一列是其中最低的那笔，
+                      不是中标方扣的钱。首单就是在这里显示 ¥16.23（达达报价）而实扣 ¥23.32（闪送）。 */}
+                  <div className="wb__line"><span>下单预扣</span><span className="wb__amt">{d.quotedFee != null ? `¥${yuan(d.quotedFee)}` : '--'}</span></div>
+                  <div className="wb__line">
+                    <span>实扣（中标）</span>
+                    <span className="wb__amt">{d.actualFee != null ? `¥${yuan(d.actualFee)}` : <span className="wb__muted">待接单</span>}</span>
+                  </div>
                   {d.tipFee > 0 && <div className="wb__line"><span>已加小费</span><span className="wb__amt">¥{yuan(d.tipFee)}</span></div>}
                   {d.cancelFee > 0 && <div className="wb__line"><span>取消费</span><span className="wb__amt">¥{yuan(d.cancelFee)}</span></div>}
+                  {/* 本单配送总成本：含自动升级留下的那张已取消配送单的取消费，
+                      所以不能只看当前这一张（服务端 costFen 已按全部配送单聚合） */}
+                  {!!detail && detail.costFen !== (d.actualFee ?? d.quotedFee ?? 0) + d.tipFee + d.cancelFee && (
+                    <div className="wb__line"><span>配送成本合计</span><span className="wb__amt">¥{yuan(detail.costFen)}</span></div>
+                  )}
                 </>
               )}
             </div>

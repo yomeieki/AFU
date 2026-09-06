@@ -24,6 +24,9 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       user: { select: { openid: true } },
       items: { select: { productName: true }, take: 1 },
     } } },
+    // estimatedDeliveryAt 与 providerDistanceM 是配送通知算「预计到达」要的两个量
+    // （见 subscribe-message.ts 的 estimateArrival）——include order 是整行，已经带上
+    // estimatedDeliveryAt；providerDistanceM 在 delivery 本行上。
   })
   if (!delivery) {
     // B6-02：这条路由未鉴权（安全性只靠 per-单 salt），deliveryNo 又是 D<orderId>-<seq>
@@ -180,7 +183,16 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       if (p.providerStatus === '310') {
         await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED' } })
         const o = delivery.order
-        after.push(() => sendDeliverSubscribeMessage(o.user.openid, { id: o.id, orderNo: o.orderNo }, { courierName: p.courierName ?? delivery.courierName, courierMobile: p.courierMobile ?? delivery.courierMobile }, o.items[0]?.productName))
+        after.push(() => sendDeliverSubscribeMessage(
+          o.user.openid,
+          { id: o.id, orderNo: o.orderNo, estimatedDeliveryAt: o.estimatedDeliveryAt },
+          {
+            courierName: p.courierName ?? delivery.courierName,
+            courierMobile: p.courierMobile ?? delivery.courierMobile,
+            providerDistanceM: delivery.providerDistanceM,
+          },
+          o.items[0]?.productName,
+        ))
       } else if (p.providerStatus === '520') {
         await tx.order.updateMany({ where: { id: delivery.orderId, deliveryType: 'LOCAL', status: { in: ['PREPARING', 'SHIPPED'] } }, data: { status: 'COMPLETED', completedAt: new Date() } })
         // 会员积分（M1）：同城配送完成也要发分，事务提交后才触发（settlePoints 自己会重新

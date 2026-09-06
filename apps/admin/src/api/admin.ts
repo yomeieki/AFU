@@ -23,6 +23,8 @@ import type {
   WorkbenchSnapshot,
   DeliveryInfo,
   DeliveryEventInfo,
+  QuoteSnapshot,
+  CourierLive,
   RejectReason,
   PrinterSettings,
   PrinterHealthEntry,
@@ -245,10 +247,28 @@ export const getWorkbenchSnapshot = (fresh = false) =>
 export const acceptLocalOrder = (id: number) => client.post<ApiResponse<Order>>(`/admin/local/orders/${id}/accept`)
 export const acceptAndCallLocalOrder = (id: number) =>
   client.post<ApiResponse<{ accepted: boolean; deliveryNo: string; status: string }>>(`/admin/local/orders/${id}/accept-and-call`)
-export const callRider = (id: number) =>
-  client.post<ApiResponse<{ deliveryNo: string; status: string; quotedFeeFen: number | null }>>(`/admin/local/orders/${id}/call`)
+// providers 是「店员在弹窗里指定运力」的口子（规格 §10）。不传 = 按设置里的呼叫策略决定
+// （默认只呼报价最低那一家），传了 = 原样照办并记为 MANUAL。
+export const callRider = (id: number, providers?: string[]) =>
+  client.post<ApiResponse<{ deliveryNo: string; status: string; quotedFeeFen: number | null }>>(
+    `/admin/local/orders/${id}/call`, providers?.length ? { providers } : undefined)
 export const getOrderDelivery = (id: number) =>
-  client.get<ApiResponse<{ delivery: DeliveryInfo | null; events: DeliveryEventInfo[] }>>(`/admin/local/orders/${id}/delivery`)
+  client.get<ApiResponse<{
+    delivery: DeliveryInfo | null
+    events: DeliveryEventInfo[]
+    // 这一单**所有**配送单的成本合计（含升级留下的那张 D-1 的取消费），服务端算好，
+    // 前端与退款弹窗共用，不要各算各的
+    costFen: number
+    // 呼叫弹窗要的那一块：各家报价 + 查询时间 + 是否已过期（服务端算 stale，免得前端复刻阈值）
+    quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+  }>>(`/admin/local/orders/${id}/delivery`)
+/** 手动重查报价（呼叫弹窗上的刷新按钮）。batchPrice 免费、不下单、不落库，随便点 */
+export const refreshOrderQuote = (id: number) =>
+  client.post<ApiResponse<{ snapshot: QuoteSnapshot; quotedAt: string; stale: boolean; persisted: boolean }>>(
+    `/admin/local/orders/${id}/quote`)
+/** 骑手实时位置 + 距离/ETA（20 秒缓存在服务端，前端 30 秒轮一次即可） */
+export const getCourierLive = (id: number) =>
+  client.get<ApiResponse<CourierLive>>(`/admin/local/orders/${id}/courier`)
 export const precancelDelivery = (id: number) =>
   client.post<ApiResponse<{ cancelFeeFen: number | null }>>(`/admin/local/orders/${id}/delivery/precancel`)
 export const cancelDelivery = (id: number, reason?: string) =>
