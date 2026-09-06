@@ -14,7 +14,11 @@ const orderSummarySelect = {
   status: true,
   actualAmount: true,
   refundedAmount: true,
-  // 售后面板要显示「实付里已经扣过券」——店员按商品原价退款是这条链路上最容易犯的错
+  // 售后面板要显示「实付里已经扣过券」——店员按商品原价退款是这条链路上最容易犯的错。
+  // totalAmount / shippingFee 是给退款弹窗那行「商品 ¥A − 券 ¥B + 运费 ¥C」用的：
+  // 只给券额，店员还是得自己心算实付是怎么来的；三个数摆齐才是可自检的。
+  totalAmount: true,
+  shippingFee: true,
   discountAmount: true,
   pointsUsed: true,
   receiverName: true,

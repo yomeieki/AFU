@@ -10,6 +10,7 @@ import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
 import StatusBadge from '../components/ui/StatusBadge'
 import RefundDialog from '../components/RefundDialog'
+import IssueCouponModal from '../components/IssueCouponModal'
 import AfterSalePanel from '../components/AfterSalePanel'
 import { usePendingOrders } from '../hooks/usePendingOrders'
 import { AFTER_SALE_STATUS_LABEL, type Order } from '../types'
@@ -69,6 +70,7 @@ export default function Orders() {
   const [shipError, setShipError] = useState('')
   const [shipping, setShipping] = useState(false)
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
+  const [couponTarget, setCouponTarget] = useState<Order | null>(null)
   const [reprintingId, setReprintingId] = useState<number | null>(null)
   const { afterSaleCount } = usePendingOrders()
   const modalOpenRef = useRef(false)
@@ -280,6 +282,17 @@ export default function Orders() {
         </button>
       </p>
       {order.remark && <p className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1">买家备注：{order.remark}</p>}
+      {/* 会员优惠（M2）。放在支付时间之前：店员看这一段是为了核对「顾客到底付了多少、为什么」，
+          优惠是这个问题的一部分，时间不是。两个字段服务端只在 >0 时才有意义，为 0 就不占一行 */}
+      {(order.discountAmount ?? 0) > 0 && (
+        <p className="text-xs text-gray-500">
+          优惠券：<span className="text-red-500">−¥{yuan(order.discountAmount!)}</span>
+          <span className="ml-1 text-gray-400">（商品 ¥{yuan(order.totalAmount)} 运费 ¥{yuan(order.shippingFee)}）</span>
+        </p>
+      )}
+      {(order.pointsUsed ?? 0) > 0 && (
+        <p className="text-xs text-gray-500">赠品抵扣：{order.pointsUsed} 积分</p>
+      )}
       {order.paidAt && <p className="text-xs text-gray-500">支付时间：{new Date(order.paidAt).toLocaleString('zh-CN')}</p>}
       {order.cancelReason && (order.status === 'CANCELLED' || order.status === 'REFUNDING' || order.status === 'REFUNDED') && (
         <p className="text-xs text-gray-500">原因：{order.cancelReason}</p>
@@ -312,6 +325,14 @@ export default function Orders() {
       {order.status === 'PREPARING' && <button onClick={() => openShipModal(order)} className={cls.primary}>发货</button>}
       {order.status === 'SHIPPED' && <button onClick={() => handleComplete(order)} className={cls.muted}>标记完成</button>}
       {renderRefundActions(order, cls)}
+      {/* 「发赔偿券」对**有成功支付记录**的单显示（M3 D2 默认），与「退款」并列且可单独使用——
+          spec §7：可以只发券不退款。待付款与已取消的单没有可赔偿的交易，不显示。
+          order.userId 来自 orderListSelect（M2 加的），列表里就有，不用先点进详情 */}
+      {order.userId !== undefined && !['PENDING_PAYMENT', 'CANCELLED'].includes(order.status) && (
+        <button onClick={() => setCouponTarget(order)} className={cls.muted} title="给这位顾客发一张赔偿券（不退款）">
+          发赔偿券
+        </button>
+      )}
       {order.status === 'PENDING_PAYMENT' && <button onClick={() => handleCancel(order)} className={cls.danger}>取消</button>}
       {order.status !== 'PENDING_PAYMENT' && (
         <button onClick={() => handleReprint(order)} disabled={reprintingId === order.id} className={`${cls.muted} disabled:opacity-40 inline-flex items-center gap-1`} title="重打该单小票（票卡纸/被撕坏/没看见时用）">
@@ -442,11 +463,15 @@ export default function Orders() {
                           {order.items.map((item, i) => (
                             <div key={i} className="flex justify-between text-xs text-gray-700">
                               <span className="truncate">
+                                {item.isGift && <span className="mr-1 text-[10px] text-orange-600 bg-orange-50 rounded px-1">赠</span>}
                                 {item.productName}
                                 {item.specText && <span className="text-gray-400"> [{item.specText}]</span>}
                                 {' '}× {item.quantity}
                               </span>
-                              <span className="shrink-0">¥{yuan(item.subtotal)}</span>
+                              {/* 赠品行 subtotal 恒为 0，直接显示 ¥0.00 会被当成 0 元 bug；印出积分价才说得清 */}
+                              <span className="shrink-0">
+                                {item.isGift ? `积分 ${item.pointsCost ?? 0}` : `¥${yuan(item.subtotal)}`}
+                              </span>
                             </div>
                           ))}
                         </div>
@@ -507,12 +532,19 @@ export default function Orders() {
                             {order.items.map((item, i) => (
                               <tr key={i}>
                                 <td className="py-1 text-gray-700">
+                                  {item.isGift && <span className="mr-1 text-[10px] text-orange-600 bg-orange-50 rounded px-1">赠</span>}
                                   {item.productName}
                                   {item.specText && <span className="ml-1.5 text-xs text-gray-400">[{item.specText}]</span>}
                                 </td>
-                                <td className="py-1 text-right text-gray-600">¥{yuan(item.productPrice)}</td>
+                                {/* 赠品的 productPrice/subtotal 恒为 0。显示 ¥0.00 会让人以为算错了，
+                                    单价栏印积分价、小计栏印「—」，才看得出这是一件不收钱的东西 */}
+                                <td className="py-1 text-right text-gray-600">
+                                  {item.isGift ? `积分 ${item.pointsCost ?? 0}` : `¥${yuan(item.productPrice)}`}
+                                </td>
                                 <td className="py-1 text-right text-gray-600">{item.quantity}</td>
-                                <td className="py-1 text-right text-gray-800">¥{yuan(item.subtotal)}</td>
+                                <td className="py-1 text-right text-gray-800">
+                                  {item.isGift ? '—' : `¥${yuan(item.subtotal)}`}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -537,6 +569,16 @@ export default function Orders() {
             setRefundTarget(null)
             load()
           }}
+        />
+      )}
+
+      {couponTarget?.userId !== undefined && couponTarget && (
+        <IssueCouponModal
+          userId={couponTarget.userId}
+          userLabel={couponTarget.receiverName}
+          defaultOrderNo={couponTarget.orderNo}
+          onClose={() => setCouponTarget(null)}
+          onDone={() => setCouponTarget(null)}
         />
       )}
 

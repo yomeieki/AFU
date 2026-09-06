@@ -9,7 +9,10 @@ import type { Order } from '../types'
 
 interface Props {
   /** 订单（需含 actualAmount / refundedAmount / remainingRefundable / status） */
-  order: Pick<Order, 'id' | 'orderNo' | 'status' | 'actualAmount' | 'refundedAmount' | 'remainingRefundable' | 'receiverName' | 'receiverPhone' | 'latestRefund'>
+  order: Pick<Order, 'id' | 'orderNo' | 'status' | 'actualAmount' | 'refundedAmount' | 'remainingRefundable' | 'receiverName' | 'receiverPhone' | 'latestRefund'> &
+    // M3：券抵扣额与它的两个加数。只用来在信息块里把「实付是怎么算出来的」摊开，
+    // **不参与任何金额校验**——可退上限仍是服务端的 actualAmount − refundedAmount（M2 Task 7 已定）。
+    Partial<Pick<Order, 'totalAmount' | 'shippingFee' | 'discountAmount'>>
   /** 传入则为「同意售后」：走 /after-sales/:id/approve，金额与回复一起提交 */
   afterSaleId?: number
   /** 售后模式下的默认回复 */
@@ -62,6 +65,11 @@ export default function RefundDialog({ order, afterSaleId, defaultReply, deliver
   const reason = preset === '其他' ? customReason.trim() : preset
   const reasonOk = preset !== '' && (preset !== '其他' || customReason.trim().length > 0)
   const confirmMatches = amountValid && parseYuan(confirmInput) === amountFen
+  const usedCoupon = (order.discountAmount ?? 0) > 0
+  // 只在**用了券**时摊开。没用券的单「实付 = 商品 + 运费」是一眼就能对上的，
+  // 多印一句「− 券 ¥0.00」只是噪声；三个字段缺任一也不显示（宁可不显示，不显示半截）。
+  const hasBreakdown =
+    usedCoupon && order.totalAmount !== undefined && order.shippingFee !== undefined
 
   const afterEffect = !amountValid
     ? ''
@@ -138,10 +146,26 @@ export default function RefundDialog({ order, afterSaleId, defaultReply, deliver
               订单号：<span className="font-mono">{order.orderNo}</span>
             </p>
             <p className="flex flex-wrap gap-x-4">
-              <span>实付 <span className="font-semibold text-gray-800">¥{yuan(order.actualAmount)}</span></span>
+              <span>
+                实付 <span className="font-semibold text-gray-800">¥{yuan(order.actualAmount)}</span>
+                {/* 三个加数齐了才摊开：只印「− 券 ¥B」而不印商品与运费，店员照样得自己心算 */}
+                {hasBreakdown && (
+                  <span className="text-gray-400">
+                    （商品 ¥{yuan(order.totalAmount!)} − 券 ¥{yuan(order.discountAmount!)} + 运费 ¥{yuan(order.shippingFee!)}）
+                  </span>
+                )}
+              </span>
               {order.refundedAmount > 0 && <span>已退 <span className="text-gray-800">¥{yuan(order.refundedAmount)}</span></span>}
               <span>可退 <span className="font-semibold text-red-600">¥{yuan(remaining)}</span></span>
             </p>
+            {usedCoupon && (
+              // 这条是给「按商品原价退」这个错误准备的：顾客用 ¥10 券买了 ¥50 的东西，实付 ¥40，
+              // 店员看着订单里 ¥50 的商品就填 ¥50——服务端会拒（超过实付），但拒之前店员已经
+              // 疑惑了一轮。先说清楚比让他撞一次墙好。券本身不退：它一次性核销，退款不还券。
+              <p className="text-orange-600">
+                本单用了优惠券（−¥{yuan(order.discountAmount!)}），可退金额以<span className="font-semibold">实付</span>为准；退款不退券。
+              </p>
+            )}
             <p>
               收货人：{order.receiverName} {order.receiverPhone}　当前状态：{ORDER_STATUS_LABEL[order.status] ?? order.status}
             </p>

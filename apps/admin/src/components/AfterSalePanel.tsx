@@ -8,6 +8,7 @@ import Pagination from './ui/Pagination'
 import StatusBadge from './ui/StatusBadge'
 import EmptyState from './ui/EmptyState'
 import RefundDialog from './RefundDialog'
+import IssueCouponModal from './IssueCouponModal'
 import { AFTER_SALE_STATUS_LABEL, type AfterSale, type AfterSaleStatus } from '../types'
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
@@ -40,6 +41,7 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
   const pageSize = 20
   const [loading, setLoading] = useState(true)
   const [approveTarget, setApproveTarget] = useState<AfterSale | null>(null)
+  const [couponTarget, setCouponTarget] = useState<AfterSale | null>(null)
   const [rejectTarget, setRejectTarget] = useState<AfterSale | null>(null)
   const [rejectReply, setRejectReply] = useState('')
   const [rejecting, setRejecting] = useState(false)
@@ -129,6 +131,10 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
                     </a>
                   </span>
                   <span>实付 ¥{yuan(a.order.actualAmount)}</span>
+                  {/* 实付里已经扣过券了。不标出来，店员按商品原价退款是这条链路上最容易犯的错 */}
+                  {a.order.discountAmount > 0 && (
+                    <span className="text-gray-400">已用券 −¥{yuan(a.order.discountAmount)}</span>
+                  )}
                   {a.order.refundedAmount > 0 && <span>已退 ¥{yuan(a.order.refundedAmount)}</span>}
                   <span className="text-red-600">可退 ¥{yuan(a.remainingRefundable)}</span>
                 </div>
@@ -147,16 +153,23 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
                   </div>
                 )}
                 {a.reply && <p className="text-xs text-gray-600">店员回复：{a.reply}{a.handledBy && `（${a.handledBy}）`}</p>}
-                {a.status === 'PENDING' && (
-                  <div className="flex gap-2 pt-1">
-                    <Button size="sm" variant="danger" onClick={() => setApproveTarget(a)} disabled={a.remainingRefundable <= 0}>
-                      同意并退款
-                    </Button>
-                    <Button size="sm" variant="secondary" onClick={() => { setRejectTarget(a); setRejectReply('') }}>
-                      拒绝
-                    </Button>
-                  </div>
-                )}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {a.status === 'PENDING' && (
+                    <>
+                      <Button size="sm" variant="danger" onClick={() => setApproveTarget(a)} disabled={a.remainingRefundable <= 0}>
+                        同意并退款
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => { setRejectTarget(a); setRejectReply('') }}>
+                        拒绝
+                      </Button>
+                    </>
+                  )}
+                  {/* 发券不限 PENDING：售后已经拒了或已经退过款，照样可能要再补一张券安抚。
+                      与退款并列且互不依赖——spec §7 明确「可以只发券不退款」 */}
+                  <Button size="sm" variant="secondary" onClick={() => setCouponTarget(a)}>
+                    发赔偿券
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
@@ -173,6 +186,9 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
             status: approveTarget.order.status,
             actualAmount: approveTarget.order.actualAmount,
             refundedAmount: approveTarget.order.refundedAmount,
+            totalAmount: approveTarget.order.totalAmount,
+            shippingFee: approveTarget.order.shippingFee,
+            discountAmount: approveTarget.order.discountAmount,
             remainingRefundable: approveTarget.remainingRefundable,
             receiverName: approveTarget.order.receiverName,
             receiverPhone: approveTarget.order.receiverPhone,
@@ -184,6 +200,16 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
             load()
             onChanged?.()
           }}
+        />
+      )}
+
+      {couponTarget && (
+        <IssueCouponModal
+          userId={couponTarget.userId}
+          userLabel={couponTarget.order.receiverName}
+          defaultOrderNo={couponTarget.orderNo}
+          onClose={() => setCouponTarget(null)}
+          onDone={() => setCouponTarget(null)}
         />
       )}
 

@@ -144,7 +144,7 @@ export interface AfterSaleSummary {
 export interface Order {
   id: number
   orderNo: string
-  /** 仅 GET /admin/orders/:id 返回。M3「发赔偿券」要用——发券端点是用户维度的 */
+  /** 列表与详情都返回（M2 把它加进了 orderListSelect）。M3「发赔偿券」要用——发券端点是用户维度的 */
   userId?: number
   status: OrderStatus
   totalAmount: number
@@ -220,14 +220,21 @@ export interface AfterSale {
     id: number
     orderNo: string
     status: OrderStatus
+    /** 券前商品小计（分） */
+    totalAmount: number
+    shippingFee: number
     actualAmount: number
     refundedAmount: number
+    /** M2/M3：券抵扣额。>0 时售后面板与退款弹窗都要显式提示「实付里已经扣过券」 */
+    discountAmount: number
+    /** M2/M3：赠品消耗的积分 */
+    pointsUsed: number
     receiverName: string
     receiverPhone: string
     receiverFullAddress: string
     receiverDisplayAddress?: string
     completedAt: string | null
-    items: { productName: string; specText: string | null; quantity: number; subtotal: number }[]
+    items: { productName: string; specText: string | null; quantity: number; subtotal: number; isGift?: boolean }[]
     shipment: { expressCompany: string | null; expressNo: string | null; shippedAt: string | null } | null
   }
 }
@@ -621,13 +628,19 @@ export interface PointsGood {
   // 以下由服务端联查补上（PointsGood 没有 product/sku 关系字段）
   productName: string | null
   productImage: string | null
-  /** 商品当前状态：ON/OFF 是上下架，DELETED 已删，MISSING 查不到。
-   *  后两者与 OFF 在顾客侧都是隐形的，页面必须显式标出来 */
-  productStatus: 'ON' | 'OFF' | 'DELETED' | 'MISSING'
+  /**
+   * 商品当前状态。前两个是 `Product.status` 原值（**是 `ON_SHELF`/`OFF_SHELF`，不是 `ON`/`OFF`**——
+   * 与本文件里券模板/赠品自身的 `OnOff` 不是一回事，写混会得到一个 `undefined` 的查表结果），
+   * `DELETED` = 商品已软删，`MISSING` = 按 id 查不到。后三种在顾客侧都是隐形的
+   * （`loadCheckoutOptions` 会过滤掉），页面必须显式标出来，否则店主永远不知道这条赠品是死的。
+   */
+  productStatus: 'ON_SHELF' | 'OFF_SHELF' | 'DELETED' | 'MISSING'
   productChannel: string | null
   specText: string | null
   /** 商品（或所选规格）的当前库存 */
   stock: number
+  /** 商品（或所选规格）的当前售价（分）；商品已删除时为 null。算「等值消费 / 回报率」用 */
+  unitPrice: number | null
 }
 
 /** 积分流水类型。中文标签由服务端给（typeLabel），前端不再自己 map */

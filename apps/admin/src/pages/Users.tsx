@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Search, Users as UsersIcon } from 'lucide-react'
-import { getUsers, getUserOrders } from '../api/admin'
+import { getUsers, getUserOrders, getUserPointsLedger, getUserCoupons } from '../api/admin'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
@@ -8,7 +8,42 @@ import Pagination from '../components/ui/Pagination'
 import StatusBadge from '../components/ui/StatusBadge'
 import Spinner from '../components/ui/Spinner'
 import EmptyState from '../components/ui/EmptyState'
-import type { AdminUser, UserOrder } from '../types'
+import { toast } from '../components/ui/Toast'
+import IssueCouponModal from '../components/IssueCouponModal'
+import type { AdminUser, UserOrder, PointsLedgerRow, UserCouponRow } from '../types'
+
+const userLabel = (u: AdminUser) => u.nickname ?? `用户 #${u.id}`
+const yuan = (fen: number) => (fen / 100).toFixed(2)
+const CHANNEL_LABEL: Record<string, string> = { ALL: '通用', LOCAL: '仅同城', EXPRESS: '仅邮寄' }
+const SOURCE_LABEL: Record<string, string> = {
+  ADMIN: '手动发放',
+  POINTS: '积分兑换',
+  CAMPAIGN: '领券中心',
+  NEWCOMER: '新人礼',
+}
+const COUPON_STATUS: Record<string, { text: string; cls: string }> = {
+  UNUSED: { text: '未使用', cls: 'bg-green-50 text-green-600' },
+  USED: { text: '已使用', cls: 'bg-gray-100 text-gray-500' },
+  EXPIRED: { text: '已过期', cls: 'bg-gray-100 text-gray-400' },
+}
+
+/** 券记录的四个页签。「可用」= 未使用**且**未到期——只看 status 会把还没被定时任务扫到的过期券算进去 */
+const COUPON_TABS = [
+  { key: 'ALL', label: '全部' },
+  { key: 'USABLE', label: '可用' },
+  { key: 'USED', label: '已用' },
+  { key: 'EXPIRED', label: '已过期' },
+] as const
+type CouponTab = (typeof COUPON_TABS)[number]['key']
+
+function filterCoupons(list: UserCouponRow[], tab: CouponTab): UserCouponRow[] {
+  const now = Date.now()
+  if (tab === 'ALL') return list
+  if (tab === 'USED') return list.filter((c) => c.status === 'USED')
+  const expired = (c: UserCouponRow) => c.status === 'EXPIRED' || new Date(c.expiresAt).getTime() <= now
+  if (tab === 'EXPIRED') return list.filter((c) => c.status !== 'USED' && expired(c))
+  return list.filter((c) => c.status === 'UNUSED' && !expired(c))
+}
 
 export default function Users() {
   const [list, setList] = useState<AdminUser[]>([])
@@ -25,6 +60,24 @@ export default function Users() {
   // 没有 catch 的话接口一挂就渲染「暂无用户 / 暂无订单」，店主会当成真的没有
   const [loadFailed, setLoadFailed] = useState(false)
   const [ordersFailed, setOrdersFailed] = useState(false)
+
+  // 发券
+  const [issueFor, setIssueFor] = useState<AdminUser | null>(null)
+
+  // 积分明细弹窗（服务端分页）
+  const [ledgerFor, setLedgerFor] = useState<AdminUser | null>(null)
+  const [ledger, setLedger] = useState<PointsLedgerRow[]>([])
+  const [ledgerTotal, setLedgerTotal] = useState(0)
+  const [ledgerPage, setLedgerPage] = useState(1)
+  const [ledgerLoading, setLedgerLoading] = useState(false)
+  const [ledgerFailed, setLedgerFailed] = useState(false)
+
+  // 券记录弹窗（一次全取，页签在前端切——服务端的 status 过滤挡不住「未使用但已到期」）
+  const [couponsFor, setCouponsFor] = useState<AdminUser | null>(null)
+  const [coupons, setCoupons] = useState<UserCouponRow[]>([])
+  const [couponTab, setCouponTab] = useState<CouponTab>('ALL')
+  const [couponsLoading, setCouponsLoading] = useState(false)
+  const [couponsFailed, setCouponsFailed] = useState(false)
 
   const load = (p = page) => {
     setLoading(true)
@@ -43,6 +96,41 @@ export default function Users() {
   const handleSearch = () => {
     setPage(1)
     load(1)
+  }
+
+  const loadLedger = (user: AdminUser, p: number) => {
+    setLedgerLoading(true)
+    setLedgerFailed(false)
+    getUserPointsLedger(user.id, { page: p, pageSize: 20 })
+      .then((d) => {
+        setLedger(d.list)
+        setLedgerTotal(d.total)
+      })
+      .catch(() => setLedgerFailed(true))
+      .finally(() => setLedgerLoading(false))
+  }
+
+  const openLedger = (user: AdminUser) => {
+    setLedgerFor(user)
+    setLedgerPage(1)
+    setLedger([])
+    loadLedger(user, 1)
+  }
+
+  const loadCoupons = (user: AdminUser) => {
+    setCouponsLoading(true)
+    setCouponsFailed(false)
+    getUserCoupons(user.id)
+      .then(setCoupons)
+      .catch(() => setCouponsFailed(true))
+      .finally(() => setCouponsLoading(false))
+  }
+
+  const openCoupons = (user: AdminUser) => {
+    setCouponsFor(user)
+    setCouponTab('ALL')
+    setCoupons([])
+    loadCoupons(user)
   }
 
   const openOrders = (user: AdminUser) => {
@@ -84,7 +172,7 @@ export default function Users() {
           </div>
         ) : (
         <Table
-          columns={7}
+          columns={9}
           loading={loading}
           isEmpty={list.length === 0}
           emptyText="暂无用户"
@@ -93,6 +181,8 @@ export default function Users() {
               <th className="text-left px-4 py-3">用户</th>
               <th className="text-left px-4 py-3">手机号</th>
               <th className="text-right px-4 py-3">订单数</th>
+              <th className="text-right px-4 py-3">积分</th>
+              <th className="text-right px-4 py-3">可用券</th>
               <th className="text-right px-4 py-3">状态</th>
               <th className="text-right px-4 py-3">最近登录</th>
               <th className="text-right px-4 py-3">注册时间</th>
@@ -121,9 +211,17 @@ export default function Users() {
                   <p className="text-xs text-gray-500 mt-1.5">
                     {u.phone ?? '未绑定手机'}　订单 {u.orderCount}　注册 {new Date(u.createdAt).toLocaleDateString('zh-CN')}
                   </p>
-                  <button onClick={() => openOrders(u)} className="mt-2 text-sm text-blue-500">
-                    查看订单
-                  </button>
+                  <p className="text-xs text-gray-500 mt-1">
+                    积分 <span className="text-gray-800 font-medium">{u.pointsBalance}</span> · 可用券{' '}
+                    <span className="text-gray-800 font-medium">{u.availableCoupons}</span>
+                  </p>
+                  {/* 四个动作在 375px 下一行放不下，靠 flex-wrap 自然折成两行 */}
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
+                    <button onClick={() => openOrders(u)} className="text-blue-500">查看订单</button>
+                    <button onClick={() => setIssueFor(u)} className="text-brand-600">发券</button>
+                    <button onClick={() => openLedger(u)} className="text-blue-500">积分明细</button>
+                    <button onClick={() => openCoupons(u)} className="text-blue-500">券记录</button>
+                  </div>
                 </div>
               ))}
             </>
@@ -145,6 +243,8 @@ export default function Users() {
               </td>
               <td className="px-4 py-3 text-gray-600">{u.phone ?? '-'}</td>
               <td className="px-4 py-3 text-right text-gray-800">{u.orderCount}</td>
+              <td className="px-4 py-3 text-right text-gray-800">{u.pointsBalance}</td>
+              <td className="px-4 py-3 text-right text-gray-800">{u.availableCoupons}</td>
               <td className="px-4 py-3 text-right">
                 <span className={`px-2 py-0.5 rounded-full text-xs ${u.status === 1 ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
                   {u.status === 1 ? '正常' : '禁用'}
@@ -157,9 +257,12 @@ export default function Users() {
                 {new Date(u.createdAt).toLocaleDateString('zh-CN')}
               </td>
               <td className="px-4 py-3 text-right">
-                <button onClick={() => openOrders(u)} className="text-blue-500 hover:text-blue-700">
-                  查看订单
-                </button>
+                <div className="flex justify-end gap-3 whitespace-nowrap">
+                  <button onClick={() => openOrders(u)} className="text-blue-500 hover:text-blue-700">订单</button>
+                  <button onClick={() => setIssueFor(u)} className="text-brand-600 hover:text-brand-700">发券</button>
+                  <button onClick={() => openLedger(u)} className="text-blue-500 hover:text-blue-700">积分明细</button>
+                  <button onClick={() => openCoupons(u)} className="text-blue-500 hover:text-blue-700">券记录</button>
+                </div>
               </td>
             </tr>
           ))}
@@ -221,6 +324,186 @@ export default function Users() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* 发券（两步确认）。成功后重新拉当前页——「可用券」那一列要立刻 +1，
+          不刷新的话店员会以为没发出去，然后再点一次 */}
+      {issueFor && (
+        <IssueCouponModal
+          userId={issueFor.id}
+          userLabel={userLabel(issueFor)}
+          onClose={() => setIssueFor(null)}
+          onDone={() => {
+            load()
+            if (couponsFor?.id === issueFor.id) loadCoupons(couponsFor)
+          }}
+        />
+      )}
+
+      {/* 积分明细 */}
+      {ledgerFor && (
+        <Modal
+          title={`${userLabel(ledgerFor)} 的积分明细（余额 ${ledgerFor.pointsBalance}）`}
+          width="lg"
+          onClose={() => setLedgerFor(null)}
+          footer={<Button variant="secondary" onClick={() => setLedgerFor(null)}>关闭</Button>}
+        >
+          {ledgerLoading ? (
+            <p className="flex items-center gap-2 text-sm text-gray-500"><Spinner /> 加载中...</p>
+          ) : ledgerFailed ? (
+            <div className="py-6 flex flex-col items-center gap-3 text-sm text-red-600">
+              <span>积分明细加载失败，当前显示的不是真实数据</span>
+              <Button size="sm" variant="secondary" onClick={() => loadLedger(ledgerFor, ledgerPage)}>重试</Button>
+            </div>
+          ) : ledger.length === 0 ? (
+            <EmptyState icon={UsersIcon} text="暂无积分记录" />
+          ) : (
+            <>
+              <div className="max-h-[60vh] overflow-auto">
+                <table className="w-full text-sm whitespace-nowrap">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr>
+                      <th className="text-left px-3 py-2">时间</th>
+                      <th className="text-left px-3 py-2">类型</th>
+                      <th className="text-right px-3 py-2">变动</th>
+                      <th className="text-right px-3 py-2">变动后</th>
+                      <th className="text-left px-3 py-2">关联</th>
+                      <th className="text-left px-3 py-2">备注</th>
+                      <th className="text-right px-3 py-2">到期</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {ledger.map((r) => (
+                      <tr key={r.id}>
+                        <td className="px-3 py-2 text-gray-500">{new Date(r.createdAt).toLocaleString('zh-CN')}</td>
+                        <td className="px-3 py-2 text-gray-700">{r.typeLabel}</td>
+                        <td className={`px-3 py-2 text-right font-semibold ${r.delta >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                          {r.delta >= 0 ? `+${r.delta}` : r.delta}
+                        </td>
+                        <td className="px-3 py-2 text-right text-gray-800">{r.balanceAfter}</td>
+                        <td className="px-3 py-2">
+                          {r.orderNo ? (
+                            <button
+                              type="button"
+                              className="font-mono text-blue-500 hover:text-blue-700"
+                              title="点击复制订单号"
+                              onClick={() => {
+                                // clipboard API 在 http:// 下不可用（后台常经 IP 直连），失败要说清楚而不是静默
+                                navigator.clipboard
+                                  ?.writeText(r.orderNo!)
+                                  .then(() => toast.success('已复制订单号'))
+                                  .catch(() => toast.error('复制失败，请手动选中'))
+                              }}
+                            >
+                              {r.orderNo}
+                            </button>
+                          ) : (
+                            <span className="text-gray-400">{r.refType} #{r.refId}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600 whitespace-normal max-w-[16rem]">{r.remark ?? '-'}</td>
+                        <td className="px-3 py-2 text-right text-gray-500">
+                          {r.expiresAt ? new Date(r.expiresAt).toLocaleDateString('zh-CN') : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination
+                page={ledgerPage}
+                total={ledgerTotal}
+                pageSize={20}
+                onChange={(p) => { setLedgerPage(p); loadLedger(ledgerFor, p) }}
+              />
+            </>
+          )}
+        </Modal>
+      )}
+
+      {/* 券记录 */}
+      {couponsFor && (
+        <Modal
+          title={`${userLabel(couponsFor)} 的优惠券`}
+          width="lg"
+          onClose={() => setCouponsFor(null)}
+          footer={<Button variant="secondary" onClick={() => setCouponsFor(null)}>关闭</Button>}
+        >
+          <div className="flex gap-2 mb-3">
+            {COUPON_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setCouponTab(t.key)}
+                className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
+                  couponTab === t.key
+                    ? 'bg-brand-50 border-brand-400 text-brand-600 font-medium'
+                    : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
+                }`}
+              >
+                {t.label}
+                {!couponsLoading && !couponsFailed && ` ${filterCoupons(coupons, t.key).length}`}
+              </button>
+            ))}
+          </div>
+          {couponsLoading ? (
+            <p className="flex items-center gap-2 text-sm text-gray-500"><Spinner /> 加载中...</p>
+          ) : couponsFailed ? (
+            <div className="py-6 flex flex-col items-center gap-3 text-sm text-red-600">
+              <span>券记录加载失败，当前显示的不是真实数据</span>
+              <Button size="sm" variant="secondary" onClick={() => loadCoupons(couponsFor)}>重试</Button>
+            </div>
+          ) : filterCoupons(coupons, couponTab).length === 0 ? (
+            <EmptyState icon={UsersIcon} text="暂无优惠券" />
+          ) : (
+            <div className="max-h-[60vh] overflow-auto">
+              <table className="w-full text-sm whitespace-nowrap">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="text-left px-3 py-2">券名</th>
+                    <th className="text-left px-3 py-2">券码</th>
+                    <th className="text-right px-3 py-2">面额</th>
+                    <th className="text-right px-3 py-2">状态</th>
+                    <th className="text-left px-3 py-2">来源</th>
+                    <th className="text-left px-3 py-2">操作人</th>
+                    <th className="text-left px-3 py-2">备注</th>
+                    <th className="text-right px-3 py-2">到期</th>
+                    <th className="text-left px-3 py-2">使用订单</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filterCoupons(coupons, couponTab).map((c) => {
+                    // 只看 status 会把「还没被定时任务扫到的过期券」显示成未使用
+                    const expired = c.status !== 'USED' && new Date(c.expiresAt).getTime() <= Date.now()
+                    const badge = COUPON_STATUS[expired ? 'EXPIRED' : c.status] ?? { text: c.status, cls: 'bg-gray-100 text-gray-500' }
+                    return (
+                      <tr key={c.id}>
+                        <td className="px-3 py-2 text-gray-800">
+                          {c.name}
+                          <span className="ml-1 text-xs text-gray-400">
+                            {c.threshold > 0 ? `满${yuan(c.threshold)}` : '无门槛'}·{CHANNEL_LABEL[c.channel] ?? c.channel}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 font-mono text-gray-600">{c.code}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-brand-600">¥{yuan(c.amount)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <span className={`px-2 py-0.5 rounded-full text-xs ${badge.cls}`}>{badge.text}</span>
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">{SOURCE_LABEL[c.source] ?? c.source}</td>
+                        <td className="px-3 py-2 text-gray-600">{c.issuedBy ?? '-'}</td>
+                        <td className="px-3 py-2 text-gray-600 whitespace-normal max-w-[14rem]">{c.remark ?? '-'}</td>
+                        <td className="px-3 py-2 text-right text-gray-500">
+                          {new Date(c.expiresAt).toLocaleDateString('zh-CN')}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-gray-600">{c.orderNo ?? c.sourceRef ?? '-'}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

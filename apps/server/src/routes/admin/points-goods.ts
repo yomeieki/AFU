@@ -38,12 +38,12 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     const products = list.length
       ? await prisma.product.findMany({
           where: { id: { in: [...new Set(list.map((g) => g.productId))] } },
-          select: { id: true, name: true, coverImage: true, stock: true, status: true, channel: true, deletedAt: true },
+          select: { id: true, name: true, coverImage: true, price: true, stock: true, status: true, channel: true, deletedAt: true },
         })
       : []
     const skuIds = list.map((g) => g.skuId).filter((v): v is number => v !== null)
     const skus = skuIds.length
-      ? await prisma.productSku.findMany({ where: { id: { in: skuIds } }, select: { id: true, specText: true, stock: true } })
+      ? await prisma.productSku.findMany({ where: { id: { in: skuIds } }, select: { id: true, specText: true, price: true, stock: true } })
       : []
     const productById = new Map(products.map((p) => [p.id, p]))
     const skuById = new Map(skus.map((s) => [s.id, s]))
@@ -62,6 +62,11 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
           productChannel: p?.channel ?? null,
           specText: s?.specText ?? null,
           stock: s ? s.stock : (p?.stock ?? 0),
+          // 这条赠品对应商品（或所选规格）的当前售价，供后台算「积分价 ↔ 等值消费 ↔ 回报率」。
+          // 必须由这个接口给：不给的话页面只能按商品名回查一次商品列表再按 id 匹配，
+          // 商品已删除或同名商品挤出前 20 条时就查不到，回报率提示在编辑态直接失效——
+          // 而「防止定出离谱的回报率」正是店主要这条提示的唯一理由（PO 2026-09-06）。
+          unitPrice: s ? s.price : (p?.price ?? null),
         }
       })
     )
