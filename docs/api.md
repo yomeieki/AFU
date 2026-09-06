@@ -1232,11 +1232,75 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 | 42241 | 400 | 打印机离线 | `CAPACITY` |
 | 42242 | 400 | 打印提交失败（附平台原文） | `BUSINESS`/`TIMEOUT` |
 
-## 附录 E：会员积分与优惠券（M1 账本层）
+## 附录 E：会员积分与优惠券
 
-设计依据 `docs/superpowers/specs/2026-09-04-member-points-coupon-design.md`，实施计划
-`docs/superpowers/plans/2026-09-04-member-m1-ledger.md`。**M1 只做服务端账本，不改下单计价、
-不碰任何前端页面**——顾客端和后台目前看不到任何变化；积分商城/赠品/结算页用券留给 M2。
+设计依据 `docs/superpowers/specs/2026-09-04-member-points-coupon-design.md`；
+顾客可见文案定稿 `docs/member-terms-copy.md`（**对外文字改动必须先改那份**）。
+
+下面先是一份**完整端点表与错误码表**（查接口只看这两张就够），后面 E.1/E.2/E.3
+按实施批次保留实现笔记——那些「为什么这么做」的内容是批次特有的，合并会丢掉上下文。
+
+### 端点总表（2026-09-06 逐条对源码核对）
+
+**顾客端**（`/api/member/*`，全部需要 `verifyUserToken`）
+
+| 端点 | 说明 |
+|---|---|
+| `GET /member/summary` | 页头：`pointsBalance`、`pointsExpireAt`、`availableCoupons`、`points{enabled,earnRatePerYuan,validDays}`、`rulesText`。后两项供「规则说明」实时渲染——**合规公示项，不许在小程序里写死数字** |
+| `GET /member/points/ledger?page=&pageSize=` | 积分流水。行含 `typeLabel`（服务端拼的中文）、`delta`、`refType`、`refId`、`remark`、`expiresAt`、`orderNo`。**不返回内部自增 id 与原始 type 码** |
+| `GET /member/coupons?status=available\|used\|expired` | 我的券。**取值只认这三个小写字面量**，不是库里的 `UNUSED/USED/EXPIRED`。输出白名单不含 `issuedBy`/`remark`/`sourceRef`/`templateId` |
+| `GET /member/mall` | 积分商城：`coupons[]`（可兑券模板）+ `gifts[]`（随单赠品，带 `channel` 供前端分组）。赠品在此**只展示不兑换** |
+| `GET /member/campaign` | 领券中心：`list[]` 带 `remaining`（NULL = 不限量）与 `claimedByMe` |
+| `GET /member/checkout-options?channel=&subtotal=` | 结算页选项。`subtotal` 传**券前**小计。券带 `usable` 与 `discount`，不可用的**也返回**并带 `reason`(`NOT_OWNER\|USED\|EXPIRED\|CHANNEL\|THRESHOLD`) + 中文 `message` |
+| `POST /member/points/redeem` | 积分兑券 `{ templateId }` |
+| `POST /member/coupons/claim` | 领券中心领取 `{ templateId }` |
+
+**下单**：`POST /orders` 多收 `couponId?: number` 与 `gifts?: [{pointsGoodId, quantity}]`；
+订单响应（列表与详情）多出 `discountAmount`、`pointsUsed`、`pointsEarned`、`items[].isGift`、
+`items[].pointsCost`，详情另有 `coupon`（无券时为 `null`，不是字段缺失）。
+**不返回** `pointsSettledAt`/`pointsBase`（内部记账字段，e2e §34 锁住）。
+
+**管理端**（`/api/admin/*`，全部需要 `verifyAdminToken`）
+
+| 端点 | 说明 |
+|---|---|
+| `GET /admin/coupon-templates?source=&status=` | 券模板列表。派生字段：`issuedTotal`（真实发出张数，**「已发」列用这个**）、`usedCount`、`usedAsNewcomer` |
+| `POST /admin/coupon-templates` | 新建。`source` 建后不可改 |
+| `PUT /admin/coupon-templates/:id` | 编辑。**无 DELETE**——删模板会让已发券的 `templateId` 悬空 |
+| `GET /admin/coupon-templates/:id/issued?page=` | 发放记录（谁领了、谁发的、为什么发） |
+| `GET /admin/points-goods` | 赠品列表。派生字段：`productName/productImage/productStatus/productChannel/specText/stock/unitPrice` |
+| `POST /admin/points-goods` | 新建。`productId`/`skuId` 建后不可改 |
+| `PUT /admin/points-goods/:id` | 编辑 |
+| `DELETE /admin/points-goods/:id` | 硬删（`OrderItem` 落快照、不引用它的 id） |
+| `GET /admin/settings/member` | 读会员设置 |
+| `PUT /admin/settings/member` | 写会员设置（**整包覆盖**，先 GET 拿完整对象再传回） |
+| `GET /admin/users` | 列表多两列：`pointsBalance`、`availableCoupons`（按**时间**判：`UNUSED && expiresAt > now`） |
+| `GET /admin/users/:id/points-ledger?page=&pageSize=` | 该用户积分流水，`pageSize` 上限 50 |
+| `GET /admin/users/:id/coupons?status=` | 该用户全部券。管理端**可以**读 `issuedBy`/`remark` |
+| `POST /admin/users/:id/coupons` | 定向发券 `{ templateId, remark, orderNo? }`。只认 `source='ADMIN'` 模板；`remark` 必填；限流 30 次/分钟**按管理员名**计数 |
+
+**`POST /admin/system/run-scheduler`** 的会员相关 override 键：`settleMissedPointsAfterMin`
+（把「completedAt 至少 2 分钟前」这道门槛调小，e2e 用它免去等待）。
+
+### 错误码（逐条对源码核对）
+
+| 码 | 文案取向 | 实际触发点 |
+|---|---|---|
+| **42250** | 积分不足 | `checkout.ts` 事务前快速失败（带「本单需 N 分，当前 M 分」）；`points.ts` 的 `consumePoints` 两轮仍不足——**后者才是真防线**，前者只是提前给个好消息 |
+| **42251** | 券不可用（**一律用这一个码**，靠 message 区分原因） | 券不存在 / 已使用 / 已过期 / 渠道不符 / 未达门槛（`checkout.ts`）；`actualAmount === 0`（`orders.ts`，「该券金额已超过本单可抵扣范围」）；并发抢用同一张券（`used.count === 0`，「优惠券已被使用」）；`redeemByPoints` 的「该券不支持积分兑换」 |
+| **42252** | 赠品不可用 | 不存在 / 已下架 / 超每单限购 / 已兑完（`checkout.ts`，含事务内 `taken.count === 0` 的并发防线） |
+| **42253** | 已领完或已达上限 | `perUserLimit` 已满 / `totalLimit` 递增失败（`redeemByPoints` 与 `claimCampaign` 各一处） |
+| **42254** | 该券已停用 | `issueCoupon` 公共原语；`redeemByPoints` **必须在 `totalLimit` 的 updateMany 之前判**，否则会被含混的 42253 盖掉；`POST /admin/users/:id/coupons` |
+
+> `NOT_OWNER` 的文案刻意说「优惠券不存在」而不是「不属于你」——后者等于确认了这张券存在，
+> 拿别人的券号试探就能枚举出有效券号。
+
+---
+
+### E.1 M1：账本层
+
+实施计划 `docs/superpowers/plans/2026-09-04-member-m1-ledger.md`。M1 只做服务端账本，
+不改下单计价、不碰前端页面——积分商城/赠品/结算页用券在 M2。
 
 ### 数据模型
 
@@ -1322,7 +1386,7 @@ pointsCost`（M1 未使用）。字段定义与枚举取值见 spec §4。
 
 ---
 
-## 附录 E-2：会员结算链路（M2）
+### E.2 M2：结算链路
 
 M1 只有账本与只读端点；M2 把券与赠品接进了 `POST /orders`。**42251/42252 从「留给 M2」变成真有触发路径。**
 
@@ -1413,7 +1477,7 @@ M1 只有账本与只读端点；M2 把券与赠品接进了 `POST /orders`。**
 
 ---
 
-## 附录 E-3：管理端用户维度（M3）
+### E.3 M3：管理端用户维度
 
 后台的会员相关页面（优惠券 / 积分赠品 / 会员设置 / 用户管理）落在 M3。除了 E-2 已列的
 券模板与赠品 CRUD，这一轮新增四个**用户维度**的端点，全部挂在 `/admin/users` 下。

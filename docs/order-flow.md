@@ -100,6 +100,17 @@ SHIPPED（已发货）
 部分退款（不改变订单状态）：PAID / PREPARING / SHIPPED / COMPLETED 任一状态下，商家可发起 amount < 可退余额 的退款，
 成功后 order.refundedAmount 累加，订单继续履约；退完全部余额即视为全额退款，走 REFUNDING → REFUNDED。
 
+**已支付后的退款一律不释放会员优惠**（刻意的不对称）：
+
+    库存 回滚 · 销量 回滚 · 优惠券 不退 · 赠品积分 不退 · 赠品名额 不回落
+
+库存回滚是因为货是实物、退了就该能再卖；券与名额不回滚是因为「下单即退」就能白嫖一张券、
+或者占掉限量赠品的名额。**退款路径一处都不调 `releaseOrderBenefits`。**
+
+已发放的积分按**退款金额比例扣回**：`points_earned × 退款额 / points_base`，与当前的
+`earnRatePerYuan` 无关（`points_base` 是发分那一刻的基数快照，所以店主改比例不影响历史单）。
+扣回不超过本单发放过的量，也不会让余额变成负数；只从「在世」的入账行扣，不碰到期未清扫的死行。
+
 售后：SHIPPED / COMPLETED 且有可退余额时顾客可提交 AfterSale（PENDING）→ 商家 approve（按金额发起退款，APPROVED → 回调成功 DONE）或 reject（REJECTED）。
 ```
 
@@ -170,6 +181,22 @@ async function createOrder(userId, { cartItemIds, addressId, deliveryType, remar
   }
   const actualAmount = totalAmount + shippingFee
 
+  // 6b. 会员优惠（M2 起）。顺序是产品决策，不能调：
+  //     小计 = Σ 非赠品行
+  //     折扣 = 券 ? min(券面额, 小计) : 0        ← 门槛比对的是**小计**
+  //     运费 = 按**券前小计**判（包邮/起送/同城起送）← 顾客不因用券失去包邮
+  //     实付 = 小计 − 折扣 + 运费
+  //
+  //     所以第 5 步的 calculateShippingFee 收到的 totalAmount 必须**始终是券前小计**。
+  //     实现见 services/member/pricing.ts 的 checkCouponUsable / computeCheckout
+  //     （两个纯函数，不 import prisma，便于 selftest 覆盖整个计价矩阵）。
+  //
+  //     actualAmount === 0 必须拒单（42251）：券把商品减到 0 且免运费在算术上合法，
+  //     但微信支付收不了 0 元,会掉进无回调的死角。
+  //
+  //     赠品行 productPrice/subtotal 恒为 0、isGift=true、pointsCost 记快照；
+  //     赠品**计入**同城的件数与重量上限（骑手真要拎）。
+
   // 7. 生成唯一订单号
   const orderNo = generateOrderNo()
 
@@ -234,6 +261,15 @@ async function createOrder(userId, { cartItemIds, addressId, deliveryType, remar
 
 配套：微信预下单带 `time_expire`（= createdAt + 超时），`/pay` 对超时订单直接拒绝，顾客端按 `payExpireAt` 显示倒计时；
 支付回调若命中已 CANCELLED 订单，记账后自动全额退款并告警（`wechat-notify.ts`）。
+
+**会员优惠的释放只发生在「未支付取消」**（四条路径都覆盖：顾客自助取消、超时任务、
+管理员取消、商家拒单的待付款分支）：券回 `UNUSED`（**若已过期则置 `EXPIRED`** —— 过期券不还给
+顾客用，也不能留在 `USED` 状态误导）、赠品积分退回（`GIFT_REVERT`，沿用原到期日不延长）、
+赠品名额 `issued_count` 回落。
+
+判定按**状态守卫**而不是端点白名单（`releaseOrderBenefits` 要求调用方已确认状态翻转成功）——
+按端点列名单的话，漏了「拒单的待付款分支」这种路径就是券与积分静默消失，而那条分支正是
+第一版差点漏掉的。
 非生产环境可 `POST /api/admin/system/run-scheduler {payTimeoutMin,autoCompleteDays,remindAfterMin}` 手动触发（e2e 用）。
 
 ---
