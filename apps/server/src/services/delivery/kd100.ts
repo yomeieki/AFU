@@ -102,8 +102,19 @@ export const kd100Provider: DeliveryProvider = {
   name: 'KD100',
   async price(input) {
     const settings = await import('../local-settings').then((m) => m.getLocalSettings())
+    // ⚠️ callbackUrl 必须是**格式合法的 URL**，哪怕 batchPrice 根本不会回调。
+    // 2026-09-06 生产实测（A/B 只变这一个量，其余 param 完全相同）：
+    //   callbackUrl: ''  → returnCode=30001「回调地址格式错误」
+    //   callbackUrl: 真实地址 → returnCode=200，返回 4 家真实报价
+    // 此前这里写的是空串，于是**生产上每一次查价都在失败**，而且失败得很安静：
+    // measureRoadDistanceM 的 catch 会退回「直线 × detourFactor」估算并只标记
+    // distanceSource:'ESTIMATED'，报价照样签发、订单照样能下——所以没人发现顾客
+    // 看到的配送费从来不是真实道路距离算出来的。（同一发实测：直线 1.11km 的点真实
+    // 道路 1422m，实际系数 1.28，而兜底配的 1.7 高估 33%。）
+    // 用 /api/kd/quote 而不是随便编一个：万一运力方真往这里 POST，handleKdCallback
+    // 查不到 deliveryNo='quote' 会返 200 + 一条固定键告警，不会污染任何真实配送单。
     const fullInput: CreateDeliveryOrderInput = {
-      deliveryNo: 'quote', callbackUrl: '', callbackSalt: '',
+      deliveryNo: 'quote', callbackUrl: `${config.publicBaseUrl}/api/kd/quote`, callbackSalt: 'quote',
       sender: input.sender, receiver: input.receiver,
       goods: { title: '', weightKg: 0.5, totalPriceFen: 0, count: 1 }
     }

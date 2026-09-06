@@ -76,6 +76,19 @@ if (process.argv.includes('--integration')) {
       goods: { title: '凉菜', weightKg: 0.5, totalPriceFen: 2000, count: 1 }, remark: '',
     } as never)
     console.log('真实询价（只读不扣费）:', JSON.stringify(r))
+    // 断言，不只是打印。此前这里只 console.log，于是 2026-09-06 之前
+    // 「查价其实一直在失败」（price() 把 callbackUrl 写成空串 → 30001）
+    // 跑这个 --integration 也是 exit 0，等于没有闸门。
+    if (!r.quotes || r.quotes.length === 0) {
+      console.error('  ✘ 没有拿到任何运力报价——密钥、门店坐标、运力覆盖、callbackUrl 格式，四者之一有问题')
+      process.exit(1)
+    }
+    if (r.distanceM === null || r.distanceM === undefined) {
+      console.error('  ✘ 拿到报价但没有 distanceM——字段名可能变了（官方文档是驼峰 kuaidiCom/distance）')
+      process.exit(1)
+    }
+    console.log(`  ✔ ${r.quotes.length} 家运力有覆盖，最低 ¥${(r.feeFen / 100).toFixed(2)}，道路距离 ${r.distanceM}m`)
+    for (const q of r.quotes) console.log(`      ${q.provider.padEnd(22)} ¥${(q.feeFen / 100).toFixed(2)}  ${q.distanceM ?? '?'}m`)
     process.exit(process.exitCode ?? 0)
   })().catch((e) => { console.error('--integration 失败:', (e as Error).message); process.exit(1) })
 }
