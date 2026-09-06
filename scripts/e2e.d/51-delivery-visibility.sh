@@ -80,6 +80,23 @@ D51_ACTUAL=$(jq -r '.data.delivery.actualFee' <<<"$R")
 [[ "$D51_ACTUAL" != "null" && "$D51_ACTUAL" != "0" ]] && ok "实扣已认领（${D51_ACTUAL} 分，来自报价快照兜底）" || fail "实扣未认领" "$R"
 assert_eq "costFen 用实扣而不是下单预扣" "$(jq -r '.data.costFen' <<<"$R")" "$D51_ACTUAL"
 
+echo "-- ⑥b 已取消配送单的**预扣不算成本**（它被释放了，一分钱没花）--"
+# 这条是复查抓出来的真 bug 的回归护栏：原实现对每一张配送单都累加 (actualFee ?? quotedFee)，
+# 于是每一张自动升级过的单都会虚报一大笔——实测订单 19430 的 D-1 是
+# CANCELLED/quoted_fee=1623/cancel_fee=0（真实 ¥0），加进去就把 ¥5 的成本算成 ¥21.23。
+# 而这个数正是店员决定退多少钱时看的。
+D51_O6=$(mk_local_paid)
+req POST "/api/admin/local/orders/$D51_O6/accept" "$AT" >/dev/null
+sleep 0.3
+req POST "/api/admin/local/orders/$D51_O6/call" "$AT" >/dev/null
+D51_D6=$(d51_dlv "$D51_O6" | jq -r '.data.delivery.deliveryNo')
+# 造一张「预扣 ¥16.23、取消费 ¥0 的已取消单」——正是自动升级留下的那种形状
+sql "UPDATE deliveries SET status='CANCELLED', active_order_id=NULL, quoted_fee=1623, cancel_fee=0 WHERE delivery_no='$D51_D6'" >/dev/null
+assert_eq "已取消单的预扣不计入成本（真实花费 ¥0）" "$(d51_dlv "$D51_O6" | jq -r '.data.costFen')" "0"
+# 同一张单加一笔真实取消费：这笔才是真扣的
+sql "UPDATE deliveries SET cancel_fee=200 WHERE delivery_no='$D51_D6'" >/dev/null
+assert_eq "已取消单只算取消费" "$(d51_dlv "$D51_O6" | jq -r '.data.costFen')" "200"
+
 echo "-- ⑥ 升级留下的已取消配送单，它的取消费也要计进成本合计 --"
 # 这正是「只看最近一张配送单」会漏掉的那笔钱：自动升级 = 撤 D-1 建 D-2，
 # D-1 上的取消费是真花出去的。

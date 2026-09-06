@@ -147,6 +147,30 @@ assert_eq "熔断时原单原封不动仍待抢单" "$(jq -r '.data.delivery.sta
 assert_eq "熔断时原单没被换成新单" "$(jq -r '.data.delivery.deliveryNo' <<<"$R")" "$D50_D4"
 req POST /api/admin/system/kd100-circuit/reset "$AT" >/dev/null
 
+echo "-- ⑧ 顾客已申请取消的单不升级（撤了旧单必然重呼失败，会把店员引向反方向）--"
+# 复查抓出来的：callRider 对 cancelRequestedAt 是硬拦截（42204），而 cancelDelivery 不拦。
+# 不排除的话顺序会变成「先把 D-1 撤了 → 重呼必然失败 → 发一条『请手动呼叫骑手』的告警」，
+# 而顾客其实是想取消。顾客可取消窗口（默认 5 分钟）与 3 分钟升级窗口高度重叠，不是罕见路径。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+d50_queue_price
+D50_O6=$(mk_local_paid)
+req POST "/api/admin/local/orders/$D50_O6/accept" "$AT" >/dev/null
+sleep 0.5
+req POST "/api/admin/local/orders/$D50_O6/call" "$AT" >/dev/null
+D50_D6=$(d50_dlv "$D50_O6" | jq -r '.data.delivery.deliveryNo')
+d50_only "$D50_D6"
+sql "UPDATE orders SET cancel_requested_at = UTC_TIMESTAMP(3) WHERE id = $D50_O6" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
+sleep 1
+R=$(req POST /api/admin/system/run-scheduler "$AT" '{"escalateAfterMin":0.01}')
+assert_eq "有待处理取消申请时不升级" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
+R=$(d50_dlv "$D50_O6")
+assert_eq "原配送单原封不动" "$(jq -r '.data.delivery.deliveryNo' <<<"$R")" "$D50_D6"
+assert_eq "原配送单仍待抢单（没被撤）" "$(jq -r '.data.delivery.status' <<<"$R")" "CALLING"
+[[ "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -r '[.data[] | select(.op=="cancelOrder")] | length')" == "0" ]] \
+  && ok "没有发出撤单请求" || fail "不该撤单却撤了" "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -c '[.data[].op]')"
+sql "UPDATE orders SET cancel_requested_at = NULL WHERE id = $D50_O6" >/dev/null
+
 echo "-- ⑥ 切回 ALL：行为与策略上线前一致（这是不必部署就能关掉策略的开关）--"
 d50_put_settings '.callStrategy = {"mode":"ALL","escalateAfterMin":3}'
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null

@@ -148,12 +148,22 @@ router.get('/:id/delivery', async (req: Request, res: Response, next: NextFuncti
       prisma.order.findUnique({ where: { id }, select: { quoteSnapshot: true, quotedAt: true } }),
       // 这一单**所有**配送单，不只最近一张：自动升级会留下一张 CANCELLED 的 D-1，
       // 它身上的取消费也是店家真花出去的钱。只看最近一张会把这笔漏掉。
-      prisma.delivery.findMany({ where: { orderId: id }, select: { quotedFee: true, actualFee: true, tipFee: true, cancelFee: true } }),
+      prisma.delivery.findMany({ where: { orderId: id }, select: { status: true, quotedFee: true, actualFee: true, tipFee: true, cancelFee: true } }),
     ])
     // 配送成本口径（前端与退款弹窗共用这一个数，不要各算各的）：
-    // 每张配送单取 实扣 ?? 下单预扣，再加上小费与取消费。actualFee 在中标运力接单后
-    // 由回调认领（callback.ts），此前只有 quotedFee 可用。
-    const costFen = allOfOrder.reduce((sum, d) => sum + (d.actualFee ?? d.quotedFee ?? 0) + d.tipFee + d.cancelFee, 0)
+    //
+    // ⚠️ **已取消/已失败的配送单，预扣是被释放掉的，一分钱没花**——只有 cancelFee 是真扣的。
+    // 小费同理随取消退回（见 orchestrator 的升级说明）。把它们的 quotedFee 也累加进来，
+    // 会让每一张自动升级过的单都虚报一大笔：实测订单 19430 的 D-1 是
+    // CANCELLED/quoted_fee=1623/cancel_fee=0（真实 ¥0），D-2 实扣 ¥5.00，
+    // 全加起来会算成 ¥21.23，是真实成本的 4 倍——而这个数正是店员决定退多少钱时看的。
+    //
+    // 在途单取 quotedFee 是「已被冻结、大概率会扣掉」的最好估计；中标运力接单后
+    // 回调会认领 actualFee（callback.ts），那时就有确切数了。
+    const costFen = allOfOrder.reduce((sum, d) => {
+      const released = d.status === 'CANCELLED' || d.status === 'FAILED'
+      return sum + (released ? 0 : (d.actualFee ?? d.quotedFee ?? 0) + d.tipFee) + d.cancelFee
+    }, 0)
     success(res, {
       delivery: delivery ?? null,
       events: delivery?.events ?? [],

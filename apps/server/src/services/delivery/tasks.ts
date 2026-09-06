@@ -7,7 +7,7 @@ import prisma from '../../utils/prisma'
 import { config } from '../../config'
 import { getLocalSettings, isOpenNow } from '../local-settings'
 import { isCircuitTripped } from './circuit'
-import { callRider, cancelDelivery, precancelDelivery } from './orchestrator'
+import { callRider, cancelDelivery, precancelDelivery, getActiveDelivery } from './orchestrator'
 import { refreshOrderQuote, QUOTE_FRESH_MS } from './quote'
 import { recordDeliveryEvent, adminEventKey } from './events'
 import { notifySystemAlert } from '../notify'
@@ -188,8 +188,15 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
   if (threshold <= 0) return 0
   if (isCircuitTripped()) return 0
   const rows = await prisma.delivery.findMany({
-    // providerTaskId 非空 = 运力方那头确实有单可撤（占位/UNKNOWN 行没有它，precancel 会 42234）
-    where: { status: 'CALLING', callStrategy: 'SOLO', providerTaskId: { not: null }, calledAt: { lt: ago(threshold) } },
+    where: {
+      // providerTaskId 非空 = 运力方那头确实有单可撤（占位/UNKNOWN 行没有它，precancel 会 42234）
+      status: 'CALLING', callStrategy: 'SOLO', providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
+      // 顾客已经申请取消的单不许升级：callRider 对这个条件是硬拦截（42204），
+      // 而 cancelDelivery 不拦——不排除的话会「先把 D-1 撤了、再在重呼那一步必然失败」，
+      // 留下一条「请到工作台手动呼叫骑手」的告警，把店员引向与顾客意愿相反的操作。
+      // 顾客可取消窗口（默认 5 分钟）与 3 分钟升级窗口高度重叠，这不是罕见路径。
+      order: { cancelRequestedAt: null },
+    },
     take: BATCH, select: { id: true, orderId: true, orderNo: true, deliveryNo: true, calledProviders: true, quotedFee: true },
   })
   let n = 0
@@ -214,6 +221,13 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
         n++
         continue
       }
+      // ⚠️ precancel 那一发是外呼（约 1 秒）。cancelDelivery 只收 orderId、内部按
+      // 「当前在途单」定位，而我们是**按 d.id 这一行**做的决策——这 1 秒里若店员手动
+      // 「取消呼叫 → 重新呼叫」换上了新的一张，下面这句会撤掉店员刚叫来的那个骑手
+      // 并白扣一笔取消费。重新确认在途单还是同一行再动手，把窗口从「一次网络往返」
+      // 压到「一次本地查询」。仍不是原子的，但代价与概率都降了两个量级。
+      const stillSame = await getActiveDelivery(d.orderId)
+      if (!stillSame || stillSame.id !== d.id) continue
       await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为并呼` })
       try {
         await callRider({

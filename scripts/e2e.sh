@@ -1894,7 +1894,13 @@ echo "== 39. 会员优惠：下单用券与赠品、未支付取消释放（M2�
 # 按 spec §9「券」「赠品」「未支付取消」「越权」四组写。变量一律 M2_ 前缀。
 # 造用户的 code **前 8 位必须互不相同**——mock 登录用 code.slice(0,8) 派生 openid，
 # 前 8 位相同就是同一个用户，会把「越权」那条测成永远通过的空断言（2026-09-06 踩过）。
-M2_TAG=$RANDOM
+# ⚠️ 前缀必须短：mock 登录的 openid = `mock_openid_` + **code 的前 8 位**（routes/auth.ts）。
+# 原来的 code 是 `alpha$M2_TAG-m2`，5 个字符的前缀吃掉大半预算，真正参与去重的只有标签的
+# 前 3 位 —— 命名空间被压到约 1000 个，而这个库里已经攒了 54 个 `mock_openid_alpha***`。
+# 撞上就会复用上一轮那个**几小时前建的**用户，于是 §48「翻页能找到该用户」在按 createdAt desc
+# 的前 250 行里找不到它，连着三条绝对值断言一起假红（2026-09-06 实测撞到一次）。
+# 改成 1 位前缀 + 双 $RANDOM：前 8 位是 `m` + 7 位数字，命名空间约 10^7。
+M2_TAG=$RANDOM$RANDOM
 M2_ORIG_SHIP=$(req GET /api/admin/settings/shipping "$AT" | jq -c .data)
 
 m2_login() { req POST /api/auth/wechat-login "" "{\"code\":\"$1\"}" | jq -r '.data.token'; }
@@ -1912,7 +1918,7 @@ m2_grant() { # $1=userId $2=分数
        UPDATE users SET points_balance=$2 WHERE id=$1;"
 }
 
-M2_UT=$(m2_login "alpha$M2_TAG-m2")
+M2_UT=$(m2_login "m${M2_TAG}")
 M2_UID=$(m2_uid "$M2_UT")
 M2_ADDR=$(m2_addr "$M2_UT")
 m2_grant "$M2_UID" 1000
@@ -1959,7 +1965,7 @@ assert_eq "券④：券额 ≥ 小计且免运费 → 42251" "$(code "$R")" "422
 assert_eq "券④：消息说的是「超过可抵扣范围」不是「过期/已用」" "$(jq -r '.message | contains("抵扣")' <<<"$R")" "true"
 
 echo "-- 券⑤：越权——B 不能用 A 的券 --"
-M2_UT2=$(m2_login "bravo$M2_TAG-m2")
+M2_UT2=$(m2_login "n${M2_TAG}")
 M2_UID2=$(m2_uid "$M2_UT2")
 assert_eq "券⑤前置：确实是两个不同用户（前 8 位不同的 code）" "$([[ "$M2_UID" != "$M2_UID2" ]] && echo yes || echo no)" "yes"
 M2_ADDR2=$(m2_addr "$M2_UT2")

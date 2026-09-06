@@ -143,8 +143,14 @@ interface ConfirmSpec {
   cost: string
   /** 花钱的操作额外给一块琥珀提示（§6） */
   amber?: string
-  /** 确认块与琥珀之间的自定义内容（呼叫弹窗用它放各家报价，见 CallQuoteBlock） */
-  extra?: ReactNode
+  /**
+   * 确认块与琥珀之间的自定义内容（呼叫弹窗用它放各家报价，见 CallQuoteBlock）。
+   * 收一个「把最新最低价报上来」的回调：报价块里点刷新之后，确认键上的运力名与金额
+   * 必须跟着变——spec 是点击那一刻存进 state 的，不回传就会停在旧数字上。
+   */
+  extra?: (onLowest: (l: { provider: string; feeFen: number } | null) => void) => ReactNode
+  /** 有实时最低价时用它生成确认键文案；没有就退回 confirmText */
+  confirmTextOf?: (lowest: { provider: string; feeFen: number }) => string
   confirmText: string
   okMsg: string
   run: () => Promise<unknown>
@@ -158,12 +164,19 @@ interface ConfirmSpec {
  *
  * batchPrice 免费、不下单、不落库，所以刷新按钮可以随便点。
  */
-function CallQuoteBlock({ orderId, initial }: {
+function CallQuoteBlock({ orderId, initial, onLowest }: {
   orderId: number
   initial: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+  onLowest: (l: { provider: string; feeFen: number } | null) => void
 }) {
   const [q, setQ] = useState(initial)
   const [busy, setBusy] = useState(false)
+  // 把「当前这份报价的最低价」报给弹窗，让确认键上的运力名与金额始终与眼前这块一致。
+  // 报价已过期时报 null：过期意味着服务端在真正下单前会自己重查一次，那时挑中的
+  // 可能是另一家——此刻在按钮上写死一个价就是空头承诺。
+  useEffect(() => {
+    onLowest(q?.stale ? null : q?.snapshot?.lowest ?? null)
+  }, [q, onLowest])
   const refresh = async () => {
     setBusy(true)
     try {
@@ -201,6 +214,11 @@ function CallQuoteBlock({ orderId, initial }: {
 function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: () => void; onDone: (msg: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // 报价块回传的实时最低价（点了刷新之后会变）。useCallback 定住引用，
+  // 否则每次渲染都是新函数，会把子组件的 useEffect 变成无限循环。
+  const [liveLowest, setLiveLowest] = useState<{ provider: string; feeFen: number } | null>(null)
+  const onLowest = useCallback((l: { provider: string; feeFen: number } | null) => setLiveLowest(l), [])
+  const confirmText = liveLowest && spec.confirmTextOf ? spec.confirmTextOf(liveLowest) : spec.confirmText
   const submit = async () => {
     setBusy(true); setError('')
     try { await spec.run(); onDone(spec.okMsg) }
@@ -216,13 +234,13 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
           <FillButton channel={spec.channel} onClick={submit} disabled={busy}>
-            {busy ? '处理中…' : spec.confirmText}
+            {busy ? '处理中…' : confirmText}
           </FillButton>
         </>
       }
     >
       <WhatBlock what={spec.what} customer={spec.customer} cost={spec.cost} />
-      {spec.extra}
+      {spec.extra?.(onLowest)}
       {spec.amber && <div className="wb__amber">{spec.amber}</div>}
     </WbModal>
   )
@@ -989,7 +1007,8 @@ export default function Workbench() {
     // 呼叫方式来自设置（默认只呼最低价）。拿不到设置时按「并呼」措辞——宁可文案保守，
     // 也不要让店员以为只花一家的钱、结果按并呼冻结了 N 笔。
     const solo = settings?.callStrategy?.mode === 'SOLO_LOWEST'
-    const lowest = detail?.quote?.snapshot?.lowest ?? null
+    // 最低价不在这里取：确认键的金额由弹窗内的报价块实时回传（见 ConfirmSpec.confirmTextOf），
+    // 这里取一次会停在打开抽屉那一刻的快照上，店员在弹窗里点过刷新之后就成了错数字。
     const escalateMin = settings?.callStrategy?.escalateAfterMin ?? 0
     const btns: ReactNode[] = []
     const fill = (key: string, label: string, onClick: () => void) => (
@@ -1008,11 +1027,16 @@ export default function Workbench() {
      * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，只能说明会先查价。
      */
     const callSpec = (title: string, confirmText: string, what: string, run: () => Promise<unknown>, hasQuote = true): ConfirmSpec => {
-      const named = solo && hasQuote && lowest
       return {
         title, channel: ch,
-        // 确认键上带运力名与金额，是「按下去要花多少钱」最后一道提示
-        confirmText: named ? `呼叫${providerLabel(lowest.provider)} ¥${yuan(lowest.feeFen)}` : confirmText,
+        // 确认键上带运力名与金额，是「按下去要花多少钱」最后一道提示。
+        // 金额取**弹窗里那块报价当前显示的**最低价（点了刷新会跟着变），而不是打开抽屉那一刻
+        // 的快照；报价过期时 CallQuoteBlock 会报 null，这里就退回不带金额的通用文案——
+        // 过期意味着服务端下单前会自己重查，此刻写死一个价就是空头承诺。
+        confirmTextOf: solo && hasQuote
+          ? (l) => `呼叫${providerLabel(l.provider)} ¥${yuan(l.feeFen)}`
+          : undefined,
+        confirmText,
         okMsg: '已呼叫骑手',
         what: solo
           ? (hasQuote
@@ -1023,7 +1047,9 @@ export default function Workbench() {
         cost: solo
           ? '只冻结这一家的配送费。'
           : '每一家各冻结一笔预扣，只有中标那家最终扣款，其余释放。',
-        extra: hasQuote ? <CallQuoteBlock orderId={order.id} initial={detail?.quote ?? null} /> : undefined,
+        extra: hasQuote
+          ? (onLowest) => <CallQuoteBlock orderId={order.id} initial={detail?.quote ?? null} onLowest={onLowest} />
+          : undefined,
         amber: CALL_AMBER, run,
       }
     }
