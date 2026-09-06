@@ -79,13 +79,15 @@ A/B 只变 `callbackUrl` 一个量，其余 param 完全相同。
 
 ## 二、部署记录（本节已随进度更新）
 
-**生产当前版本：`806c2a3`**（2026-09-06 20:43 部署，零迁移，健康检查绿）。
-回滚：`DEPLOY_REF=848ba0b bash scripts/deploy.sh`。
+**生产当前版本：`d1ce6d1`**（2026-09-07 00:12 部署，含一条 additive 迁移，健康检查绿）。
+回滚：`DEPLOY_REF=806c2a3 bash scripts/deploy.sh`（迁移是 additive，旧代码不读新列，**代码回滚不需要回滚数据库**）。
+迁移前自动备份：`/www/backups/pre-deploy/pre_deploy_20260907_001150.sql.gz`。
 
 | 时间 | 版本 | 内容 |
 |---|---|---|
 | 19:45 | `848ba0b` | 从 `e91ea42` 起 10 个提交：`b6fd384` 并发修复、`26677a2` 查价修复、`34c1446` 小程序、`4f6a7ea` nginx、文档 |
 | 20:43 | `806c2a3` | `queryCourier` 参数名修复 + **重启加载 `WECHAT_TMPL_DELIVER`** |
+| 09-07 00:12 | `d1ce6d1` | 整改批次 1+2+3：只呼最低价 + 3 分钟升级 + 实扣认领 + 工作台可见性 + 时区 + 小程序订单入口。**一条 additive 迁移**（`deliveries` 加 `call_strategy` / `order_fees`）|
 
 **20:43 部署后的三项验证（全绿）**：
 
@@ -495,7 +497,29 @@ query / queryOrder / orderQuery / queryorder / getOrder / orderDetail
 > 方案：`docs/superpowers/plans/2026-09-06-local-delivery-remediation.md`
 > 分支：`claude/local-delivery-remediation`（未部署，等店主逐项授权）
 
-## 已完成（本地已验证，**尚未上生产**）
+## ✅ 已部署（2026-09-07 00:12，版本 `d1ce6d1`）
+
+部署后逐项核实（判据按交接说明 §4：**不用 401/404 判**，在编译产物里 grep 特征串）：
+
+| 验的什么 | 结果 |
+|---|---|
+| 生产 commit | `d1ce6d1` |
+| 服务端产物含新代码 | `escalateSoloCalls` / 「只呼最低价」在 `apps/server/dist/` 里 grep 到 |
+| 调度器注册了升级任务 | `localEscalate` 在 `dist/services/scheduler.js` 里 |
+| 后台产物含新界面 | 「实扣（中标）」「只呼最低价那一家（推荐）」都 grep 到 |
+| 迁移 | `20260908000000_call_strategy` 已 finished；`call_strategy` / `order_fees` 两列在表上 |
+| 部署后的默认值 | `callStrategy: { mode: 'SOLO_LOWEST', escalateAfterMin: 3 }` |
+| PM2 | `online`，**单实例 fork**（熔断态与定时器的前提没变） |
+| 错误日志 | 空 |
+| 健康检查 | 绿 |
+
+⚠️ `settings` 表里那行 JSON 的 `callStrategy` 仍是 **NULL**，这是**预期的**——
+该字段只在店主保存设置时才写进 JSON，运行时由 `sanitizeLocalSettings` 填默认值。
+所以**策略此刻已经生效**，不需要店主再点一次；想关掉就去「同城设置 → 呼叫方式」选并呼。
+
+部署时间是 00:12，营业时段是 09:00–20:00，所以**首张只呼最低价的真实单会发生在早上开门后**。
+
+## 已完成（本地已验证）
 
 | 批次 | 内容 | 验证 |
 |---|---|---|
