@@ -10,6 +10,7 @@ import Spinner from '../components/ui/Spinner'
 import RefundDialog from '../components/RefundDialog'
 import { toast } from '../components/ui/Toast'
 import type { DeliveryEventInfo, DeliveryInfo, Order } from '../types'
+import { fmtDateTime, fmtDateTimeSec } from '../utils/time'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -169,7 +170,7 @@ export default function LocalOrders() {
                     <StatusBadge status={o.status} />
                     {dc?.delivery && <StatusBadge status={dc.delivery.status} />}
                     <span className="font-mono text-xs text-gray-500">{o.orderNo}</span>
-                    <span className="ml-auto text-xs text-gray-400">{new Date(o.createdAt).toLocaleString('zh-CN')}</span>
+                    <span className="ml-auto text-xs text-gray-400">{fmtDateTime(o.createdAt)}</span>
                   </div>
                   <div className="text-sm text-gray-700 flex flex-wrap gap-x-4 gap-y-1">
                     <span>
@@ -222,7 +223,7 @@ export default function LocalOrders() {
                         <ol className="space-y-1.5">
                           {dc.events.map((ev) => (
                             <li key={ev.id} className="text-xs text-gray-600 flex gap-2">
-                              <span className="text-gray-400 shrink-0">{new Date(ev.createdAt).toLocaleString('zh-CN')}</span>
+                              <span className="text-gray-400 shrink-0">{fmtDateTimeSec(ev.createdAt)}</span>
                               <span>
                                 {ev.statusDesc ?? ev.source}
                                 {ev.courierName ? `（${ev.courierName}）` : ''}

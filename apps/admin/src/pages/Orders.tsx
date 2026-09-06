@@ -14,6 +14,7 @@ import IssueCouponModal from '../components/IssueCouponModal'
 import AfterSalePanel from '../components/AfterSalePanel'
 import { usePendingOrders } from '../hooks/usePendingOrders'
 import { AFTER_SALE_STATUS_LABEL, type Order } from '../types'
+import { fmtDateTime } from '../utils/time'
 
 // 状态 Tab（含「全部」；REFUNDED 单量少，并入「退款」）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -293,7 +294,7 @@ export default function Orders() {
       {(order.pointsUsed ?? 0) > 0 && (
         <p className="text-xs text-gray-500">赠品抵扣：{order.pointsUsed} 积分</p>
       )}
-      {order.paidAt && <p className="text-xs text-gray-500">支付时间：{new Date(order.paidAt).toLocaleString('zh-CN')}</p>}
+      {order.paidAt && <p className="text-xs text-gray-500">支付时间：{fmtDateTime(order.paidAt)}</p>}
       {order.cancelReason && (order.status === 'CANCELLED' || order.status === 'REFUNDING' || order.status === 'REFUNDED') && (
         <p className="text-xs text-gray-500">原因：{order.cancelReason}</p>
       )}
@@ -307,7 +308,7 @@ export default function Orders() {
       {order.shipment?.expressNo && (
         <p className="text-xs text-gray-500">
           物流：{order.shipment.expressCompany} {order.shipment.expressNo}
-          {order.shipment.shippedAt && `（${new Date(order.shipment.shippedAt).toLocaleString('zh-CN')} 发货）`}
+          {order.shipment.shippedAt && `（${fmtDateTime(order.shipment.shippedAt)} 发货）`}
           {order.shipment.remark && ` 备注：${order.shipment.remark}`}
         </p>
       )}
@@ -447,7 +448,7 @@ export default function Orders() {
                       </div>
                       {order.remark && <p className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1 mt-1.5">备注：{order.remark}</p>}
                       <p className="text-xs text-gray-400 mt-1">
-                        {new Date(order.createdAt).toLocaleString('zh-CN')}
+                        {fmtDateTime(order.createdAt)}
                         {order.refundedAmount > 0 && <span className="ml-2 text-red-500">已退 ¥{yuan(order.refundedAmount)}</span>}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1.5 text-sm">
@@ -501,7 +502,7 @@ export default function Orders() {
                         <StatusBadge status={order.status} />
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-500">{new Date(order.createdAt).toLocaleString('zh-CN')}</td>
+                    <td className="px-4 py-3 text-right text-gray-500">{fmtDateTime(order.createdAt)}</td>
                     <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
                       {renderActions(
                         order,

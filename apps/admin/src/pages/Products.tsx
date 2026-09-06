@@ -12,6 +12,7 @@ import { CHANNEL_LABEL, type Product, type Category, type SpecDimension, type Ch
 import { toast } from '../components/ui/Toast'
 import QRCodeLib from 'qrcode'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
+import { fmtDateTime } from '../utils/time'
 
 const emptyForm = {
   categoryId: 0,
@@ -847,7 +848,7 @@ export default function Products() {
               <div className="flex justify-between">
                 <span className="text-gray-500">生成时间</span>
                 <span className="text-gray-600">
-                  {qrModal.qrGeneratedAt ? new Date(qrModal.qrGeneratedAt).toLocaleString() : '-'}
+                  {fmtDateTime(qrModal.qrGeneratedAt, '-')}
                 </span>
               </div>
             </div>

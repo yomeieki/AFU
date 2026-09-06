@@ -11,6 +11,7 @@ import EmptyState from '../components/ui/EmptyState'
 import { toast } from '../components/ui/Toast'
 import IssueCouponModal from '../components/IssueCouponModal'
 import type { AdminUser, UserOrder, PointsLedgerRow, UserCouponRow } from '../types'
+import { fmtDate, fmtDateTime } from '../utils/time'
 
 const userLabel = (u: AdminUser) => u.nickname ?? `用户 #${u.id}`
 const yuan = (fen: number) => (fen / 100).toFixed(2)
@@ -209,7 +210,7 @@ export default function Users() {
                     </span>
                   </div>
                   <p className="text-xs text-gray-500 mt-1.5">
-                    {u.phone ?? '未绑定手机'}　订单 {u.orderCount}　注册 {new Date(u.createdAt).toLocaleDateString('zh-CN')}
+                    {u.phone ?? '未绑定手机'}　订单 {u.orderCount}　注册 {fmtDate(u.createdAt)}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
                     积分 <span className="text-gray-800 font-medium">{u.pointsBalance}</span> · 可用券{' '}
@@ -251,10 +252,10 @@ export default function Users() {
                 </span>
               </td>
               <td className="px-4 py-3 text-right text-gray-500">
-                {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('zh-CN') : '-'}
+                {fmtDateTime(u.lastLoginAt, '-')}
               </td>
               <td className="px-4 py-3 text-right text-gray-500">
-                {new Date(u.createdAt).toLocaleDateString('zh-CN')}
+                {fmtDate(u.createdAt)}
               </td>
               <td className="px-4 py-3 text-right">
                 <div className="flex justify-end gap-3 whitespace-nowrap">
@@ -320,7 +321,7 @@ export default function Users() {
                         <StatusBadge status={o.status} />
                       </td>
                       <td className="px-3 py-2 text-right text-gray-500">
-                        {new Date(o.createdAt).toLocaleString('zh-CN')}
+                        {fmtDateTime(o.createdAt)}
                       </td>
                     </tr>
                   ))}
@@ -380,7 +381,7 @@ export default function Users() {
                   <tbody className="divide-y divide-gray-100">
                     {ledger.map((r) => (
                       <tr key={r.id}>
-                        <td className="px-3 py-2 text-gray-500">{new Date(r.createdAt).toLocaleString('zh-CN')}</td>
+                        <td className="px-3 py-2 text-gray-500">{fmtDateTime(r.createdAt)}</td>
                         <td className="px-3 py-2 text-gray-700">{r.typeLabel}</td>
                         <td className={`px-3 py-2 text-right font-semibold ${r.delta >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                           {r.delta >= 0 ? `+${r.delta}` : r.delta}
@@ -408,7 +409,7 @@ export default function Users() {
                         </td>
                         <td className="px-3 py-2 text-gray-600 whitespace-normal max-w-[16rem]">{r.remark ?? '-'}</td>
                         <td className="px-3 py-2 text-right text-gray-500">
-                          {r.expiresAt ? new Date(r.expiresAt).toLocaleDateString('zh-CN') : '-'}
+                          {fmtDate(r.expiresAt, '-')}
                         </td>
                       </tr>
                     ))}
@@ -498,7 +499,7 @@ export default function Users() {
                         <td className="px-3 py-2 text-gray-600">{c.issuedBy ?? '-'}</td>
                         <td className="px-3 py-2 text-gray-600 whitespace-normal max-w-[14rem]">{c.remark ?? '-'}</td>
                         <td className="px-3 py-2 text-right text-gray-500">
-                          {new Date(c.expiresAt).toLocaleDateString('zh-CN')}
+                          {fmtDate(c.expiresAt)}
                         </td>
                         <td className="px-3 py-2 font-mono text-gray-600">{c.orderNo ?? c.sourceRef ?? '-'}</td>
                       </tr>

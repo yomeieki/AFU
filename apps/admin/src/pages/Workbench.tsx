@@ -23,6 +23,7 @@ import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
+import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn } from '../utils/time'
 
 type ColKey = keyof WorkbenchSnapshot['columns']
 
@@ -53,16 +54,10 @@ const apiMessage = (e: unknown, fallback: string) =>
   (e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback
 const apiCode = (e: unknown) => (e as { response?: { data?: { code?: number } } })?.response?.data?.code
 
-function hhmm(iso: string | null | undefined) {
-  if (!iso) return '--'
-  const d = new Date(iso)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-function dateTime(iso: string | null | undefined) {
-  if (!iso) return '--'
-  const d = new Date(iso)
-  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${hhmm(iso)}`
-}
+// 时间一律按 Asia/Shanghai 渲染（utils/time.ts）。原来这两个函数用 getHours()/getDate()，
+// 那是按**看的人那台电脑**的时区解读——库里存的是 UTC，东七区的电脑上首单 19:59 会显示成 18:59。
+const hhmm = fmtHHmm
+const dateTime = fmtMonthDayTime
 
 /** 等待胶囊：m:ss 等宽数字；>3:00 琥珀、>6:00 红底白字（§4）—— 按秒比较，3:00/6:00 整点不提前变色 */
 function waitLabel(sinceIso: string, now: number): { text: string; cls: string } {
@@ -594,7 +589,7 @@ function TopBar({
       <div className="wb__top">
         <div className="wb__top-l">
           <span className="wb__shop">{shopName}</span>
-          <span className="wb__meta">{today.getMonth() + 1} 月 {today.getDate()} 日</span>
+          <span className="wb__meta">{fmtMonthDayCn(today)}</span>
           <span className="wb__meta"><i className={`wb__dot ${openState.cls}`} />{openState.text}</span>
           {/* 打印机状态灯：接飞鹅后 snap.printer.status 是真实健康检测结果，四态归并口径见服务端
               workbench.ts 的 summarizePrinterStatus——多台打印机取「最差」。NOT_CONNECTED（未启用/

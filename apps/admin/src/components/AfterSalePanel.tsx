@@ -10,6 +10,7 @@ import EmptyState from './ui/EmptyState'
 import RefundDialog from './RefundDialog'
 import IssueCouponModal from './IssueCouponModal'
 import { AFTER_SALE_STATUS_LABEL, type AfterSale, type AfterSaleStatus } from '../types'
+import { fmtDateTimeSec } from '../utils/time'
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: 'PENDING', label: '待处理' },
@@ -121,7 +122,7 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
                   <span className="font-medium text-gray-800">{a.reasonLabel}</span>
                   <span className="font-mono text-xs text-gray-500">{a.orderNo}</span>
                   <StatusBadge status={a.order.status} />
-                  <span className="ml-auto text-xs text-gray-400">{new Date(a.createdAt).toLocaleString('zh-CN')}</span>
+                  <span className="ml-auto text-xs text-gray-400">{fmtDateTimeSec(a.createdAt)}</span>
                 </div>
                 <div className="text-sm text-gray-700 flex flex-wrap gap-x-4 gap-y-1">
                   <span>

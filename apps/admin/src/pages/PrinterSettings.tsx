@@ -8,6 +8,7 @@ import Button from '../components/ui/Button'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import type { PrinterChannel, PrinterEntry, PrinterHealthEntry, PrinterSettings as PrinterSettingsT, PrintJob } from '../types'
+import { fmtDateTimeSec } from '../utils/time'
 
 // ── 与服务端 sanitizePrinterSettings / validatePrinterSettings 对齐的前端校验范围 ──────────
 // （见服务端 services/printer-settings.ts）：越界值会被后端悄悄回落默认，为避免店主填了才被
@@ -409,7 +410,7 @@ export default function PrinterSettings() {
                     <td className="py-1.5 font-mono text-gray-500">{j.printerSn || '—'}</td>
                     <td className={`py-1.5 font-medium ${JOB_STATUS_CLS[j.status]}`}>{JOB_STATUS_LABEL[j.status]}</td>
                     <td className="py-1.5 text-gray-500 max-w-[16rem] truncate" title={j.lastError ?? ''}>{j.lastError ?? '—'}</td>
-                    <td className="py-1.5 text-gray-400 whitespace-nowrap">{new Date(j.createdAt).toLocaleString('zh-CN')}</td>
+                    <td className="py-1.5 text-gray-400 whitespace-nowrap">{fmtDateTimeSec(j.createdAt)}</td>
                     <td className="py-1.5 text-right">
                       {j.status === 'FAILED' && (
                         <Button size="sm" variant="secondary" loading={retryingId === j.id} onClick={() => handleRetryJob(j)}>重试</Button>

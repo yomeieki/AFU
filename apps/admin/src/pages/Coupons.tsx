@@ -12,6 +12,7 @@ import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
+import { fmtDateTime } from '../utils/time'
 import type {
   CouponTemplate,
   CouponIssuedRow,
@@ -762,7 +763,7 @@ export default function Coupons() {
                             <p className="mt-1 text-gray-500 break-all">关联订单：{r.sourceRef}</p>
                           )}
                           <p className="mt-1 text-gray-400">
-                            {new Date(r.createdAt).toLocaleString()}
+                            {fmtDateTime(r.createdAt)}
                           </p>
                         </div>
                       ))}
@@ -789,7 +790,7 @@ export default function Coupons() {
                       <td className="px-3 py-2 text-gray-600">{r.remark ?? '-'}</td>
                       <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{r.sourceRef ?? '-'}</td>
                       <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                        {new Date(r.createdAt).toLocaleString()}
+                        {fmtDateTime(r.createdAt)}
                       </td>
                     </tr>
                   ))}

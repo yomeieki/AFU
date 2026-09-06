@@ -6,19 +6,19 @@ import TrendChart from '../components/ui/TrendChart'
 import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
 import Spinner from '../components/ui/Spinner'
+import { todayKey, shiftDayKey } from '../utils/time'
 
-function fmtDate(d: Date) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
+/**
+ * 查询区间必须按**上海时区**的自然日拼，不能用浏览器本地日。
+ *
+ * 服务端把扫码记录按 Asia/Shanghai 分桶（server utils/local-day.ts），这里传的
+ * startDate/endDate 是直接拿去比对桶名的。原来用 `new Date().getFullYear()/getMonth()/
+ * getDate()` 拼——那是**看的人那台电脑**的日期：店主在东七区的电脑上，北京时间
+ * 00:00–01:00 之间点「今日」，查到的是上海的昨天，而页面上不会有任何异常提示。
+ * 这是本组时区问题里唯一「查错数据」而不只是「显示错」的一处。
+ */
 function quickRange(days: number) {
-  const end = new Date()
-  const start = new Date()
-  start.setDate(start.getDate() - (days - 1))
-  return { startDate: fmtDate(start), endDate: fmtDate(end) }
+  return { startDate: shiftDayKey(-(days - 1)), endDate: todayKey() }
 }
 
 const QUICK = [
