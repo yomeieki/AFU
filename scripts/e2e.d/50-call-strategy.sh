@@ -65,7 +65,7 @@ req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","direc
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
 sleep 1   # escalateAfterMin=0.01 分钟 = 600 毫秒，要让 calledAt 真的落到窗口外
 # ⚠️ 传 0 是**关掉**自动升级（与 autoCallDelayMin 同一套约定），要立刻命中得传 0.01
-R=$(req POST /api/admin/system/run-scheduler "$AT" '{"escalateAfterMin":0.01}')
+R=$(sched '{"escalateAfterMin":0.01}')
 assert_eq "升级任务命中 1 单" "$(jq -r '.data.localEscalate' <<<"$R")" "1"
 R=$(d50_dlv "$D50_O1")
 D50_D2=$(jq -r '.data.delivery.deliveryNo' <<<"$R")
@@ -84,7 +84,7 @@ assert_eq "外呼顺序 precancel → cancel → createOrder" \
 
 echo "-- ③ 同一单不会被反复升级 --"
 # D-2 是 ALL，不在扫描范围（只扫 callStrategy='SOLO'）；漏了这条守卫就会每分钟撤一次单
-R=$(req POST /api/admin/system/run-scheduler "$AT" '{"escalateAfterMin":0.01}')
+R=$(sched '{"escalateAfterMin":0.01}')
 assert_eq "再跑一轮不再命中" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
 assert_eq "D-2 仍在途未被动过" "$(d50_dlv "$D50_O1" | jq -r '.data.delivery.deliveryNo')" "$D50_D2"
 
@@ -111,7 +111,7 @@ D50_D3=$(d50_dlv "$D50_O2" | jq -r '.data.delivery.deliveryNo')
 d50_only "$D50_D3"
 # mock 默认 precancel 回 ¥2 —— 正是「骑手已经接了单」的情形，撤单要真花钱
 sleep 1
-R=$(req POST /api/admin/system/run-scheduler "$AT" '{"escalateAfterMin":0.01}')
+R=$(sched '{"escalateAfterMin":0.01}')
 assert_eq "计入 1 次（放弃也算处理过，否则会每分钟重复告警）" "$(jq -r '.data.localEscalate' <<<"$R")" "1"
 R=$(d50_dlv "$D50_O2")
 assert_eq "标记为 SOLO_HELD" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "SOLO_HELD"
@@ -120,7 +120,7 @@ assert_eq "原配送单仍是待抢单" "$(jq -r '.data.delivery.status' <<<"$R"
 [[ "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -r '[.data[] | select(.op=="cancelOrder")] | length')" == "0" ]] \
   && ok "没有发出任何撤单请求" || fail "不该撤单却撤了" "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -c '[.data[].op]')"
 # SOLO_HELD 让该行离开扫描：不然每分钟一次 precancel + 一次告警，店员会被刷屏
-R=$(req POST /api/admin/system/run-scheduler "$AT" '{"escalateAfterMin":0.01}')
+R=$(sched '{"escalateAfterMin":0.01}')
 assert_eq "SOLO_HELD 后不再重复处理" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
 
 echo "-- ⑦ 熔断态下不升级（撤了旧单却呼不出新单，比不升级更糟）--"
@@ -140,7 +140,7 @@ req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directiv
 req POST "/api/admin/local/orders/$D50_O4/call" "$AT" >/dev/null 2>&1 || true
 assert_eq "熔断已触发" "$(req GET /api/admin/system/status "$AT" | jq -r .data.kd100.circuitTripped)" "true"
 sleep 1
-R=$(req POST /api/admin/system/run-scheduler "$AT" '{"escalateAfterMin":0.01}')
+R=$(sched '{"escalateAfterMin":0.01}')
 assert_eq "熔断时升级任务直接跳过" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
 R=$(d50_dlv "$D50_O3")
 assert_eq "熔断时原单原封不动仍待抢单" "$(jq -r '.data.delivery.status' <<<"$R")" "CALLING"
@@ -162,7 +162,7 @@ d50_only "$D50_D6"
 sql "UPDATE orders SET cancel_requested_at = UTC_TIMESTAMP(3) WHERE id = $D50_O6" >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
 sleep 1
-R=$(req POST /api/admin/system/run-scheduler "$AT" '{"escalateAfterMin":0.01}')
+R=$(sched '{"escalateAfterMin":0.01}')
 assert_eq "有待处理取消申请时不升级" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
 R=$(d50_dlv "$D50_O6")
 assert_eq "原配送单原封不动" "$(jq -r '.data.delivery.deliveryNo' <<<"$R")" "$D50_D6"

@@ -532,20 +532,36 @@ query / queryOrder / orderQuery / queryorder / getOrder / orderDetail
 
 所以**别把轮次 ③ 的「1028/0」当成打印机那几条已经稳了**。它们归另一个会话的打印机离线改动。
 
-## ⚠️ 上线顺序上的一个耦合：ETA 依赖批次 0 的均速
+## ★ 决策：`riderSpeedKmh` 维持 15，不按方案 §3.1 改成 22
 
-配送通知的「预计到达」现在取 `max(下单时估算的 estimatedDeliveryAt, 此刻 + 本单道路距离/均速)`。
-**在 `riderSpeedKmh` 仍是 15 的情况下，前者系统性偏晚、会恒定胜出**，结果比原来写死的
-「取货 + 30 分钟」还要晚：
+**店主 2026-09-07 定，理由推翻了方案 §3.1 的建议，记下来免得后面有人又去改它。**
 
-| | 首单实测（取货 20:06，实际送达 20:28） |
+方案根据首单「21 分钟走 8.94 km ≈ 25.5 km/h」推荐把均速提到 22。但那一单的中标运力是
+**闪送**，而闪送本来就是**一对一专送**（这是它的业务模式，也正是它报价最贵的原因）——
+一个骑手只带这一单，当然快。
+
+而「只呼最低价」上线后，中标的大概率是**达达**（首单报价最低的那家），达达是**顺路带单**的：
+一个骑手身上挂着好几单，路线要绕。**所以 25.5 km/h 这个样本恰恰来自最快的那种配送模式，
+拿它去标定「以后大多数单」会系统性偏乐观。**
+
+结论：保持 15，等 `callStrategy=SOLO` 的单攒够 10 张之后，用 §附 的均速 SQL 重新算
+（届时样本才是达达/蜂鸟这类带单模式的真实速度）。**复盘时记得按中标运力分组看**，
+闪送单和达达单不该混在一起平均。
+
+### 连带影响：配送通知的「预计到达」会比原来更保守
+
+新公式是 `max(下单时估算的 estimatedDeliveryAt, 此刻 + 本单道路距离/均速)`。
+均速留在 15 时，前者偏晚且会恒定胜出：
+
+| | 首单口径（取货 20:06，实际送达 20:28） |
 |---|---|
-| 旧实现（+30 分钟） | 20:36，晚 8 分钟 |
-| 新实现 + 均速 15（现状） | 20:46，**晚 18 分钟** |
-| 新实现 + 均速 22（批次 0） | 20:34，晚 6 分钟 |
+| 旧实现（写死 +30 分钟） | 20:36，晚 8 分钟 |
+| 新实现 + 均速 15（**当前选择**） | 20:46，晚 18 分钟 |
+| 新实现 + 均速 22 | 20:34，晚 6 分钟 |
 
-所以**批次 2 若先于批次 0 的均速调整上线，顾客看到的预计送达会比现在更不准**。
-两件事一起做，或者先做批次 0。
+**这是有意接受的**：报晚了顾客早收到是惊喜，报早了是投诉；而且改成只呼最低价之后
+接单的多半是带单骑手，实际耗时本来就会比首单那趟长。这条的价值在于**三处口径终于统一了**
+（顾客结算页 / 小票 / 配送通知不再各说各的），准不准是下一步用真实数据校准的事。
 
 ## 上生产之后必须盯的（观察项，不是待修 bug）
 
@@ -600,8 +616,18 @@ SELECT o.order_no, d.delivery_no, d.call_strategy, d.courier_company,
 FROM deliveries d JOIN orders o ON o.id = d.order_id
 WHERE o.is_test = 0 ORDER BY d.id DESC LIMIT 50;
 
--- 骑手均速复盘（取货→送达）
-SELECT d.delivery_no, d.provider_distance_m, TIMESTAMPDIFF(SECOND, d.picked_up_at, d.delivered_at)/60 AS ride_min,
+-- 骑手均速复盘（取货→送达）。**必须按中标运力分组看**：闪送是一对一专送、天然快，
+-- 达达/蜂鸟是顺路带单、天然慢，混在一起平均出来的数谁都不像（见上面「决策」一节）。
+SELECT d.courier_company, COUNT(*) AS n,
+       ROUND(AVG(d.provider_distance_m/1000 / (TIMESTAMPDIFF(SECOND, d.picked_up_at, d.delivered_at)/3600)), 1) AS avg_kmh,
+       ROUND(MIN(d.provider_distance_m/1000 / (TIMESTAMPDIFF(SECOND, d.picked_up_at, d.delivered_at)/3600)), 1) AS min_kmh
+FROM deliveries d
+WHERE d.status='DELIVERED' AND d.picked_up_at IS NOT NULL AND d.delivered_at IS NOT NULL
+GROUP BY d.courier_company;
+
+-- 逐单明细（对不上时用它看是哪一单拉的）
+SELECT d.delivery_no, d.courier_company, d.provider_distance_m,
+       TIMESTAMPDIFF(SECOND, d.picked_up_at, d.delivered_at)/60 AS ride_min,
        d.provider_distance_m/1000 / (TIMESTAMPDIFF(SECOND, d.picked_up_at, d.delivered_at)/3600) AS kmh
 FROM deliveries d WHERE d.status='DELIVERED' AND d.picked_up_at IS NOT NULL ORDER BY d.id DESC LIMIT 30;
 ```
