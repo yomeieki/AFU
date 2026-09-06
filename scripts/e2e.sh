@@ -1254,6 +1254,24 @@ done
 # 订单列表带 deliveryType（渠道标签靠它）
 assert_eq "orderList[0].deliveryType 存在" "$(jq -r '.data.list[0] | has("deliveryType")' <<<"$(req GET /api/orders "$UT")")" "true"
 
+# ── 会员优惠字段契约（M2 Task 8）──────────────────────────────────────────
+# M4 的小程序按这些名字取值。锁在这里比锁在文档里管用——改名会当场红，改文档不会。
+M2_LIST=$(req GET /api/orders "$UT")
+M2_DET=$(req GET "/api/orders/$LOCAL_ORDER_ID" "$UT")
+for k in discountAmount pointsUsed pointsEarned; do
+  assert_eq "orderList[0].$k 存在" "$(jq -r ".data.list[0] | has(\"$k\")" <<<"$M2_LIST")" "true"
+  assert_eq "orderDetail.$k 存在" "$(jq -r ".data | has(\"$k\")" <<<"$M2_DET")" "true"
+done
+assert_eq "orderList[0].items[0].isGift 存在（列表要给赠品行打「赠」标）" \
+  "$(jq -r '.data.list[0].items[0] | has("isGift")' <<<"$M2_LIST")" "true"
+assert_eq "orderDetail.coupon 存在（无券时为 null，不是字段缺失）" "$(jq -r '.data | has("coupon")' <<<"$M2_DET")" "true"
+# 内部记账字段不该发给顾客：pointsSettledAt 是兜底任务的「已处理」标记，pointsBase 是
+# 退款按比例扣回的分母。两个都从 M1 起一直在往外发，M2 顺手收掉（withPayExpire 剥离）。
+for k in pointsSettledAt pointsBase; do
+  assert_eq "orderDetail 不含内部字段 $k" "$(jq -r ".data | has(\"$k\")" <<<"$M2_DET")" "false"
+  assert_eq "orderList[0] 不含内部字段 $k" "$(jq -r ".data.list[0] | has(\"$k\")" <<<"$M2_LIST")" "false"
+done
+
 echo "== 35. 出票与打印机（规格 §8b）=="
 # 每个子测试都用当次新建的订单/打印机编号，不依赖固定 ID：本段要能零间隔连跑两轮。
 # 本段会用 $PID 连下 6-7 个新订单；本机开发库不在两轮 e2e 之间重置库存，$PID 前面 5/6/7/8/15

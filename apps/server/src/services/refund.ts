@@ -142,6 +142,23 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       // order.status——那只是快照，另一位店员在这几十毫秒里点了发货，SHIPPED 照样落在白名单里被改成
       // REFUNDING，拿旧快照判断就会把已经交给快递的货再加回库存，后面按虚增库存接单就是超卖。
       // 所以分两步条件写：先按未出库态试，命中才回滚；没命中再按已出库态试，命中就不回滚。
+      //
+      // ⚠️ **已支付后的退款不释放任何会员权益**（masterplan P7）。这里刻意只回滚库存，
+      // 一条不对称但是有意的边界，把它写下来是为了挡住将来「顺手补齐」的改动：
+      //
+      //   库存      回滚   ← 货还在货架上（含赠品行，order.items 天然含它们）
+      //   销量      回滚   ← 同上，rollbackOrderStock 一并处理
+      //   优惠券    不退   ← 一次核销就是用掉了。退了等于开出「用券下单再退单」的白嫖通道
+      //   赠品积分  不退   ← 同上
+      //   赠品名额  不回落 ← PO 2026-09-05 裁决（D3）：一次兑换永久占一个名额。
+      //                     后台文案要写明「限量 N 份」是**发放**上限不是**送达**上限
+      //
+      // 「为什么库存都回了名额不回」是个会被反复问的问题，答案是二者防的不是同一件事：
+      // 库存防的是超卖（货是实物，退了就该能再卖），名额防的是薅（下单即退就能占掉限量）。
+      //
+      // 释放只发生在 `PENDING_PAYMENT → CANCELLED`（spec §5.5），入口是
+      // `services/member/checkout.ts` 的 `releaseOrderBenefits`，四条取消路径各自调用。
+      // **退款路径一处都不该调它。**
       let moved = await tx.order.updateMany({ where: { ...guard, status: { in: [...STOCK_HELD_STATUSES] } }, data: toRefunding })
       if (moved.count === 1) {
         await rollbackOrderStock(tx, order.items)

@@ -44,20 +44,33 @@ function generateOrderNo(): string {
  * 新增出口时请重新数一遍本文件里所有 success(res, ...) **与 paginate(res, ...)** 调用，逐个确认是否携带订单行。
  * （列表出口走的是 paginate 而不是 success——只搜 success 会漏掉本文件最主要的那个订单行出口。）
  * 现存携带订单行的出口共 4 处：GET /（列表）、GET /:id、PUT /:id/confirm、PUT /:id/cancel（两个分支）。
+ *
+ * M2 新增的会员字段里，**该发的发、该剥的剥**：
+ *   发：discountAmount / pointsUsed / pointsEarned —— 顾客要在订单里看到「优惠了多少、
+ *       花了多少分、得了多少分」，M4 的订单详情与列表都按这三个名字取值。
+ *   剥：pointsSettledAt / pointsBase —— 纯内部记账。前者是兜底任务的「已处理」标记
+ *       （见 schema 注释：不得用 pointsEarned===0 判断，否则 earn=0 的单会被永远重扫），
+ *       后者是退款按比例扣回时的分母。两个都对顾客无意义，而且泄露了发放算法的中间量。
+ *       它们从 M1 落地起就一直在往外发，这次顺手收掉——本函数自称是这个文件的字段守门人，
+ *       那就该真的守住。
  */
 function withPayExpire<T extends { status: string; createdAt: Date }>(
   order: T
-): Omit<T, 'quoteSnapshot' | 'quotedAt' | 'isTest'> & { payExpireAt: Date | null } {
-  const { quoteSnapshot, quotedAt, isTest, ...rest } = order as T & {
+): Omit<T, 'quoteSnapshot' | 'quotedAt' | 'isTest' | 'pointsSettledAt' | 'pointsBase'> & { payExpireAt: Date | null } {
+  const { quoteSnapshot, quotedAt, isTest, pointsSettledAt, pointsBase, ...rest } = order as T & {
     quoteSnapshot?: unknown
     quotedAt?: unknown
     isTest?: unknown
+    pointsSettledAt?: unknown
+    pointsBase?: unknown
   }
   void quoteSnapshot
   void quotedAt
   void isTest
+  void pointsSettledAt
+  void pointsBase
   return {
-    ...(rest as unknown as Omit<T, 'quoteSnapshot' | 'quotedAt' | 'isTest'>),
+    ...(rest as unknown as Omit<T, 'quoteSnapshot' | 'quotedAt' | 'isTest' | 'pointsSettledAt' | 'pointsBase'>),
     payExpireAt: order.status === 'PENDING_PAYMENT' ? payExpireAtOf(order.createdAt, config.order.payTimeoutMin) : null,
   }
 }
@@ -461,7 +474,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         where,
         include: {
           items: {
-            select: { id: true, productName: true, productImage: true, productPrice: true, quantity: true, subtotal: true, specText: true },
+            // isGift / pointsCost：M4 的订单列表要给赠品行打「赠」标。订单级的优惠字段
+            // （discountAmount/pointsUsed/pointsEarned）不用在这里列——这条查询是 include
+            // 无顶层 select，Order 的全部标量本来就在返回里。
+            select: { id: true, productName: true, productImage: true, productPrice: true, quantity: true, subtotal: true, specText: true, isGift: true, pointsCost: true },
           },
           refunds: { orderBy: { createdAt: 'desc' }, take: 1, select: { status: true, amount: true } },
           afterSales: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, status: true } },
@@ -594,8 +610,19 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       const d = await prisma.delivery.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' } })
       delivery = d ? customerDeliveryView(d) : null
     }
+    // 券只在详情页带，列表不带——列表带就是 N+1（Order.couponId 是普通 Int 列，
+    // 没有关系字段可 include，只能一单一查）。顾客在列表上看到「优惠 −¥X」已经够了，
+    // 想知道用的哪张券点进详情。
+    const coupon = order.couponId
+      ? await prisma.userCoupon.findUnique({
+          where: { id: order.couponId },
+          // 白名单：不给顾客 issuedBy / remark / sourceRef（赔偿券的备注可能是「投诉客」这类内部话）
+          select: { name: true, code: true, amount: true },
+        })
+      : null
     success(res, {
       ...withPayExpire(rest),
+      coupon,
       ...(await cancelWindowOf(order)),
       afterSale: afterSales[0] ?? null,
       // 可申请售后：已发货/已完成、还有可退余额、当前无处理中的售后单

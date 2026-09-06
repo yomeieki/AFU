@@ -38,8 +38,15 @@ const orderListSelect = {
   distanceM: true,
   cancelRequestedAt: true,
   estimatedDeliveryAt: true,
+  // 会员优惠（M2）。userId 是 M3「发赔偿券」要用的——发券端点按用户维度，列表里没有它
+  // 就得先点进详情再回来，店员在售后场景下最不需要的就是多两次跳转。
+  userId: true,
+  couponId: true,
+  discountAmount: true,
+  pointsUsed: true,
+  pointsEarned: true,
   items: {
-    select: { productName: true, productImage: true, specText: true, quantity: true, productPrice: true, subtotal: true },
+    select: { productName: true, productImage: true, specText: true, quantity: true, productPrice: true, subtotal: true, isGift: true, pointsCost: true },
   },
   shipment: {
     select: { id: true, orderId: true, expressCompany: true, expressNo: true, shippedAt: true, remark: true },
@@ -175,8 +182,18 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       },
     })
     if (!order) throw new AppError(40401, '订单不存在', 404)
+    // 券的完整信息（Order.couponId 是普通 Int 列，无关系字段可 include）。
+    // 管理端比顾客端多给 source 与 issuedBy：店员在售后场景要能一眼看出
+    // 「这张券是谁发的、是不是我们自己补偿出去的」——这直接影响要不要再补一张。
+    const coupon = order.couponId
+      ? await prisma.userCoupon.findUnique({
+          where: { id: order.couponId },
+          select: { name: true, code: true, amount: true, threshold: true, source: true, issuedBy: true, remark: true },
+        })
+      : null
     success(res, {
       ...order,
+      coupon,
       receiverDisplayAddress: displayAddress(order, order.deliveryType === 'LOCAL'),
       remainingRefundable: remainingRefundable(order),
     })

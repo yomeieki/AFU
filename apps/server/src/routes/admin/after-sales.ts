@@ -14,11 +14,14 @@ const orderSummarySelect = {
   status: true,
   actualAmount: true,
   refundedAmount: true,
+  // 售后面板要显示「实付里已经扣过券」——店员按商品原价退款是这条链路上最容易犯的错
+  discountAmount: true,
+  pointsUsed: true,
   receiverName: true,
   receiverPhone: true,
   receiverFullAddress: true,
   completedAt: true,
-  items: { select: { productName: true, specText: true, quantity: true, subtotal: true } },
+  items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true } },
   shipment: { select: { expressCompany: true, expressNo: true, shippedAt: true } },
 }
 
