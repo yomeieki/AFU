@@ -77,6 +77,14 @@ Page({
     wx.switchTab({ url: '/pages/index/index' })
   },
 
+  // 「我的订单」：navigateTo 而不是 switchTab —— 订单列表不是 tabBar 页，
+  // 而且 switchTab 会把封面页栈销毁掉（goExpress 那条注释里的坑）。
+  // 不做登录判断：本页是 pages[0]，冷启动时 app._tryLogin() 可能还没回来，
+  // 在这儿判会把已登录的人误判成未登录（同 goMember 的理由）。订单页自己有登录门。
+  goOrders: function () {
+    wx.navigateTo({ url: '/pages/order/list' })
+  },
+
   // 三个会员热区共用，按 data-key 分流。
   // 这里**不做登录判断**：本页是 pages[0]，冷启动时 app._tryLogin() 可能还没回来，
   // 在这儿判会把已登录的人误判成未登录。三个目标页各自有登录门。

@@ -8,24 +8,17 @@
 //  2. typeLabel 是服务端拼好的中文，页面不再 map 一遍——两边各存一份映射，日后必然改漏一处。
 var memberApi = require('../../api/member')
 var wechatLogin = require('../../api/auth').wechatLogin
+var timeUtil = require('../../utils/time')
 
 var PAGE_SIZE = 20
 
-function pad2(n) {
-  return n < 10 ? '0' + n : '' + n
-}
-
-// ISO 串 → 本地时间文案。withTime=false 只要日期。
+// ISO 串 → 北京时间文案（utils/time.js）。withTime=false 只要日期。
 // 解析不了就退回原串的前半段，宁可显示 "2026-09-06" 也不能给顾客看 Invalid Date。
 function formatTime(v, withTime) {
   if (!v) return ''
-  var d = new Date(v)
-  if (isNaN(d.getTime())) {
-    return String(v).slice(0, withTime ? 16 : 10).replace('T', ' ')
-  }
-  var text = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
-  if (!withTime) return text
-  return text + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+  var text = withTime ? timeUtil.fmtDateTime(v) : timeUtil.fmtDate(v)
+  if (text) return text
+  return String(v).slice(0, withTime ? 16 : 10).replace('T', ' ')
 }
 
 function decorate(row) {

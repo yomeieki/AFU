@@ -60,3 +60,26 @@ page {
 .hot-points  { left: 59.963%; top: 64.778%; width: 24.303%; height: 6.897%; }
 
 .hot-banner  { left: 21.600%; top: 73.768%; width: 62.667%; height: 6.219%; }
+
+/* ── 「我的订单」常驻入口 ─────────────────────────────────
+   固定在底部安全区之上，压在封面图上层（封面图 z-index 由 .cover-stage 管，
+   这里给足 z-index 保证不被热区盖住）。半透明深色底 + 白字：封面下缘是深色画面，
+   纯文字会看不清，而给它一个实心块又会挡住画。
+   44pt 可点下限：min-height 88rpx。 */
+.cover-orders {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + 32rpx);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 88rpx;
+  padding: 0 44rpx;
+  border-radius: 44rpx;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(6rpx);
+}
+.cover-orders-hover { background: rgba(0, 0, 0, 0.58); }
+.cover-orders-text { color: #fff; font-size: 28rpx; letter-spacing: 1rpx; }

@@ -16,6 +16,18 @@
   </view>
 </view>
 
+<!-- 「我的订单」常驻入口。
+     必须是 .cover-root 的兄弟、不能放进 .cover-stage：舞台带负偏移，放进去会被一起拖歪
+     （同下面 privacy-popup 的理由）。也不动封面图本身——图是设计给的位图，改图是另一件事。
+
+     为什么加这个：同城页不在 tabBar 里，靠 navigateTo 打开，底部天然没有导航栏。
+     顾客下完单再开小程序，要走 封面→全国邮寄(switchTab)→底部「我的」→我的订单 才看得到
+     自己的单。订单列表本身**不按渠道过滤**，同城单一直都在里面，只是路径太绕。
+     用 navigateTo 而不是 switchTab：switchTab 会销毁本页页栈（goExpress 已经踩过一次）。 -->
+<view class="cover-orders" hover-class="cover-orders-hover" hover-stay-time="60" bindtap="goOrders">
+  <text class="cover-orders-text">我的订单 ›</text>
+</view>
+
 <!-- 必须是 .cover-root 的兄弟而不是 .cover-stage 的子节点：
      舞台带负偏移，放进去会把固定定位的遮罩一起拖歪。
      也必须存在——app.js 的 onNeedPrivacyAuthorization 是按当前页找 #privacy-popup 的，

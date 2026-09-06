@@ -82,6 +82,16 @@
   font-size: 22rpx;
   margin-left: 16rpx;
 }
+/* 「我的订单」文字链，跟在营业状态胶囊右边。
+   flex-shrink:0 与胶囊同款：店名过长时该被压缩的是店名，不是这两个固定标签。
+   padding 上下各 12rpx 是为了把可点高度撑到 44pt 下限（字号 24rpx 自身太矮）。 */
+.head-orders-link {
+  flex-shrink: 0;
+  margin-left: 16rpx;
+  padding: 12rpx 0;
+  font-size: 24rpx;
+  color: var(--text-2, #888);
+}
 .status-pill-open {
   color: var(--success);
   background: var(--success-bg);

@@ -4,6 +4,7 @@ var updateCartItem = cartApi.updateCartItem
 var deleteCartItem = cartApi.deleteCartItem
 var getAddresses = require('../../api/address').getAddresses
 var localApi = require('../../api/local')
+var timeUtil = require('../../utils/time')
 var getLocalMeta = localApi.getLocalMeta
 var quoteLocal = localApi.quoteLocal
 var orderApi = require('../../api/order')
@@ -21,11 +22,10 @@ function getHeadNotice(quote) {
   return { text: '', blocking: false }
 }
 
+// 北京时间（utils/time.js）。原来用 getHours()：按运行设备时区解读，
+// 开发者工具跑在别的时区的电脑上会给顾客算出错的「预计送达」。
 function formatArrival(minutes) {
-  var time = new Date(Date.now() + (Number(minutes) || 0) * 60 * 1000)
-  var hour = time.getHours() < 10 ? '0' + time.getHours() : String(time.getHours())
-  var minute = time.getMinutes() < 10 ? '0' + time.getMinutes() : String(time.getMinutes())
-  return hour + ':' + minute
+  return timeUtil.fmtAfterMinutes(minutes)
 }
 
 function decorateQuote(quote) {

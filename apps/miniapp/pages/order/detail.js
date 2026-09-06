@@ -4,6 +4,9 @@ const { callShop } = require('../../utils/contact')
 const { payOrder } = require('../../api/payment')
 const { formatPrice } = require('../../utils/format')
 const { requestSubscribe } = require('../../utils/subscribe')
+var timeUtil = require('../../utils/time')
+var fmtDateTime = timeUtil.fmtDateTime
+var fmtHHmm = timeUtil.fmtHHmm
 
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
@@ -45,8 +48,10 @@ var AFTER_SALE_STATUS_LABEL = {
   REJECTED: '商家已拒绝',
 }
 
+// 时间一律按北京时间渲染（utils/time.js）。原来用 toLocaleString()：那按**运行设备**的
+// 时区解读，开发者工具跑在别的时区的电脑上会显示错的时间，且不会报错。
 function t(v) {
-  return v ? new Date(v).toLocaleString() : ''
+  return fmtDateTime(v)
 }
 
 // 商家拒单原因前缀（服务端 apps/server/src/routes/admin/orders.ts 拼的 cancelReason 格式，服务端不会改）：
@@ -84,12 +89,10 @@ function countdownText(expireAt) {
   return p(Math.floor(left / 3600)) + ':' + p(Math.floor((left % 3600) / 60)) + ':' + p(left % 60)
 }
 
-// 支付截止时刻：HH:mm（横幅「请在 19:23 前完成支付」）
+// 支付截止时刻：HH:mm（横幅「请在 19:23 前完成支付」）。
+// 同时被 :265 的顾客端「预计送达」复用，两处都必须是北京时间。
 function deadlineText(expireAt) {
-  if (!expireAt) return ''
-  var d = new Date(expireAt)
-  var p = function(n) { return n < 10 ? '0' + n : '' + n }
-  return p(d.getHours()) + ':' + p(d.getMinutes())
+  return fmtHHmm(expireAt)
 }
 
 // 订单进度时间线：已达节点亮起并带时间，未达灰显
