@@ -4,6 +4,7 @@ import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { realOrdersSql } from '../../utils/stats-scope'
+import { localDayPartsSql, LOCAL_DAY_GROUP_BY, localDayKey, localDayKeyFromParts } from '../../utils/local-day'
 
 const router = Router()
 
@@ -28,13 +29,6 @@ function parseRange(query: unknown) {
   return { start, endExclusive }
 }
 
-function fmtDate(d: Date) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
 // GET /api/admin/scan-stats/summary
 router.get('/summary', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -44,9 +38,18 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
 
     const [totalScans, uniqueRows, todayScans, convOrders] = await Promise.all([
       prisma.scanLog.count({ where: range }),
+      // 「独立访客」数的是 **user_id**，不是 openid。
+      //
+      // ⚠️ 这里原来写的是 `COUNT(DISTINCT openid)`，而 `scan_logs.openid` **从建表起就没有写入点**
+      // （140/140 全 NULL，2026-09-06 实测），所以这个卡片从 `20260509073712_init` 起一直显示 0。
+      // 0 是个看着完全合理的数（新店本来就可能没人扫），所以没人质疑过——这类「合理的错值」
+      // 比报错更难发现。该列已在同批迁移里删掉。
+      //
+      // 口径写明白：**匿名扫码（user_id 为空）只进 totalScans，不进这个数**。
+      // 所以它是「扫过码的登录用户数」，不是「有多少人扫过」。
       prisma.$queryRaw<{ uniq: bigint }[]>`
-        SELECT COUNT(DISTINCT openid) uniq FROM scan_logs
-        WHERE created_at >= ${start} AND created_at < ${endExclusive} AND openid IS NOT NULL`,
+        SELECT COUNT(DISTINCT user_id) uniq FROM scan_logs
+        WHERE created_at >= ${start} AND created_at < ${endExclusive} AND user_id IS NOT NULL`,
       prisma.scanLog.count({ where: { createdAt: { gte: today } } }),
       // 转化（从简，不做严格归因）：区间内扫过码的用户在区间内创建的非取消订单数。
       //
@@ -70,7 +73,7 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
     const orders = Number(convOrders[0]?.cnt ?? 0)
     success(res, {
       totalScans,
-      uniqueOpenids: Number(uniqueRows[0]?.uniq ?? 0),
+      uniqueVisitors: Number(uniqueRows[0]?.uniq ?? 0),
       todayScans,
       conversion: {
         scans: totalScans,
@@ -87,21 +90,44 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
 router.get('/trend', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { start, endExclusive } = parseRange(req.query)
-    const rows = await prisma.$queryRaw<{ d: Date; scans: bigint; uniq: bigint }[]>`
-      SELECT DATE(created_at) d, COUNT(*) scans, COUNT(DISTINCT openid) uniq
+    // 分桶按**本地自然日**，实现与为什么见 utils/local-day.ts。
+    // 这里原来是 `GROUP BY DATE(created_at)`（UTC 日）配 JS 侧 `getFullYear()`（进程本地日），
+    // 两边口径不同——与 stats.ts 的 /trend 曾经是同一个 bug，那边修了、这边没跟着修。
+    //
+    // ⚠️ 但这里**不能照抄 stats.ts**：那边聚合 COUNT/SUM，跨小时可加；这里的「独立访客」是
+    // COUNT(DISTINCT)，**不可加**——同一个人在同一本地日的两个小时里各扫一次，按小时桶相加
+    // 会数成 2 个人。所以把 user_id 也放进 GROUP BY，在 JS 侧用 Set 归并。
+    //
+    // 行数上界 = 不同 (小时, 用户) 组合数 ≤ 扫码总行数；30 天窗口对本店量级是几百行。
+    // 量级真涨上来（单日上万扫码）再回来看这一处。
+    const rows = await prisma.$queryRaw<
+      { y: number; mo: number; d: number; h: number; userId: number | null; scans: bigint }[]
+    >`
+      SELECT ${localDayPartsSql()}, user_id userId, COUNT(*) scans
       FROM scan_logs
       WHERE created_at >= ${start} AND created_at < ${endExclusive}
-      GROUP BY d ORDER BY d`
+      GROUP BY ${LOCAL_DAY_GROUP_BY}, user_id`
 
-    const byDate = new Map(rows.map((r) => [fmtDate(new Date(r.d)), r]))
-    const list: { date: string; scans: number; uniqueOpenids: number }[] = []
+    const scansByDay = new Map<string, number>()
+    const visitorsByDay = new Map<string, Set<number>>()
+    for (const r of rows) {
+      const key = localDayKeyFromParts(r)
+      scansByDay.set(key, (scansByDay.get(key) ?? 0) + Number(r.scans))
+      // 匿名行（user_id 为 NULL）只计扫码次数，不进访客集合——与 summary 同口径
+      if (r.userId !== null) {
+        const set = visitorsByDay.get(key) ?? new Set<number>()
+        set.add(Number(r.userId))
+        visitorsByDay.set(key, set)
+      }
+    }
+
+    const list: { date: string; scans: number; uniqueVisitors: number }[] = []
     for (const d = new Date(start); d < endExclusive; d.setDate(d.getDate() + 1)) {
-      const key = fmtDate(d)
-      const row = byDate.get(key)
+      const key = localDayKey(d)
       list.push({
         date: key,
-        scans: Number(row?.scans ?? 0),
-        uniqueOpenids: Number(row?.uniq ?? 0),
+        scans: scansByDay.get(key) ?? 0,
+        uniqueVisitors: visitorsByDay.get(key)?.size ?? 0,
       })
     }
     success(res, { list })

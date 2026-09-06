@@ -80,7 +80,7 @@ export default function ScanStats() {
   const rate = summary?.conversion.rate
   const cards = [
     { label: '总扫码次数', value: summary?.totalScans ?? '-', icon: ScanLine, tone: 'bg-brand-50 text-brand-500' },
-    { label: '独立访客', value: summary?.uniqueOpenids ?? '-', icon: Users, tone: 'bg-blue-50 text-blue-500' },
+    { label: '独立访客', value: summary?.uniqueVisitors ?? '-', icon: Users, tone: 'bg-blue-50 text-blue-500' },
     { label: '今日扫码', value: summary?.todayScans ?? '-', icon: CalendarDays, tone: 'bg-green-50 text-green-600' },
     {
       label: '扫码转化率',

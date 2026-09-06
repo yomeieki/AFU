@@ -248,7 +248,8 @@ export interface Stats {
 // 扫码统计
 export interface ScanSummary {
   totalScans: number
-  uniqueOpenids: number
+  /** 扫过码的**登录用户**数。匿名扫码（无 userId）只进 totalScans，不进这个数 */
+  uniqueVisitors: number
   todayScans: number
   conversion: { scans: number; orders: number; rate: number | null }
 }
@@ -256,7 +257,8 @@ export interface ScanSummary {
 export interface ScanTrendPoint {
   date: string
   scans: number
-  uniqueOpenids: number
+  /** 扫过码的**登录用户**数。匿名扫码（无 userId）只进 totalScans，不进这个数 */
+  uniqueVisitors: number
 }
 
 export interface ScanProductRow {

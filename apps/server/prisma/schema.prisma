@@ -464,19 +464,18 @@ model Shipment {
 model ScanLog {
   id        Int      @id @default(autoincrement())
   productId Int      @map("product_id")
+  // 「独立访客」按这一列去重（匿名扫码为 NULL，只计次数不计人）。
+  // 不要再加 openid 列：User.openid 是 @unique 非空，由 userId 唯一确定，存副本只会失步。
   userId    Int?     @map("user_id")
-  openid    String?  @db.VarChar(64)
   scene     String   @db.VarChar(64)
   source    String   @default("package") @db.VarChar(32)
   ip        String?  @db.VarChar(45)
-  userAgent String?  @map("user_agent") @db.VarChar(255)
   createdAt DateTime @default(now()) @map("created_at")
 
   product Product @relation(fields: [productId], references: [id])
   user    User?   @relation(fields: [userId], references: [id])
 
   @@index([productId])
-  @@index([openid])
   @@index([createdAt])
   @@map("scan_logs")
 }
