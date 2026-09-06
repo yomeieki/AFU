@@ -293,6 +293,12 @@ ssh ubuntu@162.14.114.95
 cd /www/food-shop
 git status --porcelain -uno                  # 先看未提交改动！reset --hard 会抹掉（见下方要点）
 git fetch /home/ubuntu/afu.bundle <上面那个 BR>:refs/heads/<上面那个 BR>
+
+# ⚠️ 如果你在本地用 shell 变量拼这条命令，**必须写 ${BR} 不能写 $BR**：
+#   zsh 会把 `$BR:refs/...` 里的 `:r` 当成参数修饰符（去扩展名）吃掉，
+#   实际发出去的是 `deploy-xxxefs/heads/deploy-xxx`，报「couldn't find remote ref」。
+#   2026-09-06 部署批次三时踩过。bash 没这个问题，但统一写花括号最省事：
+#     REFSPEC="${BR}:refs/heads/${BR}"   然后 ssh ... "git fetch <bundle> '$REFSPEC'"
 git log --oneline -1                        # HEAD 应仍是旧版
 DEPLOY_REF=<要部署的 SHA> bash /home/ubuntu/deploy.sh
 ```
