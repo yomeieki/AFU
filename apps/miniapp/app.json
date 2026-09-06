@@ -19,7 +19,12 @@
     "pages/about/index",
     "pages/legal/index",
     "pages/local/index",
-    "pages/local/confirm"
+    "pages/local/confirm",
+    "pages/member/index",
+    "pages/member/mall",
+    "pages/member/coupons",
+    "pages/member/claim",
+    "pages/member/points-log"
   ],
   "tabBar": {
     "color": "#999999",
@@ -52,7 +57,9 @@
       }
     ]
   },
-  "requiredPrivateInfos": ["chooseLocation"],
+  "requiredPrivateInfos": [
+    "chooseLocation"
+  ],
   "permission": {
     "scope.userLocation": {
       "desc": "用于在地图上选择收货位置或设置门店位置，计算同城配送距离与配送费"
