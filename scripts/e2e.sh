@@ -1703,6 +1703,104 @@ req DELETE "/api/addresses/$M1B_ADDR" "$M1B" >/dev/null
 
 for f in "$(dirname "$0")"/e2e.d/*.sh; do [[ -f "$f" ]] && source "$f"; done
 
+echo "== 38. 扫码统计（独立访客口径 + 本地自然日分桶）=="
+# 这一整段是补的回归护栏——此前 /trend 零覆盖，而 summary 的「独立访客」自 init 迁移起
+# 就在读一个从没写过的列（COUNT(DISTINCT openid)，140/140 全 NULL），恒返回 0。
+# 0 看着完全合理（新店本来就可能没人扫），所以没人质疑过。这类「合理的错值」比报错难发现得多。
+#
+# 数字闸：字段缺失时 jq -r 会吐字符串 "null"，进 [[ -ge ]] 被当算术求值，set -u 下整跑当场炸。
+num() { [[ "${1:-}" =~ ^-?[0-9]+$ ]] && echo "$1" || echo "-1"; }
+s38_sum()  { req GET /api/admin/scan-stats/summary "$AT" | jq -r ".data.$1 // \"null\""; }
+s38_today() { req GET /api/admin/scan-stats/trend "$AT" | jq -r --arg d "$(date +%F)" '[.data.list[]|select(.date==$d)][0].scans // "null"'; }
+
+echo "-- A. 字段契约：改名后必红必绿 --"
+S38_SUMJSON=$(req GET /api/admin/scan-stats/summary "$AT")
+[[ "$(jq -r 'has("data") and (.data|has("uniqueVisitors"))' <<<"$S38_SUMJSON")" == "true" ]] \
+  && ok "A：summary 有 uniqueVisitors" || fail "A：summary 缺 uniqueVisitors" "$S38_SUMJSON"
+[[ "$(jq -r '.data|has("uniqueOpenids")' <<<"$S38_SUMJSON")" == "false" ]] \
+  && ok "A：summary 不再有 uniqueOpenids（旧名从来没数过 openid，是在撒谎）" || fail "A：仍有 uniqueOpenids" "$S38_SUMJSON"
+S38_TRJSON=$(req GET /api/admin/scan-stats/trend "$AT")
+[[ "$(jq -r '[.data.list[]|has("uniqueVisitors")]|all' <<<"$S38_TRJSON")" == "true" ]] \
+  && ok "A：trend 每行都有 uniqueVisitors" || fail "A：trend 行缺字段" "$S38_TRJSON"
+[[ "$(jq -r '[.data.list[]|has("uniqueOpenids")]|any' <<<"$S38_TRJSON")" == "false" ]] \
+  && ok "A：trend 没有任何一行带 uniqueOpenids" || fail "A：trend 仍有旧字段" "$S38_TRJSON"
+
+echo "-- B. 独立访客 ≥ 1（修复前 COUNT(DISTINCT openid) 恒 0，这条必红）--"
+# $UT 在 §33 已经扫过一次码（source:"e2e"），所以这个数不可能是 0。
+S38_V0=$(num "$(s38_sum uniqueVisitors)")
+[[ "$S38_V0" -ge 1 ]] \
+  && ok "B：独立访客 = $S38_V0 ≥ 1（修复前读 openid 恒为 0）" \
+  || fail "B：独立访客仍是 $S38_V0——「独立访客恒 0」这个 bug 没修好" "$S38_SUMJSON"
+
+if [[ "$S38_V0" -ge 1 ]]; then
+  echo "-- C. 去重是真去重（只有 B 的话，COUNT(DISTINCT) 误写成 COUNT(*) 也能蒙混过关）--"
+  S38_T0=$(num "$(s38_sum totalScans)")
+  req POST /api/scan-logs "$UT" "{\"scene\":\"p_$PID\",\"source\":\"e2e-dup\"}" >/dev/null
+  req POST /api/scan-logs "$UT" "{\"scene\":\"p_$PID\",\"source\":\"e2e-dup\"}" >/dev/null
+  assert_eq "C：同一人再扫 2 次，总扫码数 +2" "$(num "$(s38_sum totalScans)")" "$((S38_T0+2))"
+  assert_eq "C：同一人再扫 2 次，独立访客**不变**（是去重不是计数）" "$(num "$(s38_sum uniqueVisitors)")" "$S38_V0"
+
+  echo "-- D. 匿名扫码只计次数、不计人（锁住已知口径）--"
+  S38_T1=$(num "$(s38_sum totalScans)")
+  req POST /api/scan-logs "" "{\"scene\":\"p_$PID\",\"source\":\"e2e-anon\"}" >/dev/null
+  assert_eq "D：匿名扫码，总扫码数 +1" "$(num "$(s38_sum totalScans)")" "$((S38_T1+1))"
+  assert_eq "D：匿名扫码，独立访客不变（它数的是登录用户，不是「有多少人扫过」）" "$(num "$(s38_sum uniqueVisitors)")" "$S38_V0"
+else
+  echo "  · C/D 跳过：B 已红，此时 -1 == -1 会打出骗人的 ✔"
+fi
+
+echo "-- E. 本地自然日分桶（① 的证伪器）--"
+# 难点：`trend[今日] == summary.todayScans` 只在「UTC 日历与本地日历不同天」的那几个小时才红。
+# 直接写就是一条大部分时间恒绿的废断言。所以**造一条落在分歧窗口里的行**。
+sql "DELETE FROM scan_logs WHERE source='e2e-tz';"   # 兜底上一跑中断的残留
+# ⚠️ 用 `node -e console.log(...)` 而不是 `node -p "-new Date()..."`：后者开头那个减号会被
+# node 当成命令行参数（`node: bad option`），取值失败 → 空串 → 被下面的 `-eq 0` 当成 0 →
+# 打出一句「本机 TZ = UTC」的**假跳过**。2026-09-06 第一版就是这么写的，跳过理由整个是编的。
+S38_OFF=$(node -e "console.log(-new Date().getTimezoneOffset())" 2>/dev/null)
+if ! [[ "$S38_OFF" =~ ^-?[0-9]+$ ]]; then
+  # 取不到值 ≠ 本机是 UTC。探针坏了必须红，不能降级成跳过——那正是上面那个坑。
+  fail "E：拿不到本机时区偏移（探针坏了，不是「本机是 UTC」）" "node 返回: '${S38_OFF}'"
+elif [[ "$S38_OFF" -eq 0 ]]; then
+  echo "  · E 跳过：本机 TZ = UTC（实测偏移 0），两套日历重合，本条无从证伪（跳过而不是发绿票）"
+else
+  # OFFMIN>0 取本地今日 00:30；OFFMIN<0 取本地今日 23:30。落库(UTC)值 = 本地日 + (M - OFFMIN) 分钟。
+  # JST 验算：本地 2026-09-06 + (30−540) = 2026-09-05 15:30 UTC。DATE() 给 09-05，本地日历 09-06 → 跨界。
+  if [[ "$S38_OFF" -gt 0 ]]; then S38_M=30; else S38_M=1410; fi
+  sql "INSERT INTO scan_logs (product_id, user_id, scene, source, created_at)
+       VALUES ($PID, NULL, 'p_$PID', 'e2e-tz',
+               DATE(UTC_TIMESTAMP() + INTERVAL $S38_OFF MINUTE) + INTERVAL $((S38_M)) MINUTE - INTERVAL $S38_OFF MINUTE);"
+  # 前置自检①：真的写进去了。sql() 把 stderr 丢 /dev/null，列名写错会静默失败，没这条就白测。
+  assert_eq "E：前置——构造行真的写进去了（catch sql() 静默失败）" "$(num "$(sql "SELECT COUNT(*) FROM scan_logs WHERE source='e2e-tz';")")" "1"
+  # 前置自检②：这一行的 UTC 日与本地日**确实不同天**，否则本条失去证伪力。
+  # 走直连 SQL，不经过被测的那条管道。
+  S38_CROSS=$(num "$(sql "SELECT DATE(created_at) <> DATE(created_at + INTERVAL $S38_OFF MINUTE) FROM scan_logs WHERE source='e2e-tz' LIMIT 1;")")
+  assert_eq "E：前置——构造行确实跨 UTC/本地日界（否则这条测不出东西）" "$S38_CROSS" "1"
+
+  S38_TODAY_TREND=$(num "$(s38_today)")
+  S38_TODAY_SUM=$(num "$(s38_sum todayScans)")
+  # 修复前：这一行被 DATE() 分进「昨天」桶，今日桶不动 → 与 todayScans 对不上 → 红
+  assert_eq "E：trend[今日] == summary.todayScans（跨源交叉验证，修复前必红）" "$S38_TODAY_TREND" "$S38_TODAY_SUM"
+  S38_SUMTREND=$(num "$(req GET /api/admin/scan-stats/trend "$AT" | jq -r '[.data.list[].scans]|add // "null"')")
+  S38_TOTAL=$(num "$(s38_sum totalScans)")
+  assert_eq "E：Σtrend[].scans == summary.totalScans（抓「首日整批被丢」那类错位）" "$S38_SUMTREND" "$S38_TOTAL"
+  sql "DELETE FROM scan_logs WHERE source='e2e-tz';"
+fi
+
+echo "-- F. /trend 形状（此前零覆盖）--"
+S38_TR=$(req GET /api/admin/scan-stats/trend "$AT")
+assert_eq "F：/trend code 0" "$(code "$S38_TR")" "0"
+assert_eq "F：默认补齐 7 行（含空缺日期）" "$(jq -r '.data.list|length' <<<"$S38_TR")" "7"
+assert_eq "F：日期升序且无重复" "$(jq -r '[.data.list[].date]|(. == (sort|unique))' <<<"$S38_TR")" "true"
+S38_ONE=$(req GET "/api/admin/scan-stats/trend?startDate=$(date +%F)&endDate=$(date +%F)" "$AT")
+assert_eq "F：startDate=endDate=今天 → 只返回 1 行" "$(jq -r '.data.list|length' <<<"$S38_ONE")" "1"
+assert_eq "F：且这一行就是今天" "$(jq -r '.data.list[0].date' <<<"$S38_ONE")" "$(date +%F)"
+S38_TV=$(num "$(jq -r '.data.list[0].uniqueVisitors // "null"' <<<"$S38_ONE")")
+[[ "$S38_TV" -ge 1 ]] \
+  && ok "F：trend[今日].uniqueVisitors = $S38_TV ≥ 1（修复前恒 0）" \
+  || fail "F：trend 的独立访客仍是 $S38_TV" "$S38_ONE"
+
+sql "DELETE FROM scan_logs WHERE source IN ('e2e-dup','e2e-anon','e2e-tz');"
+
 echo "== 11. 清理 =="
 for a in ${ADDR2:-} ${FADDR:-}; do req DELETE "/api/addresses/$a" "$UT" >/dev/null; done
 req DELETE "/api/addresses/$ADDR" "$UT" >/dev/null && ok "删除测试地址"
