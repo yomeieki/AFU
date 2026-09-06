@@ -13,9 +13,38 @@
     <div class="section card delivery-section"><div class="section-title">配送信息</div><div class="delivery-info"><span>距门店 2.4 km</span><span>配送费 ¥3.00</span><span>预计 38 分钟 · 18:30 送达</span></div><span class="arrival-time">配送时间以骑手接单后实际安排为准</span></div>
     <div class="section card"><div class="section-title">商品明细</div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">冷吃兔</span><span class="item-spec">中辣/去骨</span><span class="item-price">¥45.80</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">凉拌折耳根</span><span class="item-price">¥12.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div></div>
     <div class="section card remark-section"><div class="tableware-row"><span class="row-label">需要餐具</span><span>○</span></div><div class="remark-row"><span class="row-label">备注</span><span class="remark-placeholder">如需餐具、放门口等请注明</span></div></div>
+    <!-- 会员优惠（components/checkout-benefits）：有券有赠品这一态。
+         同城页没有逐项金额卡，优惠明细全靠组件自己那行 row-sum -->
+    <div class="benefits">
+      <div class="row">
+        <span class="row-label">优惠券</span>
+        <div class="row-value">
+          <span class="val-strong">−¥5.00</span>
+          <span class="val-sub">新客立减券</span>
+          <span class="arrow">›</span>
+        </div>
+      </div>
+
+      <div class="gifts">
+        <div class="gifts-head">
+          <span class="row-label">积分赠品</span>
+          <span class="gifts-balance">积分 11500</span>
+        </div>
+        <div class="gifts-scroll"><div class="gift-card"><div class="gift-img gift-img-empty"></div><span class="gift-name">凉拌黄瓜</span><span class="gift-spec">小份 150g</span><span class="gift-cost">积分 200</span><div class="stepper"><span class="step-btn">−</span><span class="step-qty">1</span><span class="step-btn">+</span></div></div><div class="gift-card"><div class="gift-img gift-img-empty"></div><span class="gift-name">猪头肉试吃</span><span class="gift-spec">80g</span><span class="gift-cost">积分 400</span><div class="stepper"><span class="step-btn step-off">−</span><span class="step-qty">0</span><span class="step-btn">+</span></div></div><div class="gift-card"><div class="gift-img gift-img-empty"></div><span class="gift-name">蒜泥白肉</span><span class="gift-spec">小份 100g</span><span class="gift-cost">积分 350</span><div class="stepper"><span class="step-btn step-off">−</span><span class="step-qty">0</span><span class="step-btn">+</span></div></div></div>
+      </div>
+
+      <div class="row row-sum">
+        <div class="sum-left">
+          <span class="sum-item">优惠券 −¥5.00</span>
+          <span class="sum-item">赠品 200 积分</span>
+        </div>
+        <span class="earn">预计获得 5200 积分</span>
+      </div>
+    </div>
+
     <div class="spacer"></div>
   </div>
-  <div class="bottom-bar"><div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div><div class="bottom-main"><div class="bottom-total-wrap"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">60</span><span class="price-dec">.80</span></div><div class="submit-btn btn-primary">提交订单 ¥60.80</div></div></div>
+  <div class="bottom-bar"><div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div><div class="bottom-main"><div class="bottom-total-wrap"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">55</span><span class="price-dec">.80</span></div><div class="submit-btn btn-primary">提交订单 ¥55.80</div></div></div>
 </div>
 </body>
 </html>

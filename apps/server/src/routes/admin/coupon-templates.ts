@@ -10,6 +10,7 @@ import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
+import { getMemberSettings } from '../../services/member/settings'
 
 const router = Router()
 
@@ -69,6 +70,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     // 于是后台「已发」列在这两类模板上会永远显示 0。这里按真实行数统计。
     // 对 POINTS / CAMPAIGN 两者恒等（递增与发券同事务，一起成功一起回滚），
     // 所以「已发 / 总量」这一对拿 issuedTotal 当分子同样正确。
+    // 「这张模板正被设为新客券」——引用可见（有赞的引用保护、抖音的「无发放权限」提示，
+    // 两家的共同点都是让引用关系与失败**摆在操作者面前**，而不是等它悄悄失效）。
+    // getMemberSettings 有 60s 缓存，这里一次调用不产生额外查询压力。
+    const memberSettings = await getMemberSettings()
+    const newcomerTemplateId = memberSettings.newcomer.templateId
+
     const issuedByTemplate = new Map<number, number>()
     const usedByTemplate = new Map<number, number>()
     for (const g of grouped) {
@@ -81,6 +88,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         ...t,
         issuedTotal: issuedByTemplate.get(t.id) ?? 0,
         usedCount: usedByTemplate.get(t.id) ?? 0,
+        usedAsNewcomer: t.id === newcomerTemplateId,
       }))
     )
   } catch (e) {

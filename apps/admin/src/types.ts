@@ -558,6 +558,12 @@ export interface CouponTemplate {
   issuedTotal: number
   /** 其中已核销的张数 */
   usedCount: number
+  /**
+   * 这张模板正被「会员设置」选为新客券。
+   * 停用它 = 新注册的顾客从此收不到见面礼，而那个后果在券模板页上是看不见的
+   * （停用走的是这个接口，它本身完全不知道会员设置的存在）。列表标出来 + 停用时加重确认。
+   */
+  usedAsNewcomer: boolean
   sortOrder: number
   status: OnOff
   createdAt: string

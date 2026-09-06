@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/member-index.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page">
+
+    <!-- 已登录 + 有数据（needLogin/loading/loadError/isEmpty 四种占位态不镜像） -->
+    <div class="head-card">
+      <span class="head-label">我的积分</span>
+      <div class="head-balance">
+        <span class="balance-num">11500</span>
+        <span class="balance-unit">分</span>
+      </div>
+
+      <div class="expire-tip">
+        <span>若 1 年内无消费，您的 </span>
+        <span class="expire-em">11500</span>
+        <span> 分将于 </span>
+        <span class="expire-em">2027年9月6日</span>
+        <span> 全部过期</span>
+      </div>
+
+      <div class="head-coupon">
+        <span class="coupon-label">可用优惠券</span>
+        <div class="coupon-value">
+          <span class="coupon-num">3</span>
+          <span class="coupon-unit">张</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card entry-card">
+      <div class="entry-item">
+        <div class="entry-icon-wrap"><div class="entry-icon icon icon-pay"></div></div>
+        <span class="entry-label">我的券</span>
+      </div>
+      <div class="entry-item">
+        <div class="entry-icon-wrap"><div class="entry-icon icon icon-shop"></div></div>
+        <span class="entry-label">积分商城</span>
+      </div>
+      <div class="entry-item">
+        <div class="entry-icon-wrap"><div class="entry-icon icon icon-done"></div></div>
+        <span class="entry-label">领券中心</span>
+      </div>
+      <div class="entry-item">
+        <div class="entry-icon-wrap"><div class="entry-icon icon icon-doc"></div></div>
+        <span class="entry-label">积分明细</span>
+      </div>
+    </div>
+
+    <div class="card rules-card">
+      <span class="rules-title">规则说明</span>
+
+      <!-- ① 系统自动生成段（每元 100 分 / 365 天，与其余会员页镜像同一套口径） -->
+      <div class="rules-sec">
+        <span class="rules-p">每消费 1 元得 100 分，不足 1 元的部分不计分。</span>
+        <span class="rules-p">积分的有效期为最后一次消费后 365 天。在此期间内再次消费，全部积分的有效期自动顺延。</span>
+        <span class="rules-p">若连续 365 天未消费，账户内积分将全部清零。</span>
+        <span class="rules-p">使用积分时，优先扣除最早到期的那部分。</span>
+      </div>
+
+      <!-- ② 固定文案段（逐字取自 pages/member/index.js 的 FIXED_RULES） -->
+      <div class="rules-sec">
+        <span class="rules-h">积分怎么来</span>
+        <span class="rules-p">订单完成后，按本单实付金额发放积分。实付金额包含运费。</span>
+      </div>
+      <div class="rules-sec">
+        <span class="rules-h">积分能做什么</span>
+        <span class="rules-p">用于兑换优惠券，或在下单时兑换随单赠品。</span>
+      </div>
+      <div class="rules-sec">
+        <span class="rules-h">退款后积分怎么算</span>
+        <span class="rules-p">订单发生退款时，按退款金额扣回相应积分。扣回不会超过本单发放过的积分，也不会让积分余额变成负数。</span>
+        <span class="rules-p">若退款时该笔积分已过期或已使用，以实际可扣回的部分为准。</span>
+      </div>
+      <div class="rules-sec">
+        <span class="rules-h">赠品退回</span>
+        <span class="rules-p">若含赠品的订单被取消或退款，兑换赠品所用的积分退回账户。退回积分沿用原有的到期时间，不会因此延长。</span>
+      </div>
+      <div class="rules-sec">
+        <span class="rules-h">优惠券</span>
+        <span class="rules-p">优惠券只抵扣商品金额，不抵扣运费。</span>
+        <span class="rules-p">每笔订单限用一张，不可叠加。</span>
+        <span class="rules-p">是否达到使用门槛，按使用优惠券之前的商品金额判断——不会因为用了券而失去包邮或跌破起送金额。</span>
+        <span class="rules-p">优惠券抵扣后订单金额不能为零；若券面额已超过本单可抵扣范围，请选择其他优惠券。</span>
+        <span class="rules-p">部分优惠券限同城配送或全国邮寄使用，以券面标注为准。</span>
+        <span class="rules-p rules-p-strong">订单退款后，本单使用的优惠券不予退回。如对此有疑问，请联系门店。</span>
+      </div>
+      <div class="rules-sec">
+        <span class="rules-h">其他</span>
+        <span class="rules-p">积分与优惠券不可提现、不可转让、不可折现，不开具发票。</span>
+        <span class="rules-p">本店不设积分抽奖、盲盒、签到等玩法。</span>
+        <span class="rules-p">积分与优惠券规则如有调整，将在本页公示。</span>
+      </div>
+
+      <!-- 后台补充规则文本 -->
+      <div class="rules-sec">
+        <span class="rules-p">积分与优惠券的最终解释权归丹桂阿福凉菜所有，如有疑问请致电门店 15309003232。</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

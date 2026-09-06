@@ -7,6 +7,7 @@ import prisma from '../../utils/prisma'
 import { AppError } from '../../middlewares/error'
 import { consumePoints } from './points'
 import { getMemberSettings } from './settings'
+import { notifySystemAlert } from '../notify'
 
 function isUniqueConflict(e: unknown): boolean {
   return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002'
@@ -179,7 +180,25 @@ export async function issueNewcomerCoupon(userId: number): Promise<void> {
     if (templateId == null) return
 
     const template = await prisma.couponTemplate.findUnique({ where: { id: templateId } })
-    if (!template || template.status === 'OFF' || template.source !== 'NEWCOMER') return
+    // ⚠️ 配了 templateId 却发不出去 = **每一个新顾客都悄悄收不到见面礼**，而这条路径整段
+    // 吞错（发券失败不能连累登录），所以以前是纯静默 return，店主永远不会知道。
+    //
+    // 让它变成死配置的路有两条，而且第二条更常见：
+    //   甲 在「会员设置」里就选了一张已停用的模板
+    //   乙 当时选的是好的，后来在「优惠券」页顺手把它停用了（那个接口完全不知道
+    //      会员设置的存在，三个月后没人会记得这张券正被当新客券用）
+    // 后台的两处提示（券模板列表的「新客券」徽标、停用时的确认框）挡的是人的操作；
+    // 这条告警是唯一能覆盖「直接改库 / 并发 / 提示被点掉」的兜底。
+    // key 带 templateId：换了模板要能再报一次；5 分钟窗口内不会因为一串新用户注册刷屏。
+    if (!template || template.status === 'OFF' || template.source !== 'NEWCOMER') {
+      const why = !template ? '模板不存在（已被删除？）' : template.source !== 'NEWCOMER' ? `模板类型是 ${template.source}，不是 NEWCOMER` : '模板已停用'
+      notifySystemAlert('新客券发不出去：新用户收不到见面礼', [
+        `会员设置里配的模板 id = ${templateId}`,
+        why,
+        '处理：到后台「会员设置」重选一张已上架的新人礼模板，或把原模板重新上架；也可以选「不发新客券」把这条告警关掉',
+      ], { key: `member:newcomer-broken:${templateId}` })
+      return
+    }
 
     const existing = await prisma.userCoupon.findFirst({ where: { userId, templateId, source: 'NEWCOMER' } })
     if (existing) return

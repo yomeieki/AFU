@@ -2132,6 +2132,28 @@ assert_eq "模板：issuedTotal = 真实发出的张数（1）" "$(jq -r '.issue
 assert_eq "模板：issuedCount 仍是 0（它只被 POINTS/CAMPAIGN 递增）" "$(jq -r '.issuedCount' <<<"$M3_TPL_ROW")" "0"
 assert_eq "模板：usedCount = 0（这张还没核销）" "$(jq -r '.usedCount' <<<"$M3_TPL_ROW")" "0"
 
+echo "-- 新客券的引用关系：券模板列表标出「正被设为新客券」--"
+# 让新客券变成死配置的更常见路径是「当时选的是好的，后来在优惠券页顺手停用了」——
+# 那个接口完全不知道会员设置的存在。所以引用关系必须在券模板列表上看得见，
+# 停用时后台才能加重提示。断言比「字段存在」严一档：切换会员设置后这个值要跟着变。
+M4_NT=$(req POST /api/admin/coupon-templates "$AT" "{\"name\":\"E2E新客引用$M3_TAG\",\"amount\":500,\"threshold\":0,\"channel\":\"ALL\",\"validDays\":30,\"source\":\"NEWCOMER\"}" | jq -r '.data.id')
+M4_SET_BAK=$(req GET /api/admin/settings/member "$AT" | jq -c .data)
+nc_flag() { req GET "/api/admin/coupon-templates?source=NEWCOMER" "$AT" | jq -r --argjson tid "$M4_NT" '.data[] | select(.id == $tid) | .usedAsNewcomer'; }
+assert_eq "新客引用：未被选中时 usedAsNewcomer=false" "$(nc_flag)" "false"
+req PUT /api/admin/settings/member "$AT" "{\"points\":{\"enabled\":true,\"earnRatePerYuan\":1,\"validDays\":365},\"newcomer\":{\"templateId\":$M4_NT},\"rulesText\":\"\"}" >/dev/null
+assert_eq "新客引用：被选为新客券后 usedAsNewcomer=true" "$(nc_flag)" "true"
+# 停用**不被拒绝**（店主可能就是想暂停发新客券；主流平台也是提示而非阻止），
+# 但引用关系仍在——后台正是靠它决定要不要加重那句确认文案
+R=$(req PUT "/api/admin/coupon-templates/$M4_NT" "$AT" '{"status":"OFF"}')
+assert_eq "新客引用：停用被引用的模板不被拒（提示而非阻止）" "$(code "$R")" "0"
+assert_eq "新客引用：停用后引用关系仍在（后台据此加重确认文案）" "$(nc_flag)" "true"
+# 还原：会员设置回到原值，模板删掉。不还原的话下一轮的新用户全都会撞进「死配置」路径
+req PUT /api/admin/settings/member "$AT" "$M4_SET_BAK" >/dev/null
+sql "DELETE FROM user_coupons WHERE template_id=$M4_NT; DELETE FROM coupon_templates WHERE id=$M4_NT;"
+assert_eq "新客引用收尾：会员设置已还原" \
+  "$(req GET /api/admin/settings/member "$AT" | jq -r '.data.newcomer.templateId // "null"')" \
+  "$(jq -r '.newcomer.templateId // "null"' <<<"$M4_SET_BAK")"
+
 echo "-- 积分赠品：unitPrice 随列表一起给 --"
 # 不给的话后台算不出「等值消费 / 回报率」，编辑态只能按商品名回查商品列表再按 id 匹配
 M3_PG_ROW=$(req GET /api/admin/points-goods "$AT" | jq -c --argjson gid "$M2_PG" '.data[] | select(.id == $gid)')

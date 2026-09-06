@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/member-claim.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page">
+
+    <!-- 已登录 + 有活动。三张卡覆盖「可领 / 限领剩余 / 已达上限（is-off）」三种样子 -->
+    <div class="claim-list">
+
+      <div class="claim-card">
+        <div class="claim-top">
+          <div class="claim-face">
+            <div class="claim-amount">
+              <span class="face-symbol">¥</span>
+              <span class="face-int">8</span>
+              <span class="face-dec">.00</span>
+            </div>
+            <span class="claim-threshold">满 ¥50 可用</span>
+          </div>
+          <div class="claim-info">
+            <div class="claim-title-row">
+              <span class="claim-name">三十年感恩券</span>
+            </div>
+            <span class="claim-desc">丹桂阿福凉菜开店三十年，感谢街坊照顾</span>
+            <span class="claim-valid">领取后 15 天内有效</span>
+          </div>
+        </div>
+        <div class="claim-foot">
+          <div class="claim-meta">
+            <span class="claim-remaining">仅剩 62 张</span>
+            <span class="claim-claimed">本人已领 0/1</span>
+          </div>
+          <button class="claim-btn btn-primary">领取</button>
+        </div>
+      </div>
+
+      <div class="claim-card">
+        <div class="claim-top">
+          <div class="claim-face">
+            <div class="claim-amount">
+              <span class="face-symbol">¥</span>
+              <span class="face-int">10</span>
+              <span class="face-dec">.00</span>
+            </div>
+            <span class="claim-threshold">满 ¥68 可用</span>
+          </div>
+          <div class="claim-info">
+            <div class="claim-title-row">
+              <span class="claim-name">同城配送满减券</span>
+              <span class="channel-tag local">同城专享</span>
+            </div>
+            <span class="claim-desc">汇东新区丹桂片区当天送达，凉菜到手还冰着</span>
+            <span class="claim-valid">领取后 30 天内有效</span>
+          </div>
+        </div>
+        <div class="claim-foot">
+          <div class="claim-meta">
+            <span class="claim-remaining">仅剩 18 张</span>
+            <span class="claim-claimed">本人已领 1/2</span>
+          </div>
+          <button class="claim-btn btn-primary">领取</button>
+        </div>
+      </div>
+
+      <!-- 已达上限：整卡走 is-off，按钮 btn-disabled -->
+      <div class="claim-card is-off">
+        <div class="claim-top">
+          <div class="claim-face">
+            <div class="claim-amount">
+              <span class="face-symbol">¥</span>
+              <span class="face-int">20</span>
+              <span class="face-dec">.00</span>
+            </div>
+            <span class="claim-threshold">满 ¥100 可用</span>
+          </div>
+          <div class="claim-info">
+            <div class="claim-title-row">
+              <span class="claim-name">邮寄满减券</span>
+              <span class="channel-tag express">邮寄专享</span>
+            </div>
+            <span class="claim-desc">真空装凉菜发全国，顺丰冷链次日达</span>
+            <span class="claim-valid">领取后 30 天内有效</span>
+          </div>
+        </div>
+        <div class="claim-foot">
+          <div class="claim-meta">
+            <span class="claim-claimed">本人已领 1/1</span>
+          </div>
+          <button class="claim-btn btn-disabled">已达上限</button>
+        </div>
+      </div>
+
+      <div class="list-foot">
+        <span>优惠券只抵扣商品金额，不抵扣运费。每笔订单限用一张，不可叠加。</span>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

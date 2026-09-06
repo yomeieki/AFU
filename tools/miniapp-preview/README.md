@@ -1,6 +1,6 @@
 # 小程序 HTML 预览台
 
-在浏览器里近似预览 `apps/miniapp` 的 13 个页面，供 UI 改造时快速看效果、截图自检。
+在浏览器里近似预览 `apps/miniapp` 的 22 个页面，供 UI 改造时快速看效果、截图自检。
 
 ## 用途
 
@@ -14,7 +14,7 @@ npm run preview:miniapp        # 默认 http://localhost:5180
 node tools/miniapp-preview/serve.mjs --port 5180
 ```
 
-打开首页即为「画廊」：13 个页面各嵌在手机边框里，顶部一条 tabBar 展示 8 张真实图标。
+打开首页即为「画廊」：22 个页面各嵌在手机边框里，顶部一条 tabBar 展示 8 张真实图标。
 
 ## 工作机制
 

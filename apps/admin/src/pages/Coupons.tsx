@@ -252,10 +252,18 @@ export default function Coupons() {
   // ── 停用 / 启用 ────────────────────────────────────────────────────────
   const handleToggleStatus = async (t: CouponTemplate) => {
     const turnOff = t.status === 'ON'
+    // 正被设为新客券时，停用的后果比「不再发新券」重得多：**新注册的顾客从此一张券都收不到**，
+    // 而且这个后果在券模板页上完全看不见（停用走的是券模板接口，它不知道会员设置的存在）。
+    // 不阻止操作——店主可能就是想暂停发新客券；但必须在按下去之前说清楚。
+    // （主流做法同此：有赞是引用保护、抖音是发放时明确提示「无发放权限」，都不是静默失效。）
+    const newcomerWarn =
+      turnOff && t.usedAsNewcomer
+        ? '\n\n⚠️ 这张券正被「会员设置」选为新客券。停用后，新注册的顾客将收不到任何见面礼——请记得到「会员设置」换一张，或改选「不发新客券」。'
+        : ''
     const ok = await confirmDialog({
       title: turnOff ? `停用「${t.name}」` : `启用「${t.name}」`,
       content: turnOff
-        ? '停用只影响再发放：这张模板不再发出新券。已经发到顾客手里的券照常可用，不受影响。'
+        ? '停用只影响再发放：这张模板不再发出新券。已经发到顾客手里的券照常可用，不受影响。' + newcomerWarn
         : '启用后，这张模板会重新按它的发放路径发券。',
       danger: turnOff,
       confirmText: turnOff ? '停用' : '启用',
@@ -389,7 +397,14 @@ export default function Coupons() {
                   <div key={t.id} className="border border-gray-100 rounded-lg p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-800 break-all">{t.name}</p>
+                        <p className="text-sm font-medium text-gray-800 break-all">
+                          {t.name}
+                          {t.usedAsNewcomer && (
+                          <span className="ml-1.5 align-middle text-[10px] text-brand-600 bg-brand-50 border border-brand-200 rounded px-1 py-0.5 whitespace-nowrap" title="「会员设置」把这张券选为新客券。停用它，新注册的顾客将收不到见面礼">
+                            新客券
+                          </span>
+                        )}
+                        </p>
                         {t.description && (
                           <p className="text-xs text-gray-400 mt-0.5 break-all">{t.description}</p>
                         )}
@@ -435,7 +450,14 @@ export default function Coupons() {
             {list.map((t) => (
               <tr key={t.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3">
-                  <div className="text-gray-800">{t.name}</div>
+                  <div className="text-gray-800">
+                    {t.name}
+                    {t.usedAsNewcomer && (
+                      <span className="ml-1.5 align-middle text-[10px] text-brand-600 bg-brand-50 border border-brand-200 rounded px-1 py-0.5 whitespace-nowrap" title="「会员设置」把这张券选为新客券。停用它，新注册的顾客将收不到见面礼">
+                        新客券
+                      </span>
+                    )}
+                  </div>
                   {t.description && <div className="text-xs text-gray-400 mt-0.5">{t.description}</div>}
                 </td>
                 <td className="px-4 py-3 text-right font-semibold text-brand-600 whitespace-nowrap">

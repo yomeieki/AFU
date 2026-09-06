@@ -43,12 +43,42 @@
       <div class="row"><span class="row-label">备注</span><input class="remark-input" placeholder="选填，如配送时间要求"></div>
     </div>
 
+    <!-- 会员优惠（components/checkout-benefits）：有券有赠品这一态 -->
+    <div class="benefits">
+      <div class="row">
+        <span class="row-label">优惠券</span>
+        <div class="row-value">
+          <span class="val-strong">−¥20.00</span>
+          <span class="val-sub">邮寄满减券</span>
+          <span class="arrow">›</span>
+        </div>
+      </div>
+
+      <div class="gifts">
+        <div class="gifts-head">
+          <span class="row-label">积分赠品</span>
+          <span class="gifts-balance">积分 11500</span>
+        </div>
+        <div class="gifts-scroll"><div class="gift-card"><div class="gift-img gift-img-empty"></div><span class="gift-name">凉拌黄瓜</span><span class="gift-spec">小份 150g</span><span class="gift-cost">积分 200</span><div class="stepper"><span class="step-btn">−</span><span class="step-qty">1</span><span class="step-btn">+</span></div></div><div class="gift-card"><div class="gift-img gift-img-empty"></div><span class="gift-name">卤鹌鹑蛋</span><span class="gift-spec">4 颗装</span><span class="gift-cost">积分 300</span><div class="stepper"><span class="step-btn step-off">−</span><span class="step-qty">0</span><span class="step-btn">+</span></div></div><div class="gift-card"><div class="gift-img gift-img-empty"></div><span class="gift-name">手撕海带丝</span><span class="gift-spec">小份 120g</span><span class="gift-cost">积分 250</span><div class="stepper"><span class="step-btn step-off">−</span><span class="step-qty">0</span><span class="step-btn">+</span></div></div></div>
+      </div>
+
+      <div class="row row-sum">
+        <div class="sum-left">
+          <span class="sum-item">优惠券 −¥20.00</span>
+          <span class="sum-item">赠品 200 积分</span>
+        </div>
+        <span class="earn">预计获得 10700 积分</span>
+      </div>
+    </div>
+
     <div class="section card">
       <div class="row"><span class="row-label">商品金额</span><span class="row-value">¥127.40</span></div>
+      <div class="row"><span class="row-label">优惠券</span><span class="row-value discount">−¥20.00</span></div>
+      <div class="row"><span class="row-label">积分赠品</span><span class="row-value">200 积分</span></div>
       <div class="row"><span class="row-label">运费</span><span class="row-value free">免运费</span></div>
       <div class="row total-row">
         <span class="row-label">合计</span>
-        <div class="total-price-wrap"><span class="price-symbol">¥</span><span class="price-int total-price-int">127</span><span class="price-dec">.40</span></div>
+        <div class="total-price-wrap"><span class="price-symbol">¥</span><span class="price-int total-price-int">107</span><span class="price-dec">.40</span></div>
       </div>
     </div>
 
@@ -58,7 +88,7 @@
   <div class="bottom-bar">
     <div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div>
     <div class="bottom-main">
-      <div class="bottom-total-wrap"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">127</span><span class="price-dec">.40</span></div>
+      <div class="bottom-total-wrap"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">107</span><span class="price-dec">.40</span></div>
       <div class="submit-btn btn-primary"><span>提交订单</span></div>
     </div>
   </div>

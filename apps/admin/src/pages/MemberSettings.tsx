@@ -74,9 +74,13 @@ export default function MemberSettings() {
     if (clear) setErrors((e) => (e[clear] ? { ...e, [clear]: undefined } : e))
   }
 
+  // 拉**全部** NEWCOMER 模板（不带 status 过滤）。只拉 ON 的话，一张被停用的模板
+  // 与一张被删掉的模板在页面上长得一模一样，而这两件事的处理办法完全不同
+  // （前者去「优惠券」页重新上架即可，后者只能改选别的）。
+  // 下拉里仍然只提供上架中的（选一张停用的存下去等于配了个死配置）。
   const loadTemplates = () => {
     setTplLoading(true)
-    getCouponTemplates({ source: 'NEWCOMER', status: 'ON' })
+    getCouponTemplates({ source: 'NEWCOMER' })
       .then((list) => { setTemplates(list); setTplFailed(false) })
       .catch(() => { setTplFailed(true); toast.error('新客券模板加载失败') })
       .finally(() => setTplLoading(false))
@@ -102,12 +106,39 @@ export default function MemberSettings() {
   if (!saved) return <div className="text-gray-500">加载中...</div>
 
   const selectedId = form.templateId === '' ? null : Number(form.templateId)
-  const selectedInList = selectedId !== null && templates.some((t) => t.id === selectedId)
+  const onTemplates = templates.filter((t) => t.status === 'ON')
+  const selectedTpl = selectedId === null ? null : (templates.find((t) => t.id === selectedId) ?? null)
+  const selectedInList = selectedId !== null && onTemplates.some((t) => t.id === selectedId)
+
+  /**
+   * 新客券配置的**实时健康状态**。这是这一页最要紧的一块信息：
+   * 「保存成功但新客一张券都收不到」是可达状态，而且从这个页面上原本完全看不出来
+   * ——让它变成死配置的更常见路径是「当时选的是好的，后来在『优惠券』页顺手停用了」，
+   * 那个操作根本不经过本页。所以状态必须常驻可见，而不是靠保存时校验。
+   */
+  const newcomerHealth: { level: 'off' | 'ok' | 'warn'; text: string } =
+    selectedId === null
+      ? { level: 'off', text: '当前不发新客券。新顾客注册后不会自动收到任何优惠券。' }
+      : tplLoading
+        ? { level: 'off', text: '模板加载中…' }
+        : tplFailed
+          ? { level: 'warn', text: '模板列表加载失败，暂时无法确认新客券是否生效。' }
+          : selectedTpl === null
+            ? { level: 'warn', text: `模板 #${selectedId} 已被删除（或类型已不是「新客券」）。新顾客注册后收不到任何券。` }
+            : selectedTpl.status === 'OFF'
+              ? { level: 'warn', text: `「${selectedTpl.name}」已停用。停用的模板发不出券——新顾客注册后收不到任何券。` }
+              : { level: 'ok', text: `生效中：新顾客注册后会自动收到「${selectedTpl.name}」。` }
   // 选中的模板不在「NEWCOMER 且上架中」列表里：可能已下架/已删，也可能只是列表没加载出来。
   // 两种情况都得补一个 option，否则 <select> 会显示成第一项「不发新客券」，
   // 而 form.templateId 其实还是旧 id —— 看到的和会保存的不是一回事。
   const strayId = selectedId !== null && !selectedInList ? selectedId : null
-  const strayText = tplLoading ? '模板加载中…' : tplFailed ? '模板列表加载失败，暂不可更改' : '已下架或已删除'
+  const strayText = tplLoading
+    ? '模板加载中…'
+    : tplFailed
+      ? '模板列表加载失败，暂不可更改'
+      : selectedTpl
+        ? `${selectedTpl.name}（已停用）`
+        : '已删除'
 
   const rateNum = parseIntStrict(form.earnRate)
   const ratePreview = rateNum !== null && rateNum >= RATE_MIN && rateNum <= RATE_MAX
@@ -244,7 +275,7 @@ export default function MemberSettings() {
             onChange={(e) => edit({ templateId: e.target.value })}
           >
             <option value="">不发新客券</option>
-            {templates.map((t) => (
+            {onTemplates.map((t) => (
               <option key={t.id} value={String(t.id)}>{tplLabel(t)}</option>
             ))}
             {strayId !== null && <option value={String(strayId)}>{`模板 #${strayId}（${strayText}）`}</option>}
@@ -256,12 +287,28 @@ export default function MemberSettings() {
             <button onClick={loadTemplates} className="underline ml-1">重试</button>
           </p>
         )}
-        {!tplFailed && !tplLoading && strayId !== null && (
-          <p className="text-xs text-red-600">
-            当前选中的模板已下架或已删除，新客登录时收不到任何券。请到 <Link to="/coupons" className="underline">「优惠券」</Link> 页把它重新上架，或在上面改选别的模板 / 改成「不发新客券」。
-          </p>
-        )}
-        {!tplFailed && !tplLoading && templates.length === 0 && strayId === null && (
+        {/* 健康状态条常驻。三态各有各的处理办法，文案里直接写出来——
+            店主看到告警时最需要的是「那我现在该点哪儿」，不是「出错了」。 */}
+        <div
+          className={`text-xs rounded-md px-3 py-2 border ${
+            newcomerHealth.level === 'ok'
+              ? 'bg-green-50 border-green-200 text-green-700'
+              : newcomerHealth.level === 'warn'
+                ? 'bg-amber-50 border-amber-300 text-amber-800'
+                : 'bg-gray-50 border-gray-200 text-gray-500'
+          }`}
+        >
+          {newcomerHealth.level === 'ok' ? '✅ ' : newcomerHealth.level === 'warn' ? '⚠️ ' : ''}
+          {newcomerHealth.text}
+          {newcomerHealth.level === 'warn' && (
+            <>
+              {' '}
+              请到 <Link to="/coupons" className="underline">「优惠券」</Link> 页把它重新上架，
+              或在上面改选别的模板 / 改成「不发新客券」。
+            </>
+          )}
+        </div>
+        {!tplFailed && !tplLoading && onTemplates.length === 0 && strayId === null && (
           <p className="text-xs text-gray-500">
             还没有上架中的新客券模板。先到 <Link to="/coupons" className="underline">「优惠券」</Link> 页新建一个来源为「新客券」的模板并上架，再回来选。
           </p>

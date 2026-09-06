@@ -30,13 +30,20 @@ const PAGE_COMPONENTS = {
   'order-list': ['empty-state', 'order-status-tag'],
   'address-list': ['empty-state'],
   'local-index': ['sku-popup', 'empty-state'],
+  'order-confirm': ['checkout-benefits'],
+  'local-confirm': ['checkout-benefits'],
 }
 
 // wxss → 浏览器 CSS
 function transformWxss(css) {
   return css
     // page {  →  .mp-page {  （变量作用域挂到根容器）
-    .replace(/\bpage\s*\{/g, '.mp-page {')
+    //
+    // ⚠️ 前面那个字符不能是 `.` 或 `-` 或标识符字符：`\bpage\s*\{` 会把页面自己的
+    // `.page {` 也吃掉，替出一个 `..mp-page {`——非法选择器，浏览器静默丢弃整条规则。
+    // 多数镜像的留白来自内层容器所以看不出来，但 member-index 的 `.page { padding: … }`
+    // 整块丢了，预览成了贴边渲染（2026-09-06 做会员页镜像时发现，此前一直存在）。
+    .replace(/(^|[^.\w-])page\s*\{/g, '$1.mp-page {')
     // 123rpx / 1.5rpx  →  calc(123 * var(--rpx))
     .replace(/(\d*\.?\d+)rpx/g, 'calc($1 * var(--rpx))')
 }
@@ -84,6 +91,11 @@ const PAGE_WXSS = {
   legal: 'pages/legal/index.wxss',
   'local-index': 'pages/local/index.wxss',
   'local-confirm': 'pages/local/confirm.wxss',
+  'member-index': 'pages/member/index.wxss',
+  'member-mall': 'pages/member/mall.wxss',
+  'member-coupons': 'pages/member/coupons.wxss',
+  'member-claim': 'pages/member/claim.wxss',
+  'member-points-log': 'pages/member/points-log.wxss',
 }
 
 let version = Date.now()
