@@ -75,17 +75,30 @@ echo "-- 商品规格不再被静默截断（长规格独占一行）--"
 # 真机复现过「500克/切片/微辣」与「500克/切片/微辣/真空装」打出来一模一样 → 打包发错货。
 if [[ -n "$D44_DUAL_OID" ]]; then
   sql "UPDATE order_items SET spec_text='500克/切片/微辣/真空装/加赠调料包' WHERE order_id=$D44_DUAL_OID;"
-  # 前置自检：sql() 把 stderr 丢进 /dev/null，UPDATE 写错列名/语法会**静默失败**，
-  # 后面那条断言就会在「规格压根没被改长」的前提下轻松通过——本次会话已经被这个坑咬过一次。
-  D44_SPEC_SET=$(sql "SELECT COUNT(*) FROM order_items WHERE order_id=$D44_DUAL_OID AND spec_text LIKE '%加赠调料包%';")
-  assert_eq "长规格：前置——UPDATE 真的写进去了（catch sql() 静默失败）" "${D44_SPEC_SET:-0}" "1"
+  # 前置自检 ①：sql() 把 stderr 丢进 /dev/null，UPDATE 写错列名/语法会**静默失败**，
+  # 后面那条断言就会在「规格压根没被改长」的前提下轻松通过——本次会话已被这个坑咬过一次。
+  #
+  # 用 CHAR_LENGTH 而不是 `LIKE '%加赠调料包%'`：后者走**同一条管道**回读，客户端字符集错时
+  # 查询串和存储值一起变成乱码、反而匹配上，自检照样绿（2026-09-06 实测踩过）。
+  # 字符数是独立判据——latin1 误存时一个汉字会变成 3 个字符，长度立刻从 20 膨胀到 44。
+  D44_SPEC_LEN=$(sql "SELECT CHAR_LENGTH(spec_text) FROM order_items WHERE order_id=$D44_DUAL_OID LIMIT 1;")
+  assert_eq "长规格：前置——规格写进去了且未被字符集损坏（CHAR_LENGTH=20）" "${D44_SPEC_LEN:-0}" "20"
   R=$(req POST "/api/admin/orders/$D44_DUAL_OID/reprint" "$AT")
   sleep 0.3
   D44_SPEC=$(PJOBS "$D44_DUAL_OID" | jq -r '[.data.list[] | select(.kind=="REPRINT")][0].content')
-  [[ "$D44_SPEC" == *"加赠调料包"* ]] \
-    && ok "长规格完整保留（末尾的「加赠调料包」没被砍掉）" \
-    || fail "长规格被截断——两个不同 SKU 会打成一样，打包会发错货" "$D44_SPEC"
+  # 断言前先把折行接回去：长规格会被 wrapByWidth 拆到多行（`…加赠调<BR>  料包)`），
+  # 直接按连续子串找「加赠调料包」会假失败——这是**渲染正确但断言写错**，2026-09-06 踩过。
+  # 判据用**完整规格串**而不是末尾几个字：中间任何一段被吞掉都要能红。
+  D44_SPEC_FLAT=${D44_SPEC//<BR>  /}
+  [[ "$D44_SPEC_FLAT" == *"(500克/切片/微辣/真空装/加赠调料包)"* ]] \
+    && ok "长规格完整保留（接回折行后与原文逐字一致）" \
+    || fail "长规格被截断——两个不同 SKU 会打成一样，打包会发错货" "$D44_SPEC_FLAT"
 fi
+# 收尾：把本组留下的在途作业跑完再进下一组。B6 是竞态用例（固定 sleep 卡时序），
+# 上一组遗留的 PENDING/SENDING 行会被它那次 run-scheduler 一并扫到，挤占同一轮的处理时间——
+# 跨用例残留正是这类偶发红的常见来源。不断言，只清场。
+req POST /api/admin/system/run-scheduler "$AT" '{}' >/dev/null
+sleep 0.5
 
 echo "-- B6：立即发送与定时兜扫的竞争，同一 PrintJob 只应被物理发送一次 --"
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D44-B6","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null

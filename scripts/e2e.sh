@@ -1414,7 +1414,11 @@ req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
 req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null
 
 echo "== 36. 会员积分与优惠券（M1）=="
-sql() { docker exec -i food-shop-mysql mysql -N -ufoodshop_user -pfoodshop_password "$DB_NAME" -e "$1" 2>/dev/null; }
+# ⚠️ --default-character-set=utf8mb4 不能省：容器里 mysql 客户端默认 latin1，写中文会被逐字节
+# 当成 latin1 存进去（2026-09-06 实测：'500克/切片' 存成 '500å…‹/åˆ‡ç‰‡'）。
+# 更阴的是**同源自检检不出来**——若用 `LIKE '%中文%'` 回读，查询串走同一条坏管道、同样变成乱码，
+# 反而匹配上，自检照样绿。写中文的用例必须带这个参数，或者改走 API 而不是直连库。
+sql() { docker exec -i food-shop-mysql mysql --default-character-set=utf8mb4 -N -ufoodshop_user -pfoodshop_password "$DB_NAME" -e "$1" 2>/dev/null; }
 
 # 备份原有会员设置，本段末尾原样写回——这是全局配置，共享同一个库的其他联调/agent 不该被本段改动影响
 ORIG_MEMBER_SETTINGS=$(req GET /api/admin/settings/member "$AT" | jq -c .data)
