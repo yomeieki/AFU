@@ -20,7 +20,7 @@
       </view>
 
       <view wx:if="{{quoteText}}" class="quote-strip {{quoteOk && !coordStale ? '' : 'quote-strip-warn'}}">
-        <text class="quote-text">{{quoteText}}</text>
+        <text class="quote-text">{{coordStale ? '地址已修改，运费需重新选点后计算' : quoteText}}</text>
       </view>
     </block>
 

@@ -107,12 +107,17 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const textChanged = (['province', 'city', 'district', 'detail'] as const).some(
       (k) => data[k] !== undefined && data[k] !== exists[k]
     )
-    // 客户端契约（apps/miniapp/pages/address/edit.js 的 onSave/doSave）：小程序在文字
-    // 与坐标快照（coordSnapshotText）不一致且顾客没有重新选点时，本就不会带 latE6/lngE6
-    // 这两个键——这是这条防线在小程序上真正生效的前提。这里的语义不因此改变：
-    // coordProvided 只看请求体是否带了坐标键，不信任客户端「坐标是否新鲜」的判断，
-    // 服务端永远按「带了就用、没带且文字变了就清空」处理。
-    const coordProvided = 'latE6' in data || 'lngE6' in data
+    // 按值判定，不能只看请求体带没带这两个键：小程序端「重新选点」在坐标数值不变
+    // 时（比如就在原位置点确认）也会把 latE6/lngE6 原样带上——若只看「带了键就算
+    // provided」，staleCoordPatch 不会误触发，这条本就没问题；但反过来，旧版/异常
+    // 客户端可能把「没变的旧坐标」跟着文字改动一起回传，此时请求体带了键、值却和
+    // 库里一致，不代表顾客真的重新选过点。按值判断后，只有「请求体带了键 且 值与
+    // 库内不同」才算真的提供了新坐标，「带了键但值没变」不会被当成新坐标去豁免
+    // textChanged 触发的清空——不依赖、也不信任客户端对「坐标是否新鲜」的判断。
+    const coordChanged =
+      ('latE6' in data && data.latE6 !== exists.latE6) ||
+      ('lngE6' in data && data.lngE6 !== exists.lngE6)
+    const coordProvided = ('latE6' in data || 'lngE6' in data) && coordChanged
     const staleCoordPatch =
       textChanged && !coordProvided ? { latE6: null, lngE6: null, poiName: null } : {}
 

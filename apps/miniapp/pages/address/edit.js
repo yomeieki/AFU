@@ -63,6 +63,11 @@ Page({
     coordSnapshotText: null,
     // 上面那种「文字变了、坐标没跟着变」的状态，供 wxml 提前提示（不用等到点保存才发现）。
     coordStale: false,
+    // 本次页面停留期间是否成功选过点一次。onSave 判「坐标是否过期」以它为准而不是
+    // 单纯比对文字快照——选点成功后会把路名预填进详细地址（见 onPickLocation），
+    // 顾客紧接着补门牌号会让「文字 vs 快照」立刻不一致，若还按快照判断，刚选的坐标
+    // 反而会被当成「过期」在保存时弹窗、选「仍要保存」后被清空。
+    coordPickedThisSession: false,
     locating: false,
     // 报价条：距离 / 配送费 / 是否超范围
     quoteText: '',
@@ -120,9 +125,9 @@ Page({
   // 不用等到点保存才用弹窗打断顾客。真正拦截回传坐标的判断仍在 onSave 里做一次。
   refreshCoordStale() {
     var snapshot = this.data.coordSnapshotText
-    if (snapshot === null) { this.setData({ coordStale: false }); return }
-    var current = coordTextKey(this.data.region, this.data.form.detail)
-    this.setData({ coordStale: current !== snapshot })
+    var next = snapshot === null ? false : coordTextKey(this.data.region, this.data.form.detail) !== snapshot
+    // 值没变就不 setData——onInput 每敲一个字都会走到这里，避免无意义的重渲染。
+    if (next !== this.data.coordStale) this.setData({ coordStale: next })
   },
 
   onInput(e) {
@@ -169,6 +174,7 @@ Page({
         var resultDetail = patch['form.detail'] !== undefined ? patch['form.detail'] : self.data.form.detail
         patch.coordSnapshotText = coordTextKey(resultRegion, resultDetail)
         patch.coordStale = false
+        patch.coordPickedThisSession = true
         self.setData(patch)
         self.refreshQuote()
       },
@@ -253,6 +259,9 @@ Page({
           region: region,
           regionText: region.join(' / '),
         })
+        // 导入会整段覆盖文字地址，和顾客手改文字一样可能让已选的坐标对不上——
+        // 走同一条 stale 检测，别漏了这条路径。
+        self.refreshCoordStale()
       },
       fail(err) {
         var msg = (err && err.errMsg) || ''
@@ -292,35 +301,37 @@ Page({
     if (!detail) { wx.showToast({ title: '请填写详细地址', icon: 'none' }); return }
 
     var hasCoord = this.data.latE6 !== null && this.data.lngE6 !== null
-    // 坐标是否还对得上当前文字——对不上说明顾客改了省市区/详细地址却没重新选点。
-    // 不拦这一下的话，下面会把（未变的）旧坐标当「新鲜坐标」原样回传，服务端
-    // addresses.ts 的 coordProvided 恒为 true，「改了文字就清坐标」的防线形同虚设：
-    // 顾客把「丹桂 3 栋」改成「城南某小区 8 栋」后，配送费和骑手目的地会一直按旧坐标算。
-    var coordStale = hasCoord && this.data.coordSnapshotText !== coordTextKey(region, detail)
+    // 坐标是否还对得上当前文字——只有「本次会话没有重新选点过」时才追问快照是否
+    // 对得上当前文字。不加这个前提的话，新建同城地址时顾客选完点、地图预填的路名
+    // 被顾客紧接着补上「3栋201」，onInput 会立刻把这次刚选的坐标判成「过期」：
+    // 保存必弹窗，弹窗里唯一能继续的路又会把刚选的坐标当「旧坐标」一起清空，
+    // 新建同城地址的主流程被这条本该保护它的检查自己拦死。
+    var coordStale = hasCoord && !this.data.coordPickedThisSession &&
+      this.data.coordSnapshotText !== coordTextKey(region, detail)
 
-    if (coordStale) {
+    // 只有同城配送要靠坐标算运费/派骑手，才值得为「坐标过期」打断顾客；EXPRESS
+    // 地址本就不强制选点，文字改了坐标没跟着变时，直接按服务端既有语义不回传坐标
+    // （见 addresses.ts 的 staleCoordPatch：文字变了 + 本次未带坐标 → 清空），不用弹窗。
+    if (coordStale && isLocal) {
       var self = this
       wx.showModal({
         title: '地址文字已修改',
-        content: '地址文字已修改，请重新在地图上选点，否则同城配送将无法报价',
+        content: '请重新在地图上确认定位（可直接在原位置点确认），否则同城配送无法报价',
         confirmText: '去选点',
-        cancelText: '仍要保存',
+        cancelText: '返回修改',
         success: function(r) {
           if (r.confirm) {
             self.onPickLocation()
-            return
           }
-          // 顾客选「仍要保存」：不回传这份对不上文字的旧坐标，交给服务端按
-          // 「文字变了 + 本次未带坐标」清空坐标（addresses.ts 的 staleCoordPatch）。
-          // 这比带着错坐标保存安全——顾客下次同城下单会被 42223 挡住去补定位，
-          // 好过悄悄按旧地点算运费、把骑手派到错误地址。
-          self.doSave(name, phone, region, detail, form, false)
+          // 取消/返回：什么都不做，回到表单继续改——不再提供「仍要保存」这条路径。
+          // 之前那条路径把「点取消」和「明确要清坐标保存」混成同一个操作，点遮罩/
+          // 返回键都会被判成「同意清坐标」，属于破坏性操作绑在无副作用的取消键上。
         },
       })
       return
     }
 
-    this.doSave(name, phone, region, detail, form, hasCoord)
+    this.doSave(name, phone, region, detail, form, hasCoord && !coordStale)
   },
 
   doSave(name, phone, region, detail, form, includeCoord) {
