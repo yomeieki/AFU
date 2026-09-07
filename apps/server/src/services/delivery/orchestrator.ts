@@ -303,10 +303,11 @@ export async function callRider(input: CallRiderInput) {
   // notifySystemAlert 同一套 5 分钟抑制，不然告警频道会被同一条刷屏。
   if (err.kind === 'CAPACITY') notifyLocalDeliveryAlert('呼叫骑手失败（运力异常）', [`订单 ${order.orderNo}`, err.message, '可稍后重试、加小费或改自己送'], { key: `dlv-capacity:${orderId}` })
   // BUSINESS：_mapReturnCode 把 CONFIG/BALANCE/CAPACITY 之外的一切返回码（含未归类业务拒绝码、
-  // DNS/连接失败、非 JSON 响应）都落成这一类，此前完全没有专属告警——手动呼叫时店员能在确认弹窗
-  // 当场看到 42225 原文，但 autoCallDelayMin>0 时 SCHEDULER 触发的失败只会 console.warn 悄悄丢掉，
+  // DNS/连接失败、非 JSON 响应）都落成这一类。收窄到 SCHEDULER：手动呼叫（ADMIN）失败时店员
+  // 已经能在确认弹窗当场看到 42225 原文（本函数最后一行 throw 出去的那条），不需要再重复告警；
+  // 真正的信息差在 autoCallDelayMin>0 时 SCHEDULER 触发的失败——此前只会 console.warn 悄悄丢掉，
   // 店员要等 10 分钟通用「未呼叫骑手」提醒才知道这单有问题，且提醒文案不带失败原因。
-  if (err.kind === 'BUSINESS') notifySystemAlert('快递100 呼叫失败（未归类）', [`订单 ${order.orderNo}`, `${err.code}: ${err.message}`], { key: `dlv-business:${orderId}` })
+  if (err.kind === 'BUSINESS' && source === 'SCHEDULER') notifySystemAlert('快递100 呼叫失败（未归类）', [`订单 ${order.orderNo}`, `${err.code}: ${err.message}`], { key: `dlv-business:${orderId}` })
   throw new AppError(42225, `呼叫骑手失败：${err.message}`)
 }
 

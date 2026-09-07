@@ -70,26 +70,78 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
   // 并呼假撤单过滤：多运力并呼时未中标运力也推 720。快递100 的 taskId 是**批次级**的——
   // 同批次所有被呼运力共享同一个 taskId（docs/research/2026-09-03-kuaidi100-same-city-api.md
   // :174,181,238-244），真正区分「这条 720 是谁的」的字段是 kuaidicom（即下面的 p.courierCompany，
-  // verifyAndParseCallback 已从 param.kuaidicom 解出，见 kd100.ts:227）。原判定只比 taskId，
-  // 同批次任何真实回调恒相等，这条护栏与它挂着的 kd-cb-720x 告警在真实语义下从未生效——
-  // 落空方的 720 会直接把中标方的在途单终态化，中标骑手后续 100/310/520 全部撞 TERMINAL
-  // 被静默丢弃（见 :123 的 moved===0 分支）。现在的判定口径：
-  //  - 本地已锁定中标运力（statusRank>=20 时的 courierCompany，与下面 actualFee 认领 :150
-  //    同一口径）且回调 kuaidicom 与其不一致 → 确认是未中标方撤单，忽略；taskId 不匹配保留作
-  //    附加信号（不再是唯一依据，两者任一命中都判定为假撤单）
-  //  - 尚未锁定中标方（还在 CALLING/呼叫阶段）：无法判断这条 720 到底是谁的，按 :59 未认领
-  //    占位单同样的口径只留痕不终态化——判错的代价不对称：错杀会撞死中标方的在途单，
-  //    错放最多是让一条真撤单晚一点被人工核对处理
+  // verifyAndParseCallback 已从 param.kuaidicom 解出，见 kd100.ts:227）。
+  //
+  // 复核（opus）指出上一版有两条比原缺陷更糟的卡死路径，这版按「只在能正面证明这条 720
+  // 属于非相关方时才忽略，证明不了就按真撤单处理」重写：
+  //  (1) 上一版用 `statusRank>=20 时的 courierCompany` 当唯一判据，呼叫阶段（rank<20）恒为
+  //      null → `!lockedWinner` 恒真 → 一律只留痕不终态化。生产默认 SOLO_LOWEST 只呼一家，
+  //      呼叫阶段收到的 720 必然是这唯一一家自己的真撤单，却被当假撤单晾着：配送单卡在
+  //      CALLING 不放、activeOrderId 不释放，escalateSoloCalls 3 分钟后对已取消单
+  //      precancel/cancel 报错，被 tasks.ts:249 的 catch 静默吞掉、每分钟空转；店员
+  //      cancel/selfDeliver/addTip 三条出口全部要外呼，也全废——订单永久卡 PREPARING。
+  //      现在补一条「只呼了一家」的判据（soleCalled，来自 Delivery.calledProviders，
+  //      orchestrator.ts:165 落库，tasks.ts:20 已有解析先例）：呼叫阶段只有一个候选，
+  //      它自己撤单没有二义性，不用等 rank>=20 才敢认。
+  //  (2) rank>=20 但 courierCompany 这一列本身为 null（推进 rank 的那条回调没带 kuaidicom，
+  //      真实形态，见下面 e2e.sh 缺字段 310 用例）时，上一版直接把它当「未中标」忽略——
+  //      写不上是「不知道该由谁撤」，不是「知道不是它」，这两者代价不对称，不能划等号。
+  //      现在 `lockedWinner` 只在这一列真写上了才算「已锁定」；写不上时退到 soleCalled，
+  //      两者都拿不到（多家并呼 + 未锁定）才是真的「说不清」，只有这一档才留痕不终态化，
+  //      且下面加了自愈：呼叫过的每一家都各自推过 720 时不用死等人工核对。
   if (p.providerStatus === '720' && delivery.providerTaskId) {
+    const called = Array.isArray(delivery.calledProviders)
+      ? delivery.calledProviders.filter((x): x is string => typeof x === 'string') : []
+    // 中标方：rank>=20 且这一列真写上了才算「已锁定」；写不上是「未知」，不能当「未中标」
     const lockedWinner = delivery.statusRank >= 20 ? delivery.courierCompany : null
-    const mismatchByCourier = !!lockedWinner && !!p.courierCompany && p.courierCompany !== lockedWinner
+    // 只呼了一家：这一家就是唯一可能的撤单方，呼叫阶段的 720 也无歧义
+    const soleCalled = called.length === 1 ? called[0] : null
+    const expected = lockedWinner ?? soleCalled            // null = 真不知道该由谁撤
     const mismatchByTaskId = !!p.taskId && p.taskId !== delivery.providerTaskId
-    if (!lockedWinner || mismatchByCourier || mismatchByTaskId) {
-      try {
-        await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, `720@${p.courierCompany || p.taskId || 'unknown'}`, null, rawBody), source: 'CALLBACK', providerStatus: 720, statusDesc: lockedWinner ? `未中标运力撤单（kuaidicom=${p.courierCompany || '空'}，中标=${lockedWinner}），忽略` : `尚未锁定中标运力，无法判断撤单归属（kuaidicom=${p.courierCompany || '空'}），不终态化，待人工核对`, rawPayload: body })
-      } catch { /* 同上 */ }
-      if (delivery.statusRank < 20) notifySystemAlert('快递100 呼叫阶段收到疑似未中标方 720', [`deliveryNo=${deliveryNo}`, `中标=${lockedWinner || '尚未锁定'} 回调 kuaidicom=${p.courierCompany || '空'} taskId=${p.taskId || '空'}`, '真实联调时请核实并呼语义（spec §5.4）'], { key: `kd-cb-720x:${deliveryNo}` })
-      return { http: 200 }
+    const mismatchByCourier = !!expected && !!p.courierCompany && p.courierCompany !== expected
+    // 说不清归属的只剩：多家并呼 + 尚未锁定中标方。此时才只留痕
+    let ambiguous = !expected && called.length > 1
+    if (mismatchByTaskId || mismatchByCourier || ambiguous) {
+      const kcDesc = `kuaidicom=${p.courierCompany || '空'}`
+      if (ambiguous) {
+        try {
+          await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, `720amb@${p.courierCompany || 'unknown'}`, null, rawBody), source: 'CALLBACK', providerStatus: 720, statusDesc: `多家并呼撤单（${kcDesc}），尚无中标方，不终态化，待人工核对`, rawPayload: body })
+        } catch { /* 同上 */ }
+        // 自愈：呼叫过的每一家运力各自都推过一次 720（distinct kuaidicom）时，说明这批
+        // 运力全撤了，不再是「说不清归属」，放行给下面走真撤单终态化，不用死等人工核对。
+        // DeliveryEvent 没有专门列存 kuaidicom，退而求其次数上面刚落库的 statusDesc 文案里
+        // 的 kuaidicom——如果以后加了专门列，这里应该改成查那一列而不是文本匹配。
+        const events = await prisma.deliveryEvent.findMany({
+          where: { deliveryId: delivery.id, providerStatus: 720, statusDesc: { startsWith: '多家并呼撤单（' } },
+          select: { statusDesc: true },
+        })
+        const seen = new Set<string>()
+        for (const e of events) {
+          const m = e.statusDesc?.match(/kuaidicom=([^）)]+)/)
+          if (m && m[1] !== '空') seen.add(m[1])
+        }
+        if (called.length > 0 && seen.size >= called.length) ambiguous = false   // 全员撤单，落到下面按真撤单处理
+      } else {
+        try {
+          await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, `720x@${p.courierCompany || p.taskId || 'unknown'}`, null, rawBody), source: 'CALLBACK', providerStatus: 720, statusDesc: `未中标运力撤单（${kcDesc}，中标=${expected}），忽略`, rawPayload: body })
+        } catch { /* 同上 */ }
+      }
+      if (ambiguous) {
+        notifySystemAlert('快递100 并呼撤单归属不明', [
+          `deliveryNo=${deliveryNo}（订单 ${delivery.orderNo}，当前 ${delivery.status}）`,
+          `多家并呼中收到撤单（${kcDesc} taskId=${p.taskId || '空'}），尚无中标方，无法判断归属；运力方可能已无活单，请到快递100 后台核对后在工作台取消重呼`,
+        ], { key: `kd-cb-720x:${deliveryNo}` })
+        return { http: 200 }
+      }
+      if (mismatchByTaskId || mismatchByCourier) {
+        // 呼叫阶段（还没锁定中标方）收到的 taskId/kuaidicom 不匹配才提醒——一旦锁定，
+        // 已知输家迟到的 720 不必打扰店员，静默留痕即可（同上一版行为）
+        if (delivery.statusRank < 20) {
+          notifySystemAlert('快递100 呼叫阶段收到疑似未中标方 720', [`deliveryNo=${deliveryNo}`, `中标=${expected || '尚未锁定'} 回调 ${kcDesc} taskId=${p.taskId || '空'}`, '真实联调时请核实并呼语义（spec §5.4）'], { key: `kd-cb-720x:${deliveryNo}` })
+        }
+        return { http: 200 }
+      }
+      // 走到这里必然是 ambiguous 自愈成功：不再拦截，往下按真撤单终态化
     }
   }
   const mapped = PROVIDER_STATUS_MAP[p.providerStatus]
@@ -159,7 +211,7 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       // 所以不认领的话这一列永远是 NULL，对账只能靠人去后台抄。
       //
       // 为什么卡在 rank>=20 而不是 `0`：并呼时 `0` 回调带的 kuaidicom 不一定是最终中标那家
-      // （:94 会把它写进 courierCompany，等 `100` 到了再覆盖）。实扣只能在「谁接了」确定之后写。
+      // （:166 会把它写进 courierCompany，等 `100` 到了再覆盖）。实扣只能在「谁接了」确定之后写。
       // 写一次为准（where actualFee:null）：后续 230/310/520 再来也不改。
       if (moved > 0 && mapped.type === 'rank' && mapped.rank >= 20) {
         // 本次回调带了运力就用本次的；没带则只在**本地已经越过 100** 时才敢用行上那份
