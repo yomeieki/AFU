@@ -1,10 +1,16 @@
-/* 封面分流页。
-   底色写死 #FBF5E7（与封面图纸底同色）而不是继承 app.wxss 的 --bg：
-   冷启动时 WeChat 先画 page 背景再渲染，同色才不会闪一下灰白。 */
+/* 封面分流页｜方案 C 青瓦简约版
+   设计基准 750 × 1333，设计稿 1px === 1rpx。坐标出自设计交付包的
+   specs/hotspots.json、specs/design-tokens.json 与 previews/homepage-formal.svg。
+   所有文字的行盒顶边都是按 SVG 里的基线 y 反算的，不是目测对齐；
+   已在浏览器里逐项实测到 0.00px（12 项几何量，见 config/cover-entries.js 顶部说明）。
+
+   底色写死 #F1E9DA（取自背景原图顶部 60px 均值）而不是继承 app.wxss 的 --bg：
+   冷启动时 WeChat 先画 page 背景再渲染，同色才不会闪一下灰白。
+   （旧亭子版这里是 #FBF5E7，跟着换背景一起改了。） */
 page {
   height: 100%;
   overflow: hidden;
-  background: #FBF5E7;
+  background: #F1E9DA;
 }
 
 .cover-root {
@@ -12,59 +18,194 @@ page {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background: #FBF5E7;
+  background: #F1E9DA;
 }
 
-/* 舞台 = 「含被裁部分的完整缩放尺寸」，由 JS 算出 left/top/width/height 内联下发。
-   它的宽高比恒等于 750:1624，所以内部百分比与 Figma 坐标 1:1 对应——
-   这正是不能直接用 aspectFill + 页面百分比的原因（那样会差一个裁剪偏移量）。 */
-.cover-stage {
+/* ---------- 背景 ---------- */
+.cover-bg {
   position: absolute;
+  left: 0;
+  width: 750rpx;
   z-index: 1;
 }
+.cover-bg-paper { top: 0; }
+.cover-bg-wall { bottom: 0; }
 
-.cover-img {
-  display: block;
-  width: 100%;
-  height: 100%;
+/* ---------- 舞台 ---------- */
+.cover-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 750rpx;
+  height: 1333rpx;
+  z-index: 2;
+  transform-origin: 375rpx 135rpx;
 }
 
+.cover-logo {
+  position: absolute;
+  left: 125rpx;
+  top: 135rpx;
+  width: 500rpx;
+  height: 292.86rpx;
+}
+
+.cover-divider {
+  position: absolute;
+  top: 748rpx;
+  width: 1rpx;
+  height: 38rpx;
+  background: #7A684E;
+}
+
+/* ---------- 热区 ---------- */
 .hot {
   position: absolute;
-  z-index: 2;
+  z-index: 3;
+  box-sizing: border-box;
 }
 
-/* 按钮是画在位图里的，没有按压反馈顾客会重复点 */
-.hot-hover {
-  background: rgba(0, 0, 0, 0.07);
-  border-radius: 12rpx;
+/* 按下反馈。旧版按钮画在位图里只能整块压暗；现在是原生元素，
+   直接作用在看得见的框/文字上，反馈更准。 */
+.card,
+.nav-text {
+  transition: background-color .16s ease, opacity .16s ease, transform .16s ease;
+}
+.hot-hover .card {
+  background: rgba(181, 139, 81, .16);
+  border-color: #9C763F;
+  transform: scale(.985);
+}
+.hot-hover .nav-text {
+  opacity: .55;
+  transform: scale(.985);
 }
 
-/* 开发期把 data.debug 打开，用虚线框核对热区是否压在画上的按钮上 */
-.hot-debug {
-  outline: 1rpx dashed rgba(229, 68, 30, 0.9);
-  background: rgba(229, 68, 30, 0.12);
+/* 注意：卡片带 1rpx 边框且 box-sizing 为 border-box，其内绝对定位子元素相对
+   padding box 排布，所以下面所有 top/left 都已经扣掉了这 1rpx。 */
+
+/* ---------- 同城配送 / 全国邮寄 ---------- */
+.card-delivery {
+  position: absolute;
+  left: .5rpx;
+  top: 4.5rpx;
+  width: 305rpx;
+  height: 111rpx;
+  box-sizing: border-box;
+  border: 1rpx solid #B58B51;
+  border-radius: 16rpx;
+  background: rgba(251, 245, 231, .12);
+}
+.delivery-cn {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 24.5rpx;
+  height: 32rpx;
+  line-height: 32rpx;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: 32rpx;
+  letter-spacing: 10rpx;
+  /* letter-spacing 会在最后一个字后面留下等宽空隙，居中文本因此整体左偏半格；
+     同值 padding-left 正好抵消，视觉中心才回到设计值 211 / 539。 */
+  padding-left: 10rpx;
+  color: #1E1914;
+  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
+}
+.delivery-en {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 63rpx;
+  height: 18rpx;
+  line-height: 18rpx;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: 18rpx;
+  letter-spacing: 1.4rpx;
+  padding-left: 1.4rpx;
+  color: #8B6B40;
+  font-family: Georgia, "Times New Roman", serif;
 }
 
-/* ── 热区几何：均为 750×1624 设计坐标换算的百分比 ──
-   同城/邮寄     rect x=69.5|397.5 y=902.5 w=305 h=111 rx=15.5（含 0.5 描边外扩）
-   会员三格      组 translate(162 1081) 470×54，两条分隔线 x=320.225(w2) / 449.225(w1)
-                 高度由 54 上下各扩 29 到 112，以满足 44pt 可点下限；
-                 上距快捷入口 34px、下距横幅 34.5px，均不重叠
-   冷链横幅      rect x=162.5 y=1198.5 w=469 h=100 rx=7.5                        */
-.hot-local   { left:  9.200%; top: 55.542%; width: 40.800%; height: 6.897%; }
-.hot-express { left: 52.933%; top: 55.542%; width: 40.800%; height: 6.897%; }
+/* ---------- 会员中心 / 优惠券 / 积分商城 ---------- */
+.nav-text {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 30rpx;
+  height: 29rpx;
+  line-height: 29rpx;
+  text-align: center;
+  font-size: 29rpx;
+  color: #1E1914;
+  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
+}
 
-.hot-member  { left: 21.600%; top: 64.778%; width: 21.230%; height: 6.897%; }
-.hot-coupon  { left: 42.830%; top: 64.778%; width: 17.133%; height: 6.897%; }
-.hot-points  { left: 59.963%; top: 64.778%; width: 24.303%; height: 6.897%; }
-
-.hot-banner  { left: 21.600%; top: 73.768%; width: 62.667%; height: 6.219%; }
+/* ---------- 全国冷链配送 ---------- */
+.card-cold {
+  position: absolute;
+  left: .5rpx;
+  top: 14.5rpx;
+  width: 469rpx;
+  height: 100rpx;
+  box-sizing: border-box;
+  border: 1rpx solid #B58B51;
+  border-radius: 8rpx;
+  background: rgba(251, 245, 231, .12);
+}
+.cold-cn {
+  display: block;
+  position: absolute;
+  left: 28.5rpx;
+  top: 19.5rpx;
+  height: 36rpx;
+  line-height: 36rpx;
+  font-size: 36rpx;
+  color: #1E1914;
+  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
+}
+.cold-en {
+  display: block;
+  position: absolute;
+  left: 28.5rpx;
+  top: 64rpx;
+  height: 17rpx;
+  line-height: 17rpx;
+  font-size: 17rpx;
+  letter-spacing: 1.3rpx;
+  color: #8B6B40;
+  font-family: Georgia, "Times New Roman", serif;
+}
+.cold-divider {
+  position: absolute;
+  left: 302.5rpx;
+  top: 15.5rpx;
+  width: 1rpx;
+  height: 69rpx;
+  background: #7A684E;
+}
+.cold-action {
+  position: absolute;
+  left: 304.5rpx;
+  width: 164rpx;
+  top: 0;
+  height: 100rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: #1E1914;
+  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
+}
+.cold-action .l1 { position: absolute; left: 0; right: 0; top: 21.5rpx; height: 24rpx; line-height: 24rpx; }
+.cold-action .l2 { position: absolute; left: 0; right: 0; top: 51.5rpx; height: 24rpx; line-height: 24rpx; }
 
 /* ── 「我的订单」常驻入口 ─────────────────────────────────
-   固定在底部安全区之上，压在封面图上层（封面图 z-index 由 .cover-stage 管，
-   这里给足 z-index 保证不被热区盖住）。半透明深色底 + 白字：封面下缘是深色画面，
-   纯文字会看不清，而给它一个实心块又会挡住画。
+   固定在底部安全区之上，压在最上层。设计稿里没有这个入口，是 1c9de11 为解决
+   「同城下单后找不到订单」加的，改版不能丢。
+   青瓦版下缘是浅色院墙，所以底色比亭子版浅一档、文字改深色，否则白字糊在灰瓦上。
    44pt 可点下限：min-height 88rpx。 */
 .cover-orders {
   position: fixed;
@@ -78,8 +219,13 @@ page {
   min-height: 88rpx;
   padding: 0 44rpx;
   border-radius: 44rpx;
-  background: rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(6rpx);
+  background: rgba(251, 245, 231, .88);
+  border: 1rpx solid #B58B51;
 }
-.cover-orders-hover { background: rgba(0, 0, 0, 0.58); }
-.cover-orders-text { color: #fff; font-size: 28rpx; letter-spacing: 1rpx; }
+.cover-orders-hover { background: rgba(233, 220, 194, .95); }
+.cover-orders-text {
+  color: #1E1914;
+  font-size: 28rpx;
+  letter-spacing: 1rpx;
+  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
+}
