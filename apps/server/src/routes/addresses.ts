@@ -107,6 +107,11 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const textChanged = (['province', 'city', 'district', 'detail'] as const).some(
       (k) => data[k] !== undefined && data[k] !== exists[k]
     )
+    // 客户端契约（apps/miniapp/pages/address/edit.js 的 onSave/doSave）：小程序在文字
+    // 与坐标快照（coordSnapshotText）不一致且顾客没有重新选点时，本就不会带 latE6/lngE6
+    // 这两个键——这是这条防线在小程序上真正生效的前提。这里的语义不因此改变：
+    // coordProvided 只看请求体是否带了坐标键，不信任客户端「坐标是否新鲜」的判断，
+    // 服务端永远按「带了就用、没带且文字变了就清空」处理。
     const coordProvided = 'latE6' in data || 'lngE6' in data
     const staleCoordPatch =
       textChanged && !coordProvided ? { latE6: null, lngE6: null, poiName: null } : {}
