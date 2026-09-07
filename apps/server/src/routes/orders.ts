@@ -23,15 +23,9 @@ import { DELIVERY_STATUS_LABEL } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getCourierLocationByOrder } from '../services/delivery/courier-location'
 import { settlePoints } from '../services/member/points'
+import { allocateOrderNo } from '../services/order-no'
 
 const router = Router()
-
-function generateOrderNo(): string {
-  const d = new Date()
-  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const rand = String(Math.floor(Math.random() * 1000000)).padStart(6, '0')
-  return `ORD${date}${rand}`
-}
 
 /** 顾客端订单附加字段：待付款截止时间（倒计时用） */
 /**
@@ -370,14 +364,11 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     // （1 次 findMany + 最多 2 轮 × N 次 updateMany + user.update + ledger.create）、GIFT 行
     // expiresAt 回填、以及每个赠品各一次名额占用 + 库存扣减。默认值下晚高峰会出现「下单偶发
     // P2028」这种极难复现的故障——它不会稳定重现，因此也不会被任何测试抓到。
-    const order = await prisma.$transaction(async (tx) => {
-      let orderNo = generateOrderNo()
-      for (let i = 0; i < 3; i++) {
-        const dup = await tx.order.findUnique({ where: { orderNo } })
-        if (!dup) break
-        orderNo = generateOrderNo()
-      }
+    // 单号在**事务外**先取（services/order-no.ts 说明了为什么不能放进来：
+    // 计数器那一行的锁会被这整笔交易持有，下单就被串行化了）。
+    const orderNo = await allocateOrderNo()
 
+    const order = await prisma.$transaction(async (tx) => {
       const newOrder = await tx.order.create({
         data: {
           orderNo,

@@ -100,5 +100,23 @@ S=$(req GET "/api/admin/workbench/snapshot?fresh=1" "$AT")
 assert_eq "卡片带 acceptedAt（倒计时基准）" \
   "$(jq -r --argjson id "$D52_O3" '[.data.columns.preparing[] | select(.orderId==$id)] | last | .local.acceptedAt != null' <<<"$S")" "true"
 
+echo "-- ⑦ 单号：当天流水，后四位不重号 --"
+# 票面和工作台都只显示后四位，所以「当天内后四位唯一」是这条流程的**前提**，不是锦上添花：
+# 旧的六位随机数下，同一天 100 单就有 39% 概率撞号，撞了之后店员照着票点退款会退错人。
+D52_N1=$(d52_ord "$(mk_local_paid)" | jq -r '.data.orderNo')
+D52_N2=$(d52_ord "$(mk_local_paid)" | jq -r '.data.orderNo')
+D52_N3=$(d52_ord "$(mk_local_paid)" | jq -r '.data.orderNo')
+[[ "$D52_N1" =~ ^ORD[0-9]{8}[0-9]{4}$ ]] && ok "单号格式 ORD+8位日期+4位当日流水（$D52_N1）" || fail "单号格式不对" "$D52_N1"
+assert_eq "连续三单的后四位互不相同" \
+  "$(printf '%s\n%s\n%s\n' "${D52_N1: -4}" "${D52_N2: -4}" "${D52_N3: -4}" | sort -u | wc -l | tr -d ' ')" "3"
+# 严格递增才说明走的是计数器而不是随机数——三个不同的随机数也能凑出「互不相同」
+[[ "10#${D52_N2: -4}" -gt "10#${D52_N1: -4}" && "10#${D52_N3: -4}" -gt "10#${D52_N2: -4}" ]] \
+  && ok "后四位逐单递增（${D52_N1: -4} → ${D52_N2: -4} → ${D52_N3: -4}）" \
+  || fail "后四位没有递增，可能退回了随机数" "$D52_N1 $D52_N2 $D52_N3"
+# 日期段必须是 Asia/Shanghai 的今天：用进程时区取日期的话，跨时区部署会把单号挂到隔壁那天，
+# 于是和那天的单撞号——正是这次要消灭的东西
+assert_eq "日期段按 Asia/Shanghai 取（不是进程时区）" \
+  "${D52_N1:3:8}" "$(TZ=Asia/Shanghai date +%Y%m%d)"
+
 req PUT /api/admin/settings/local-delivery "$AT" "$D52_ORIG" >/dev/null
 req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null
