@@ -799,12 +799,15 @@ req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000,"lngE6":104790000}' >/d
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 md5hex() { if command -v md5sum >/dev/null 2>&1; then printf '%s' "$1" | md5sum | cut -d' ' -f1; else printf '%s' "$1" | md5 -q; fi; }
 KDCB_BODY=/tmp/e2e-kdcb.json
-kd_cb() { # deliveryNo taskId status desc updateTime [courierName] [courierMobile] → echo HTTP 状态码，响应体在 $KDCB_BODY
-  local dno="$1" task="$2" st="$3" desc="$4" ut="$5" cn="${6:-王骑手}" cm="${7:-13900001111}"
+kd_cb() { # deliveryNo taskId status desc updateTime [courierName] [courierMobile] [kuaidicom] → echo HTTP 状态码，响应体在 $KDCB_BODY
+  # kuaidicom 默认 shansongtongcheng：批次 taskId 恒相等，真正区分「哪一家」的是这个字段
+  # （callback.ts 的并呼假撤单过滤比它，不比 taskId），本段大多数用例不关心它、保持默认即可，
+  # 只有 §27 的并呼假撤单测试需要显式传一个不同的编码。
+  local dno="$1" task="$2" st="$3" desc="$4" ut="$5" cn="${6:-王骑手}" cm="${7:-13900001111}" kc="${8:-shansongtongcheng}"
   local salt param sign
   salt=$(req GET "/api/admin/system/kd100-mock/salt/$dno" "$AT" | jq -r '.data.salt // empty')
-  param=$(jq -cn --arg t "$task" --arg s "$st" --arg d "$desc" --arg u "$ut" --arg cn "$cn" --arg cm "$cm" \
-    '{taskId:$t,status:$s,statusDesc:$d,updateTime:$u,courierName:$cn,courierMobile:$cm,kuaidicom:"shansongtongcheng"}')
+  param=$(jq -cn --arg t "$task" --arg s "$st" --arg d "$desc" --arg u "$ut" --arg cn "$cn" --arg cm "$cm" --arg kc "$kc" \
+    '{taskId:$t,status:$s,statusDesc:$d,updateTime:$u,courierName:$cn,courierMobile:$cm,kuaidicom:$kc}')
   sign=$(md5hex "${param}${salt}" | tr 'a-f' 'A-F')
   curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$dno" \
     --data-urlencode "param=$param" --data-urlencode "sign=$sign" --data-urlencode "taskId=$task"
@@ -849,9 +852,24 @@ assert_eq "未知状态不动状态机" "$(dstat $CBO2)" "CALLING"
 # —— 入库失败返 500（N5）：providerStatus 超出 Int 列范围 → 事件落库抛错 → 500 让快递100 重推
 assert_eq "入库失败 http 500" "$(kd_cb "$CBD2" "$CBT2" 99999999999999999999 '溢出' '2026-09-04 12:02:00')" "500"
 assert_eq "500 应答 result=false" "$(jq -r .result "$KDCB_BODY")" "false"
-# —— 并呼假撤单：taskId 不匹配的 720 不得终态化；随后真 100 正常推进
-assert_eq "陌生 taskId 的 720 http 200" "$(kd_cb "$CBD2" "OTHER-TASK" 720 '未中标运力撤单' '2026-09-04 12:03:00')" "200"
-assert_eq "假撤单不终态化" "$(dstat $CBO2)" "CALLING"
+# —— 单运力（POST /call 默认 SOLO_LOWEST 建的，只呼一家）CALLING 阶段收到同 taskId 同
+# kuaidicom 的 720：这是这一家自己的真撤单，没有二义性，必须终态化 + 释放 activeOrderId，
+# 不能因为 statusRank 还没到 20（还没人「接单」）就当假撤单晾着——用一个独立的订单/配送单，
+# 避免打断下面 CBD2 那条正向剧本
+CBO2S=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO2S/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$CBO2S/call" "$AT"); CBD2S=$(jq -r .data.deliveryNo <<<"$R")
+R=$(req GET "/api/admin/local/orders/$CBO2S/delivery" "$AT")
+CBT2S=$(jq -r .data.delivery.providerTaskId <<<"$R")
+CBP2S=$(jq -r '.data.delivery.calledProviders[0]' <<<"$R")
+assert_eq "默认 SOLO_LOWEST 只呼一家" "$(jq -r .data.delivery.callStrategy <<<"$R")" "SOLO"
+assert_eq "唯一被呼运力自己撤单 http 200" "$(kd_cb "$CBD2S" "$CBT2S" 720 '骑手取消订单' '2026-09-04 12:03:30' '王骑手' '13900001111' "$CBP2S")" "200"
+assert_eq "呼叫阶段唯一候选的真撤单→CANCELLED（不再误判假撤单卡死）" "$(dstat $CBO2S)" "CANCELLED"
+assert_eq "释放 activeOrderId" "$(req GET "/api/admin/local/orders/$CBO2S/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
+R=$(req POST "/api/admin/local/orders/$CBO2S/call" "$AT"); assert_eq "释放后订单回到可重呼状态 code 0" "$(code "$R")" "0"
+# —— 并呼假撤单（呼叫阶段，尚未锁定中标方）：taskId 是批次级的，此刻还没人接单，
+# 无法判断这条 720 到底是谁的，不管 taskId/kuaidicom 是否匹配都只留痕不得终态化
+assert_eq "呼叫阶段收到陌生 taskId 的 720 http 200" "$(kd_cb "$CBD2" "OTHER-TASK" 720 '未中标运力撤单' '2026-09-04 12:03:00')" "200"
+assert_eq "尚未锁定中标方，假撤单不终态化" "$(dstat $CBO2)" "CALLING"
 assert_eq "真 100 http 200" "$(kd_cb "$CBD2" "$CBT2" 100 '骑手已接单' '2026-09-04 12:04:00')" "200"
 assert_eq "推进 ACCEPTED" "$(dstat $CBO2)" "ACCEPTED"
 # —— N8：515 改派后收到 100，允许 rank 回拨、换新骑手
@@ -860,13 +878,18 @@ assert_eq "515→REASSIGNING" "$(dstat $CBO2)" "REASSIGNING"
 assert_eq "改派后新 100 http 200" "$(kd_cb "$CBD2" "$CBT2" 100 '新骑手接单' '2026-09-04 12:06:00' '李骑手' '13922223333')" "200"
 assert_eq "REASSIGNING→ACCEPTED（rank 回拨特例）" "$(dstat $CBO2)" "ACCEPTED"
 assert_eq "换成新骑手" "$(req GET "/api/admin/local/orders/$CBO2/delivery" "$AT" | jq -r .data.delivery.courierName)" "李骑手"
-# —— 720 匹配 taskId：终态化 + SHIPPED 回退 PREPARING（三重护栏都通过时）
+# —— 并呼假撤单（中标方已锁定，courierCompany=shansongtongcheng）：同 taskId 但 kuaidicom
+# 不同的 720 是真实语义下最该拦住的那条——taskId 恒相等挡不住它，必须靠 kuaidicom 判定是
+# 未中标方撤单，忽略、不终态化
+assert_eq "中标已锁定后同 taskId 不同 kuaidicom 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '未中标运力撤单' '2026-09-04 12:06:30' '假骑手' '10000000000' 'dadatongcheng')" "200"
+assert_eq "kuaidicom 不匹配的假撤单不终态化" "$(dstat $CBO2)" "ACCEPTED"
+# —— 720 匹配 taskId 且 kuaidicom 与中标方一致：终态化 + SHIPPED 回退 PREPARING（三重护栏都通过时）
 assert_eq "cb 310 http 200" "$(kd_cb "$CBD2" "$CBT2" 310 '骑手已取货' '2026-09-04 12:07:00')" "200"
 assert_eq "订单 →SHIPPED" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "SHIPPED"
 # 真已是 SHIPPED 的 LOCAL 单，邮寄端点 complete 必须仍拒（不是巧合命中「非 SHIPPED」分支的假阳性）
 R=$(req POST "/api/admin/orders/$CBO2/complete" "$AT"); assert_eq "已 SHIPPED 的 LOCAL 单邮寄 complete 仍拒 42204" "$(code "$R")" "42204"
 assert_eq "complete 被拒后订单仍 SHIPPED（未被误置 COMPLETED）" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "SHIPPED"
-assert_eq "匹配 taskId 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '骑手取消订单' '2026-09-04 12:08:00')" "200"
+assert_eq "同 taskId 同 kuaidicom 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '骑手取消订单' '2026-09-04 12:08:00')" "200"
 assert_eq "720→CANCELLED" "$(dstat $CBO2)" "CANCELLED"
 assert_eq "订单回退 PREPARING" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "PREPARING"
 assert_eq "720 释放占位" "$(req GET "/api/admin/local/orders/$CBO2/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
@@ -899,6 +922,16 @@ SIGNMIN=$(md5hex "${PMIN}${salt4}" | tr 'a-f' 'A-F')
 HTTPMIN=$(curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$CBD4" --data-urlencode "param=$PMIN" --data-urlencode "sign=$SIGNMIN" --data-urlencode "taskId=$CBT4")
 assert_eq "缺字段（仅 taskId/status/updateTime）回调 http 200" "$HTTPMIN" "200"
 assert_eq "缺字段回调仍推进状态机 →DELIVERING" "$(dstat $CBO4)" "DELIVERING"
+# —— DELIVERING 之后收到不带 kuaidicom 字段的 720（回调不带 kuaidicom 是真实形态，上面那条
+# 缺字段 310 已经证明这种包会到达）：中标方已由更早的 100 锁定，此时不能因为这条 720 本身
+# 没重复带上 kuaidicom 就把它晾在「说不清归属」里——taskId 对得上就是真撤单，必须终态化
+salt4b=$(req GET "/api/admin/system/kd100-mock/salt/$CBD4" "$AT" | jq -r '.data.salt // empty')
+P720MIN=$(jq -cn --arg t "$CBT4" '{taskId:$t,status:"720",statusDesc:"骑手取消订单",updateTime:"2026-09-04 12:11:00"}')
+SIGN720MIN=$(md5hex "${P720MIN}${salt4b}" | tr 'a-f' 'A-F')
+HTTP720MIN=$(curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$CBD4" --data-urlencode "param=$P720MIN" --data-urlencode "sign=$SIGN720MIN" --data-urlencode "taskId=$CBT4")
+assert_eq "不带 kuaidicom 字段的 720 http 200" "$HTTP720MIN" "200"
+assert_eq "缺 kuaidicom 的真撤单仍终态化→CANCELLED" "$(dstat $CBO4)" "CANCELLED"
+assert_eq "缺 kuaidicom 的 720 也释放 activeOrderId" "$(req GET "/api/admin/local/orders/$CBO4/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
 
 echo "== 28. 配送单操作与资金联动 =="
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
