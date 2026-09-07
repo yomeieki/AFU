@@ -58,11 +58,11 @@
 - Consumes: 本计划 Spec §4–§10 的页面与状态定义。
 - Produces: 不接真实接口的可点击预览，供店主确认布局、空间和文案。
 
-- [ ] **Step 1: 建立 375×812 与 320×568 两种手机画布**
+- [x] **Step 1: 建立 375×812 与 320×568 两种手机画布**
 
 预览入口必须提供“全国邮寄/同城配送”切换，以及以下页面按钮：主页、分类、购物车、我的、结算、地址列表、地址编辑、优惠券弹层。
 
-- [ ] **Step 2: 绘制同城页头和统一四栏导航**
+- [x] **Step 2: 绘制同城页头和统一四栏导航**
 
 同城页头只保留：
 
@@ -73,11 +73,11 @@
 
 预览中不得出现顶部“我的订单”。四栏导航使用当前 tabBar 的图标、文字和顺序。
 
-- [ ] **Step 3: 绘制完整结算页与弹层**
+- [x] **Step 3: 绘制完整结算页与弹层**
 
 结算页必须同时展示地址、配送信息、两件商品、优惠券、积分赠品、餐具、备注、金额明细、协议和固定提交栏。优惠券弹层覆盖不超过 70vh，并留出安全区。
 
-- [ ] **Step 4: 加入状态切换面板**
+- [x] **Step 4: 加入状态切换面板**
 
 状态面板提供这些确定值：
 
@@ -87,7 +87,7 @@
 
 每个状态必须同时改变页面提示、金额展示和按钮可用性，不能只换一行文案。
 
-- [ ] **Step 5: 进行预览自检**
+- [x] **Step 5: 进行预览自检**
 
 Run: `node docs/design/miniapp-local-v2/serve.mjs`
 
@@ -98,7 +98,7 @@ Expected: <http://localhost:5195> 打开独立预览，两种画布无横向滚�
 > （`tools/miniapp-preview/serve.mjs:17`），服务不了 `docs/` 下的文件。也不能直接双击
 > `preview.html`——`file://` 下相对路径的 CSS/JS 加载不出来。
 
-- [ ] **Step 6: 停止并等待店主确认**
+- [x] **Step 6: 停止并等待店主确认**
 
 把独立预览链接交给店主。未收到明确确认前，不执行 Task 2。
 
@@ -117,7 +117,7 @@ Expected: <http://localhost:5195> 打开独立预览，两种画布无横向滚�
 - Consumes: `wx.getStorageSync`、`wx.setStorageSync`。
 - Produces: `normalizeChannel(value)`, `getShoppingChannel()`, `setShoppingChannel(channel)`, `channelQuery(channel)`, `checkoutAction(state)`。
 
-- [ ] **Step 1: 写渠道隔离失败测试**
+- [x] **Step 1: 写渠道隔离失败测试**
 
 ```js
 const test = require('node:test')
@@ -141,13 +141,13 @@ test('invalid persisted values fall back to EXPRESS', function () {
 })
 ```
 
-- [ ] **Step 2: 运行测试并确认失败原因**
+- [x] **Step 2: 运行测试并确认失败原因**
 
 Run: `node --test tests/miniapp/channel.test.cjs`
 
 Expected: FAIL with `Cannot find module '../../apps/miniapp/utils/channel'`。
 
-- [ ] **Step 3: 实现最小渠道工具**
+- [x] **Step 3: 实现最小渠道工具**
 
 ```js
 var STORAGE_KEY = 'shoppingChannel'
@@ -178,7 +178,7 @@ module.exports = {
 }
 ```
 
-- [ ] **Step 4: 写结算按钮状态失败测试**
+- [x] **Step 4: 写结算按钮状态失败测试**
 
 ```js
 test('address and quote changes never leave an old payable submit button', function () {
@@ -199,13 +199,13 @@ test('only a fresh quote and payable amount enables submit', function () {
 })
 ```
 
-- [ ] **Step 5: 运行测试并确认缺少实现**
+- [x] **Step 5: 运行测试并确认缺少实现**
 
 Run: `node --test tests/miniapp/local-checkout-state.test.cjs`
 
 Expected: FAIL because `checkoutAction` is not defined。
 
-- [ ] **Step 6: 按地址→报价→业务阻塞→提交中的优先级实现 `checkoutAction`**
+- [x] **Step 6: 按地址→报价→业务阻塞→提交中的优先级实现 `checkoutAction`**
 
 按钮文案只允许：`请选择地址`、`请补充定位`、`正在计算运费`、`重新获取运费`、`暂不可配送`、`提交订单`、`提交中`。长业务原因由页面提示区展示。
 
@@ -226,7 +226,7 @@ Expected: FAIL because `checkoutAction` is not defined。
 **绝不允许写成「按钮没禁用就去提交」**——那会在没有有效 `quoteToken` 的状态下打 `POST /orders`，
 被服务端 `42239` 拒掉，顾客看到的是一句莫名其妙的报错。
 
-- [ ] **Step 7: 运行单测和 ES5 闸门**
+- [x] **Step 7: 运行单测和 ES5 闸门**
 
 Run: `node --test tests/miniapp/*.test.cjs`
 
@@ -236,7 +236,7 @@ Run: `node scripts/check-miniapp-es5.mjs apps/miniapp/utils/channel.js apps/mini
 
 Expected: PASS，无 `const/let`、箭头函数、模板字符串或展开语法。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add package.json apps/miniapp/utils/channel.js apps/miniapp/utils/local-checkout-state.js tests/miniapp

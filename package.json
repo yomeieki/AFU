@@ -12,7 +12,8 @@
     "build:admin": "npm run build --workspace=apps/admin",
     "preview:miniapp": "node tools/miniapp-preview/serve.mjs",
     "gen:tabbar": "node scripts/gen-tabbar-icons.mjs",
-    "gen:pwa-icons": "node scripts/gen-pwa-icons.mjs"
+    "gen:pwa-icons": "node scripts/gen-pwa-icons.mjs",
+    "test:miniapp": "node --test tests/miniapp/*.test.cjs"
   },
   "devDependencies": {
     "sharp": "^0.35.3"

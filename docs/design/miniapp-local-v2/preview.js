@@ -3,9 +3,10 @@
  * 这是给店主看的**静态预览**，不接任何接口、不改任何业务代码。
  * 它对应 docs/superpowers/plans/2026-09-07-miniapp-dual-channel-navigation-checkout.md 的 Task 1。
  *
- * 唯一有「契约」意义的是下面的 checkoutAction()：它就是 Task 2 要用 node:test 锁住、
- * Task 7 要接进 pages/local/confirm.js 的那个纯函数。预览与实现共用同一份口径，
- * 店主在这里看到的按钮文案与禁用规则，就是将来真机上的规则。
+ * 唯一有「契约」意义的是下面的 checkoutAction()。
+ * ⚠️ Task 2 之后，它的**权威实现已经落在 `apps/miniapp/utils/local-checkout-state.js`**，
+ * 由 `tests/miniapp/local-checkout-state.test.cjs` 锁住。这里这一份是给预览用的副本，
+ * 改规则要两边一起改——预览是浏览器脚本、模块是 CommonJS，暂时没法直接复用同一个文件。
  *
  * 本文件是浏览器脚本，可以用 ES6；apps/miniapp 下的 ES5 闸门与它无关。
  */
