@@ -76,6 +76,12 @@ Page({
   data: {
     tabs: TABS,
     activeTab: 0,
+    // 'channel' = 只看进来时那个渠道的单（默认）；'all' = 两个渠道一起看。
+    // **过滤在服务端做**：客户端拿分页结果再筛会漏单——第一页 20 条里可能一条
+    // 同城都没有，顾客会以为自己的单丢了，而页面不解释为什么。
+    scope: 'channel',
+    channel: 'EXPRESS',
+    channelLabel: '全国邮寄',
     orders: [],
     loading: true,
     loadingMore: false,
@@ -84,10 +90,26 @@ Page({
   },
 
   onLoad(options) {
+    // 渠道取自入口参数而不是当前全局渠道：顾客可能在列表里待着的时候，
+    // 别的页面把全局渠道改了；这一页应当稳定停在他进来时看的那一边。
+    var channel = options.deliveryType === 'LOCAL' ? 'LOCAL'
+      : options.deliveryType === 'EXPRESS' ? 'EXPRESS'
+      : getApp().getShoppingChannel()
+    this.setData({ channel: channel, channelLabel: channel === 'LOCAL' ? '同城配送' : '全国邮寄' })
     if (options.status) {
       var idx = TABS.findIndex(function(t) { return t.status === options.status })
       if (idx >= 0) this.setData({ activeTab: idx })
     }
+  },
+
+  // 「当前渠道 / 全部订单」。换范围时**保留状态筛选**（那是顾客此刻想看的那一类），
+  // 但页码必须归零、旧列表必须清空——不清的话新范围的第一屏会从第 N 页开始，
+  // 看起来像是「什么都没有」。在途的旧响应由 loadOrders 里的 _seq 作废。
+  onScopeChange(e) {
+    var scope = e.currentTarget.dataset.scope === 'all' ? 'all' : 'channel'
+    if (scope === this.data.scope) return
+    this.setData({ scope: scope, orders: [], page: 1, hasMore: true })
+    this.loadOrders(true)
   },
 
   onShow() {
@@ -125,7 +147,13 @@ Page({
     var seq = (this._seq = (this._seq || 0) + 1)
     if (reset) this.setData({ loading: true })
     else this.setData({ loadingMore: true })
-    getOrders({ status: status || undefined, page: page, pageSize: PAGE_SIZE })
+    getOrders({
+      status: status || undefined,
+      // scope='all' 时**不传**这个参数（传空串服务端会按不过滤处理，但不如不传干净）
+      deliveryType: this.data.scope === 'channel' ? this.data.channel : undefined,
+      page: page,
+      pageSize: PAGE_SIZE,
+    })
       .then(function(data) {
         if (seq !== self._seq) return // 快速切 Tab 时丢弃过期响应
         var list = (data.list || []).map(decorate)

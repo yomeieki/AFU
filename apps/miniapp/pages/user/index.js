@@ -108,13 +108,20 @@ Page({
     })
   },
 
+  // 订单入口带上当前渠道：顾客在同城模式下点「我的订单」，看到的应该是同城的单。
+  // 列表页可以切「全部订单」，所以这只是默认视角，不是过滤死。
+  orderListUrl: function(status) {
+    var url = '/pages/order/list?deliveryType=' + getApp().getShoppingChannel()
+    if (status) url += '&status=' + encodeURIComponent(status)
+    return url
+  },
+
   goToOrders() {
-    wx.navigateTo({ url: '/pages/order/list' })
+    wx.navigateTo({ url: this.orderListUrl('') })
   },
 
   goToOrdersByStatus(e) {
-    var status = e.currentTarget.dataset.status
-    wx.navigateTo({ url: '/pages/order/list?status=' + status })
+    wx.navigateTo({ url: this.orderListUrl(e.currentTarget.dataset.status) })
   },
 
   goToMerchant() {

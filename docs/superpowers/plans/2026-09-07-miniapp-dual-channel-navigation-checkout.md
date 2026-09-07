@@ -731,7 +731,7 @@ git commit -m "feat(miniapp): close local address selection and quote flow"
 - Consumes: `GET /orders?deliveryType=…`、当前渠道。
 - Produces: 订单列表参数 `{ scope: 'channel'|'all', deliveryType, status, page, pageSize }`。
 
-- [ ] **Step 1: 写订单列表渠道失败测试**
+- [x] **Step 1: 写订单列表渠道失败测试**
 
 LOCAL 模式从“我的”进入订单列表时 URL 带 `deliveryType=LOCAL`；切到“全部订单”后不带 `deliveryType`；状态和分页参数继续保留。
 
@@ -739,23 +739,23 @@ Run: `node --test tests/miniapp/order-channel.test.cjs`
 
 Expected: FAIL because current order API ignores deliveryType。
 
-- [ ] **Step 2: 删除同城页头订单入口的所有残留**
+- [x] **Step 2: 删除同城页头订单入口的所有残留**
 
 全仓 `rg 'head-orders-link|我的订单 ›' apps/miniapp` 应无结果；封面是否保留独立“我的订单”由封面现有设计决定，不属于同城页头。
 
-- [ ] **Step 3: “我的”页按当前渠道进入订单列表**
+- [x] **Step 3: “我的”页按当前渠道进入订单列表**
 
 个人资料、积分、券、地址和协议继续共用；订单入口传当前渠道，并在标题或小标签显示“同城配送/全国邮寄”，避免顾客不知道当前所处模式。
 
-- [ ] **Step 4: 订单列表增加“当前渠道/全部”切换**
+- [x] **Step 4: 订单列表增加“当前渠道/全部”切换**
 
 切换时递增请求序号、清空旧列表、回到 page 1；晚到响应不得覆盖新筛选结果。订单卡继续显示渠道标签。
 
-- [ ] **Step 5: 回归同城订单详情**
+- [x] **Step 5: 回归同城订单详情**
 
 确认 LOCAL 不显示“确认收货”；骑手轮询只在在途状态启动，订单终态、页面 hide/unload 都停止；取消申请在途防双击；退款与售后字段完整显示。
 
-- [ ] **Step 6: 验证**
+- [x] **Step 6: 验证**
 
 Run: `node --test tests/miniapp/order-channel.test.cjs`
 
@@ -763,7 +763,7 @@ Expected: PASS。
 
 （本任务只改既有非 ES5 文件，无新增 js，跳过 ES5 闸门。）
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/miniapp/pages/user apps/miniapp/pages/order apps/miniapp/api/order.js tests/miniapp/order-channel.test.cjs

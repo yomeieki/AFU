@@ -1,6 +1,13 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
 
+  <!-- 渠道范围。放在状态 Tab 之上：先决定「看哪一边的单」，再决定「看哪一类状态」。
+       两个渠道的单混在一起时，顾客要在一堆邮寄单里翻自己刚下的那张同城单。 -->
+  <view class="scope-bar">
+    <view class="scope-item {{scope === 'channel' ? 'active' : ''}}" bindtap="onScopeChange" data-scope="channel">{{channelLabel}}</view>
+    <view class="scope-item {{scope === 'all' ? 'active' : ''}}" bindtap="onScopeChange" data-scope="all">全部订单</view>
+  </view>
+
   <!-- Tabs -->
   <scroll-view scroll-x class="tab-scroll" show-scrollbar="{{false}}">
     <view class="tab-list">
@@ -20,7 +27,8 @@
     <text class="tip-text">加载中...</text>
   </view>
 
-  <empty-state wx:elif="{{orders.length === 0}}" type="order" text="暂无订单" />
+  <empty-state wx:elif="{{orders.length === 0}}" type="order"
+    text="{{scope === 'channel' ? ('暂无' + channelLabel + '订单') : '暂无订单'}}" />
 
   <view wx:else class="order-list">
     <view

@@ -247,3 +247,30 @@
   font-size: 24rpx;
   color: var(--text-3);
 }
+
+/* 渠道范围条。两项等宽、贴在状态 Tab 之上——先选「哪一边的单」，再选「哪一类状态」。
+   两项都用同一套选中样式，避免顾客把它误认成状态 Tab 的一部分。 */
+.scope-bar {
+  display: flex;
+  gap: 12rpx;
+  padding: 16rpx 24rpx 0;
+  background: var(--card);
+}
+.scope-item {
+  flex: 1;
+  min-width: 0;
+  padding: 12rpx 0;
+  border-radius: 999rpx;
+  background: var(--divider);
+  color: var(--text-2);
+  font-size: 24rpx;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-item.active {
+  background: var(--brand-bg);
+  color: var(--brand);
+  font-weight: 600;
+}
