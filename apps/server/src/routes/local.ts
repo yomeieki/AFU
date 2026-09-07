@@ -11,7 +11,7 @@ import { optionalUserAuth } from '../middlewares/auth'
 import { localQuoteLimiter } from '../middlewares/rate-limit'
 import {
   getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText,
-  billableDistanceM, haversineM, calcLocalFee, estimateMinutes, signQuote,
+  billableDistanceM, haversineM, calcLocalFee, estimateMinutesRange, signQuote,
 } from '../services/local-settings'
 import { measureRoadDistanceM } from '../services/delivery/quote'
 
@@ -62,6 +62,7 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
     const distanceM = measuredM ?? estimatedM
     const distanceSource: 'MEASURED' | 'ESTIMATED' = measuredM === null ? 'ESTIMATED' : 'MEASURED'
     const q = calcLocalFee(s, distanceM, body.subtotal)
+    const est = estimateMinutesRange(s, distanceM)
     success(res, {
       enabled: s.enabled,
       isOpen: isOpenNow(s),
@@ -74,7 +75,13 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
       fee: q.fee,
       minOrderAmount: s.fee.minOrderAmount,
       belowMin: q.belowMin,
-      estimatedMinutes: estimateMinutes(s, distanceM),
+      // 结算页只给**大概**，不给钟点（PO 2026-09-07）：备餐是从店员接单才开始的，
+      // 而这一刻店员还没接单，任何绝对时刻都是在替他打包票。高峰期给区间（25–30 + 路上），
+      // 平时 min===max。真正的预计送达钟点在接单时才落库，见 admin/delivery.ts 的 doAccept。
+      estimatedMinutes: est.max,          // 兼容旧字段：老版本小程序仍读它，给上界（保守）
+      estimatedMinRange: est.min,
+      estimatedMaxRange: est.max,
+      isPeakNow: est.isPeak,
       // 收货坐标与门店坐标一并签进 token：下单端点信任 token 里的 distanceM，两对坐标任何一边动了
       // 这段距离就不再成立（见 signQuote 注释）。
       //

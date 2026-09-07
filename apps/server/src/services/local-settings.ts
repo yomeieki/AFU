@@ -33,7 +33,27 @@ export interface LocalDeliverySettings {
   detourFactor: number
   fee: { baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number }
   businessHours: BusinessHour[]
+  /**
+   * 平时的备餐时长（分钟）。**这段时间是从店员点「接单」开始算的**，不是从顾客下单开始——
+   * 顾客下单到店员接单之间那一段（等付款、店里正忙）不属于备餐，也不该由这个数来兜。
+   * 预计送达因此在**接单那一刻**才计算（routes/admin/delivery.ts 的 doAccept）。
+   */
   prepMinutes: number
+  /**
+   * 高峰时段：备餐排队，出餐比平时慢。
+   *
+   * 为什么要单列而不是把 prepMinutes 直接调大：一天里只有两个小时是高峰，用高峰的数去报
+   * 全天的单，平时那些单会被报得离谱地晚，顾客看到「预计 45 分钟」就走了。
+   *
+   * prepMin/prepMax 是**范围**：结算页如实告诉顾客「25–30 分钟」，而算预计送达一律取
+   * **上界**——报晚了顾客早收到是惊喜，报早了是投诉。
+   */
+  peak: {
+    /** 高峰时段（Asia/Shanghai，与营业时段同结构，后台可改） */
+    windows: BusinessHour[]
+    prepMinMinutes: number
+    prepMaxMinutes: number
+  }
   riderSpeedKmh: number
   acceptGraceMin: number
   autoCallDelayMin: number
@@ -49,18 +69,36 @@ export interface LocalDeliverySettings {
     soloProvider: string | null
   }
   /**
-   * 呼叫策略（批次 1）。2026-09-06 首单实测把这件事从「假设」变成了「账」：
+   * 呼叫策略。2026-09-06 首单实测把这件事从「假设」变成了「账」：
    * 并呼 7 家，最贵的闪送 ¥23.32 抢到，而最低的达达报 ¥16.23 —— 一单多付 ¥7.09；
-   * 且**每一家在下单瞬间各冻结一笔**（那一单冻了 ¥75.08，实付 ¥23.32），
-   * 按快递100 最低充值 100 元算，并呼只能同时挂 1 单，只呼最低价能挂 6 单。
+   * 且**每一家在下单瞬间各冻结一笔**（那一单冻了 ¥75.08，实付 ¥23.32）。
    *
-   * mode:
-   *   SOLO_LOWEST 默认。按报价快照里的最低价只呼那一家；查不到报价则退回并呼（不因此拒绝呼叫）。
-   *   ALL         今天的行为：并呼设置里的全部运力。**这是不必部署就能关掉策略的开关**。
-   * escalateAfterMin: SOLO 单等这么久仍无人接 → 取消 D-1、并呼建 D-2。0 = 不自动升级
-   *   （只靠 callTimeoutMin 的人工提醒）。调度器 60 秒一跳，所以实际升级发生在 N ~ N+1 分钟之间。
+   * **店主 2026-09-07 最终定的阶梯（三级，一级一级加人，不一步跳到全表）**：
+   *   第一次 —— 自动挑**最便宜的一家**（mode 默认 SOLO_LOWEST）。工作台弹窗里仍然
+   *             列出全部报价，店员可以当场改选任意一家（急单挑闪送），改选记 MANUAL。
+   *   第二次 —— escalateAfterMin 分钟仍无人接：取消旧单，**并呼最便宜 cheapestN 家**。
+   *   第三次 —— 再过 escalateAfterMin 分钟仍无人接：**并呼全部运力**兜底。
+   *   前两级不分第一次是怎么呼的——SOLO 和店员手选 MANUAL 走同一条阶梯。
+   *   每一级都按**当时**的报价重新挑人（不拿三分钟前那份名单）。
+   *
+   * mode 决定的只是「店员不动手时第一次呼谁」：
+   *   SOLO_LOWEST 默认。只呼报价最低那一家，冻结最省。
+   *   CHEAPEST_N  按报价从低到高取 cheapestN 家并呼。抢单成功率更高，代价是冻结按家数放大。
+   *   ALL         并呼设置里的全部运力。**这是不必部署就能关掉策略的开关**。
+   *   查不到报价一律退回 ALL（不因此拒绝呼叫）。
+   *
+   * ⚠️ 冻结额度按「同时并呼几家」放大，这是三级阶梯存在的全部理由。按首单那组报价：
+   *      一家 ¥16.23／单 · 最便宜 3 家 ≈ ¥51.76／单 · 全部 7 家 ¥75.08／单
+   *    以充值 100 元计，能同时挂的单数分别是 6 / 1 / 1。绝大多数单在第一级就被接走，
+   *    只冻一笔；真没人接的那少数才逐级摊开
+   *    （kd100.autoDowngradeToSelfOnNoBalance 是余额见底后的最后一道兜底）。
+   *
+   * cheapestN: 第二级并呼几家。可选家数不足时有几家呼几家。
+   * escalateAfterMin: 每一级等这么久仍无人接就升下一级。0 = 不自动升级
+   *   （只靠 callTimeoutMin 的人工提醒）。调度器 60 秒一跳，所以实际升级发生在 N ~ N+1 分钟之间；
+   *   走完三级最长约 2×(N+1) 分钟。
    */
-  callStrategy: { mode: 'SOLO_LOWEST' | 'ALL'; escalateAfterMin: number }
+  callStrategy: { mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'; cheapestN: number; escalateAfterMin: number }
   limits: { maxItems: number; maxWeightKg: number }
   callTimeoutMin: number
   acceptedStuckMin: number
@@ -108,7 +146,17 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   // 只有把客单价推上去才摊得平。先跑一个月看单量与距离分布再调。
   fee: { baseFee: 600, baseKm: 3, perKmFee: 250, freeThreshold: 9900, minOrderAmount: 4000 },
   businessHours: [{ start: '09:00', end: '20:00' }],
-  prepMinutes: 15,
+  // 15 → 20（PO 2026-09-07）：15 是拍脑袋的初值。首单实测接单→取货 10.4 分钟，看着够，
+  // 但那是晚上 8 点的单；而且原来的预计送达从**下单**起算，把「下单→付款→接单」那一段
+  // 白送掉了，两个误差正好被偏慢的骑行均速（15 vs 实测 25.5）盖住。现在计时改到接单起算，
+  // 这个数就必须是真实的备餐时长。
+  prepMinutes: 20,
+  peak: {
+    // 午市与晚市各一小时（PO 2026-09-07 定，后台可改）
+    windows: [{ start: '12:00', end: '13:00' }, { start: '17:00', end: '18:00' }],
+    prepMinMinutes: 25,
+    prepMaxMinutes: 30,
+  },
   riderSpeedKmh: 15,
   acceptGraceMin: 5,
   autoCallDelayMin: 0,
@@ -119,9 +167,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     providers: [...KD100_PROVIDERS], goodsType: '食品', defaultItemWeightG: 300,
     insurance: false, autoDowngradeToSelfOnNoBalance: false, soloProvider: null,
   },
-  // 3 分钟：凉菜等不起再挑一轮（挑第二便宜要再等 3 分钟）。升级一步到位并呼全部，
-  // 与 docs/design/workbench-ui-spec.md §6b 一致。
-  callStrategy: { mode: 'SOLO_LOWEST', escalateAfterMin: 3 },
+  // 三级阶梯：一家 →（3 分钟）最便宜 3 家 →（再 3 分钟）全部。
+  // 3 分钟这个数：凉菜等不起再挑一轮。与 docs/design/workbench-ui-spec.md §6b 一致。
+  callStrategy: { mode: 'SOLO_LOWEST', cheapestN: 3, escalateAfterMin: 3 },
   limits: { maxItems: 30, maxWeightKg: 10 },
   callTimeoutMin: 10,
   acceptedStuckMin: 30,
@@ -152,7 +200,7 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
   const o = asObj(raw)
   const D = DEFAULT_LOCAL_SETTINGS
   const store = asObj(o.store), fee = asObj(o.fee), kd = asObj(o.kd100), lim = asObj(o.limits), tip = asObj(o.tip)
-  const cs = asObj(o.callStrategy)
+  const cs = asObj(o.callStrategy), peak = asObj(o.peak)
   const paused = o.paused && typeof o.paused === 'object'
     ? { until: str(asObj(o.paused).until, '', 40) || null, reason: str(asObj(o.paused).reason, '', 60) }
     : null
@@ -184,6 +232,23 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
     },
     businessHours: hours,
     prepMinutes: int(o.prepMinutes, D.prepMinutes, 0, 180),
+    peak: {
+      // 与 businessHours 同一套过滤：格式不合法的行直接丢掉，不让脏值进来。
+      // 高峰时段允许为空数组（= 全天不分高峰），所以这里不做「空则回默认」的兜底——
+      // 店主真想关掉高峰加时，清空这一栏就该真的关掉。
+      windows: Array.isArray(peak.windows)
+        ? peak.windows
+            .map((h) => ({ start: str(asObj(h).start, '', 5), end: str(asObj(h).end, '', 5) }))
+            .filter((h) => HHMM.test(h.start) && HHMM.test(h.end))
+        : D.peak.windows,
+      prepMinMinutes: int(peak.prepMinMinutes, D.peak.prepMinMinutes, 0, 180),
+      // 上界不得小于下界：范围倒置会让结算页打出「30–25 分钟」，也会让取上界算出来的
+      // 预计送达比下界还早。取两者的大值，而不是丢弃或报错——这里是 sanitize，职责是给出可用值。
+      prepMaxMinutes: Math.max(
+        int(peak.prepMaxMinutes, D.peak.prepMaxMinutes, 0, 180),
+        int(peak.prepMinMinutes, D.peak.prepMinMinutes, 0, 180),
+      ),
+    },
     riderSpeedKmh: num(o.riderSpeedKmh, D.riderSpeedKmh, 5, 60),
     acceptGraceMin: int(o.acceptGraceMin, D.acceptGraceMin, 0, 30),
     autoCallDelayMin: int(o.autoCallDelayMin, D.autoCallDelayMin, 0, 60),
@@ -196,9 +261,14 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       soloProvider: typeof kd.soloProvider === 'string' && (KD100_PROVIDERS as readonly string[]).includes(kd.soloProvider) ? kd.soloProvider : null,
     },
     callStrategy: {
-      // 只认这两个值，别的（含未来某天写进去的错拼）一律回落默认。⚠️ 生产库里已有的
-      // local_delivery 行没有这个字段 → 回落 SOLO_LOWEST → **部署即生效**，不需要店主再点一次。
-      mode: cs.mode === 'ALL' ? 'ALL' : D.callStrategy.mode,
+      // 只认这三个值，别的（含未来某天写进去的错拼）一律回落默认。⚠️ 生产库里已有的
+      // local_delivery 行若没有这个字段 → 回落默认 → **部署即生效**，不需要店主再点一次。
+      // 反过来说：改默认值等于改生产行为，改之前必须先跟店主确认
+      // （2026-09-07 最终确认：第一次由店员选、默认预选最低那家；第二次并呼全部）。
+      mode: cs.mode === 'ALL' || cs.mode === 'SOLO_LOWEST' || cs.mode === 'CHEAPEST_N' ? cs.mode : D.callStrategy.mode,
+      // 上界取运力表长度：填 9 也只有 7 家可呼，把它夹到真实可选范围内，
+      // 免得后台显示一个永远达不到的数
+      cheapestN: int(cs.cheapestN, D.callStrategy.cheapestN, 1, KD100_PROVIDERS.length),
       escalateAfterMin: int(cs.escalateAfterMin, D.callStrategy.escalateAfterMin, 0, 30),
     },
     limits: { maxItems: int(lim.maxItems, D.limits.maxItems, 1, 500), maxWeightKg: num(lim.maxWeightKg, D.limits.maxWeightKg, 0.5, 100) },
@@ -408,8 +478,46 @@ export function calcLocalFee(
   return { fee, inRange, belowMin }
 }
 
-export function estimateMinutes(s: LocalDeliverySettings, distanceM: number): number {
-  return Math.round(s.prepMinutes + (distanceM / 1000 / s.riderSpeedKmh) * 60)
+/** 此刻是不是高峰时段（Asia/Shanghai）。空窗口列表 = 全天不分高峰 */
+export function isPeakNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
+  const cur = shanghaiMinutes(now)
+  return s.peak.windows.some((h) => cur >= toMin(h.start) && cur < toMin(h.end))
+}
+
+/** 骑手在路上的分钟数（不含备餐）。距离是门店→收货地址的道路距离 */
+export function rideMinutes(s: LocalDeliverySettings, distanceM: number): number {
+  return Math.round((distanceM / 1000 / s.riderSpeedKmh) * 60)
+}
+
+/**
+ * 「从现在开始，还要多少分钟送到」的区间（分钟）。
+ *
+ * ⚠️ **计时起点是调用这个函数的那一刻**，而备餐是从店员点「接单」才开始的。
+ * 所以它只有在**接单那一刻**调用才等于真实的预计送达；在下单那一刻调用得到的是
+ * 「假设立刻接单」的乐观值——顾客下单到店员接单之间那一段（等付款、店里正忙）不在里面。
+ * 这正是 2026-09-07 之前 estimatedDeliveryAt 系统性偏早的根因：它在下单时就写死了。
+ * 现在下单路径只用它给顾客一个**大概**（结算页不显示钟点），真正的钟点在接单时才落库。
+ *
+ * 高峰返回真区间（如 25–30 + 路上），平时 min===max。调用方要一个单值时**一律取 max**：
+ * 报晚了顾客早收到是惊喜，报早了是投诉。
+ */
+export function estimateMinutesRange(
+  s: LocalDeliverySettings, distanceM: number, now: Date = new Date()
+): { min: number; max: number; isPeak: boolean } {
+  const ride = rideMinutes(s, distanceM)
+  const peak = isPeakNow(s, now)
+  const prepMin = peak ? s.peak.prepMinMinutes : s.prepMinutes
+  const prepMax = peak ? s.peak.prepMaxMinutes : s.prepMinutes
+  return { min: prepMin + ride, max: prepMax + ride, isPeak: peak }
+}
+
+/**
+ * 单值版（取区间上界）。用于要落一个具体时刻的地方——主要是接单时写 estimatedDeliveryAt。
+ * 保留这个名字是因为它已经被小票、订阅消息等多处引用，语义没变（仍是「还要多少分钟」），
+ * 变的只是它现在会按当前是否高峰给出不同的备餐时长。
+ */
+export function estimateMinutes(s: LocalDeliverySettings, distanceM: number, now: Date = new Date()): number {
+  return estimateMinutesRange(s, distanceM, now).max
 }
 
 // ── 报价签名（防 quote 与下单之间金额漂移）───────────────────

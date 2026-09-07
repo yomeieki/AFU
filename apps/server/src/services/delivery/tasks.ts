@@ -7,7 +7,7 @@ import prisma from '../../utils/prisma'
 import { config } from '../../config'
 import { getLocalSettings, isOpenNow } from '../local-settings'
 import { isCircuitTripped } from './circuit'
-import { callRider, cancelDelivery, precancelDelivery, getActiveDelivery } from './orchestrator'
+import { callRider, cancelDelivery, precancelDelivery, getActiveDelivery, HELD_OF, NEXT_RUNG, DeliveryCallStrategy } from './orchestrator'
 import { refreshOrderQuote, QUOTE_FRESH_MS } from './quote'
 import { recordDeliveryEvent, adminEventKey } from './events'
 import { notifySystemAlert } from '../notify'
@@ -132,6 +132,59 @@ export async function remindCancelRequestPending(min = 5): Promise<number> {
 }
 
 /**
+ * 取消申请超时未处理 → **自动驳回**（PO 2026-09-07 定的「甲」口径）。
+ *
+ * 计时从**接单**起算，阈值直接复用 `acceptGraceMin`——这不是偷懒，是「甲」的定义：
+ * 顾客能申请的窗口与店员能处理的窗口是**同一条线**，一句话说得清：
+ * 「接单 5 分钟之后这一单就不能取消了，无论谁点」。所以这里绝不能引入第二个阈值设置，
+ * 否则两条线一旦被调成不一样，就会出现「顾客还能申请、但申请一落地就被自动驳回」的荒谬状态。
+ *
+ * 为什么必须有这个任务：顾客在第 4 分钟申请、店员在忙——这条申请会一直挂着，而它
+ * **挡着「呼叫骑手」**（callRider 对 cancelRequestedAt 是硬拦截），订单就卡在备餐中走不了。
+ *
+ * 代价（PO 已知悉并接受）：顾客第 4:30 申请，店员只剩 30 秒。调度器 60 秒一跳，
+ * 所以实际驳回落在 5:00–6:00 之间。
+ *
+ * ⚠️ 与 `remindCancelRequestPending` 的关系：那个任务在 acceptGraceMin=5 的当前配置下
+ * 基本永远轮不到（自动驳回总是先到），但它**不是死代码**——店主若把可取消窗口调大到 30 分钟，
+ * 申请就能真的挂很久，那时它才是有用的。两者阈值不同、语义不同，保留。
+ */
+export async function autoRejectStaleCancelRequests(min?: number): Promise<number> {
+  const s = await getLocalSettings()
+  const threshold = min ?? s.acceptGraceMin
+  const rows = await prisma.order.findMany({
+    where: {
+      deliveryType: 'LOCAL', status: 'PREPARING',
+      cancelRequestedAt: { not: null },
+      acceptedAt: { lt: ago(threshold) },
+    },
+    take: BATCH, select: { id: true, orderNo: true, cancelRequestNote: true },
+  })
+  let n = 0
+  for (const o of rows) {
+    // 与人工驳回同一套写法：条件带上 cancelRequestedAt 非空，店员在这一瞬间抢先处理了就让给他
+    const moved = await prisma.order.updateMany({
+      where: { id: o.id, status: 'PREPARING', cancelRequestedAt: { not: null } },
+      data: {
+        cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
+        cancelRequestRejectedAt: new Date(), cancelRequestRejectedBy: 'AUTO',
+      },
+    })
+    if (moved.count === 0) continue
+    n++
+    // 告知而不是告警：这是预期内的规则生效，不是异常。但店员该知道「有个顾客想取消、
+    // 系统按规则替你回绝了」——他可能想主动打个电话，而不是等顾客打进来。
+    notifyLocalDeliveryAlert('取消申请已自动驳回', [
+      `订单 ${o.orderNo}`,
+      `接单已超过 ${threshold} 分钟仍无人处理，按规则不再受理取消`,
+      ...(o.cancelRequestNote ? [`顾客当时写的理由：${o.cancelRequestNote}`] : []),
+      '订单继续制作。如需协商请主动联系顾客',
+    ])
+  }
+  return n
+}
+
+/**
  * 报价保鲜（规格 §6b 保鲜第一层）：「备餐中 + 无在途配送单 + 报价早于 N 分钟」的单重查一次。
  * 备餐时长不固定（十分钟到半小时都有），报价会过时；查价免费不扣费，所以定时刷比在
  * 点呼叫时强制重查更好——最坏也就旧 N 分钟，而店员点下去的那一刻不会卡。
@@ -177,7 +230,18 @@ export async function refreshStaleQuotes(min?: number): Promise<number> {
  *  - `escalateAfterMin <= 0`：店主关掉了自动升级，只留 callTimeoutMin 的人工提醒；
  *  - 熔断中：撤了旧单却呼不出新单，比不升级更糟——直接跳过，等人充值后点「恢复」；
  *  - 预估取消费 > 0：说明骑手多半已经接单了（未接单的单撤销不要钱）。这时自动撤单要真花钱，
- *    改标 `SOLO_HELD` 交给人决定。这个标记同时让该行离开扫描范围，不会每分钟重复 precancel + 重复告警。
+ *    改标 `*_HELD` 交给人决定。这个标记同时让该行离开扫描范围，不会每分钟重复 precancel + 重复告警。
+ *
+ * 店主 2026-09-07 定的是**三级阶梯**，一级一级往上加人，不一步跳到全表：
+ *      第一次 自动挑最便宜的一家  →  第二次 并呼最便宜 N 家  →  第三次 并呼全部
+ * 所以这里不再固定升到 ALL，而是按当前这一行的策略决定下一级（NEXT_RUNG）。
+ * 升到 CHEAPEST 之后那一行仍在扫描范围里，下一轮超时会自然接着升到 ALL——
+ * 三级不需要额外的计数器，靠「当前策略」本身就能表达走到哪一级了。
+ *
+ * 扫描范围含 SOLO / CHEAPEST / MANUAL。MANUAL 也在里面：店员手选的那一家没人接，
+ * 菜一样做好了在等，没有理由不给它后面两级（原来把它排除在外，理由是「不该在背后
+ * 换掉店员的选择」——那会让手选的单永远停在第一级）。升级只在仍是 CALLING 且
+ * 预估取消费为 0 时动手，不会撤掉已接单的骑手。
  *
  * 残余竞态：precancel 与 cancel 之间那约 1 秒里骑手恰好接单 → cancel 会真的取消已接单的骑手
  * 并产生约 ¥2 取消费。金额会落在 D-1 行的 cancelFee 上、事件里看得见；概率极低，接受并记录。
@@ -190,23 +254,27 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
   const rows = await prisma.delivery.findMany({
     where: {
       // providerTaskId 非空 = 运力方那头确实有单可撤（占位/UNKNOWN 行没有它，precancel 会 42234）
-      status: 'CALLING', callStrategy: 'SOLO', providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
+      status: 'CALLING', callStrategy: { in: ['SOLO', 'CHEAPEST', 'MANUAL'] }, providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
       // 顾客已经申请取消的单不许升级：callRider 对这个条件是硬拦截（42204），
       // 而 cancelDelivery 不拦——不排除的话会「先把 D-1 撤了、再在重呼那一步必然失败」，
       // 留下一条「请到工作台手动呼叫骑手」的告警，把店员引向与顾客意愿相反的操作。
       // 顾客可取消窗口（默认 5 分钟）与 3 分钟升级窗口高度重叠，这不是罕见路径。
       order: { cancelRequestedAt: null },
     },
-    take: BATCH, select: { id: true, orderId: true, orderNo: true, deliveryNo: true, calledProviders: true, quotedFee: true },
+    take: BATCH, select: { id: true, orderId: true, orderNo: true, deliveryNo: true, calledProviders: true, quotedFee: true, callStrategy: true },
   })
   let n = 0
   for (const d of rows) {
     try {
       const { cancelFeeFen } = await precancelDelivery(d.orderId)
       if ((cancelFeeFen ?? 0) > 0) {
+        // HELD 标记跟着原策略走（SOLO→SOLO_HELD、CHEAPEST→CHEAPEST_HELD），这样事后还能
+        // 分清「当时呼的是一家还是三家」；where 也带上原值，避免覆盖这一秒里被别人改过的行。
+        const heldMark = HELD_OF[d.callStrategy as DeliveryCallStrategy]
+        if (!heldMark) continue
         const held = await prisma.delivery.updateMany({
-          where: { id: d.id, status: 'CALLING', callStrategy: 'SOLO' },
-          data: { callStrategy: 'SOLO_HELD' },
+          where: { id: d.id, status: 'CALLING', callStrategy: d.callStrategy },
+          data: { callStrategy: heldMark },
         })
         if (held.count === 0) continue   // 这一秒里被别人改了（接单/取消），下一轮自然不再命中
         await recordDeliveryEvent(prisma, {
@@ -214,7 +282,7 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
           statusDesc: `预估取消费 ¥${((cancelFeeFen ?? 0) / 100).toFixed(2)} > 0，放弃自动升级并呼（多半骑手已接单），请人工决定`,
         })
         notifyLocalDeliveryAlert('自动升级并呼已放弃', [
-          `订单 ${d.orderNo}（${d.deliveryNo}，只呼了 ${calledLabel(d.calledProviders)}${d.quotedFee != null ? ` ¥${(d.quotedFee / 100).toFixed(2)}` : ''}）`,
+          `订单 ${d.orderNo}（${d.deliveryNo}，呼了 ${calledLabel(d.calledProviders)}${d.quotedFee != null ? ` ¥${(d.quotedFee / 100).toFixed(2)}` : ''}）`,
           `等待超过 ${threshold} 分钟，但预估取消费 ¥${((cancelFeeFen ?? 0) / 100).toFixed(2)}`,
           '撤单要花钱，已保留原呼叫。可继续等待、加小费或手动取消重呼',
         ])
@@ -228,11 +296,16 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
       // 压到「一次本地查询」。仍不是原子的，但代价与概率都降了两个量级。
       const stillSame = await getActiveDelivery(d.orderId)
       if (!stillSame || stillSame.id !== d.id) continue
-      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为并呼` })
+      // 下一级：一家没人接 → 最便宜 N 家；N 家还没人接 → 全部。
+      // 挑谁交给 callRider/resolveCallProviders 按**当下**的报价现算（forceMode），
+      // 不拿三分钟前那份名单——那三分钟里报价会变，运力表也可能被店主改过。
+      const nextMode = NEXT_RUNG[d.callStrategy as DeliveryCallStrategy]
+      if (!nextMode) continue
+      const rungText = nextMode === 'ALL' ? '并呼全部运力' : `并呼最便宜 ${s.callStrategy.cheapestN} 家`
+      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为${rungText}` })
       try {
         await callRider({
-          orderId: d.orderId, operator: 'scheduler', source: 'SCHEDULER',
-          providers: s.kd100.providers, callStrategy: 'ALL',
+          orderId: d.orderId, operator: 'scheduler', source: 'SCHEDULER', forceMode: nextMode,
         })
         n++
       } catch (e) {

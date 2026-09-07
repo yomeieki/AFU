@@ -19,7 +19,7 @@ import { notifyAcceptReminder, notifyLowStock } from './order-notify'
 import { LOW_STOCK_THRESHOLD } from '../utils/constants'
 import {
   remindCallTimeout, remindAcceptedStuck, remindDeliveringTimeout, remindUnknownGhost,
-  remindLocalUncalled, remindCancelRequestPending, autoCallRiders, autoCompleteLocalDelivered,
+  remindLocalUncalled, remindCancelRequestPending, autoRejectStaleCancelRequests, autoCallRiders, autoCompleteLocalDelivered,
   housekeepingDelivery, refreshStaleQuotes, escalateSoloCalls,
 } from './delivery/tasks'
 import {
@@ -59,6 +59,9 @@ export interface SchedulerOverrides {
   unknownStuckMin?: number
   localUncalledMin?: number
   cancelRequestPendingMin?: number
+  // 取消申请自动驳回的阈值（分钟，从**接单**起算）。不传则用设置里的 acceptGraceMin——
+  // 「甲」口径下这两条线必须是同一个值，这里只为 e2e 能立刻命中而留的覆盖口。
+  cancelAutoRejectMin?: number
   autoCallDelayMin?: number
   quoteRefreshMin?: number
   // 只呼最低价 → 并呼的升级门槛（分钟）。0 = 不自动升级。e2e 传 0 是「关掉」而不是「立刻升级」，
@@ -97,6 +100,9 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['localUnknown', () => remindUnknownGhost(overrides.unknownStuckMin)],
     ['localUncalled', () => remindLocalUncalled(overrides.localUncalledMin)],
     ['localCancelReq', () => remindCancelRequestPending(overrides.cancelRequestPendingMin)],
+    // 取消申请超时自动驳回。**必须排在 localAutoCall 之前**：驳回会解除对「呼叫骑手」的拦截，
+    // 同一轮里让自动呼叫立刻能接上，而不是白等一分钟。
+    ['localCancelAutoReject', () => autoRejectStaleCancelRequests(overrides.cancelAutoRejectMin)],
     ['localQuoteRefresh', () => refreshStaleQuotes(overrides.quoteRefreshMin)],
     ['localAutoCall', () => autoCallRiders(overrides.autoCallDelayMin)],
     ['localAutoComplete', () => autoCompleteLocalDelivered(overrides.autoCompleteDays)],

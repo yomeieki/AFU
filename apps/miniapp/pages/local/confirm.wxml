@@ -31,11 +31,12 @@
       <text>{{quote.distanceLabel}}</text>
       <text wx:if="{{quote.fee > 0}}">配送费 ¥{{pricefmt.fen(quote.fee)}}</text>
       <text wx:else>免运费</text>
-      <text>预计 {{quote.estimatedMinutes}} 分钟 · {{quote.arrivalTime}} 送达</text>
+      <text>{{quote.etaText}}</text>
     </view>
     <text wx:elif="{{!address}}" class="delivery-empty">选择地址后计算配送费</text>
     <text wx:else class="delivery-empty">运费计算中…</text>
-    <text wx:if="{{quote && !quoting && !quoteError}}" class="arrival-time">配送时间以骑手接单后实际安排为准</text>
+    <text wx:if="{{quote.peakHint}}" class="arrival-time">{{quote.peakHint}}</text>
+    <text wx:if="{{quote && !quoting && !quoteError}}" class="arrival-time">备餐从商家接单开始计时，具体送达时间以骑手取货后为准</text>
     <text wx:if="{{blockReason && quote && !quoting}}" class="delivery-block">{{blockReason}}</text>
   </view>
 

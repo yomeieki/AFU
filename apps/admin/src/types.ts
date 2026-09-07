@@ -346,15 +346,19 @@ export interface LocalDeliverySettings {
   detourFactor: number
   fee: { baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number }
   businessHours: { start: string; end: string }[]
+  /** 平时备餐时长（分）。**从店员点接单开始算**，不含顾客下单到接单那一段 */
   prepMinutes: number
+  /** 高峰时段：备餐排队。prepMin/prepMax 是范围——结算页如实给顾客看区间，算预计送达取上界 */
+  peak: { windows: { start: string; end: string }[]; prepMinMinutes: number; prepMaxMinutes: number }
   riderSpeedKmh: number
   acceptGraceMin: number
   autoCallDelayMin: number
   defaultProvider: 'KD100' | 'SELF'
   kd100: { providers: string[]; goodsType: string; defaultItemWeightG: number; insurance: boolean; autoDowngradeToSelfOnNoBalance: boolean }
-  // 呼叫策略。SOLO_LOWEST = 只呼报价最低那一家（省钱，且余额只冻结一笔）；ALL = 并呼全表（旧行为）。
+  // 呼叫策略。CHEAPEST_N = 并呼报价最低的 N 家（默认 N=3，2026-09-07 店主定）；
+  // SOLO_LOWEST = 只呼最低那一家（最省冻结额度，但抢单成功率最低）；ALL = 并呼全表（旧行为）。
   // escalateAfterMin 分钟无人接单则自动取消重呼、升级为并呼；0 = 不自动升级。
-  callStrategy: { mode: 'SOLO_LOWEST' | 'ALL'; escalateAfterMin: number }
+  callStrategy: { mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'; cheapestN: number; escalateAfterMin: number }
   limits: { maxItems: number; maxWeightKg: number }
   callTimeoutMin: number
   acceptedStuckMin: number
@@ -411,7 +415,7 @@ export interface DeliveryInfo {
   quotedAt: string | null
   /** 本单实际呼了哪些运力（kuaidicom 编码） */
   calledProviders: string[] | null
-  /** SOLO | ALL | MANUAL | SOLO_HELD；null = 策略上线前的历史单 */
+  /** SOLO | CHEAPEST | ALL | MANUAL | SOLO_HELD | CHEAPEST_HELD；null = 策略上线前的历史单 */
   callStrategy: string | null
   /** 下单那一刻**各家各自的预扣**（batchOrder 的 fee[]），比呼叫前的报价快照更权威 */
   orderFees: ProviderQuote[] | null
@@ -454,8 +458,14 @@ export interface WorkbenchCard {
     distanceM: number | null
     estimatedDeliveryAt: string | null   // 规格 §3 要求同城卡片出现「预计送达」，来自 Order.estimatedDeliveryAt
     cancelRequested: boolean
+    /** 取消申请被驳回过：AUTO=接单满 5 分钟系统自动驳回，MANUAL=店员点的。null=没被驳回过 */
+    cancelRejected: 'AUTO' | 'MANUAL' | null
+    /** 接单时刻。卡片用它 + snapshot.acceptGraceMin 自己算「还剩多久自动驳回」的倒计时 */
+    acceptedAt: string | null
     delivery: {
       status: string; statusLabel: string; courierName: string | null; courierMobile: string | null
+      /** 'SELF' = 店内自送，其余是快递100 的运力方。「已完成」列靠它区分「自送」与「骑手」 */
+      provider?: string | null
       /** 最近一次呼叫骑手失败（运力方拒单/下单报错），订单还停在备餐中等店员重呼或改自送。服务端可选下发 */
       callFailed?: boolean
     } | null
@@ -475,6 +485,8 @@ export interface WorkbenchSnapshot {
   circuit: { tripped: boolean }
   localEnabled: boolean
   localOpenNow: boolean
+  /** 顾客可申请取消 / 店员可处理的窗口（分钟，从接单起算）——同一条线，见服务端「甲」口径 */
+  acceptGraceMin: number
   paused: { reason: string; until: string | null } | null
   /** 多台打印机取「最差」状态归并（见服务端 workbench.ts 的 summarizePrinterStatus） */
   printer: {

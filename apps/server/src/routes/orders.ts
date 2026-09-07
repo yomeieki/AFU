@@ -17,21 +17,15 @@ import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/s
 import { getShippingSettings, calcShippingFee } from '../services/settings'
 import { channelOfDeliveryType } from '../utils/channel'
 import {
-  getLocalSettings, isOpenNow, isPaused, nextOpenText, calcLocalFee, estimateMinutes, verifyQuote,
+  getLocalSettings, isOpenNow, isPaused, nextOpenText, calcLocalFee, verifyQuote, haversineM,
 } from '../services/local-settings'
 import { DELIVERY_STATUS_LABEL } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getCourierLocationByOrder } from '../services/delivery/courier-location'
 import { settlePoints } from '../services/member/points'
+import { allocateOrderNo } from '../services/order-no'
 
 const router = Router()
-
-function generateOrderNo(): string {
-  const d = new Date()
-  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-  const rand = String(Math.floor(Math.random() * 1000000)).padStart(6, '0')
-  return `ORD${date}${rand}`
-}
 
 /** 顾客端订单附加字段：待付款截止时间（倒计时用） */
 /**
@@ -320,7 +314,14 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         // 订单行上直接看得出这一单收没收贵/收没收亏（quoted.distanceSource 的信任边界见
         // services/local-settings.ts 的 QuotePayload.distanceSource 注释）。
         distanceSource: quoted.distanceSource,
-        estimatedDeliveryAt: new Date(Date.now() + estimateMinutes(s, distanceM) * 60 * 1000),
+        // ⚠️ **下单时不再写预计送达**（PO 2026-09-07）。
+        // 原来这里写的是 `下单时刻 + 备餐 + 路上`，但备餐是从店员点「接单」才开始的——
+        // 中间「等顾客付款 + 店里忙着没点接单」那一整段被白送掉了，高峰期能差十几分钟。
+        // 之前没暴露，是因为骑行均速设成 15（实测 25.5）把路上时间高估了一倍，正好抵消；
+        // 一旦把均速调准，这个缺口立刻在最忙的时候露出来。
+        // 现在改成**接单那一刻**才算（routes/admin/delivery.ts 的 doAccept），
+        // 顾客在结算页看到的是「大概多少分钟」而不是钟点，见 routes/local.ts 的报价响应。
+        // 这里**不给这个字段**（列本身可空），接单时才落值。
       }
     } else {
       // 运费与起送门槛都按**商品小计**判断（不含运费，见 services/settings.ts）
@@ -363,14 +364,11 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     // （1 次 findMany + 最多 2 轮 × N 次 updateMany + user.update + ledger.create）、GIFT 行
     // expiresAt 回填、以及每个赠品各一次名额占用 + 库存扣减。默认值下晚高峰会出现「下单偶发
     // P2028」这种极难复现的故障——它不会稳定重现，因此也不会被任何测试抓到。
-    const order = await prisma.$transaction(async (tx) => {
-      let orderNo = generateOrderNo()
-      for (let i = 0; i < 3; i++) {
-        const dup = await tx.order.findUnique({ where: { orderNo } })
-        if (!dup) break
-        orderNo = generateOrderNo()
-      }
+    // 单号在**事务外**先取（services/order-no.ts 说明了为什么不能放进来：
+    // 计数器那一行的锁会被这整笔交易持有，下单就被串行化了）。
+    const orderNo = await allocateOrderNo()
 
+    const order = await prisma.$transaction(async (tx) => {
       const newOrder = await tx.order.create({
         data: {
           orderNo,
@@ -539,16 +537,35 @@ function customerDeliveryView(d: { status: string; courierName: string | null; c
 // 但两个路由都以 /:id 开头，放在前面更直观，也避免未来改动引入吞噬风险。
 //
 // 取数与 20 秒缓存搬到了 services/delivery/courier-location.ts，与管理端共用一份
-// （两份缓存 + 两份负缓存迟早会 drift）。**响应契约保持不变**：仍然只有 location 一个字段，
-// e2e §34 的契约锁照旧——顾客端不需要知道这份位置是什么时候取的，管理端才需要。
+// （两份缓存 + 两份负缓存迟早会 drift）。
+//
+// 响应里**只多给 etaMinutes**，不给 fetchedAt / 距店距离那些——那些是店家的运营信息。
+// 顾客端本来就在页面上按坐标自己算「骑手距您约 x.x km」，所以坐标与距离不是秘密；
+// 但「这份位置是 20 秒前取的」对顾客没有意义，只会让他盯着一个抖动的数字。
+//
+// etaMinutes 只在**骑手已取货**（DELIVERING）时才非空——这就是 PO 2026-09-07 定的「第三段」：
+// 取货之前给的都是「备餐 + 距离÷均速」的大概，取货之后剩下的只有路上那一段，
+// 用骑手实时位置算出来才配叫「真正的预计送达」。
 router.get('/:id/courier', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
     const userId = req.userId!
-    const order = await prisma.order.findFirst({ where: { id, userId }, select: { id: true } })
+    const order = await prisma.order.findFirst({
+      where: { id, userId },
+      select: { id: true, receiverLatE6: true, receiverLngE6: true },
+    })
     if (!order) throw new AppError(40401, '订单不存在', 404)
-    const { location } = await getCourierLocationByOrder(id)
-    success(res, { location })
+    const { location, delivery } = await getCourierLocationByOrder(id)
+    let etaMinutes: number | null = null
+    if (location && delivery?.status === 'DELIVERING' && order.receiverLatE6 != null && order.receiverLngE6 != null) {
+      const s = await getLocalSettings()
+      // 与管理端同一套算法（routes/admin/delivery.ts 的 /courier）：直线 × 绕路系数 ÷ 均速。
+      // 运力方不提供「骑手到目的地」的道路距离，也不提供 ETA（调研文档 §6：接口不返回预计送达时间），
+      // 所以这是我们能给出的最准的一个数——但它仍是估算，文案上必须写「预计」。
+      const legM = Math.round(haversineM(location.latE6, location.lngE6, order.receiverLatE6, order.receiverLngE6) * s.detourFactor)
+      etaMinutes = Math.max(1, Math.round((legM / 1000 / s.riderSpeedKmh) * 60))
+    }
+    success(res, { location, etaMinutes })
   } catch (e) {
     next(e)
   }
@@ -635,7 +652,12 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     const snapshotStatus = (await prisma.delivery.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE'
     const moved = await prisma.order.updateMany({
       where: { id, status: 'PREPARING', cancelRequestedAt: null },
-      data: { cancelRequestedAt, cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: snapshotStatus },
+      data: {
+        cancelRequestedAt, cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: snapshotStatus,
+        // 上一次申请若被驳回过，痕迹要清掉：顾客在窗口内还能再申请一次（比如第一次没说清理由），
+        // 不清的话工作台会同时显示「有待处理申请」和「已驳回」，顾客端也会同时看到两种结论。
+        cancelRequestRejectedAt: null, cancelRequestRejectedBy: null,
+      },
     })
     // 真并发兜底：两个请求同时读到 cancelRequestedAt=null，只有一个能写入
     if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')

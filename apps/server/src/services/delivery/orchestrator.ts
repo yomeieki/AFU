@@ -46,10 +46,54 @@ export interface CallRiderInput {
    * 而 §7.2 的观察项（升级并呼到底会不会收到 720）恰恰要靠这个标签把这批单捞出来。
    */
   callStrategy?: DeliveryCallStrategy
+  /**
+   * **内部字段，不从 HTTP 收**：这一次按哪种方式挑运力，覆盖设置里的 callStrategy.mode。
+   *
+   * 只有自动升级任务用它。升级是一级一级往上走的（第一次一家 → 第二次最便宜 N 家 →
+   * 第三次全部），每一级都要重新按**当时**的报价挑人，而不能拿三分钟前那份快照里
+   * 算好的名单：报价会变，运力表也可能被店主改过。把「挑谁」这件事整个交回
+   * resolveCallProviders，就能顺带复用它的重新查价、按运力表过滤、挑不出来退回并呼
+   * 这三段逻辑，不用在升级任务里再抄一份。
+   */
+  forceMode?: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'
 }
 
-/** Delivery.callStrategy 的取值域。SOLO_HELD 只由升级任务写，不是一次呼叫的结果 */
-export type DeliveryCallStrategy = 'SOLO' | 'ALL' | 'MANUAL' | 'SOLO_HELD'
+/**
+ * Delivery.callStrategy 的取值域。
+ * SOLO      = 只呼了报价最低那一家
+ * CHEAPEST  = 并呼了报价最低的 N 家（2026-09-07 起的默认策略）
+ * ALL       = 并呼全表
+ * MANUAL    = 店员在弹窗里指定的
+ * *_HELD    = 只由升级任务写：等超时了但预估取消费 > 0，放弃自动升级、留原样等人工决定。
+ *             不是一次呼叫的结果，所以和上面几个分开取值。
+ */
+export type DeliveryCallStrategy =
+  | 'SOLO' | 'CHEAPEST' | 'ALL' | 'MANUAL'
+  | 'SOLO_HELD' | 'CHEAPEST_HELD' | 'MANUAL_HELD'
+
+/**
+ * 超时未接时，各策略对应的「放弃升级」标记。没有对应值的策略不参与自动升级。
+ *
+ * MANUAL 在 2026-09-07 被加了进来。原来把它排除在外，理由是「店员亲手指定的运力，
+ * 系统不该在背后换掉」——那条理由在店主定下新阶梯之后不成立了：
+ * **第一次就是店员从全部报价里挑一家，第二次一律并呼全部**。把 MANUAL 排除在外，
+ * 等于店员一旦手选，这单就永远等不到第二次，菜做好了却挂在那儿没人送。
+ * 升级只在「仍是 CALLING（没人接）且预估取消费为 0」时才动手，所以不会撤掉已接单的骑手。
+ */
+export const HELD_OF: Partial<Record<DeliveryCallStrategy, DeliveryCallStrategy>> = {
+  SOLO: 'SOLO_HELD', CHEAPEST: 'CHEAPEST_HELD', MANUAL: 'MANUAL_HELD',
+}
+
+/**
+ * 超时未接时，当前策略的**下一级**该怎么呼（店主 2026-09-07 定的三级阶梯）：
+ *      一家（SOLO / 店员手选 MANUAL）→ 最便宜 N 家 → 全部
+ * 有对应值 = 还能往上升；ALL 与 *_HELD 不在表里，走到头了。
+ * 升到 CHEAPEST 的那一行仍会被升级任务扫到，下一轮超时自然接着升到 ALL——
+ * 「走到第几级」由当前策略本身表达，不需要另设计数器。
+ */
+export const NEXT_RUNG: Partial<Record<DeliveryCallStrategy, 'CHEAPEST_N' | 'ALL'>> = {
+  SOLO: 'CHEAPEST_N', MANUAL: 'CHEAPEST_N', CHEAPEST: 'ALL',
+}
 
 /**
  * 呼叫成功那条事件的文案。店员在时间线上看到的第一行就是它，所以要一眼看出
@@ -61,17 +105,25 @@ function callEventDesc(
   called: string[],
   lowest: { provider: string; feeFen: number } | null,
   escalateAfterMin: number,
+  chosen?: { provider: string; feeFen: number }[],
 ): string {
+  const yuan = (fen: number) => `¥${(fen / 100).toFixed(2)}`
+  const tail = escalateAfterMin > 0 ? `（约 ${escalateAfterMin} 分钟无人接自动改为并呼全部）` : '（不自动升级）'
   if (strategy === 'SOLO' && lowest) {
-    const tail = escalateAfterMin > 0 ? `（约 ${escalateAfterMin} 分钟无人接自动改为并呼）` : '（不自动升级）'
-    return `只呼最低价 ${providerLabel(lowest.provider)} ¥${(lowest.feeFen / 100).toFixed(2)}${tail}`
+    return `只呼最低价 ${providerLabel(lowest.provider)} ${yuan(lowest.feeFen)}${tail}`
+  }
+  if (strategy === 'CHEAPEST' && chosen?.length) {
+    // 把选中的几家连价一起写出来：对账时「为什么冻了这么多」只看这一行就够
+    const list = chosen.map((q) => `${providerLabel(q.provider)} ${yuan(q.feeFen)}`).join('、')
+    const total = chosen.reduce((n, q) => n + q.feeFen, 0)
+    return `并呼最便宜 ${chosen.length} 家：${list}；合计冻结约 ${yuan(total)}${tail}`
   }
   if (strategy === 'MANUAL') return `已向指定运力下单：${called.map(providerLabel).join('、')}`
   return `已向运力方下单（并呼 ${called.length} 家抢单中）`
 }
 
 /**
- * 决定这一次呼谁：只呼最低价那一家，还是并呼全表。
+ * 决定这一次呼谁：最便宜的 N 家、只呼最低那一家，还是并呼全表。
  *
  * 三条边界，每条都有代价不对称的理由：
  *  - 店员在弹窗里指定了运力 → 原样照办（MANUAL），策略不插手人工决定；
@@ -90,12 +142,17 @@ async function resolveCallProviders(
   providers: string[] | undefined
   callStrategy: DeliveryCallStrategy
   lowest: { provider: string; feeFen: number } | null
+  /** CHEAPEST 实际选中的那几家（含价），只用于事件文案与对账 */
+  chosen: { provider: string; feeFen: number }[]
   /** 策略**实际据以决策**的那份快照；只在这里现查了一次时非空，用于覆盖占位行上更旧的那份 */
   fresh: { snapshot: QuoteSnapshot; quotedAt: Date } | null
 }> {
-  if (input.callStrategy) return { providers: input.providers, callStrategy: input.callStrategy, lowest: null, fresh: null }
-  if (input.providers?.length) return { providers: input.providers, callStrategy: 'MANUAL', lowest: null, fresh: null }
-  if (s.callStrategy.mode !== 'SOLO_LOWEST') return { providers: undefined, callStrategy: 'ALL', lowest: null, fresh: null }
+  const none = { chosen: [] as { provider: string; feeFen: number }[] }
+  if (input.callStrategy) return { providers: input.providers, callStrategy: input.callStrategy, lowest: null, fresh: null, ...none }
+  if (input.providers?.length) return { providers: input.providers, callStrategy: 'MANUAL', lowest: null, fresh: null, ...none }
+  // 升级任务用 forceMode 指定这一级该怎么挑；平时为空，走设置里的 mode
+  const mode = input.forceMode ?? s.callStrategy.mode
+  if (mode === 'ALL') return { providers: undefined, callStrategy: 'ALL', lowest: null, fresh: null, ...none }
 
   let snapshot: QuoteSnapshot | null = null
   let fresh: { snapshot: QuoteSnapshot; quotedAt: Date } | null = null
@@ -114,12 +171,26 @@ async function resolveCallProviders(
       console.warn('[callRider] 订单', orderId, '呼叫前查价失败，退回并呼:', (e as Error)?.message ?? e)
     }
   }
-  // 快照里的最低价那一家必须仍在设置的运力表里：店主可能刚把它摘掉，而快照是几分钟前的。
-  // 不在表里就当没选出来（退回并呼），不要拿一个已被摘掉的运力去下单。
-  const lowest = snapshot?.lowest && s.kd100.providers.includes(snapshot.lowest.provider) ? snapshot.lowest : null
+  // 快照里挑出来的运力必须仍在设置的运力表里：店主可能刚把某家摘掉，而快照是几分钟前的。
+  // 不在表里的一律先滤掉，不要拿一个已被摘掉的运力去下单。
+  const usable = (snapshot?.quotes ?? [])
+    .filter((q) => s.kd100.providers.includes(q.provider))
+    .sort((a, b) => a.feeFen - b.feeFen)
+    .map((q) => ({ provider: q.provider, feeFen: q.feeFen }))
+
+  if (mode === 'CHEAPEST_N') {
+    // 一家都挑不出来（没报价 / 全被摘了）才退回并呼；挑出 1 家也照呼——
+    // 「只剩一家可呼」和「呼全表」是两回事，后者会多冻六笔钱。
+    const chosen = usable.slice(0, s.callStrategy.cheapestN)
+    return chosen.length
+      ? { providers: chosen.map((q) => q.provider), callStrategy: 'CHEAPEST', lowest: chosen[0], chosen, fresh }
+      : { providers: undefined, callStrategy: 'ALL', lowest: null, fresh, ...none }
+  }
+
+  const lowest = usable[0] ?? null
   return lowest
-    ? { providers: [lowest.provider], callStrategy: 'SOLO', lowest, fresh }
-    : { providers: undefined, callStrategy: 'ALL', lowest: null, fresh }
+    ? { providers: [lowest.provider], callStrategy: 'SOLO', lowest, fresh, ...none }
+    : { providers: undefined, callStrategy: 'ALL', lowest: null, fresh, ...none }
 }
 
 export async function callRider(input: CallRiderInput) {
@@ -149,7 +220,7 @@ export async function callRider(input: CallRiderInput) {
 
   // 呼谁：只呼最低价 / 并呼全表 / 店员指定。查价可能有一次网络往返（约 1 秒），
   // 所以放在占位事务之前——占位一旦建好就占住了 activeOrderId，不该拿着它去等网络。
-  const { providers, callStrategy, lowest, fresh } = await resolveCallProviders(orderId, s, order, { ...input, providers: asked })
+  const { providers, callStrategy, lowest, chosen, fresh } = await resolveCallProviders(orderId, s, order, { ...input, providers: asked })
   const calledProviders = providers?.length ? providers : s.kd100.providers
   // 策略若现查了一份新报价，它就是这次呼叫的依据，占位行直接用它（而不是 :45 读到的旧值）
   const snapshotForDelivery = fresh?.snapshot ?? order.quoteSnapshot
@@ -252,7 +323,7 @@ export async function callRider(input: CallRiderInput) {
           notifySystemAlert('呼叫骑手成功但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, `taskId=${result!.taskId ?? ''}`, '请到快递100 后台核对，必要时人工登记'], { key: `kd100-landing-race:${orderId}` })
           return
         }
-        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: callEventDesc(callStrategy, calledProviders, lowest, s.callStrategy.escalateAfterMin), operator })
+        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: callEventDesc(callStrategy, calledProviders, lowest, s.callStrategy.escalateAfterMin, chosen), operator })
       })
     } catch (e) {
       // 落库失败（如 providerTaskId 撞唯一索引）会让占位行永远停在 PENDING：

@@ -454,7 +454,12 @@ R=$(req GET "/api/orders/$LO1" "$UT")
 assert_eq "订单 deliveryType=LOCAL" "$(jq -r .data.deliveryType <<<"$R")" "LOCAL"
 [[ "$(jq -r '.data.distanceM // -1' <<<"$R")" -gt 0 ]] && ok "distanceM 已快照" || fail "distanceM" "$R"
 [[ "$(jq -r .data.distanceSource <<<"$R")" =~ ^(MEASURED|ESTIMATED)$ ]] && ok "distanceSource 已快照" || fail "distanceSource" "$R"
-[[ "$(jq -r .data.estimatedDeliveryAt <<<"$R")" != "null" ]] && ok "estimatedDeliveryAt 已写" || fail "estimatedDeliveryAt"
+# 预计送达**下单时不写**（PO 2026-09-07）：备餐是从店员点「接单」才开始的，在下单那一刻
+# 写死 `下单时刻 + 备餐 + 路上` 会把「等付款 + 店里忙着没接单」那一段白送掉。
+# 这两条一起看才有意义——只断言「下单时为空」会被「永远不写」这种实现骗过去。
+# 配对的另一半「接单后才写」在 scripts/e2e.d/52-cancel-request-flow.sh ① ——
+# 那里用自己造的单，不会像在这里 accept 一下就打乱 LO1 后续段落的前置状态。
+assert_eq "下单时不写预计送达（备餐从接单才开始计时）" "$(jq -r .data.estimatedDeliveryAt <<<"$R")" "null"
 assert_eq "shipment 为空（LOCAL 不写 Shipment）" "$(jq -r .data.shipment <<<"$R")" "null"
 # 全局邮寄运费被设成 9999 也不影响同城运费
 req PUT /api/admin/settings/shipping "$AT" '{"fee":999900,"freeThreshold":0,"minOrderAmount":0}' >/dev/null

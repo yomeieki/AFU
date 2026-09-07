@@ -106,10 +106,20 @@ sql "UPDATE deliveries SET cancel_fee=200 WHERE delivery_no='$D51_D1'" >/dev/nul
 R=$(d51_dlv "$D51_O1")
 assert_eq "成本合计含取消费" "$(jq -r '.data.costFen' <<<"$R")" "$((D51_ACTUAL + 200))"
 
-echo "-- ⑦ 顾客端骑手位置接口的响应契约不变（与管理端共用取数，但只给 location）--"
+echo "-- ⑦ 顾客端骑手位置接口：只给 location + etaMinutes，不漏运营信息 --"
 R=$(req GET "/api/orders/$D51_O1/courier" "$UT")
 assert_eq "顾客端 code 0" "$(code "$R")" "0"
-assert_eq "顾客端只有 location 一个字段（不漏 fetchedAt/距离给顾客）" \
-  "$(jq -r '.data | keys | join(",")' <<<"$R")" "location"
+# 契约锁：顾客只该拿到「骑手在哪」和「还要多久」。fetchedAt（这份位置几秒前取的）、
+# toStoreM（骑手距门店多远）都是店家的运营信息，漏出去对顾客没用还徒增困惑。
+assert_eq "顾客端字段恰好是 location + etaMinutes" \
+  "$(jq -r '.data | keys | join(",")' <<<"$R")" "etaMinutes,location"
+# 「第三段」：只有骑手**取货之后**才给真实 ETA——本单此刻是 DELIVERING，所以该有值
+assert_eq "本单已取货（DELIVERING）" "$(d51_dlv "$D51_O1" | jq -r '.data.delivery.status')" "DELIVERING"
+[[ "$(jq -r '.data.etaMinutes // -1' <<<"$R")" -ge 1 ]] \
+  && ok "取货后给出按骑手实时位置算的 ETA" || fail "取货后没给 ETA" "$R"
+# 取货之前不给：那一段顾客看到的应该是「大概」，不是一个假装很准的钟点
+D51_O7=$(mk_local_paid)
+req POST "/api/admin/local/orders/$D51_O7/accept" "$AT" >/dev/null
+assert_eq "未派骑手时 etaMinutes 为空" "$(req GET "/api/orders/$D51_O7/courier" "$UT" | jq -r '.data.etaMinutes')" "null"
 
 req PUT /api/admin/settings/local-delivery "$AT" "$D51_ORIG" >/dev/null

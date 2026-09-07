@@ -143,6 +143,11 @@ export default function LocalSettings() {
     return `¥${toYuan(baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * perKm)}`
   }
   const hoursText = s.businessHours.map((h) => `${h.start}-${h.end}`).join('\n')
+  const peakText = s.peak.windows.map((h) => `${h.start}-${h.end}`).join('\n')
+  // 与营业时段同一套解析：每行 HH:mm-HH:mm，空行忽略。**允许清空**（= 全天不分高峰），
+  // 所以不做「空则回默认」的兜底——店主清空这一栏就该真的关掉高峰加时。
+  const parseWindows = (v: string) => v.split('\n').map((l) => l.trim()).filter(Boolean)
+    .map((l) => { const [start, end] = l.split('-'); return { start: start?.trim() ?? '', end: end?.trim() ?? '' } })
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -219,12 +224,36 @@ export default function LocalSettings() {
               onBlur={(e) => patch({ businessHours: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [start, end] = l.split('-'); return { start: start?.trim() ?? '', end: end?.trim() ?? '' } }) })} />
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="备餐时长（分）"><input className={inputCls} type="number" min={0} value={s.prepMinutes} onChange={(e) => patch({ prepMinutes: Number(e.target.value) })} /></Field>
+            <Field label="备餐时长（分）" hint="从点「接单」开始算，不含顾客下单到接单那一段"><input className={inputCls} type="number" min={0} value={s.prepMinutes} onChange={(e) => patch({ prepMinutes: Number(e.target.value) })} /></Field>
             <Field label="骑行均速（km/h）"><input className={inputCls} type="number" min={5} value={s.riderSpeedKmh} onChange={(e) => patch({ riderSpeedKmh: Number(e.target.value) })} /></Field>
             <Field label="接单后可取消（分）" hint="顾客申请取消的窗口"><input className={inputCls} type="number" min={0} max={30} value={s.acceptGraceMin} onChange={(e) => patch({ acceptGraceMin: Number(e.target.value) })} /></Field>
             <Field label="接单后自动呼叫（分）" hint="0 = 手动呼叫；须 ≥ 可取消窗口"><input className={inputCls} type="number" min={0} max={15} value={s.autoCallDelayMin} onChange={(e) => patch({ autoCallDelayMin: Number(e.target.value) })} /></Field>
             <Field label="单次最多件数"><input className={inputCls} type="number" min={1} value={s.limits.maxItems} onChange={(e) => patch({ limits: { ...s.limits, maxItems: Number(e.target.value) } })} /></Field>
             <Field label="单次最大重量（kg）"><input className={inputCls} type="number" step="0.5" min={0.5} value={s.limits.maxWeightKg} onChange={(e) => patch({ limits: { ...s.limits, maxWeightKg: Number(e.target.value) } })} /></Field>
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <h3 className="font-medium text-gray-800">高峰时段</h3>
+        <p className="text-xs text-gray-500">
+          高峰期出餐排队，备餐比平时慢。这里设的时长只在高峰时段生效，平时仍用上面的「备餐时长」——
+          用高峰的数去报全天的单，平时那些单会被报得离谱地晚。
+          顾客在结算页看到的是区间（如「约 35–40 分钟送达」）；接单时落库的预计送达取<b>上界</b>，
+          报晚了顾客早收到是惊喜，报早了是投诉。
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="高峰时段（每行一段 HH:mm-HH:mm）" hint="留空 = 全天不分高峰">
+            <textarea className={inputCls} rows={3} defaultValue={peakText}
+              onBlur={(e) => patch({ peak: { ...s.peak, windows: parseWindows(e.target.value) } })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="高峰备餐最短（分）">
+              <input className={inputCls} type="number" min={0} value={s.peak.prepMinMinutes}
+                onChange={(e) => patch({ peak: { ...s.peak, prepMinMinutes: Number(e.target.value) } })} /></Field>
+            <Field label="高峰备餐最长（分）" hint="预计送达按这个算">
+              <input className={inputCls} type="number" min={0} value={s.peak.prepMaxMinutes}
+                onChange={(e) => patch({ peak: { ...s.peak, prepMaxMinutes: Number(e.target.value) } })} /></Field>
           </div>
         </div>
       </section>
@@ -240,14 +269,21 @@ export default function LocalSettings() {
             </select>
           </Field>
           */}
-          <Field label="呼叫方式" hint="并呼时每家各冻结一笔预扣，且最贵的常抢到（2026-09-06 首单实测多付 ¥7.09）">
+          <Field label="第一次呼谁（店员没手选时）"
+            hint="三级阶梯的第一级。工作台弹窗里始终列出全部报价，店员可以当场改选任意一家（急单选闪送）；这里定的是他不动手时默认呼谁。并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。">
             <select className={inputCls} value={s.callStrategy.mode}
-              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'ALL' } })}>
+              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL' } })}>
               <option value="SOLO_LOWEST">只呼最低价那一家（推荐）</option>
+              <option value="CHEAPEST_N">并呼最便宜的几家</option>
               <option value="ALL">并呼全部运力（旧行为）</option>
             </select>
           </Field>
-          <Field label="无人接单几分钟后改为并呼" hint="0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
+          <Field label="第二级并呼最便宜的几家"
+            hint="第一级没人接时升到这一级。按首单那组报价：1 家约冻 ¥16、3 家约冻 ¥52、7 家约冻 ¥75。家数越多抢单越快，但占用的余额也越多">
+            <input className={inputCls} type="number" min={1} max={7} value={s.callStrategy.cheapestN}
+              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, cheapestN: Number(e.target.value) } })} /></Field>
+          <Field label="每一级等几分钟"
+            hint="一家没人接 → 等这么久 → 并呼最便宜几家 → 再等这么久 → 并呼全部运力（约冻 ¥75）。不分第一次是怎么呼的——店员手选的那一家同样会被逐级兜住。0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
             <input className={inputCls} type="number" min={0} max={30} value={s.callStrategy.escalateAfterMin}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, escalateAfterMin: Number(e.target.value) } })} /></Field>
           <Field label="商品默认净重（克）" hint="商品未填净重时用"><input className={inputCls} type="number" min={50} value={s.kd100.defaultItemWeightG} onChange={(e) => patch({ kd100: { ...s.kd100, defaultItemWeightG: Number(e.target.value) } })} /></Field>

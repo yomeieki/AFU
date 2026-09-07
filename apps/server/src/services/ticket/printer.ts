@@ -9,7 +9,12 @@
  */
 
 /** PrintJob.kind：NEW_ORDER 新单 | REPEAT 未接单重打 | CANCEL 取消/退款提醒 | REPRINT 手动重打 |
- *  TEST 测试页 | CANCEL_REQUEST 顾客申请取消（未决，店员可驳回）| RESUME 取消申请被驳回，继续制作（H6） */
+ *  TEST 测试页 | CANCEL_REQUEST 顾客申请取消（未决，店员可驳回）
+ *
+ *  ⚠️ `RESUME`（取消申请被驳回 → 出票通知厨房继续做）**已于 2026-09-07 撤除**：
+ *  PO 定「取消流程只留一张票，厨房不用管、店员会通知」，驳回改为在工作台卡片上显示。
+ *  这个字面量保留在联合类型里**只为让历史 print_jobs 行仍能被读回**（库里存的是字符串，
+ *  移除会让旧行在任何按 kind 收窄的读取处失配）。**不要给它新增生产者。** */
 export type PrintJobKind = 'NEW_ORDER' | 'REPEAT' | 'CANCEL' | 'REPRINT' | 'TEST' | 'CANCEL_REQUEST' | 'RESUME'
 
 /** PrintJob.provider */

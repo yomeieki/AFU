@@ -24,8 +24,14 @@ function getHeadNotice(quote) {
 
 // 北京时间（utils/time.js）。原来用 getHours()：按运行设备时区解读，
 // 开发者工具跑在别的时区的电脑上会给顾客算出错的「预计送达」。
-function formatArrival(minutes) {
-  return timeUtil.fmtAfterMinutes(minutes)
+/** 「大概还要多久送到」。高峰给区间，平时给单值；缺字段时退回旧的 estimatedMinutes */
+function etaRangeText(quote) {
+  var lo = quote.estimatedMinRange
+  var hi = quote.estimatedMaxRange
+  if (typeof lo !== 'number' || typeof hi !== 'number') {
+    return quote.estimatedMinutes ? ('约 ' + quote.estimatedMinutes + ' 分钟送达') : ''
+  }
+  return lo === hi ? ('约 ' + hi + ' 分钟送达') : ('约 ' + lo + '–' + hi + ' 分钟送达')
 }
 
 function decorateQuote(quote) {
@@ -35,7 +41,12 @@ function decorateQuote(quote) {
     distanceText: km,
     distanceLabel: estimated ? ('约 ' + km + ' km（估算）') : ('距门店 ' + km + ' km'),
     feeText: formatPrice(quote.fee || 0),
-    arrivalTime: formatArrival(quote.estimatedMinutes),
+    // 结算页**只给大概时长，不给钟点**（PO 2026-09-07）。原来这里算的是「此刻 + 预计分钟」
+    // 的绝对时刻，但备餐是从店员点接单才开始的——这一刻店员还没接单，那个钟点等于替他打包票。
+    // 顾客付完款可能还要等几分钟才被接单，高峰期更久，写死的钟点必然偏早。
+    // 高峰时段给区间（如「35–40 分钟」），平时 min===max 就退化成一个数。
+    etaText: etaRangeText(quote),
+    peakHint: quote.isPeakNow ? '当前为高峰时段，出餐较慢' : '',
   })
 }
 

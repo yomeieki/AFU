@@ -9,8 +9,7 @@ import {
 } from '../../services/delivery/orchestrator'
 import { refreshOrderQuote, kickOffQuote, isQuoteStale, QUOTE_FRESH_MS } from '../../services/delivery/quote'
 import { getCourierLocationByOrder } from '../../services/delivery/courier-location'
-import { getLocalSettings, haversineM } from '../../services/local-settings'
-import { enqueueOrderTicket } from '../../services/ticket'
+import { getLocalSettings, haversineM, estimateMinutes } from '../../services/local-settings'
 
 const router = Router()
 
@@ -34,10 +33,22 @@ const ADMIN_DELIVERY_SELECT = {
 } satisfies Prisma.DeliverySelect
 
 async function doAccept(id: number) {
-  const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true } })
+  const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true, distanceM: true } })
   if (!target) throw new AppError(40401, '订单不存在', 404)
   if (target.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单可在此接单')
-  const moved = await prisma.order.updateMany({ where: { id, status: 'PAID' }, data: { status: 'PREPARING', acceptedAt: new Date() } })
+  // 预计送达在**这一刻**才算（PO 2026-09-07）：备餐是从接单开始的，把「顾客下单→付款→
+  // 店员接单」那一段算进去只会让承诺系统性偏早，而且恰恰在最忙的时候偏得最多。
+  // 取区间上界（高峰 30 而不是 25）：报晚了顾客早收到是惊喜，报早了是投诉。
+  // 距离取不到（理论上同城单必有）就不写，宁可页面显示「—」也不要一个编出来的时刻。
+  const acceptedAt = new Date()
+  const s = await getLocalSettings()
+  const estimatedDeliveryAt = target.distanceM != null
+    ? new Date(acceptedAt.getTime() + estimateMinutes(s, target.distanceM, acceptedAt) * 60 * 1000)
+    : null
+  const moved = await prisma.order.updateMany({
+    where: { id, status: 'PAID' },
+    data: { status: 'PREPARING', acceptedAt, ...(estimatedDeliveryAt ? { estimatedDeliveryAt } : {}) },
+  })
   if (moved.count === 0) {
     // 竞态文案：上面 :37 早读到的 target.status 到这里可能已经不是真的了——双标签页接单，
     // 或顾客在这几毫秒内自助取消（走 orders.ts 的条件写），都会让 updateMany 落空却仍拿旧值
@@ -109,17 +120,18 @@ router.post('/:id/cancel-request/reject', async (req: Request, res: Response, ne
     // 终态/退款中的单上这个标记只是历史痕迹（徽标口径同 workbench.ts），不该再被「驳回」改写
     const moved = await prisma.order.updateMany({
       where: { id, cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED', 'REFUNDING'] } },
-      data: { cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null },
+      data: {
+        cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
+        // 清空上面四列等于抹掉「有人申请过」的全部痕迹，所以必须同事务留下驳回痕迹——
+        // 工作台要靠它显示「已驳回 · 继续完成此订单」，顾客端要靠它显示「商家未同意取消」。
+        cancelRequestRejectedAt: new Date(), cancelRequestRejectedBy: 'MANUAL',
+      },
     })
     if (moved.count === 0) {
       throw new AppError(42204, target.cancelRequestedAt ? `订单状态为 ${target.status}，取消申请已无需处理` : '该订单没有待处理的取消申请')
     }
-    // H6：驳回意味着顾客还是要这一单，厨房该继续做——出一张 RESUME 票提醒。seq 用当次驳回时间戳
-    // （不是固定 0）：这个 kind 专门对应"驳回"这个动作本身，每次驳回都该是新的一张，不与任何
-    // 其它 RESUME 共享 dedupe 槽位。
-    enqueueOrderTicket(id, 'RESUME', { seq: Date.now() }).catch((err) => {
-      console.error('[admin/delivery] enqueueOrderTicket 失败（驳回取消申请）:', (err as Error).message)
-    })
+    // 不出票（PO 2026-09-07 定）：取消流程只留「顾客申请取消」那一张票。厨房不看票做判断，
+    // 店员会口头通知；「继续做」这件事显示在工作台卡片上就够了，多一张票只是多一次噪音播报。
     success(res, await prisma.order.findUnique({ where: { id } }))
   } catch (e) { next(e) }
 })

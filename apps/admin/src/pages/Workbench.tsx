@@ -61,6 +61,33 @@ const TIP_STEPS = [200, 500, 1000, 2000]
 const OTHER_COMPANY = '__other__'
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
+/**
+ * 「还剩多久自动回绝退菜」。接单 + acceptGraceMin 分钟到点，服务端会自动回绝并放行呼叫。
+ *
+ * 倒计时**走本地秒表**（每秒重渲染），不依赖 10 秒轮询；`now` 已用服务端时间校准过时钟偏差
+ * （见 skewRef），所以店员那台电脑时间不准也不会算歪。
+ *
+ * 归零之后**不显示 0:00 也不留空**：真正的回绝由调度器执行，60 秒一跳，再加一次快照轮询，
+ * 最坏要等约 70 秒才翻成「已回绝」。这段空窗里若什么都不写，店员会以为倒计时卡死了；
+ * 写死「0:00」同样像卡住。所以归零后改说「即将自动回绝」——它描述的是真实状态。
+ */
+function autoRejectLeft(acceptedAt: string | null | undefined, graceMin: number, now: number): string | null {
+  if (!acceptedAt || !graceMin) return null
+  const deadline = new Date(acceptedAt).getTime() + graceMin * 60_000
+  if (!Number.isFinite(deadline)) return null
+  const left = Math.floor((deadline - now) / 1000)
+  if (left <= 0) return '（即将自动回绝）'
+  return `（约 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 后自动回绝）`
+}
+
+/**
+ * 屏幕上一律只显示后四位（与小票同口径，PO 2026-09-07）。
+ * 完整单号在这一屏里没有用处——店员比对的是手上那张小票，而后四位就够区分同时在做的十几单；
+ * 整串 ORD+日期+序号 反而把卡片最显眼的一行挤满，读起来还得逐位对。
+ * 需要完整单号的场合只有一个（退款/客诉时去微信、快递100后台查），那里留了整串 + 复制按钮。
+ */
+const shortNo = (no: string | null | undefined) => (no ? `#${no.slice(-4)}` : '--')
+
 /** 米 → 给人读的距离。1 km 以内用米（「800 m」比「0.8 km」好判断要不要等） */
 const km = (m: number | null | undefined) =>
   m == null ? '--' : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`
@@ -75,12 +102,76 @@ const apiCode = (e: unknown) => (e as { response?: { data?: { code?: number } } 
 const hhmm = fmtHHmm
 const dateTime = fmtMonthDayTime
 
+// ─────────────────────────────────────────────────────────
+// 卡片紧急度（PO 2026-09-07）
+//
+// 屏幕上有两套颜色，各管各的，任何时候都不许互相顶替：
+//   · **渠道** = 左侧 4px 竖条 + 徽章（同城橘红 / 邮寄蓝）。这两个颜色**永不随状态变化**，
+//     所以「卡片变热」永远读不成「换了渠道」。
+//   · **紧急度** = 整卡外圈光晕 + 极淡底色。光晕画在卡片轮廓**之外**（box-shadow 扩散），
+//     竖条在轮廓**之内**——不同的平面、不同的形状，扫一眼不会看成同一根线。
+//
+// 紧急度由两把尺子取更严重的那把：
+//   ① 列内停留时长——「这张单没人碰」
+//   ② 距承诺送达还剩多久——「这张单要迟到了」，顾客感知的是这把
+// ─────────────────────────────────────────────────────────
+type Urgency = '' | 'warn' | 'late'
+
+/**
+ * 每列「正常停留多久」差得很远：付了钱该秒回，而备餐本来就要 20 分钟。
+ * 原来五列共用一套 3 分钟 / 6 分钟阈值，于是备餐中的卡片开工六分钟后**全部**变红——
+ * 全红等于没有红（§0：红是这一屏最稀缺的信号）。所以阈值按列给，备餐那一档
+ * 直接取设置里的备餐时长（高峰自动取高峰值），店主改设置这里跟着走。
+ * 邮寄单图例写明「可以稍后处理」，给一套宽得多的阈值：只有真被忘了才亮。
+ * 返回 null = 这一列不看停留时长（配送中在路上多久取决于距离，只看承诺送达）。
+ */
+function dwellBudget(colKey: ColKey, channel: Channel, prepMin: number): [number, number] | null {
+  if (channel === 'EXPRESS') return [60, 240]
+  switch (colKey) {
+    case 'pending': return [2, 5]
+    case 'preparing': return [prepMin, prepMin + 8]
+    case 'waitingCourier': return [6, 12]
+    default: return null
+  }
+}
+/** 距承诺送达还剩这么多分钟就开始烧（第二把尺子）。已经过点一律算超时。 */
+const DEADLINE_WARN_MIN = 15
+const DEADLINE_LATE_MIN = 5
+
+/** 当下该用哪个备餐时长：高峰取上界。窗口比较用 Asia/Shanghai 的 'HH:mm' 字符串——
+ *  零填充过的时刻串可以直接比大小，也就不用在前端再引一套时区换算。 */
+function prepMinutesNow(s: LocalDeliverySettings | null, now: number): number {
+  if (!s) return 20
+  const cur = fmtHHmm(now, '')
+  const peak = !!cur && s.peak.windows.some((w) => cur >= w.start && cur < w.end)
+  return peak ? s.peak.prepMaxMinutes : s.prepMinutes
+}
+
+/** 「已完成」列永不参与：给已经做完的事上色只会稀释红色（I7）。 */
+function urgencyOf(card: WorkbenchCard, colKey: ColKey, now: number, prepMin: number): Urgency {
+  if (colKey === 'done') return ''
+  let u: Urgency = ''
+  const budget = dwellBudget(colKey, card.channel, prepMin)
+  if (budget) {
+    const min = (now - Date.parse(card.waitSince)) / 60_000
+    if (min >= budget[1]) u = 'late'
+    else if (min >= budget[0]) u = 'warn'
+  }
+  const est = card.local?.estimatedDeliveryAt
+  if (est) {
+    const left = (Date.parse(est) - now) / 60_000
+    if (left <= DEADLINE_LATE_MIN) u = 'late'
+    else if (left <= DEADLINE_WARN_MIN && u !== 'late') u = 'warn'
+  }
+  return u
+}
+
 /** 等待胶囊：m:ss 等宽数字；>3:00 琥珀、>6:00 红底白字（§4）—— 按秒比较，3:00/6:00 整点不提前变色 */
-function waitLabel(sinceIso: string, now: number): { text: string; cls: string } {
+function waitLabel(sinceIso: string, now: number, urgency: Urgency): { text: string; cls: string } {
   const sec = Math.max(0, Math.floor((now - Date.parse(sinceIso)) / 1000))
   const min = Math.floor(sec / 60)
   const text = `${min}:${String(sec % 60).padStart(2, '0')}`
-  return { text, cls: sec > 360 ? 'wb__wait--danger' : sec > 180 ? 'wb__wait--warn' : '' }
+  return { text, cls: urgency === 'late' ? 'wb__wait--danger' : urgency === 'warn' ? 'wb__wait--warn' : '' }
 }
 
 /** ≤2 样列全名；≥3 样给「前两菜名 等 N 样 / M 份」，「等 N 样」用渠道色（§4） */
@@ -156,15 +247,27 @@ interface ConfirmSpec {
   amber?: string
   /**
    * 确认块与琥珀之间的自定义内容（呼叫弹窗用它放各家报价，见 CallQuoteBlock）。
-   * 收一个「把最新最低价报上来」的回调：报价块里点刷新之后，确认键上的运力名与金额
-   * 必须跟着变——spec 是点击那一刻存进 state 的，不回传就会停在旧数字上。
+   * 收一个「当前要呼哪几家」的回调：报价块里点刷新或改选之后，确认键的文案和真正发出去的
+   * providers 都必须跟着变——spec 是点击那一刻存进 state 的，不回传就会停在旧值上。
    */
-  extra?: (onLowest: (l: { provider: string; feeFen: number } | null) => void) => ReactNode
-  /** 有实时最低价时用它生成确认键文案；没有就退回 confirmText */
-  confirmTextOf?: (lowest: { provider: string; feeFen: number }) => string
+  extra?: (onPick: (p: CallPick | null) => void) => ReactNode
+  /** 有实时选择时用它生成确认键文案；没有就退回 confirmText */
+  confirmTextOf?: (pick: CallPick) => string
   confirmText: string
   okMsg: string
-  run: () => Promise<unknown>
+  /** 呼叫弹窗把当前选择传进来；其它弹窗忽略这个参数即可 */
+  run: (pick?: CallPick | null) => Promise<unknown>
+}
+
+/**
+ * 呼叫弹窗里「这一次要呼谁」。
+ * providers 为空 = 不指定，按后台策略走（服务端自己挑最便宜的 N 家）；
+ * 非空 = 店员手点过，覆盖策略，服务端记成 MANUAL。
+ */
+interface CallPick {
+  providers: string[]
+  quotes: { provider: string; feeFen: number }[]
+  manual: boolean
 }
 
 /**
@@ -175,9 +278,12 @@ interface ConfirmSpec {
  *
  * batchPrice 免费、不下单、不落库，所以刷新按钮可以随便点。
  */
-function CallQuoteBlock({ orderId, initial, freshMs, skewMs, onLowest }: {
+function CallQuoteBlock({ orderId, initial, mode, cheapestN, freshMs, skewMs, onPick }: {
   orderId: number
   initial: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+  /** 后台设定的呼叫方式，决定「不动手时默认呼谁」 */
+  mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'
+  cheapestN: number
   /** 服务端定义的新鲜度阈值（quote.ts 的 QUOTE_FRESH_MS），与 quotedAt 一起实时重算 stale */
   freshMs: number
   /**
@@ -186,10 +292,12 @@ function CallQuoteBlock({ orderId, initial, freshMs, skewMs, onLowest }: {
    * 传 skewRef.current 才能让每次渲染都按「服务端此刻的真实时间」校正过期判断。
    */
   skewMs: number
-  onLowest: (l: { provider: string; feeFen: number } | null) => void
+  onPick: (p: CallPick | null) => void
 }) {
   const [q, setQ] = useState(initial)
   const [busy, setBusy] = useState(false)
+  /** null = 不指定，按后台策略走；非 null = 店员点中的那一家 */
+  const [sel, setSel] = useState<string | null>(null)
   // initial.stale 只是「打开抽屉那一刻」服务端算好的快照，弹窗可能被店员晾很久才点确认——
   // 久留期间不会有任何请求把它刷新掉。改成每次渲染都用 quotedAt+freshMs 对着当前时间重算，
   // 并用一个每秒跳一次的 tick 强制重新渲染，这样弹窗开着不动时新鲜度也会自己翻成「已过期」，
@@ -200,12 +308,6 @@ function CallQuoteBlock({ orderId, initial, freshMs, skewMs, onLowest }: {
     return () => window.clearInterval(t)
   }, [])
   const stale = isQuoteStaleNow(q?.quotedAt, freshMs, skewMs)
-  // 把「当前这份报价的最低价」报给弹窗，让确认键上的运力名与金额始终与眼前这块一致。
-  // 报价已过期时报 null：过期意味着服务端在真正下单前会自己重查一次，那时挑中的
-  // 可能是另一家——此刻在按钮上写死一个价就是空头承诺。
-  useEffect(() => {
-    onLowest(stale ? null : q?.snapshot?.lowest ?? null)
-  }, [q, stale, onLowest])
   const refresh = async () => {
     setBusy(true)
     try {
@@ -214,8 +316,28 @@ function CallQuoteBlock({ orderId, initial, freshMs, skewMs, onLowest }: {
     } catch { /* 查价失败不影响呼叫本身：呼叫时服务端还会自己再查一次 */ }
     finally { setBusy(false) }
   }
-  const quotes = q?.snapshot?.quotes ?? []
-  if (!quotes.length) {
+  const sorted = useMemo(
+    () => [...(q?.snapshot?.quotes ?? [])].sort((a, b) => a.feeFen - b.feeFen),
+    [q],
+  )
+  // 不动手时策略会呼谁——高亮的就是这几家，让店员在按下去之前看到系统的选择
+  const byStrategy = useMemo(() => {
+    if (!sorted.length) return []
+    if (mode === 'ALL') return sorted
+    if (mode === 'SOLO_LOWEST') return sorted.slice(0, 1)
+    return sorted.slice(0, Math.max(1, cheapestN))
+  }, [sorted, mode, cheapestN])
+  const picked = sel ? sorted.filter((x) => x.provider === sel) : byStrategy
+  // 报价过期时不把金额报上去：过期意味着服务端下单前会自己重查一次，那时的价可能不是
+  // 眼前这个——此刻在按钮上写死一个数字就是空头承诺。运力选择本身仍然有效（MANUAL 只认家数）。
+  useEffect(() => {
+    onPick(sorted.length
+      ? { providers: sel ? [sel] : [], quotes: stale ? [] : picked, manual: !!sel }
+      : null)
+    // picked 是每次渲染新建的数组，放进依赖会自激；用它的内容做依赖
+  }, [onPick, sel, stale, sorted.length, picked.map((x) => `${x.provider}:${x.feeFen}`).join(',')])
+
+  if (!sorted.length) {
     return (
       <div className="wb__quote">
         <span className="wb__muted">暂无报价（呼叫时会自动查一次）</span>
@@ -223,22 +345,51 @@ function CallQuoteBlock({ orderId, initial, freshMs, skewMs, onLowest }: {
       </div>
     )
   }
-  const min = Math.min(...quotes.map((x) => x.feeFen))
+  const min = sorted[0].feeFen
+  const extraFen = sel ? (sorted.find((x) => x.provider === sel)?.feeFen ?? min) - min : 0
   return (
     <div className={`wb__quote${stale ? ' wb__quote--stale' : ''}`}>
       <div className="wb__quote-head">
-        <span>{stale ? '报价已过期' : '当前报价'}</span>
+        <span>{stale ? '报价已过期' : '选一家呼 · 点行切换，打勾的就是要呼的'}</span>
         <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 刷新'}</button>
       </div>
       {/* 报价新鲜度靠时钟偏移校正过，店员没法从「过期/未过期」倒推查价的实际时间——
           直接写出查价时刻（按上海时区，与小票/其他时间戳同口径），比自己心算靠谱 */}
       <div className="wb__muted">查于 {fmtHHmm(q?.quotedAt)}</div>
-      {[...quotes].sort((a, b) => a.feeFen - b.feeFen).map((x) => (
-        <div className="wb__line" key={x.provider}>
-          <span>{providerLabel(x.provider)}{x.feeFen === min && <span className="wb__muted"> 最低</span>}</span>
-          <span className="wb__fee">¥{yuan(x.feeFen)}</span>
-        </div>
-      ))}
+      {sorted.map((x) => {
+        const on = picked.some((p) => p.provider === x.provider)
+        return (
+          <button
+            type="button"
+            key={x.provider}
+            className={`wb__quote-row${on ? ' wb__quote-row--on' : ''}`}
+            aria-pressed={on}
+            /* 再点一次选中的那一家 = 取消手选、回到策略默认。没有这条，店员点错了就只能关掉弹窗重来 */
+            onClick={() => setSel(sel === x.provider ? null : x.provider)}
+          >
+            <span>
+              <span className="wb__quote-tick">{on ? '✓' : ''}</span>
+              {providerLabel(x.provider)}
+              {x.feeFen === min && <span className="wb__muted"> 最低</span>}
+            </span>
+            <span className="wb__fee">¥{yuan(x.feeFen)}</span>
+          </button>
+        )
+      })}
+      {sel
+        ? (
+          <div className={`wb__quote-note${extraFen > 0 ? ' wb__quote-note--warn' : ''}`}>
+            只呼 {providerLabel(sel)}
+            {extraFen > 0 ? `，比最低价多 ¥${yuan(extraFen)}` : ''}。再点一次可改回默认。
+          </div>
+        )
+        : (
+          <div className="wb__quote-note">
+            {mode === 'SOLO_LOWEST'
+              ? '默认给你选好了最便宜的这家；要更快就点闪送那一行。'
+              : `打勾的是按后台设置会呼的 ${picked.length} 家，谁先接算谁的。`}
+          </div>
+        )}
     </div>
   )
 }
@@ -246,14 +397,14 @@ function CallQuoteBlock({ orderId, initial, freshMs, skewMs, onLowest }: {
 function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: () => void; onDone: (msg: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  // 报价块回传的实时最低价（点了刷新之后会变）。useCallback 定住引用，
+  // 报价块回传的「当前要呼谁」（点刷新或改选之后会变）。useCallback 定住引用，
   // 否则每次渲染都是新函数，会把子组件的 useEffect 变成无限循环。
-  const [liveLowest, setLiveLowest] = useState<{ provider: string; feeFen: number } | null>(null)
-  const onLowest = useCallback((l: { provider: string; feeFen: number } | null) => setLiveLowest(l), [])
-  const confirmText = liveLowest && spec.confirmTextOf ? spec.confirmTextOf(liveLowest) : spec.confirmText
+  const [pick, setPick] = useState<CallPick | null>(null)
+  const onPick = useCallback((p: CallPick | null) => setPick(p), [])
+  const confirmText = pick && spec.confirmTextOf ? spec.confirmTextOf(pick) : spec.confirmText
   const submit = async () => {
     setBusy(true); setError('')
-    try { await spec.run(); onDone(spec.okMsg) }
+    try { await spec.run(pick); onDone(spec.okMsg) }
     catch (e) { setError(apiMessage(e, '操作失败，请重试')) }
     finally { setBusy(false) }
   }
@@ -272,7 +423,7 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
       }
     >
       <WhatBlock what={spec.what} customer={spec.customer} cost={spec.cost} />
-      {spec.extra?.(onLowest)}
+      {spec.extra?.(onPick)}
       {spec.amber && <div className="wb__amber">{spec.amber}</div>}
     </WbModal>
   )
@@ -604,8 +755,13 @@ function RejectModal({ order, channel, onClose, onDone }: {
 // ─────────────────────────────────────────────────────────
 // 卡片（§3/§4）：三重编码 = 4px 色条 + 徽章（图标+文字）+ 渠道各自的字段
 // ─────────────────────────────────────────────────────────
-function Card({ card, colKey, now, onOpen, onHandleCancel }: {
-  card: WorkbenchCard; colKey: ColKey; now: number; onOpen: () => void; onHandleCancel: () => void
+function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: {
+  card: WorkbenchCard; colKey: ColKey; now: number
+  /** 顾客可申请取消 / 店员可处理的窗口（分钟，接单起算），用来算「还剩多久自动回绝」 */
+  graceMin: number
+  /** 当下的备餐时长（分，高峰取上界）——「备餐中」那一列的正常停留时长就是它 */
+  prepMin: number
+  onOpen: () => void; onHandleCancel: () => void
 }) {
   const local = card.channel === 'LOCAL'
   const d = card.local?.delivery ?? null
@@ -616,11 +772,20 @@ function Card({ card, colKey, now, onOpen, onHandleCancel }: {
   // 已完成列不再用等待胶囊的琥珀/红底：红是本页面最稀缺的信号（§0/§5「红框=立即处理」），
   // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
   // 改显示静态的完成时刻（服务端给 done 列的锚点就是 completedAt，即 card.waitSince）。
-  const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now)
-  const km = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : '--'
+  const urg = alert ? 'late' : urgencyOf(card, colKey, now, prepMin)
+  // 已完成列用：自送和骑手送要分开说，不然「骑手 店员小李」读着别扭
+  const doneBy = !d
+    ? '送达方式未记录'
+    : d.provider === 'SELF'
+      ? `自送${d.courierName ? ` ${d.courierName}` : ''}`
+      : `骑手 ${d.courierName ?? d.statusLabel}`
+  const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg)
+  // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
+  // 印一行「距离 --」只是在卡片上占一格空话，所以整行不渲染（PO 2026-09-07）。
+  const kmText = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : null
   return (
     <div
-      className={`wb__card ${local ? 'wb__card--local' : 'wb__card--express'} ${alert ? 'wb__card--alert' : ''}`}
+      className={`wb__card ${local ? 'wb__card--local' : 'wb__card--express'} ${alert ? 'wb__card--alert' : urg ? `wb__card--${urg}` : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -634,20 +799,30 @@ function Card({ card, colKey, now, onOpen, onHandleCancel }: {
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
-      <div className="wb__no"><span>{card.orderNo}</span><b>¥{yuan(card.amountFen)}</b></div>
+      <div className="wb__no"><span className="wb__shortno">{shortNo(card.orderNo)}</span><b>¥{yuan(card.amountFen)}</b></div>
       <div className="wb__items">{itemsSummary(card.items, card.channel)}</div>
 
       {/* 无备注必须明写，留空则「没看见」与「没有」无法区分（§4） */}
       {card.note ? <div className="wb__note">{card.note}</div> : <div className="wb__nonote">无备注</div>}
 
       <div className="wb__fields">
-        {local ? (
+        {local ? (colKey === 'done' ? (
+          /* 已完成的单只回答一件事：**最后是谁送的**。
+             这里原来照抄了在途卡片的两行，于是显示成「骑手 未呼叫 · 预计送达 15:06」——
+             送到了却说没呼叫骑手，还配一个未来时刻的预计送达，两条都是假的
+             （送达时 activeOrderId 被清空，服务端就查不到那张配送单了，现已按 orderId 补回）。
+             送达时刻不用再写一遍：右上角那枚胶囊已经是「完成于 14:36」。 */
           <>
-            <span>距离 {km}</span>
+            {kmText && <span>距离 {kmText}</span>}
+            <span>{doneBy}</span>
+          </>
+        ) : (
+          <>
+            {kmText && <span>距离 {kmText}</span>}
             <span>骑手 {d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}</span>
             <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>
           </>
-        ) : (
+        )) : (
           <>
             <span>{card.express?.province}{card.express?.city && card.express.city !== card.express.province ? ` ${card.express.city}` : ''}</span>
             <span>{card.express?.expressCompany ?? '未发货'}</span>
@@ -656,10 +831,20 @@ function Card({ card, colKey, now, onOpen, onHandleCancel }: {
         )}
       </div>
 
+      {/* 取消申请：不用「去处理」，因为**不处理就是驳回**——接单满 acceptGraceMin 分钟系统自动
+          回绝（服务端 autoRejectStaleCancelRequests，「甲」口径）。所以这条只需要回答一件事：
+          「你要不要退他钱」，以及「不动的话还剩多久自动回绝」。倒计时归零后本条会随下一次
+          快照刷新自然消失（变成下面那条「已驳回」）。 */}
       {card.local?.cancelRequested && (
         <div className="wb__strip wb__strip--warn">
-          <span>顾客申请取消</span>
-          <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>去处理</button>
+          <span>顾客要退菜{autoRejectLeft(card.local.acceptedAt, graceMin, now) ?? ''}</span>
+          <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>同意退款</button>
+        </div>
+      )}
+      {/* 驳回之后厨房要继续做。PO 2026-09-07 定：这件事只显示在屏幕上，不再出票 */}
+      {!card.local?.cancelRequested && card.local?.cancelRejected && (
+        <div className="wb__strip">
+          <span>{card.local.cancelRejected === 'AUTO' ? '超时未处理，已自动回绝退菜' : '已回绝退菜'} · 继续完成此订单</span>
         </div>
       )}
       {(badFlow || callFailed) && d && (
@@ -811,6 +996,8 @@ export default function Workbench() {
   const [gone, setGone] = useState(false)
   // 骑手实时位置：只在骑手真的上路的那几个状态下轮询，抽屉一关就停（见下面的 useEffect）
   const [courier, setCourier] = useState<CourierLive | null>(null)
+  // 已完成列默认收起（见下面渲染处的注释）。刻意不持久化：每天开工都是干净的四列。
+  const [doneOpen, setDoneOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
   const [modal, setModal] = useState<ModalState>(null)
@@ -1090,9 +1277,10 @@ export default function Workbench() {
     // 「实际约 ¥5–8」这句已被实测推翻（2026-09-06 首单 8.94 km 实扣 ¥23.32，1.1 km 那组
     // 最贵的也报 ¥11.22），改成不给死数字，让店员看下面报价块里的真实金额。
     const CALL_AMBER = '会预扣配送费，实际以中标运力的预扣为准。若之后取消已接单的骑手，可能产生约 ¥2 取消费。'
-    // 呼叫方式来自设置（默认只呼最低价）。拿不到设置时按「并呼」措辞——宁可文案保守，
-    // 也不要让店员以为只花一家的钱、结果按并呼冻结了 N 笔。
-    const solo = settings?.callStrategy?.mode === 'SOLO_LOWEST'
+    // 呼叫方式来自设置（默认并呼最便宜的 N 家）。拿不到设置时按「并呼全部」措辞——
+    // 宁可文案保守，也不要让店员以为只花一家的钱、结果按并呼冻结了 N 笔。
+    const callMode = settings?.callStrategy?.mode ?? 'ALL'
+    const cheapestN = settings?.callStrategy?.cheapestN ?? 3
     // 最低价不在这里取：确认键的金额由弹窗内的报价块实时回传（见 ConfirmSpec.confirmTextOf），
     // 这里取一次会停在打开抽屉那一刻的快照上，店员在弹窗里点过刷新之后就成了错数字。
     const escalateMin = settings?.callStrategy?.escalateAfterMin ?? 0
@@ -1108,41 +1296,58 @@ export default function Workbench() {
       <a key={key} className="wb__btn wb__btn--ghost" href={`tel:${phone}`}><Phone className="w-4 h-4" />{label}</a>
     )
     /**
-     * 呼叫确认弹窗。文案随呼叫方式变——「只呼最低价」和「并呼」在**花多少钱**上差一个数量级
-     * （首单实测：并呼 7 家一次冻结 ¥75.08，只呼一家冻 ¥16.23），店员按下去之前必须知道是哪种。
-     * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，只能说明会先查价。
+     * 呼叫确认弹窗。文案随呼叫方式变——呼几家在**冻结多少钱**上差一个数量级
+     * （首单那组报价：只呼最低 ¥16.23／最便宜 3 家约 ¥51.76／全部 7 家 ¥75.08），
+     * 店员按下去之前必须知道是哪种。
+     * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，
+     * 也就没得选——只能说明会先查价，选运力这件事留给之后单独点「呼叫骑手」。
      */
-    const callSpec = (title: string, confirmText: string, what: string, run: () => Promise<unknown>, hasQuote = true): ConfirmSpec => {
+    // 三级阶梯（店主 2026-09-07 定）：第一次呼你在上面选中的，之后系统一级一级往上加人。
+    // 后半句对**任何**第一次都成立——包括手选的那一家（服务端把 MANUAL 也纳入了升级范围），
+    // 所以不能只在「没手选」时显示，否则店员会以为手选的单没人兜。
+    const strategyText = callMode === 'SOLO_LOWEST' ? '只呼你选中的那一家'
+      : callMode === 'CHEAPEST_N' ? `并呼最便宜的 ${cheapestN} 家，谁先接算谁的`
+        : '并呼设置里的全部运力，谁先接算谁的'
+    const escalateText = escalateMin > 0 && callMode !== 'ALL'
+      ? `；没人接的话系统会自动往上加人——约 ${escalateMin} 分钟后改为并呼最便宜 ${cheapestN} 家，再过 ${escalateMin} 分钟并呼全部运力`
+      : ''
+    const callSpec = (
+      title: string, confirmText: string, what: string,
+      run: (pick?: CallPick | null) => Promise<unknown>, hasQuote = true,
+    ): ConfirmSpec => {
       return {
         title, channel: ch,
         // 确认键上带运力名与金额，是「按下去要花多少钱」最后一道提示。
-        // 金额取**弹窗里那块报价当前显示的**最低价（点了刷新会跟着变），而不是打开抽屉那一刻
-        // 的快照；报价过期时 CallQuoteBlock 会报 null，这里就退回不带金额的通用文案——
+        // 取的是**弹窗里那块报价当前的选择**（点刷新或改选都会跟着变），而不是打开抽屉那一刻
+        // 的快照；报价过期时 CallQuoteBlock 报空 quotes，这里就退回不带金额的文案——
         // 过期意味着服务端下单前会自己重查，此刻写死一个价就是空头承诺。
-        confirmTextOf: solo && hasQuote
-          ? (l) => `呼叫${providerLabel(l.provider)} ¥${yuan(l.feeFen)}`
+        confirmTextOf: hasQuote
+          ? (p) => {
+            const sum = p.quotes.reduce((n, x) => n + x.feeFen, 0)
+            if (p.manual) return `只呼${providerLabel(p.providers[0])}${p.quotes.length ? ` ¥${yuan(sum)}` : ''}`
+            if (p.quotes.length === 1) return `呼叫${providerLabel(p.quotes[0].provider)} ¥${yuan(p.quotes[0].feeFen)}`
+            if (p.quotes.length > 1) return `并呼 ${p.quotes.length} 家 共冻 ¥${yuan(sum)}`
+            return confirmText
+          }
           : undefined,
         confirmText,
         okMsg: '已呼叫骑手',
-        what: solo
-          ? (hasQuote
-            ? `${what}按最低价只呼一家${escalateMin > 0 ? `，约 ${escalateMin} 分钟无人接自动改为并呼全部运力` : ''}。`
-            : `${what}接单后先查价，再按最低价只呼一家。`)
-          : `${what}并呼设置里的全部运力，谁先接算谁的。`,
+        what: hasQuote ? `${what}${strategyText}${escalateText}。` : `${what}接单后先查价，再${strategyText}。`,
         customer: '顾客看到「正在为您呼叫骑手」。',
-        cost: solo
+        cost: callMode === 'SOLO_LOWEST'
           ? '只冻结这一家的配送费。'
-          : '每一家各冻结一笔预扣，只有中标那家最终扣款，其余释放。',
+          : '并呼几家就同时冻结几笔预扣，只有中标那家最终扣款，其余释放。',
         extra: hasQuote
-          ? (onLowest) => (
-              <CallQuoteBlock
-                orderId={order.id}
-                initial={detail?.quote ?? null}
-                freshMs={detail?.quote?.quoteFreshMs ?? DEFAULT_QUOTE_FRESH_MS}
-                skewMs={skewRef.current}
-                onLowest={onLowest}
-              />
-            )
+          ? (onPick) => (
+            <CallQuoteBlock
+              orderId={order.id}
+              initial={detail?.quote ?? null}
+              mode={callMode} cheapestN={cheapestN}
+              freshMs={detail?.quote?.quoteFreshMs ?? DEFAULT_QUOTE_FRESH_MS}
+              skewMs={skewRef.current}
+              onPick={onPick}
+            />
+          )
           : undefined,
         amber: CALL_AMBER, run,
       }
@@ -1185,7 +1390,9 @@ export default function Workbench() {
           btns.push(fill('call', failed ? '重新呼叫骑手' : '呼叫骑手', () => confirm(callSpec(
             failed ? '重新呼叫骑手' : '呼叫骑手', failed ? '确认重呼' : '确认呼叫',
             '向快递100 发单，等骑手接单并到店取货。',
-            () => callRider(order.id),
+            // 手选了才传 providers：传了服务端就记 MANUAL、原样照办；
+            // 不传才走后台策略（并呼最便宜的 N 家），两条路在配送单上分得开，事后能对账
+            (pick) => callRider(order.id, pick?.manual ? pick.providers : undefined),
           ))))
           btns.push(ghost('self', '自己送', () => setModal({ kind: 'self' })))
         }
@@ -1234,6 +1441,9 @@ export default function Workbench() {
     return btns
   }
 
+  // 每秒重渲染一次，卡片有几十张——高峰判定只算一次，别每张卡各跑一遍 Intl
+  const prepMin = prepMinutesNow(settings, now)
+
   // ── 详情抽屉（§5）──
   const renderDrawer = (): ReactNode => {
     if (!drawer) return null
@@ -1241,8 +1451,11 @@ export default function Workbench() {
     const local = card.channel === 'LOCAL'
     const o = detail?.order
     const d = detail?.delivery ?? null
-    // 与卡片同规则：已完成不再用会变色的等待胶囊（I7）
-    const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now)
+    // 与卡片同规则：已完成不再用会变色的等待胶囊（I7）；紧急度也走同一个函数，
+    // 否则抽屉里的胶囊会和它背后那张卡片显示不同的颜色
+    const w = colKey === 'done'
+      ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' }
+      : waitLabel(card.waitSince, now, urgencyOf(card, colKey, now, prepMin))
     const canReject = !!o && ['PENDING_PAYMENT', 'PAID', 'PREPARING'].includes(o.status)
     return (
       <>
@@ -1253,7 +1466,7 @@ export default function Workbench() {
               {local ? <Bike className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
               {local ? '同城配送' : '全国邮寄'}
             </span>
-            <span>{card.orderNo}</span>
+            <span className="wb__shortno">{shortNo(card.orderNo)}</span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
 
@@ -1306,7 +1519,9 @@ export default function Workbench() {
               <div className="wb__line"><span>地址</span><span style={{ textAlign: 'right' }}>{o?.receiverDisplayAddress ?? o?.receiverFullAddress ?? '--'}</span></div>
               {local ? (
                 <>
-                  <div className="wb__line"><span>距离</span><span>{card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : '--'}</span></div>
+                  {card.local?.distanceM != null && (
+                    <div className="wb__line"><span>距离</span><span>{(card.local.distanceM / 1000).toFixed(1)} km</span></div>
+                  )}
                   <div className="wb__line"><span>预计送达</span><span>{hhmm(o?.estimatedDeliveryAt)}</span></div>
                 </>
               ) : (
@@ -1558,39 +1773,80 @@ export default function Workbench() {
       />
 
       {/* 图例常驻（§3）；专注模式下让位给看板 */}
+      {/* 两组颜色分工写在屏幕上：左边一组是「这是什么单」（永不变），右边一组是「急不急」（会变）。
+          不写的话，新店员看到一张烧红的邮寄单，第一反应会是「这是同城吧？」 */}
       <div className="wb__legend">
-        <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
-        <span>骑手送，晚十分钟菜就凉了——每列里恒排在邮寄单上面</span>
-        <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
-        <span>快递发出，可以稍后处理</span>
+        <span className="wb__legend-g">
+          <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
+          <span>骑手送，恒排在邮寄单上面</span>
+          <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
+          <span>可以稍后处理</span>
+        </span>
+        <span className="wb__legend-sep" />
+        <span className="wb__legend-g">
+          <span className="wb__chip">正常</span>
+          <span className="wb__chip wb__chip--warn">该催了</span>
+          <span className="wb__chip wb__chip--late">要延误</span>
+          <span>整圈发光 = 急，左边那条竖色条只说渠道、不会变色</span>
+        </span>
       </div>
 
-      <div className="wb__board" ref={boardRef}>
+      <div className={`wb__board${doneOpen ? ' wb__board--done-open' : ''}`} ref={boardRef}>
         {COLUMNS.map((col) => {
           // 顺序由服务端排定（同城恒上），前端只按数组顺序渲染，不再排一次
           const list = snap ? snap.columns[col.key] : []
+          // 「已完成」默认折叠成一条窄边栏（PO 2026-09-07 定）：这一列里没有任何待办，
+          // 却常年占着和前四列一样的宽度。收起来之后干活的四列各自变宽约 25%，
+          // 卡片上的地址、备注、骑手电话少折一行。默认每次进页面都是收起的——
+          // 不记忆展开状态：每天开工看到的应该是干净的四列，想看完成情况点开即可。
+          const collapsed = col.key === 'done' && !doneOpen
+          if (collapsed) {
+            return (
+              <section className="wb__col wb__col--collapsed" key={col.key}
+                onClick={() => setDoneOpen(true)} title="点击展开已完成">
+                <div className="wb__col-collapsed-inner">
+                  <span className="wb__col-count">{list.length}</span>
+                  <span className="wb__col-collapsed-t">{col.title}</span>
+                </div>
+              </section>
+            )
+          }
           return (
             <section className="wb__col" key={col.key}>
               <div className="wb__col-head">
                 <span>{col.title}</span>
                 <span className="wb__col-count">{list.length}</span>
+                {col.key === 'done' && (
+                  <button className="wb__iconbtn" onClick={() => setDoneOpen(false)}>收起</button>
+                )}
               </div>
-              {list.length === 0
-                ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
-                : list.map((c) => (
-                  <Card
-                    key={c.orderId} card={c} colKey={col.key} now={now}
-                    onOpen={() => openCard(c, col.key)}
-                    onHandleCancel={() => openCard(c, col.key, true)}
-                  />
-                ))}
+              {/* 卡片区单独滚动：每列各滚各的，列头和另外四列都不动。
+                  整页滚的话，滑到备餐中的第 12 张，待接单那一列就被推出屏幕了——
+                  而「有没有新单等着接」恰恰是这一屏最不能丢的信息。 */}
+              <div className="wb__col-body">
+                {list.length === 0
+                  ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
+                  : list.map((c) => (
+                    <Card
+                      key={c.orderId} card={c} colKey={col.key} now={now}
+                      onOpen={() => openCard(c, col.key)}
+                      graceMin={snap?.acceptGraceMin ?? 0}
+                      prepMin={prepMin}
+                      onHandleCancel={() => openCard(c, col.key, true)}
+                    />
+                  ))}
+              </div>
             </section>
           )
         })}
       </div>
 
+      {/* 底部这行是唯一写明「多久算久」的地方。原来写死 3/6 分钟，改成按列给预算之后
+          必须跟着改——不然店员照着这行读，看到备餐中 10 分钟还没变色会以为页面坏了。 */}
       <div className="wb__hint">
-        等待时长从进入本列时算起：超过 3 分钟转琥珀，超过 6 分钟转红底。卡片变红框 = 顾客申请取消或配送异常，先处理它。
+        等待时长从进入本列时算起，每列的「正常」不一样：待接单 2/5 分钟，备餐中 {prepMin}/{prepMin + 8} 分钟，
+        等待配送员 6/12 分钟；配送中不看等待时长，只看离预计送达还剩多久（≤15 分转琥珀、≤5 分或已过点转红）。
+        邮寄单可以稍后处理，60/240 分钟才变色。红框最急 = 顾客申请退菜或配送异常，先处理它。
       </div>
 
       {renderDrawer()}

@@ -43,7 +43,10 @@
     </view>
     <view class="info-row">
       <text class="info-label">预计送达</text>
-      <text class="info-value">{{order.estimatedDeliveryText}}</text>
+      <!-- 三段，越往后越确定：①未接单不给钟点 ②已接单给接单时算的钟点 ③骑手取货后用实时位置重算 -->
+      <text class="info-value" wx:if="{{liveEtaText}}">{{liveEtaText}}<text class="info-sub"> · 按骑手当前位置</text></text>
+      <text class="info-value" wx:elif="{{order.estimatedDeliveryText}}">{{order.estimatedDeliveryText}}<text wx:if="{{order.estimatedDeliveryHint}}" class="info-sub"> · {{order.estimatedDeliveryHint}}</text></text>
+      <text class="info-value" wx:else>{{order.estimatedDeliveryHint || '—'}}</text>
     </view>
     <view class="info-row">
       <text class="info-label">配送费</text>
@@ -77,8 +80,11 @@
     <text class="courier-route-distance" wx:if="{{courierDistanceText}}">骑手距您约 {{courierDistanceText}} km</text>
   </view>
 
-  <view class="card local-cancel-card" wx:if="{{order.isLocal && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelUnavailable)}}">
+  <view class="card local-cancel-card" wx:if="{{order.isLocal && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelRejected || order.showLocalCancelUnavailable)}}">
     <view class="local-cancel-submitted" wx:if="{{order.cancelRequestedAt}}">取消申请已提交，商家会尽快处理</view>
+    <!-- 申请被驳回（店员点的或超时自动）。不写明是哪一种：对顾客而言结论一样，
+         而「系统自动回绝」听起来比「商家考虑后未同意」更冷。 -->
+    <view class="local-cancel-unavailable" wx:elif="{{order.showLocalCancelRejected}}">商家未同意取消，订单继续制作中。如有问题请联系商家</view>
     <view wx:elif="{{order.canRequestCancel}}">
       <text class="local-cancel-title">可申请取消</text>
       <text class="local-cancel-copy" wx:if="{{graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.localCancelDeadlineText}}）</text>
