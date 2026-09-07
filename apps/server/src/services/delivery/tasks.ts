@@ -232,9 +232,12 @@ export async function refreshStaleQuotes(min?: number): Promise<number> {
  *  - 预估取消费 > 0：说明骑手多半已经接单了（未接单的单撤销不要钱）。这时自动撤单要真花钱，
  *    改标 `*_HELD` 交给人决定。这个标记同时让该行离开扫描范围，不会每分钟重复 precancel + 重复告警。
  *
- * 扫描范围含 SOLO 与 CHEAPEST 两种策略：并呼最便宜 3 家同样可能三家都不接，
- * 那时该升级的理由和只呼一家时一模一样（菜做好了在等）。MANUAL 不在范围内——
- * 店员亲手指定的运力，系统不该在背后把它换掉。
+ * 扫描范围含 SOLO / CHEAPEST / MANUAL：店主 2026-09-07 定的阶梯是
+ * **第一次由店员从全部报价里挑，第二次一律并呼全部**，所以「怎么呼的第一次」不影响
+ * 该不该有第二次——三家不接、一家不接、店员挑的那家不接，菜都一样做好了在等。
+ * （MANUAL 原来被排除在外，理由是「不该在背后换掉店员的选择」；新阶梯下那等于
+ * 店员一手选这单就永远等不到第二次。升级只在仍是 CALLING 且预估取消费为 0 时动手，
+ * 不会撤掉已接单的骑手。）
  *
  * 残余竞态：precancel 与 cancel 之间那约 1 秒里骑手恰好接单 → cancel 会真的取消已接单的骑手
  * 并产生约 ¥2 取消费。金额会落在 D-1 行的 cancelFee 上、事件里看得见；概率极低，接受并记录。
@@ -247,7 +250,7 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
   const rows = await prisma.delivery.findMany({
     where: {
       // providerTaskId 非空 = 运力方那头确实有单可撤（占位/UNKNOWN 行没有它，precancel 会 42234）
-      status: 'CALLING', callStrategy: { in: ['SOLO', 'CHEAPEST'] }, providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
+      status: 'CALLING', callStrategy: { in: ['SOLO', 'CHEAPEST', 'MANUAL'] }, providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
       // 顾客已经申请取消的单不许升级：callRider 对这个条件是硬拦截（42204），
       // 而 cancelDelivery 不拦——不排除的话会「先把 D-1 撤了、再在重呼那一步必然失败」，
       // 留下一条「请到工作台手动呼叫骑手」的告警，把店员引向与顾客意愿相反的操作。

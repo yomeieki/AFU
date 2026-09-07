@@ -322,7 +322,7 @@ function CallQuoteBlock({ orderId, initial, mode, cheapestN, onPick }: {
   return (
     <div className={`wb__quote${stale ? ' wb__quote--stale' : ''}`}>
       <div className="wb__quote-head">
-        <span>{stale ? '报价已过期' : '当前报价 · 点一行可改成只呼那一家'}</span>
+        <span>{stale ? '报价已过期' : '选一家呼 · 点行切换，打勾的就是要呼的'}</span>
         <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 刷新'}</button>
       </div>
       {sorted.map((x) => {
@@ -347,14 +347,16 @@ function CallQuoteBlock({ orderId, initial, mode, cheapestN, onPick }: {
       })}
       {sel
         ? (
-          <div className="wb__quote-note wb__quote-note--warn">
-            已改成只呼 {providerLabel(sel)}
-            {extraFen > 0 ? `，比最低价多 ¥${yuan(extraFen)}` : ''}。再点一次可取消手选。
+          <div className={`wb__quote-note${extraFen > 0 ? ' wb__quote-note--warn' : ''}`}>
+            只呼 {providerLabel(sel)}
+            {extraFen > 0 ? `，比最低价多 ¥${yuan(extraFen)}` : ''}。再点一次可改回默认。
           </div>
         )
         : (
           <div className="wb__quote-note">
-            打勾的是按后台设置会呼的{mode === 'SOLO_LOWEST' ? '那一家' : ` ${picked.length} 家`}，谁先接算谁的。
+            {mode === 'SOLO_LOWEST'
+              ? '默认给你选好了最便宜的这家；要更快就点闪送那一行。'
+              : `打勾的是按后台设置会呼的 ${picked.length} 家，谁先接算谁的。`}
           </div>
         )}
     </div>
@@ -1215,10 +1217,13 @@ export default function Workbench() {
      * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，
      * 也就没得选——只能说明会先查价，选运力这件事留给之后单独点「呼叫骑手」。
      */
-    const strategyText = callMode === 'SOLO_LOWEST' ? '按最低价只呼一家'
+    // 两级阶梯（店主 2026-09-07 定）：第一次呼你在上面选中的，第二次由系统并呼全部兜底。
+    // 第二句对**任何**第一次都成立——包括手选的那一家（服务端已把 MANUAL 纳入升级范围），
+    // 所以这句话不能只在「没手选」时显示，否则店员会以为手选的单没人兜。
+    const strategyText = callMode === 'SOLO_LOWEST' ? '只呼你选中的那一家'
       : callMode === 'CHEAPEST_N' ? `并呼最便宜的 ${cheapestN} 家，谁先接算谁的`
         : '并呼设置里的全部运力，谁先接算谁的'
-    const escalateText = escalateMin > 0 && callMode !== 'ALL' ? `，约 ${escalateMin} 分钟无人接自动改为并呼全部运力` : ''
+    const escalateText = escalateMin > 0 && callMode !== 'ALL' ? `；约 ${escalateMin} 分钟仍无人接，系统会自动取消它、改为并呼全部运力` : ''
     const callSpec = (
       title: string, confirmText: string, what: string,
       run: (pick?: CallPick | null) => Promise<unknown>, hasQuote = true,

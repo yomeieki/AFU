@@ -57,11 +57,21 @@ export interface CallRiderInput {
  * *_HELD    = 只由升级任务写：等超时了但预估取消费 > 0，放弃自动升级、留原样等人工决定。
  *             不是一次呼叫的结果，所以和上面几个分开取值。
  */
-export type DeliveryCallStrategy = 'SOLO' | 'CHEAPEST' | 'ALL' | 'MANUAL' | 'SOLO_HELD' | 'CHEAPEST_HELD'
+export type DeliveryCallStrategy =
+  | 'SOLO' | 'CHEAPEST' | 'ALL' | 'MANUAL'
+  | 'SOLO_HELD' | 'CHEAPEST_HELD' | 'MANUAL_HELD'
 
-/** 超时未接时，各策略对应的「放弃升级」标记。没有对应值的策略不参与自动升级 */
+/**
+ * 超时未接时，各策略对应的「放弃升级」标记。没有对应值的策略不参与自动升级。
+ *
+ * MANUAL 在 2026-09-07 被加了进来。原来把它排除在外，理由是「店员亲手指定的运力，
+ * 系统不该在背后换掉」——那条理由在店主定下新阶梯之后不成立了：
+ * **第一次就是店员从全部报价里挑一家，第二次一律并呼全部**。把 MANUAL 排除在外，
+ * 等于店员一旦手选，这单就永远等不到第二次，菜做好了却挂在那儿没人送。
+ * 升级只在「仍是 CALLING（没人接）且预估取消费为 0」时才动手，所以不会撤掉已接单的骑手。
+ */
 export const HELD_OF: Partial<Record<DeliveryCallStrategy, DeliveryCallStrategy>> = {
-  SOLO: 'SOLO_HELD', CHEAPEST: 'CHEAPEST_HELD',
+  SOLO: 'SOLO_HELD', CHEAPEST: 'CHEAPEST_HELD', MANUAL: 'MANUAL_HELD',
 }
 
 /**

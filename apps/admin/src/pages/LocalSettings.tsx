@@ -269,11 +269,12 @@ export default function LocalSettings() {
             </select>
           </Field>
           */}
-          <Field label="呼叫方式" hint="并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。最贵的通常是闪送（一对一专送），2026-09-06 首单并呼全部被它抢到，多付 ¥7.09">
+          <Field label="第一次呼谁（店员没手选时）"
+            hint="工作台弹窗里始终列出全部报价，店员可以当场改选任意一家（急单选闪送）；这里定的是他不动手时默认呼谁。并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。">
             <select className={inputCls} value={s.callStrategy.mode}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL' } })}>
-              <option value="CHEAPEST_N">并呼最便宜的几家（推荐）</option>
-              <option value="SOLO_LOWEST">只呼最低价那一家</option>
+              <option value="SOLO_LOWEST">只呼最低价那一家（推荐）</option>
+              <option value="CHEAPEST_N">并呼最便宜的几家</option>
               <option value="ALL">并呼全部运力（旧行为）</option>
             </select>
           </Field>
@@ -282,7 +283,8 @@ export default function LocalSettings() {
               <input className={inputCls} type="number" min={1} max={7} value={s.callStrategy.cheapestN}
                 onChange={(e) => patch({ callStrategy: { ...s.callStrategy, cheapestN: Number(e.target.value) } })} /></Field>
           )}
-          <Field label="无人接单几分钟后改为并呼" hint="0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
+          <Field label="无人接单几分钟后并呼全部"
+            hint="第二级兜底：到点仍没人接，系统取消原单、并呼全部运力（约冻 ¥75）。不分第一次是怎么呼的——店员手选的那一家同样会被兜。0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
             <input className={inputCls} type="number" min={0} max={30} value={s.callStrategy.escalateAfterMin}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, escalateAfterMin: Number(e.target.value) } })} /></Field>
           <Field label="商品默认净重（克）" hint="商品未填净重时用"><input className={inputCls} type="number" min={50} value={s.kd100.defaultItemWeightG} onChange={(e) => patch({ kd100: { ...s.kd100, defaultItemWeightG: Number(e.target.value) } })} /></Field>

@@ -73,19 +73,23 @@ export interface LocalDeliverySettings {
    * 并呼 7 家，最贵的闪送 ¥23.32 抢到，而最低的达达报 ¥16.23 —— 一单多付 ¥7.09；
    * 且**每一家在下单瞬间各冻结一笔**（那一单冻了 ¥75.08，实付 ¥23.32）。
    *
-   * mode（2026-09-07 店主定为 CHEAPEST_N=3）：
-   *   CHEAPEST_N  默认。按报价从低到高取 cheapestN 家并呼，谁先接算谁的。
-   *               为什么不是只呼最低那一家：最贵的通常是闪送（一对一专送，快但贵），
-   *               而最便宜的几家多是顺路带单，**一家一家呼容易没人接**。三家一起抢，
-   *               既避开了闪送的价，也不至于干等。
-   *   SOLO_LOWEST 只呼报价最低那一家。最省冻结额度，但抢单成功率最低。
+   * **店主 2026-09-07 最终定的阶梯（两级）**：
+   *   第一次 —— 工作台弹窗里列出全部报价，**由店员挑一家**；不动手就按 mode 决定
+   *             默认呼谁（默认 SOLO_LOWEST = 预选最便宜那一家，一路点确认也不会多花钱）。
+   *   第二次 —— escalateAfterMin 分钟仍无人接，系统取消旧单、**并呼全部运力**兜底。
+   *             这一级不分第一次是怎么呼的（SOLO / CHEAPEST / 店员手选 MANUAL 都算）。
+   *
+   * mode 决定的只是「店员不动手时第一次呼谁」：
+   *   SOLO_LOWEST 默认。只呼报价最低那一家，冻结最省。
+   *   CHEAPEST_N  按报价从低到高取 cheapestN 家并呼。抢单成功率更高，代价是冻结按家数放大。
    *   ALL         并呼设置里的全部运力。**这是不必部署就能关掉策略的开关**。
    *   查不到报价一律退回 ALL（不因此拒绝呼叫）。
    *
-   * ⚠️ 冻结额度按「同时并呼几家」放大，这是选 N 时唯一要算的账。按首单那组报价：
+   * ⚠️ 冻结额度按「同时并呼几家」放大，这是选 mode 时唯一要算的账。按首单那组报价：
    *      只呼最低 ¥16.23／单 · 最便宜 3 家 ≈ ¥51.76／单 · 并呼 7 家 ¥75.08／单
-   *    以充值 100 元计，能同时挂的单数分别是 6 / 1 / 1。**N=3 时余额要备足**，
-   *    否则第二单就会因余额不足呼不出去（kd100.autoDowngradeToSelfOnNoBalance 是最后一道兜底）。
+   *    以充值 100 元计，能同时挂的单数分别是 6 / 1 / 1。默认取 SOLO_LOWEST 正是为了这个：
+   *    第一次只冻一笔，真没人接时才由第二次摊开
+   *    （kd100.autoDowngradeToSelfOnNoBalance 是余额见底后的最后一道兜底）。
    *
    * cheapestN: CHEAPEST_N 模式下并呼几家。可选家数不足时有几家呼几家。
    * escalateAfterMin: 呼了这么久仍无人接 → 取消旧单、并呼全表建新单。0 = 不自动升级
@@ -160,9 +164,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     providers: [...KD100_PROVIDERS], goodsType: '食品', defaultItemWeightG: 300,
     insurance: false, autoDowngradeToSelfOnNoBalance: false, soloProvider: null,
   },
-  // 3 分钟：凉菜等不起再挑一轮（挑第二便宜要再等 3 分钟）。升级一步到位并呼全部，
-  // 与 docs/design/workbench-ui-spec.md §6b 一致。
-  callStrategy: { mode: 'CHEAPEST_N', cheapestN: 3, escalateAfterMin: 3 },
+  // 第一次只呼一家（弹窗里预选最便宜那家，店员可改选）；3 分钟无人接一步到位并呼全部。
+  // 3 分钟这个数：凉菜等不起再挑一轮。与 docs/design/workbench-ui-spec.md §6b 一致。
+  callStrategy: { mode: 'SOLO_LOWEST', cheapestN: 3, escalateAfterMin: 3 },
   limits: { maxItems: 30, maxWeightKg: 10 },
   callTimeoutMin: 10,
   acceptedStuckMin: 30,
@@ -256,7 +260,8 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
     callStrategy: {
       // 只认这三个值，别的（含未来某天写进去的错拼）一律回落默认。⚠️ 生产库里已有的
       // local_delivery 行若没有这个字段 → 回落默认 → **部署即生效**，不需要店主再点一次。
-      // 反过来说：改默认值等于改生产行为，改之前必须先跟店主确认（2026-09-07 已确认 CHEAPEST_N=3）。
+      // 反过来说：改默认值等于改生产行为，改之前必须先跟店主确认
+      // （2026-09-07 最终确认：第一次由店员选、默认预选最低那家；第二次并呼全部）。
       mode: cs.mode === 'ALL' || cs.mode === 'SOLO_LOWEST' || cs.mode === 'CHEAPEST_N' ? cs.mode : D.callStrategy.mode,
       // 上界取运力表长度：填 9 也只有 7 家可呼，把它夹到真实可选范围内，
       // 免得后台显示一个永远达不到的数

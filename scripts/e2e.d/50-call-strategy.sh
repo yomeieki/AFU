@@ -185,7 +185,7 @@ assert_eq "ALL 模式呼设置里的全部运力" "$(jq -c '.data.delivery.calle
 assert_eq "ALL 模式策略标记为 ALL" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "ALL"
 assert_eq "ALL 模式 orderFees 每家一条" "$(jq -r '.data.delivery.orderFees | length' <<<"$R")" "$(jq -r 'length' <<<"$D50_ALLPROV")"
 
-echo "-- ⑦ 并呼最便宜 N 家（2026-09-07 起的默认策略）--"
+echo "-- ⑦ 并呼最便宜 N 家（设置里的可选模式，不是默认）--"
 # 店主定的口径：最贵的通常是闪送（一对一专送），平时不该呼它；但只呼最低那一家又容易没人接。
 # 折中是并呼最便宜的 3 家。这一组守两件事：**挑的确实是最便宜那几家**（不是前 3 家、
 # 不是随便 3 家），以及**冻结笔数等于家数**（orderFees 每家一条，就是那笔余额账）。
@@ -218,9 +218,12 @@ assert_eq "CHEAPEST 单也会被自动升级" "$(jq -r '.data.localEscalate' <<<
 R=$(d50_dlv "$D50_O7")
 assert_eq "升级后策略变 ALL" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "ALL"
 
-echo "-- ⑧ 店员手选运力：覆盖策略，记为 MANUAL --"
-# 「除非来不及了或者要迟到了再选闪送」——这条路必须能走通，且要和策略呼叫在配送单上分得开。
-d50_put_settings '.callStrategy = {"mode":"CHEAPEST_N","cheapestN":3,"escalateAfterMin":0}'
+echo "-- ⑧ 店员手选运力：第一次呼他选的那家，第二次照样并呼全部 --"
+# 店主 2026-09-07 定的两级阶梯：第一次由店员从全部报价里挑一家（急单挑闪送），
+# 第二次一律并呼全部。这一段守的是**第二级对手选单同样生效**——
+# 早期版本把 MANUAL 排除在升级之外（「不该在背后换掉店员的选择」），
+# 那会让手选的单永远等不到第二次，菜做好了挂在那儿没人送。
+d50_put_settings '.callStrategy = {"mode":"SOLO_LOWEST","cheapestN":3,"escalateAfterMin":0}'
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 d50_queue_price
 D50_O8=$(mk_local_paid)
@@ -232,12 +235,21 @@ R=$(d50_dlv "$D50_O8")
 assert_eq "只呼了店员指定的闪送" "$(jq -c '.data.delivery.calledProviders' <<<"$R")" '["shansongtongcheng"]'
 assert_eq "策略标记为 MANUAL（与自动挑选分得开）" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "MANUAL"
 assert_eq "手选也只冻一笔" "$(jq -r '.data.delivery.orderFees | length' <<<"$R")" "1"
-# 手选的单不许被系统在背后换掉：店员是有理由才指定的
+# 第二级：手选的单到点没人接，同样要被并呼全部兜住。
+# 预估取消费必须压成 0 才走「真升级」分支——mock 默认回 ¥2，那对应「骑手已经接了单」，
+# 会走 *_HELD（放弃升级、留给人工），localEscalate 同样计数，但策略不会变成 ALL。
 d50_only "$(jq -r '.data.delivery.deliveryNo' <<<"$R")"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
+d50_queue_price
 sleep 1
 R=$(sched '{"escalateAfterMin":0.01}')
-assert_eq "MANUAL 单不参与自动升级" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
-assert_eq "手选的配送单原封不动" "$(d50_dlv "$D50_O8" | jq -r '.data.delivery.callStrategy')" "MANUAL"
+assert_eq "MANUAL 单也会被自动升级（第二级对手选单同样生效）" "$(jq -r '.data.localEscalate' <<<"$R")" "1"
+R=$(d50_dlv "$D50_O8")
+assert_eq "升级后策略变 ALL" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "ALL"
+assert_eq "第二次并呼的是全部运力" \
+  "$(jq -r '.data.delivery.calledProviders | length' <<<"$R")" \
+  "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r '.data.kd100.providers | length')"
 
 # 还原：这一组改过全局设置，不还原会污染后面（以及重跑时的）用例
 req PUT /api/admin/settings/local-delivery "$AT" "$D50_ORIG" >/dev/null
