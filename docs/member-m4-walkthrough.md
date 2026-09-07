@@ -159,6 +159,6 @@ node scripts/check-miniapp-es5.mjs apps/miniapp/api/member.js \
 npm run preview:miniapp
 ```
 
-- [ ] 画廊里有 22 个页面
+- [ ] 画廊里有 23 个页面
 - [ ] 五个会员页镜像 + 两个结算页的优惠区都能看
 - [ ] 改任一新页的 wxss，预览即时刷新

@@ -4,6 +4,7 @@
  * 机制：把真实 wxss 转成浏览器可渲染 CSS（page→.mp-page、rpx→calc），
  * 生成 *.generated.css；静态服务镜像 HTML；fs.watch 源 wxss 变更即重生成；
  * 页面注入轮询脚本，检测到 CSS 版本变化自动刷新。
+ * 协议/隐私政策两页例外：正文现读 config/legal.js 渲染（见下方 LEGAL_PAGES）。
  *
  * 用法：node tools/miniapp-preview/serve.mjs [--port 5180]
  * 边界：视觉近似，无交互/wxs/真实数据，真机验证仍走微信开发者工具。
@@ -12,6 +13,9 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = __dirname
@@ -89,6 +93,8 @@ const PAGE_WXSS = {
   'address-edit-local': 'pages/address/edit.wxss',
   about: 'pages/about/index.wxss',
   legal: 'pages/legal/index.wxss',
+  // 用户协议与隐私政策是同一个页面（type 参数区分），共用一份 wxss
+  'legal-agreement': 'pages/legal/index.wxss',
   'local-index': 'pages/local/index.wxss',
   'local-confirm': 'pages/local/confirm.wxss',
   'member-index': 'pages/member/index.wxss',
@@ -96,6 +102,69 @@ const PAGE_WXSS = {
   'member-coupons': 'pages/member/coupons.wxss',
   'member-claim': 'pages/member/claim.wxss',
   'member-points-log': 'pages/member/points-log.wxss',
+}
+
+// ===== 协议/隐私政策：唯一从真实配置生成正文的两个镜像 =====
+//
+// 其余镜像的正文是手抄的 mock 数据，抄旧了顶多是"预览里的价格不对"；这两页不一样，
+// 正文本身就是要审的东西——店主/开发在浏览器里通读合规文案只有这一处。手抄必然过期：
+// 2026-09-06 把隐私政策第一节补到 9 条、日期改到当天，镜像还停在 3 条 / 2026-09-02，
+// 看上去像"政策没改"。微信审核最不该被误导的就是这一页，所以这两页不落静态文件，
+// 请求时现读 apps/miniapp/config/legal.js 渲染，结构照抄 pages/legal/index.wxml
+// （text → span，class 名保持一致，样式仍走 legal.generated.css）。
+const LEGAL_CONFIG = path.join(MINIAPP, 'config', 'legal.js')
+const SHOP_CONFIG = path.join(MINIAPP, 'config', 'shop.js')
+
+// 镜像 key → legal.js 导出的文档 key
+const LEGAL_PAGES = {
+  legal: 'privacy',
+  'legal-agreement': 'agreement',
+}
+
+function loadLegal() {
+  // legal.js 的主体信息取自 shop.js，两份缓存都要清，否则改店名不生效
+  for (const f of [LEGAL_CONFIG, SHOP_CONFIG]) {
+    try { delete require.cache[require.resolve(f)] } catch {}
+  }
+  return require(LEGAL_CONFIG)
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function legalShell(pageKey, inner) {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/${pageKey}.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page">
+${inner}
+  </div>
+</div>
+</body>
+</html>
+`
+}
+
+function renderLegalHtml(pageKey) {
+  const doc = loadLegal()[LEGAL_PAGES[pageKey]]
+  const lines = [
+    `<span class="legal-title">${esc(doc.title)}</span>`,
+    `<span class="legal-meta">更新日期：${esc(doc.updatedAt)}</span>`,
+    `<span class="legal-p legal-intro">${esc(doc.intro)}</span>`,
+  ]
+  for (const section of doc.sections) {
+    lines.push(`<span class="legal-h">${esc(section.heading)}</span>`)
+    for (const p of section.paragraphs) lines.push(`<span class="legal-p">${esc(p)}</span>`)
+  }
+  return legalShell(pageKey, '    <div class="card legal-card">\n      ' + lines.join('\n      ') + '\n    </div>')
 }
 
 let version = Date.now()
@@ -118,7 +187,9 @@ const watchDirs = [
 ]
 let debounce
 function onChange(_e, file) {
-  if (file && !file.endsWith('.wxss')) return
+  // legal.js / shop.js：正文是现读的，重生成只为把 version 推上去让画廊自动刷新
+  const watched = !file || file.endsWith('.wxss') || /(^|[\\/])config[\\/](legal|shop)\.js$/.test(file)
+  if (!watched) return
   clearTimeout(debounce)
   debounce = setTimeout(regenerate, 120)
 }
@@ -158,6 +229,18 @@ const server = http.createServer((req, res) => {
   if (urlPath === '/__version') {
     res.writeHead(200, { 'Content-Type': 'text/plain' })
     return res.end(String(version))
+  }
+
+  // 协议/隐私政策：不读镜像文件，现读 config/legal.js 渲染
+  const legalKey = (/^\/pages\/(.+)\.html$/.exec(urlPath) || [])[1]
+  if (legalKey && Object.hasOwn(LEGAL_PAGES, legalKey)) {
+    res.writeHead(200, { 'Content-Type': MIME['.html'] })
+    try {
+      return res.end(renderLegalHtml(legalKey))
+    } catch (err) {
+      // legal.js 改坏时把错误显示出来，别让预览台整个挂掉
+      return res.end(legalShell(legalKey, `    <div class="card legal-card"><span class="legal-p">读取 apps/miniapp/config/legal.js 失败：${esc(err && err.message)}</span></div>`))
+    }
   }
 
   // tabBar 图标等静态资源：/assets/* → apps/miniapp/assets/*
