@@ -100,8 +100,15 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     })
 
     let cart
+    // 叠加超库存时按库存静默封顶（顾客已有 95 件、库存 100、再加 10 件 → 只加 5 件）。
+    // 之前响应只回 {id, channel}，前端两个加购入口拿到成功响应一律弹「已加入」，
+    // 顾客会以为按自己选的数量全加上了，实际只加了差额，只能到结算页逐行核对才发现。
+    // 这里把「最终数量」与「是否被封顶」一起回传，让前端能提示真实加购结果。
+    let capped = false
     if (existing) {
-      const newQty = Math.min(existing.quantity + quantity, availableStock)
+      const desiredQty = existing.quantity + quantity
+      const newQty = Math.min(desiredQty, availableStock)
+      capped = newQty < desiredQty
       cart = await prisma.cart.update({ where: { id: existing.id }, data: { quantity: newQty } })
     } else {
       cart = await prisma.cart.create({
@@ -109,7 +116,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       })
     }
 
-    success(res, { id: cart.id, channel: product.channel })
+    success(res, { id: cart.id, channel: product.channel, quantity: cart.quantity, capped })
   } catch (e) {
     next(e)
   }

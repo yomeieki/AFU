@@ -323,6 +323,17 @@ R=$(req GET /api/cart "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] 
 R=$(req GET "/api/cart?channel=LOCAL" "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] | length" <<<"$R")" == "1" ]] && ok "同城购物车含该行" || fail "同城购物车" "$R"
 assert_eq "同城购物车小计=2400" "$(jq -r .data.totalAmount <<<"$R")" "2400"
 
+echo "== 20b. 购物车叠加超库存：静默封顶要带 capped=true + 真实数量 =="
+# 之前 cart.ts 只按「本次增量」校验库存、按库存 Math.min 封顶后响应只回 {id, channel}，
+# 前端两个加购入口拿到成功响应一律弹「已加入」，顾客不知道实际只加了差额。
+# $LCID 这一行此刻已有 quantity=2；把库存钉到 5，再加 10 件 → 2+10=12 被封顶到 5。
+req PUT "/api/admin/products/$LPID" "$AT" '{"stock":5}' >/dev/null
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":10}")
+assert_eq "叠加超库存 code 0（服务端封顶而非报错）" "$(code "$R")" "0"
+assert_eq "封顶后 quantity=库存(5)" "$(jq -r .data.quantity <<<"$R")" "5"
+assert_eq "封顶标记 capped=true" "$(jq -r .data.capped <<<"$R")" "true"
+req PUT "/api/admin/products/$LPID" "$AT" '{"stock":50}' >/dev/null # 复位库存，避免影响后续分段
+
 echo "== 21. 同城设置/报价 =="
 # enabled 初值与 version 初值都是持久化状态，重复跑 e2e 时不为默认值：
 # 这里改成相对断言（记录旧 version，断言新 version = 旧值+1；enabled 断言保存开启后的值），
