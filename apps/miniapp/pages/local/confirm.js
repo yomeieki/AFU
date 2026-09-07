@@ -92,11 +92,19 @@ Page({
     if (app.globalData.selectedAddress) {
       this.setData({ address: app.globalData.selectedAddress })
       app.globalData.selectedAddress = null
+      // 同下面那条分支：换地址回来若报价因缺坐标早退，头条提示要靠最新的 meta 兜底
+      this.loadMeta()
       this.refreshQuote('address')
       return
     }
     // onLoad 后会紧跟一次 onShow；首次报价完成前不重复打 /local/quote。
-    if (this._quotedOnce) this.reloadAddressAndQuote()
+    if (this._quotedOnce) {
+      // meta（暂停/打烊/未开通）从不主动刷新的话，顾客从地址编辑页/后台切回来，
+      // 店铺状态变化（比如店主刚恢复接单）要等到下次报价成功才会体现——重新报价
+      // 前先刷一次 meta，让 self._metaNotice 跟上最新状态。
+      this.loadMeta()
+      this.reloadAddressAndQuote()
+    }
   },
 
   // 「去补充定位」走的是地址编辑页，保存后只 navigateBack、不写 globalData.selectedAddress，
@@ -130,9 +138,20 @@ Page({
   loadMeta: function() {
     var self = this
     getLocalMeta().then(function(meta) {
+      // meta 独立于 refreshQuote 拉取——refreshQuote 在缺地址/缺坐标/购物车为空三种
+      // 情况下会在发请求前直接 return（下面 refreshQuote 里的三个早退分支），永远不会
+      // 走到 getHeadNotice(quote) 那一步。若这里不单独算一次头条通知，顾客在这三种
+      // 状态下会看不到「同城已暂停/未开通/已打烊」，只看到「缺地址/缺定位」之类的
+      // 引导性文案，误以为补完资料就能下单，白跑一趟地图选点/换地址流程。
+      // 这里只记结论（self._metaNotice），真正写 headNotice/headBlocking 的只有两处：
+      // refreshQuote 的三个早退分支（缺地址/缺坐标/购物车为空）会读它兜底；报价成功
+      // 之后头条一律以报价结果为准（见下面 refreshQuote 的 .then），不会被这里写死——
+      // 否则店铺恢复营业/报价成功后，这条提示会一直钉在顶部，直到离开本页才消失。
+      var notice = getHeadNotice(meta)
+      self._metaNotice = notice
       self.setData({ meta: meta })
     }).catch(function() {
-      // 报价结果才是确认页的最终状态；meta 仅为报价前的店头信息兜底。
+      // 报价结果才是确认页的最终状态；meta 仅为报价前的店头信息兜底，拉取失败不影响主流程。
     })
   },
 
@@ -161,16 +180,31 @@ Page({
       clearTimeout(this._quoteTimer)
       this._quoteTimer = null
     }
+    // 这三条早退分支在拿到报价前就 return，永远走不到下面 .then 里用报价结果算头条
+    // 通知的那一步——头条只能靠 loadMeta 记下的结论（self._metaNotice）兜底，且只在
+    // 它判定为阻塞（暂停/未开通/打烊）时才显示，不阻塞就不覆盖，留空。
     if (!address) {
-      this.setData({ quoting: false, quoteToken: null, quoteError: '', blockReason: '请选择收货地址' })
+      this.setData({
+        quoting: false, quoteToken: null, quoteError: '', blockReason: '请选择收货地址',
+        headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
+        headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
+      })
       return
     }
     if (address.latE6 == null || address.lngE6 == null) {
-      this.setData({ quoting: false, quoteToken: null, quoteError: '', blockReason: '该地址缺少定位，请补充后再下单' })
+      this.setData({
+        quoting: false, quoteToken: null, quoteError: '', blockReason: '该地址缺少定位，请补充后再下单',
+        headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
+        headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
+      })
       return
     }
     if (!this.data.items.length) {
-      this.setData({ quoting: false, quoteToken: null, quoteError: '', blockReason: '请先选择同城商品' })
+      this.setData({
+        quoting: false, quoteToken: null, quoteError: '', blockReason: '请先选择同城商品',
+        headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
+        headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
+      })
       return
     }
     this.setData({ quoting: true, quoteToken: null, quoteError: '' })
@@ -179,6 +213,13 @@ Page({
         if (seq !== self._quoteSeq) return
         var quote = decorateQuote(rawQuote)
         var notice = getHeadNotice(quote)
+        // 报价成功即拿到了最新状态，头条一律以这次报价结果为准——不再让 loadMeta
+        // 记下的旧结论（self._metaNotice）盖过它。之前反过来「meta 阻塞就优先」会把
+        // 头条粘死：店铺恢复营业/报价成功、按钮已能提交，顶部仍钉着「暂停接单」，
+        // 因为 meta 只在 onLoad 拉一次、之后再没人把 self._metaNotice 清掉。
+        // 报价结果比 meta 新（提交前必然会重新报价），这里清空它，避免留着一个陈旧
+        // 的结论去污染后面几条早退分支（缺地址/缺坐标/购物车为空）的兜底判断。
+        self._metaNotice = null
         var patch = {
           quoting: false,
           quote: quote,
@@ -363,6 +404,9 @@ Page({
   },
 
   onRetryQuote: function() {
+    // 同 onShow：重新报价前先刷一次 meta，避免顾客点「重试」时头条通知还停在
+    // 上一次 loadMeta 拉到的旧结论上。
+    this.loadMeta()
     this.refreshQuote('retry')
   },
 
