@@ -1,0 +1,73 @@
+.store-head {
+  background: var(--card, #fff);
+  padding: 24rpx 24rpx 20rpx;
+}
+.store-head-compact { padding-bottom: 14rpx; }
+
+/* Spec §4.1 的三条排版铁律，改这里之前先读组件 js 的文件头：
+   ① 整行左对齐——原来的 space-between 会把胶囊推到远处；
+   ② 店名可收缩、可省略（flex: 0 1 auto + min-width: 0，缺一不可，
+      没有 min-width:0 的 flex 子项不会收缩到内容以下，省略号永远不出现）；
+   ③ 胶囊不可收缩、不换行、按内容自适应——它被压扁时绿色底会跟着文字一起截断。 */
+.store-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12rpx;
+}
+.store-name-wrap {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 10rpx;
+}
+.store-icon { width: 36rpx; height: 36rpx; flex-shrink: 0; }
+.store-name {
+  font-size: 34rpx;
+  font-weight: 600;
+  color: var(--text-1, #1a1a1a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  box-sizing: border-box;
+  font-size: 22rpx;
+  line-height: 1;
+  padding: 7rpx 14rpx;
+  border-radius: 999rpx;
+}
+.status-pill-open { color: var(--success, #16a34a); background: var(--success-bg, #f0fdf4); }
+.status-pill-paused { color: var(--warning, #ff9500); background: var(--warning-bg, #fff7e8); }
+.status-pill-closed { color: var(--gray, #9ca3af); background: var(--gray-bg, #f3f4f6); }
+
+.delivery-rules {
+  display: block;
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: var(--text-2, #666);
+  line-height: 1.5;
+}
+.head-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  margin-top: 16rpx;
+  padding: 14rpx 18rpx;
+  background: var(--warning-bg, #fff7e8);
+  border-radius: 10rpx;
+}
+.head-notice-text { font-size: 24rpx; color: #a15c00; line-height: 1.45; }
+.head-notice-action {
+  flex-shrink: 0;
+  font-size: 24rpx;
+  color: var(--brand, #e5441e);
+  white-space: nowrap;
+  text-decoration: underline;
+}

@@ -1,0 +1,19 @@
+<view class="store-head {{compact ? 'store-head-compact' : ''}}">
+  <!-- 第一行只有三样东西：图标、店名、状态胶囊。原来这里还有个「我的订单 ›」，
+       改版后订单统一从底部「我的」进（Spec §4.1）。 -->
+  <view class="store-title-row">
+    <view class="store-name-wrap">
+      <view class="icon icon-shop store-icon"></view>
+      <text class="store-name">{{meta.store.name || '同城配送'}}</text>
+    </view>
+    <text class="status-pill status-pill-{{tone}}">{{label}}</text>
+  </view>
+
+  <block wx:if="{{!compact}}">
+    <text wx:if="{{rulesText}}" class="delivery-rules">{{rulesText}}</text>
+    <view wx:if="{{notice}}" class="head-notice">
+      <text class="head-notice-text">{{notice}}</text>
+      <view class="head-notice-action" bindtap="onGoExpress">去全国邮寄</view>
+    </view>
+  </block>
+</view>

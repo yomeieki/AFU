@@ -1,5 +1,5 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
-<view class="page">
+<view class="page {{channel === 'LOCAL' ? 'page-local' : ''}}">
 
   <!-- 自绘导航栏。本页是 tabBar 页，微信不会给它原生返回箭头，
        只有改 navigationStyle:custom 自己画，才能把返回键放到与同城页
@@ -11,13 +11,19 @@
         <view class="navbar-back-icon"></view>
       </view>
       <text class="navbar-title">阿福凉菜</text>
+      <!-- 两个渠道共用同一套四栏导航，顾客很容易忘了自己在哪一边。
+           这颗标识就说这一件事；点它回封面重选，与左侧返回箭头同一个去处。 -->
+      <text class="navbar-channel" hover-class="navbar-channel-hover" hover-stay-time="60" bindtap="goCover">{{channelLabel}}</text>
     </view>
   </view>
   <view style="height:{{navTotal}}px"></view>
 
-  <!-- Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
+  <!-- 同城：门店头（营业状态 / 配送规则 / 阻塞通知）取代 Banner 的位置 -->
+  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" bind:goexpress="onGoExpress" />
+
+  <!-- 邮寄 Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
   <swiper
-    wx:if="{{banners.length > 0}}"
+    wx:elif="{{banners.length > 0}}"
     class="banner-swiper"
     autoplay
     circular
@@ -36,7 +42,7 @@
       />
     </swiper-item>
   </swiper>
-  <view wx:else class="banner">
+  <view wx:elif="{{channel === 'EXPRESS'}}" class="banner">
     <view class="banner-deco banner-deco-1"></view>
     <view class="banner-deco banner-deco-2"></view>
     <view class="banner-deco banner-deco-3"></view>
@@ -49,7 +55,7 @@
   <!-- Categories -->
   <view class="section" wx:if="{{categories.length > 0}}">
     <view class="section-header">
-      <text class="section-title">商品分类</text>
+      <text class="section-title">{{channel === 'LOCAL' ? '同城分类' : '商品分类'}}</text>
       <text class="section-more" bindtap="goToAllProducts">全部 <text class="section-more-arrow icon icon-arrow"></text></text>
     </view>
     <scroll-view scroll-x class="category-scroll" enhanced="{{true}}" show-scrollbar="{{false}}">
@@ -82,7 +88,7 @@
   <!-- Recommended Products -->
   <view class="section">
     <view class="section-header">
-      <text class="section-title">推荐商品</text>
+      <text class="section-title">{{channel === 'LOCAL' ? '今日现拌' : '推荐商品'}}</text>
     </view>
 
     <!-- 骨架屏 -->
@@ -96,7 +102,8 @@
       </view>
     </view>
 
-    <empty-state wx:elif="{{products.length === 0}}" type="product" text="暂无商品" />
+    <empty-state wx:elif="{{products.length === 0}}" type="product"
+      text="{{channel === 'LOCAL' ? '同城菜单还在准备中' : '暂无商品'}}" />
 
     <view wx:else class="product-grid">
       <view
@@ -127,7 +134,15 @@
               <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
               <text wx:if="{{item.hasSkus}}" class="price-from">起</text>
             </view>
-            <text wx:if="{{item.salesCount > 0}}" class="product-sales">已售{{item.salesCount}}</text>
+            <text wx:if="{{item.salesCount > 0 && channel !== 'LOCAL'}}" class="product-sales">已售{{item.salesCount}}</text>
+            <!-- catchtap 而不是 bindtap：不 catch 的话会冒泡到整张卡的 goToDetail，
+                 顾客按一下加购、页面却跳进了详情页。 -->
+            <view
+              wx:if="{{channel === 'LOCAL'}}"
+              class="add-btn {{item.stock <= 0 ? 'add-btn-disabled' : ''}}"
+              catchtap="onAddToCart"
+              data-id="{{item.id}}"
+            >+</view>
           </view>
         </view>
       </view>
@@ -135,5 +150,17 @@
   </view>
 
 </view>
+
+<!-- 同城购物车条。fixed 在 tabBar 之上（tabBar 是画在 WebView 之外的原生组件，
+     可视区本来就不含它），车空时组件自己不渲染、不占位。 -->
+<local-cart-bar
+  wx:if="{{channel === 'LOCAL'}}"
+  id="local-cart-bar"
+  meta="{{meta}}"
+  blocking="{{headBlocking}}"
+  bind:change="onCartChange"
+/>
+
+<local-sku-picker wx:if="{{channel === 'LOCAL'}}" id="local-sku-picker" bind:added="onAdded" />
 
 <privacy-popup id="privacy-popup" />

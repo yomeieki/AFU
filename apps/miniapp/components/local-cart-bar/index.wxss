@@ -1,0 +1,129 @@
+/* 同城购物车条。样式沿用改版前 pages/local/index.wxss 的那一套（深色条 + 白字 + 品牌色角标），
+   顾客已经认得这个形状，改版不动它。 */
+
+/* 展开的明细面板。bottom 要让开合计条自身的高度（内容 112rpx + 安全区），
+   否则面板底部会被合计条压住最后一行。 */
+.cart-detail {
+  position: fixed;
+  z-index: 80;
+  left: 0;
+  right: 0;
+  bottom: calc(112rpx + env(safe-area-inset-bottom));
+  max-height: 56vh;
+  padding: 22rpx 24rpx 12rpx;
+  background: var(--card);
+  border-radius: 24rpx 24rpx 0 0;
+  box-shadow: 0 -8rpx 30rpx rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+}
+.cart-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 16rpx;
+  border-bottom: 1rpx solid var(--divider);
+}
+.cart-detail-title { font-size: 30rpx; font-weight: 600; }
+.cart-detail-close,
+.cart-delete { color: var(--text-3); font-size: 24rpx; }
+.cart-detail-list { max-height: 42vh; }
+.cart-item {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 0;
+  gap: 16rpx;
+  border-bottom: 1rpx solid var(--divider);
+}
+.cart-img-wrap {
+  width: 84rpx;
+  height: 84rpx;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+.cart-img { width: 100%; height: 100%; }
+.cart-item-info { flex: 1; min-width: 0; }
+.cart-item-name {
+  display: block;
+  font-size: 26rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cart-item-spec,
+.cart-item-price {
+  display: block;
+  margin-top: 6rpx;
+  color: var(--text-3);
+  font-size: 22rpx;
+}
+.cart-item-price { color: var(--brand); }
+.cart-item-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8rpx;
+  flex-shrink: 0;
+}
+.cart-delete { padding: 4rpx; }
+.stepper { display: flex; align-items: center; gap: 4rpx; }
+.stepper-btn {
+  width: 44rpx;
+  height: 44rpx;
+  border-radius: var(--radius-sm);
+  background: var(--divider);
+  color: var(--text-1);
+  font-size: 26rpx;
+  line-height: 44rpx;
+  text-align: center;
+}
+.stepper-btn.disabled { color: var(--text-disabled); }
+.stepper-num { min-width: 52rpx; text-align: center; font-size: 26rpx; }
+
+/* 合计条。**bottom: 0，不给 tabBar 留偏移**——tabBar 是画在 WebView 之外的原生组件，
+   tabBar 页的可视区本来就不含它，这里已经落在 tabBar 之上；再加偏移只会留出一条缝。
+   同 pages/cart/index.wxss 的 .bottom-bar。 */
+.local-cart-bar {
+  position: fixed;
+  z-index: 90;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14rpx 24rpx;
+  padding-bottom: calc(14rpx + env(safe-area-inset-bottom));
+  background: #2b2b2b;
+  box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.12);
+}
+.cart-summary { display: flex; align-items: center; min-width: 0; color: #fff; }
+.cart-badge {
+  min-width: 42rpx;
+  height: 42rpx;
+  padding: 0 5rpx;
+  margin-right: 14rpx;
+  border-radius: 999rpx;
+  background: var(--brand);
+  color: #fff;
+  font-size: 22rpx;
+  line-height: 42rpx;
+  text-align: center;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+.cart-summary-text { min-width: 0; }
+.cart-summary-title,
+.cart-summary-amount { display: block; line-height: 1.2; }
+.cart-summary-title { color: #e5e5e5; font-size: 22rpx; }
+.cart-summary-amount { margin-top: 4rpx; color: #fff; font-size: 32rpx; font-weight: 600; }
+.checkout-btn {
+  flex-shrink: 0;
+  min-width: 200rpx;
+  padding: 16rpx 32rpx;
+  border-radius: 999rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}

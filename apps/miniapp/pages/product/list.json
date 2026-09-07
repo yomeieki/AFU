@@ -1,6 +1,9 @@
 {
   "navigationBarTitleText": "分类",
   "usingComponents": {
-    "empty-state": "/components/empty-state/index"
+    "empty-state": "/components/empty-state/index",
+    "local-store-header": "/components/local-store-header/index",
+    "local-cart-bar": "/components/local-cart-bar/index",
+    "local-sku-picker": "/components/local-sku-picker/index"
   }
 }

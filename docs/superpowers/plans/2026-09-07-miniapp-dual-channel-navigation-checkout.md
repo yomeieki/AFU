@@ -422,7 +422,11 @@ git commit -m "feat(miniapp): share four-tab navigation across channels"
 
 ### Task 5: 整改同城主页、营业标志和分类选购
 
-**Files:**
+**Files:**（执行期多拆了两个组件，理由见下方 Step 3 附注）
+- Create: `apps/miniapp/utils/local-catalog.js` + `tests/miniapp/local-catalog.test.cjs`
+- Create: `apps/miniapp/components/local-cart-bar/*`（主页与分类页共用的购物车条）
+- Create: `apps/miniapp/components/local-sku-picker/*`（主页与分类页共用的加购流程）
+- Create: `tests/miniapp/channel-pages.test.cjs`
 - Create: `apps/miniapp/components/local-store-header/index.js`
 - Create: `apps/miniapp/components/local-store-header/index.json`
 - Create: `apps/miniapp/components/local-store-header/index.wxml`
@@ -441,7 +445,7 @@ git commit -m "feat(miniapp): share four-tab navigation across channels"
 - Consumes: `getShoppingChannel()`, `/categories?channel=…`, `/products?channel=…`, `/local/meta`, `addToCart`。
 - Produces: `<local-store-header meta head-notice>`；分类页 LOCAL 加购事件。
 
-- [ ] **Step 1: 写 catalog 查询失败测试**
+- [x] **Step 1: 写 catalog 查询失败测试**
 
 ```js
 assert.equal(buildProductsUrl({ channel: 'LOCAL', page: 2, pageSize: 20, categoryId: 7 }), '/products?channel=LOCAL&page=2&pageSize=20&categoryId=7')
@@ -452,11 +456,11 @@ Run: `node --test tests/miniapp/catalog.test.cjs`
 
 Expected: FAIL because `api/catalog.js` does not exist。
 
-- [ ] **Step 2: 实现显式渠道 catalog API 并通过测试**
+- [x] **Step 2: 实现显式渠道 catalog API 并通过测试**
 
 URL 参数用 `encodeURIComponent`，固定顺序为 `channel,page,pageSize,categoryId,keyword`，便于测试和日志比对。
 
-- [ ] **Step 3: 创建门店头组件并移除“我的订单”**
+- [x] **Step 3: 创建门店头组件并移除“我的订单”**
 
 组件第一行结构固定为：
 
@@ -469,15 +473,15 @@ URL 参数用 `encodeURIComponent`，固定顺序为 `channel,page,pageSize,cate
 
 样式使用 `justify-content:flex-start`；店名 `flex:0 1 auto; min-width:0`；胶囊 `display:inline-flex; flex-shrink:0; white-space:nowrap; box-sizing:border-box`。组件中不存在 `head-orders-link`。
 
-- [ ] **Step 4: 主页按渠道加载**
+- [x] **Step 4: 主页按渠道加载**
 
 EXPRESS 保留现有 Banner/推荐。LOCAL 请求 meta、LOCAL 分类和 LOCAL 推荐；暂停或打烊时仍显示商品，但加购和结算入口按业务状态禁用并提供“改用全国邮寄”。
 
-- [ ] **Step 5: 分类页按渠道加载与交互**
+- [x] **Step 5: 分类页按渠道加载与交互**
 
 两种渠道共用左分类/右商品骨架。EXPRESS 保留搜索和进入详情；LOCAL 使用 LOCAL 查询、显示圆形加购按钮，多规格先拉详情再弹 `sku-popup`，成功后刷新 LOCAL 购物车条和当前渠道角标。
 
-- [ ] **Step 6: LOCAL 购物车条避让 tabBar**
+- [x] **Step 6: LOCAL 购物车条避让 tabBar**
 
 有货时显示在 tabBar 上方。**用 `position: fixed; bottom: 0`，不要为 tabBar 留任何偏移**——
 微信 tabBar 是画在 WebView 之外的原生组件，tabBar 页的可视区本来就不含它，`bottom:0`
@@ -485,11 +489,11 @@ EXPRESS 保留现有 Banner/推荐。LOCAL 请求 meta、LOCAL 分类和 LOCAL �
 `padding-bottom: calc(14rpx + env(safe-area-inset-bottom))` 照抄仓库既有写法
 （`pages/cart/index.wxss:133-143`，那已经是一个 tabBar 页的固定栏）。无货时完全不占位。
 
-- [ ] **Step 7: 视觉验收**
+- [x] **Step 7: 视觉验收**
 
 在开发者工具切换 iPhone SE、iPhone 15 Pro Max：长门店名不挤掉“营业中”；绿色胶囊没有横向溢出；四个 tab 均可点击；购物车条不遮 tabBar。
 
-- [ ] **Step 8: 自动检查**
+- [x] **Step 8: 自动检查**
 
 Run: `node --test tests/miniapp/catalog.test.cjs tests/miniapp/navigation.test.cjs`
 
@@ -499,7 +503,7 @@ Run: `node scripts/check-miniapp-es5.mjs apps/miniapp/api/catalog.js apps/miniap
 
 Expected: PASS。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add apps/miniapp/api/catalog.js apps/miniapp/components/local-store-header apps/miniapp/pages/index apps/miniapp/pages/product/list tests/miniapp/catalog.test.cjs

@@ -1,0 +1,1 @@
+<sku-popup show="{{show}}" product="{{product}}" mode="cart" bind:close="onClose" bind:confirm="onConfirm" />

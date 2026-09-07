@@ -1,0 +1,44 @@
+<wxs src="../../utils/price.wxs" module="pricefmt" />
+
+<!-- 展开的明细面板。压在合计条之上，车空时整块不渲染。 -->
+<view wx:if="{{expanded && items.length > 0}}" class="cart-detail">
+  <view class="cart-detail-head">
+    <text class="cart-detail-title">同城购物车</text>
+    <text class="cart-detail-close" bindtap="toggle">收起</text>
+  </view>
+  <scroll-view class="cart-detail-list" scroll-y>
+    <view wx:for="{{items}}" wx:key="id" class="cart-item">
+      <view class="cart-img-wrap">
+        <image wx:if="{{item.productImage}}" class="cart-img" src="{{item.productImage}}" mode="aspectFill" />
+        <view wx:else class="cart-img img-placeholder"></view>
+      </view>
+      <view class="cart-item-info">
+        <text class="cart-item-name">{{item.productName}}</text>
+        <text wx:if="{{item.specText}}" class="cart-item-spec">{{item.specText}}</text>
+        <text class="cart-item-price">¥{{pricefmt.fen(item.price)}}</text>
+      </view>
+      <view class="cart-item-actions">
+        <view class="stepper">
+          <view class="stepper-btn {{item.quantity <= 1 ? 'disabled' : ''}}" bindtap="onDecrease" data-id="{{item.id}}">−</view>
+          <text class="stepper-num">{{item.quantity}}</text>
+          <view class="stepper-btn" bindtap="onIncrease" data-id="{{item.id}}">+</view>
+        </view>
+        <view class="cart-delete" bindtap="onDelete" data-id="{{item.id}}">删除</view>
+      </view>
+    </view>
+  </scroll-view>
+</view>
+
+<!-- 合计条。bottom:0 —— tabBar 是画在 WebView 之外的原生组件，tabBar 页的可视区
+     本来就不含它，这里已经落在 tabBar 之上；再加偏移只会在两者之间留出一条缝。
+     写法与 pages/cart/index.wxss 的 .bottom-bar 一致。 -->
+<view wx:if="{{count > 0}}" class="local-cart-bar" bindtap="toggle">
+  <view class="cart-summary">
+    <view class="cart-badge">{{count}}</view>
+    <view class="cart-summary-text">
+      <text class="cart-summary-title">共 {{count}} 件 · 券前小计</text>
+      <text class="cart-summary-amount">¥{{pricefmt.fen(amount)}}</text>
+    </view>
+  </view>
+  <view class="checkout-btn {{disabled ? 'btn-disabled' : 'btn-primary'}}" catchtap="goCheckout">{{actionText}}</view>
+</view>

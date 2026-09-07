@@ -1,8 +1,12 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
-<view class="page">
+<view class="page {{channel === 'LOCAL' ? 'page-local' : ''}}">
 
-  <!-- Search bar -->
-  <view class="search-bar">
+  <!-- 同城：紧凑门店头（只留店名 + 营业状态）。配送规则与阻塞通知在主页给过，
+       这一页寸土寸金，右侧商品列表要尽量高。 -->
+  <local-store-header wx:if="{{channel === 'LOCAL'}}" compact="{{true}}" meta="{{meta}}" bind:goexpress="onGoExpress" />
+
+  <!-- 邮寄：搜索框。同城菜单只有几十件、左侧分类一眼看完，不需要搜索。 -->
+  <view wx:else class="search-bar">
     <view class="search-input-wrap">
       <text class="search-icon">🔍</text>
       <input
@@ -59,7 +63,7 @@
       <empty-state
         wx:if="{{list.length === 0 && !loading}}"
         type="product"
-        text="{{searchKeyword ? '没有找到相关商品' : '该分类暂无商品'}}"
+        text="{{searchKeyword ? '没有找到相关商品' : (channel === 'LOCAL' && categories.length <= 1 ? '同城菜单还在准备中' : '该分类暂无商品')}}"
       />
 
       <view class="product-list">
@@ -94,6 +98,14 @@
               <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
               <text wx:if="{{item.hasSkus}}" class="product-row-price-from">起</text>
               <text class="product-row-unit">/ {{item.unit}}</text>
+              <!-- catchtap 而不是 bindtap：不 catch 的话点击会冒泡到整行的 goToDetail，
+                   顾客按一下加购、页面却跳进了详情页。 -->
+              <view
+                wx:if="{{channel === 'LOCAL'}}"
+                class="add-btn {{item.stock <= 0 ? 'add-btn-disabled' : ''}}"
+                catchtap="onAddToCart"
+                data-id="{{item.id}}"
+              >+</view>
             </view>
           </view>
         </view>
@@ -109,4 +121,15 @@
     </scroll-view>
 
   </view>
+
+  <local-sku-picker wx:if="{{channel === 'LOCAL'}}" id="local-sku-picker" bind:added="onAdded" />
 </view>
+
+<!-- 同城购物车条。fixed 在原生 tabBar 之上，车空时组件自己不渲染、不占位。 -->
+<local-cart-bar
+  wx:if="{{channel === 'LOCAL'}}"
+  id="local-cart-bar"
+  meta="{{meta}}"
+  blocking="{{headBlocking}}"
+  bind:change="onCartChange"
+/>

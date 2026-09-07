@@ -1,5 +1,13 @@
-const { request } = require('../../utils/request')
+// 分类页（tabBar[1]）。同城与邮寄共用左分类 / 右商品这一套骨架，差别只有两处：
+//   EXPRESS：顶部搜索框；点商品进详情页
+//   LOCAL  ：顶部紧凑门店头；点圆形「+」直接加购 + 底部购物车条
+//
+// 加购流程与主页共用 components/local-sku-picker，本页只负责找到那件商品并把它交出去。
+
 const { formatPrice, formatStock } = require('../../utils/format')
+const catalogApi = require('../../api/catalog')
+const { getLocalMeta } = require('../../api/local')
+const { headNoticeOf } = require('../../utils/local-catalog')
 const app = getApp()
 
 // 左侧分类栏首项：「全部」（id 为 null → 请求时不带 categoryId）
@@ -7,7 +15,11 @@ var ALL_CATEGORY = { id: null, name: '全部', iconUrl: '' }
 
 Page({
   data: {
-    // 搜索
+    channel: 'EXPRESS',
+    // 同城专用
+    meta: null,
+    headBlocking: false,
+    // 搜索（仅邮寄）
     keyword: '',          // 输入框实时值
     searchKeyword: '',    // 已确认的搜索词（非空 = 搜索模式，右侧展示跨分类结果）
     // 分类
@@ -25,12 +37,19 @@ Page({
   },
 
   onLoad() {
-    this.loadCategories()
-    this.loadProducts(true)
+    this.reloadForChannel()
   },
 
-  // 每次切到本 tab 都会触发：消费主页通过 globalData 传来的分类意图
+  // 每次切到本 tab 都会触发。渠道变了就整页重来；否则只消费主页传来的分类意图。
   onShow() {
+    if (app.getShoppingChannel() !== this.data.channel) {
+      this.reloadForChannel()
+      return
+    }
+    if (this.data.channel === 'LOCAL') {
+      this.loadMeta()
+      this.refreshCartBar()
+    }
     var g = app.globalData
     if (g.pendingCategoryAll === true) {
       g.pendingCategoryAll = false
@@ -47,9 +66,44 @@ Page({
     }
   },
 
+  // 切渠道时把分类、商品、搜索词、分页全部归零。
+  // 不归零的话，新渠道的第一屏会先闪出上一个渠道的商品，而且 activeCategoryId
+  // 可能指向一个当前渠道根本没有的分类，右侧会一直空着且看不出原因。
+  reloadForChannel() {
+    var channel = app.getShoppingChannel()
+    this.setData({
+      channel: channel,
+      categories: [ALL_CATEGORY],
+      activeCategoryId: null,
+      keyword: '',
+      searchKeyword: '',
+      list: [],
+      page: 1,
+      total: 0,
+      hasMore: true,
+      meta: channel === 'LOCAL' ? this.data.meta : null,
+      headBlocking: false,
+    })
+    this.resetRightScroll()
+    this.loadCategories()
+    this.loadProducts(true)
+    if (channel === 'LOCAL') this.loadMeta()
+  },
+
+  loadMeta() {
+    var self = this
+    getLocalMeta()
+      .then(function(meta) {
+        self.setData({ meta: meta, headBlocking: headNoticeOf(meta).blocking })
+      })
+      .catch(function() {
+        // 保留上一次的 meta：拉不到状态时，把营业中的店显示成打烊比不刷新更糟
+      })
+  },
+
   loadCategories() {
     var self = this
-    request({ url: '/categories' })
+    catalogApi.getCategories(this.data.channel)
       .then(function(data) {
         var cats = (data || []).map(function(c) {
           return { id: c.id, name: c.name, iconUrl: c.iconUrl || '' }
@@ -95,18 +149,18 @@ Page({
 
     var page = reset ? 1 : this.data.page
     var self = this
-    // 记录本次请求对应的筛选条件，响应回来时若条件已变则丢弃（防止快速切换分类时串数据）
+    // 记录本次请求对应的筛选条件，响应回来时若条件已变则丢弃（防止快速切换分类时串数据）。
+    // 渠道也进这把钥匙：切渠道那一刻可能还有一个在途请求，它带回来的是**另一个渠道的货**。
     var reqKey = this.buildQueryKey()
     this.setData({ loading: true })
 
-    var url = '/products?page=' + page + '&pageSize=' + this.data.pageSize
-    if (this.data.searchKeyword) {
-      url += '&keyword=' + encodeURIComponent(this.data.searchKeyword)
-    } else if (this.data.activeCategoryId != null) {
-      url += '&categoryId=' + this.data.activeCategoryId
-    }
-
-    request({ url: url })
+    catalogApi.getProducts({
+      channel: this.data.channel,
+      page: page,
+      pageSize: this.data.pageSize,
+      categoryId: this.data.activeCategoryId,
+      keyword: this.data.searchKeyword,
+    })
       .then(function(data) {
         if (self.buildQueryKey() !== reqKey) {
           // 条件已变化：本次结果作废，让新条件的请求重新发起
@@ -137,9 +191,10 @@ Page({
   },
 
   buildQueryKey() {
-    return this.data.searchKeyword
+    var base = this.data.channel + '|'
+    return base + (this.data.searchKeyword
       ? 'k:' + this.data.searchKeyword
-      : 'c:' + (this.data.activeCategoryId == null ? '' : this.data.activeCategoryId)
+      : 'c:' + (this.data.activeCategoryId == null ? '' : this.data.activeCategoryId))
   },
 
   onScrollToLower() {
@@ -186,5 +241,37 @@ Page({
   goToDetail(e) {
     var id = e.currentTarget.dataset.id
     wx.navigateTo({ url: '/pages/product/detail?id=' + id })
+  },
+
+  // 同城「+」：整条加购流程（拉详情 → 弹规格 → 加购 → 提示）在
+  // components/local-sku-picker 里，主页与本页共用同一份。
+  onAddToCart(e) {
+    var id = e.currentTarget.dataset.id
+    var product = null
+    for (var i = 0; i < this.data.list.length; i++) {
+      if (this.data.list[i].id === id) { product = this.data.list[i]; break }
+    }
+    var picker = this.selectComponent('#local-sku-picker')
+    if (product && picker) picker.open(product)
+  },
+
+  // 加购成功（含「加错了渠道」那一支）：刷购物车条与角标
+  onAdded() {
+    this.refreshCartBar()
+    app.updateCartCount()
+  },
+
+  refreshCartBar() {
+    var bar = this.selectComponent('#local-cart-bar')
+    if (bar) bar.refresh()
+  },
+
+  onCartChange() {
+    app.updateCartCount()
+  },
+
+  onGoExpress() {
+    app.setShoppingChannel('EXPRESS')
+    this.reloadForChannel()
   },
 })

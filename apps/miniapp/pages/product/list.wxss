@@ -235,3 +235,29 @@
   font-size: 24rpx;
   color: var(--text-disabled);
 }
+
+/* ── 同城快速加购 ─────────────────────────────────────────
+   「+」推到行尾：margin-left:auto 而不是给价格区加 flex:1——
+   价格区是 flex-wrap:wrap 的，给它 flex:1 会在窄屏上把「/ 份」挤到第二行。
+   align-self:center：这一行是 align-items:baseline（为了让 ¥ 与整数对齐基线），
+   圆按钮跟着基线走会偏低半个身位。 */
+.add-btn {
+  margin-left: auto;
+  align-self: center;
+  flex-shrink: 0;
+  width: 48rpx;
+  height: 48rpx;
+  border-radius: 999rpx;
+  background: var(--brand-gradient, #e5441e);
+  color: #fff;
+  font-size: 32rpx;
+  line-height: 48rpx;
+  text-align: center;
+}
+.add-btn-disabled { background: var(--text-disabled, #c8c9cc); }
+
+/* 同城下底部有购物车条（内容 112rpx + 安全区）。这一页右侧是 scroll-view，
+   给 .page 加 padding 没用——要让出空位的是那个滚动容器的内容底部。 */
+.page-local .prod-panel {
+  padding-bottom: calc(132rpx + env(safe-area-inset-bottom));
+}

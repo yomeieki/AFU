@@ -284,3 +284,43 @@
   font-size: 32rpx;
   font-weight: 500;
 }
+
+/* ── 双渠道 ─────────────────────────────────────────────
+   渠道标识。绝对定位到右侧而不是塞进 flex 流：标题是 justify-content:center 居中的，
+   把标识排进同一条流会把标题挤偏，两个渠道下偏移量还不一样（「同城配送」比「全国邮寄」宽）。 */
+.navbar-channel {
+  position: absolute;
+  right: 24rpx;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6rpx 16rpx;
+  border-radius: 999rpx;
+  background: var(--brand-bg, #fef4f0);
+  color: var(--brand, #e5441e);
+  font-size: 22rpx;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.navbar-channel-hover { background: var(--brand-bg-deep, #fde5dc); }
+
+/* 同城下底部有购物车条（内容 112rpx + 安全区），页面要留出等高的空位，
+   否则最后一行商品会被压在条底下点不到。邮寄渠道没有这条，不占位。 */
+.page-local {
+  padding-bottom: calc(132rpx + env(safe-area-inset-bottom));
+}
+
+/* 同城商品卡的快速加购按钮。卡片底行原本是「价格 + 已售」，同城下换成「价格 + ＋」——
+   已售数字对现拌凉菜意义不大，而加购按钮必须够大够好点（44pt 下限）。 */
+.add-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 48rpx;
+  height: 48rpx;
+  border-radius: 999rpx;
+  background: var(--brand-gradient, #e5441e);
+  color: #fff;
+  font-size: 32rpx;
+  line-height: 48rpx;
+  text-align: center;
+}
+.add-btn-disabled { background: var(--text-disabled, #c8c9cc); }

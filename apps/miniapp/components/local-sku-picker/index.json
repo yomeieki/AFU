@@ -1,0 +1,6 @@
+{
+  "component": true,
+  "usingComponents": {
+    "sku-popup": "/components/sku-popup/index"
+  }
+}
