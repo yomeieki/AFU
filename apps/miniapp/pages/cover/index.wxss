@@ -8,7 +8,7 @@
       而渲染器会把边框按设备像素取整，padding box 原点因此漂移 0.2~0.25rpx。
       所以所有内框都与外框**平级**，用绝对设计坐标定位，不嵌套。
    2. .hot 自带 z-index，让热区成为独立堆叠上下文；否则冷链内部 1~5 的层级
-      会窜到页面根层级，盖住「我的订单」等本该更高的元素。
+      会窜到页面根层级，盖住页面上本该更高的元素。
 
    底色写死 #F1E9DA（背景原图顶部 60px 均值）：冷启动时先画 page 背景再渲染，
    同色才不会闪一下灰白。 */
@@ -165,32 +165,4 @@ page {
   .hot-hover .cc-tag, .hot-hover .cc-tag-inner, .hot-hover .cc-tag-cha, .hot-hover .cc-tag-kan {
     transform: none;
   }
-}
-
-/* ── 「我的订单」常驻入口 ─────────────────────────────────
-   设计稿里没有这个入口，是 1c9de11 为解决「同城下单后找不到订单」加的，改版不能丢。
-   z-index 要高过热区（热区是 3）。44pt 可点下限：min-height 88rpx。 */
-.cover-orders {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(env(safe-area-inset-bottom) + 32rpx);
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 88rpx;
-  padding: 0 44rpx;
-  border-radius: 44rpx;
-  box-sizing: border-box;
-  border: 1.25rpx solid #9F7F50;
-  background: linear-gradient(180deg, rgba(255, 251, 239, .92), rgba(246, 236, 217, .86));
-  box-shadow: 0 2.5rpx 3.6rpx rgba(89, 66, 38, .14);
-}
-.cover-orders-hover { background: linear-gradient(180deg, rgba(255, 248, 230, .96), rgba(242, 229, 205, .90)); }
-.cover-orders-text {
-  color: #2B2118;
-  font-size: 28rpx;
-  letter-spacing: 1rpx;
-  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
 }
