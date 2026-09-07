@@ -92,6 +92,8 @@ Page({
     if (app.globalData.selectedAddress) {
       this.setData({ address: app.globalData.selectedAddress })
       app.globalData.selectedAddress = null
+      // 同下面那条分支：换地址回来若报价因缺坐标早退，头条提示要靠最新的 meta 兜底
+      this.loadMeta()
       this.refreshQuote('address')
       return
     }

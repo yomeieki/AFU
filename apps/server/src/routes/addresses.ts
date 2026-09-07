@@ -107,17 +107,13 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const textChanged = (['province', 'city', 'district', 'detail'] as const).some(
       (k) => data[k] !== undefined && data[k] !== exists[k]
     )
-    // 按值判定，不能只看请求体带没带这两个键：小程序端「重新选点」在坐标数值不变
-    // 时（比如就在原位置点确认）也会把 latE6/lngE6 原样带上——若只看「带了键就算
-    // provided」，staleCoordPatch 不会误触发，这条本就没问题；但反过来，旧版/异常
-    // 客户端可能把「没变的旧坐标」跟着文字改动一起回传，此时请求体带了键、值却和
-    // 库里一致，不代表顾客真的重新选过点。按值判断后，只有「请求体带了键 且 值与
-    // 库内不同」才算真的提供了新坐标，「带了键但值没变」不会被当成新坐标去豁免
-    // textChanged 触发的清空——不依赖、也不信任客户端对「坐标是否新鲜」的判断。
-    const coordChanged =
-      ('latE6' in data && data.latE6 !== exists.latE6) ||
-      ('lngE6' in data && data.lngE6 !== exists.lngE6)
-    const coordProvided = ('latE6' in data || 'lngE6' in data) && coordChanged
+    // 只看请求体带没带坐标键，**不能**按「值是否与库里不同」判定：小程序改了文字后会强制
+    // 顾客重新在地图上确认定位（edit.js onSave），而「就在原位置点确认」是最常见的动作，
+    // 回传的 latE6/lngE6 与库里完全相同——若按值判，这次合法的重新确认会被当成「没提供
+    // 坐标」，连同 textChanged 一起把坐标清空，顾客照着提示做了却仍拿到 42223。
+    // 代价是尚未更新的旧版小程序仍可能带着旧坐标改文字，这属于版本过渡期的已知缺口，
+    // 由新版客户端的「改文字必须重选点」闸门收口，服务端不为此牺牲正常路径。
+    const coordProvided = 'latE6' in data || 'lngE6' in data
     const staleCoordPatch =
       textChanged && !coordProvided ? { latE6: null, lngE6: null, poiName: null } : {}
 
