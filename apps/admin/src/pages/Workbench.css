@@ -215,6 +215,17 @@
 .wb__quote-head { display:flex; align-items:center; justify-content:space-between;
   color:var(--text-2); font-size:12px; margin-bottom:4px; }
 .wb__quote--stale .wb__quote-head { color:var(--warn); font-weight:600; }
+/* 报价行现在是可点的（PO 2026-09-07：店员要能改选运力）。做成按钮而不是给 div 挂 onClick——
+   键盘能 Tab 到、能回车按下，触屏上也有正确的点击区域。 */
+.wb__quote-row { display:flex; align-items:baseline; justify-content:space-between; gap:8px; width:100%;
+  padding:5px 6px; margin:1px 0; border:1px solid transparent; border-radius:6px;
+  background:transparent; color:var(--text-1); font:inherit; text-align:left; cursor:pointer; }
+.wb__quote-row:hover { background:var(--bg); }
+.wb__quote-row--on { border-color:var(--local); background:var(--local-soft); }
+/* 勾位常驻占宽：只在选中时才占位的话，勾一变整列文字就左右跳 */
+.wb__quote-tick { display:inline-block; width:14px; color:var(--local); font-weight:700; }
+.wb__quote-note { margin-top:6px; font-size:12px; color:var(--text-2); line-height:1.5; }
+.wb__quote-note--warn { color:var(--warn); font-weight:600; }
 .wb__redbar { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }
 .wb__opt { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line);

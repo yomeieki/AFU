@@ -269,13 +269,19 @@ export default function LocalSettings() {
             </select>
           </Field>
           */}
-          <Field label="呼叫方式" hint="并呼时每家各冻结一笔预扣，且最贵的常抢到（2026-09-06 首单实测多付 ¥7.09）">
+          <Field label="呼叫方式" hint="并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。最贵的通常是闪送（一对一专送），2026-09-06 首单并呼全部被它抢到，多付 ¥7.09">
             <select className={inputCls} value={s.callStrategy.mode}
-              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'ALL' } })}>
-              <option value="SOLO_LOWEST">只呼最低价那一家（推荐）</option>
+              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL' } })}>
+              <option value="CHEAPEST_N">并呼最便宜的几家（推荐）</option>
+              <option value="SOLO_LOWEST">只呼最低价那一家</option>
               <option value="ALL">并呼全部运力（旧行为）</option>
             </select>
           </Field>
+          {s.callStrategy.mode === 'CHEAPEST_N' && (
+            <Field label="并呼最便宜的几家" hint="按首单那组报价：1 家约冻 ¥16、3 家约冻 ¥52、7 家约冻 ¥75。家数越多抢单越快，但占用的余额也越多">
+              <input className={inputCls} type="number" min={1} max={7} value={s.callStrategy.cheapestN}
+                onChange={(e) => patch({ callStrategy: { ...s.callStrategy, cheapestN: Number(e.target.value) } })} /></Field>
+          )}
           <Field label="无人接单几分钟后改为并呼" hint="0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
             <input className={inputCls} type="number" min={0} max={30} value={s.callStrategy.escalateAfterMin}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, escalateAfterMin: Number(e.target.value) } })} /></Field>

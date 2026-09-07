@@ -185,6 +185,60 @@ assert_eq "ALL 模式呼设置里的全部运力" "$(jq -c '.data.delivery.calle
 assert_eq "ALL 模式策略标记为 ALL" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "ALL"
 assert_eq "ALL 模式 orderFees 每家一条" "$(jq -r '.data.delivery.orderFees | length' <<<"$R")" "$(jq -r 'length' <<<"$D50_ALLPROV")"
 
+echo "-- ⑦ 并呼最便宜 N 家（2026-09-07 起的默认策略）--"
+# 店主定的口径：最贵的通常是闪送（一对一专送），平时不该呼它；但只呼最低那一家又容易没人接。
+# 折中是并呼最便宜的 3 家。这一组守两件事：**挑的确实是最便宜那几家**（不是前 3 家、
+# 不是随便 3 家），以及**冻结笔数等于家数**（orderFees 每家一条，就是那笔余额账）。
+d50_put_settings '.callStrategy = {"mode":"CHEAPEST_N","cheapestN":3,"escalateAfterMin":3}'
+assert_eq "设置里落下 CHEAPEST_N" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.callStrategy.mode)" "CHEAPEST_N"
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+d50_queue_price
+D50_O7=$(mk_local_paid)
+req POST "/api/admin/local/orders/$D50_O7/accept" "$AT" >/dev/null
+sleep 0.5
+R=$(req POST "/api/admin/local/orders/$D50_O7/call" "$AT")
+assert_eq "CHEAPEST_N 呼叫 code 0" "$(code "$R")" "0"
+R=$(d50_dlv "$D50_O7")
+# 报价：达达 1623 < 顺丰 1738 < 蜂鸟 1815 < 闪送 2332。取最便宜三家 = 前三个，闪送必须被排除。
+assert_eq "呼的是最便宜三家（闪送出局）" \
+  "$(jq -c '.data.delivery.calledProviders | sort' <<<"$R")" \
+  '["dadatongcheng","fengniaotongcheng","shunfengtongcheng"]'
+assert_eq "策略标记为 CHEAPEST" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "CHEAPEST"
+assert_eq "冻结笔数 = 呼叫家数（orderFees 三条）" "$(jq -r '.data.delivery.orderFees | length' <<<"$R")" "3"
+[[ "$(jq -r '[.data.events[] | select(.source=="API")] | last | .statusDesc' <<<"$R")" == *"并呼最便宜 3 家"* ]] \
+  && ok "时间线写明并呼了几家与合计冻结" \
+  || fail "事件文案没写清并呼几家" "$(jq -r '[.data.events[] | select(.source=="API")] | last | .statusDesc' <<<"$R")"
+# 超时升级同样要覆盖 CHEAPEST——三家都不接和一家不接，该升级的理由一模一样
+d50_only "$(jq -r '.data.delivery.deliveryNo' <<<"$R")"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
+d50_queue_price
+sleep 1
+R=$(sched '{"escalateAfterMin":0.01}')
+assert_eq "CHEAPEST 单也会被自动升级" "$(jq -r '.data.localEscalate' <<<"$R")" "1"
+R=$(d50_dlv "$D50_O7")
+assert_eq "升级后策略变 ALL" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "ALL"
+
+echo "-- ⑧ 店员手选运力：覆盖策略，记为 MANUAL --"
+# 「除非来不及了或者要迟到了再选闪送」——这条路必须能走通，且要和策略呼叫在配送单上分得开。
+d50_put_settings '.callStrategy = {"mode":"CHEAPEST_N","cheapestN":3,"escalateAfterMin":0}'
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+d50_queue_price
+D50_O8=$(mk_local_paid)
+req POST "/api/admin/local/orders/$D50_O8/accept" "$AT" >/dev/null
+sleep 0.5
+R=$(req POST "/api/admin/local/orders/$D50_O8/call" "$AT" '{"providers":["shansongtongcheng"]}')
+assert_eq "指定闪送 呼叫 code 0" "$(code "$R")" "0"
+R=$(d50_dlv "$D50_O8")
+assert_eq "只呼了店员指定的闪送" "$(jq -c '.data.delivery.calledProviders' <<<"$R")" '["shansongtongcheng"]'
+assert_eq "策略标记为 MANUAL（与自动挑选分得开）" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "MANUAL"
+assert_eq "手选也只冻一笔" "$(jq -r '.data.delivery.orderFees | length' <<<"$R")" "1"
+# 手选的单不许被系统在背后换掉：店员是有理由才指定的
+d50_only "$(jq -r '.data.delivery.deliveryNo' <<<"$R")"
+sleep 1
+R=$(sched '{"escalateAfterMin":0.01}')
+assert_eq "MANUAL 单不参与自动升级" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
+assert_eq "手选的配送单原封不动" "$(d50_dlv "$D50_O8" | jq -r '.data.delivery.callStrategy')" "MANUAL"
+
 # 还原：这一组改过全局设置，不还原会污染后面（以及重跑时的）用例
 req PUT /api/admin/settings/local-delivery "$AT" "$D50_ORIG" >/dev/null
 assert_eq "设置已还原" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.callStrategy.mode)" "$(jq -r '.callStrategy.mode // "SOLO_LOWEST"' <<<"$D50_ORIG")"

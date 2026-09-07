@@ -69,18 +69,29 @@ export interface LocalDeliverySettings {
     soloProvider: string | null
   }
   /**
-   * 呼叫策略（批次 1）。2026-09-06 首单实测把这件事从「假设」变成了「账」：
+   * 呼叫策略。2026-09-06 首单实测把这件事从「假设」变成了「账」：
    * 并呼 7 家，最贵的闪送 ¥23.32 抢到，而最低的达达报 ¥16.23 —— 一单多付 ¥7.09；
-   * 且**每一家在下单瞬间各冻结一笔**（那一单冻了 ¥75.08，实付 ¥23.32），
-   * 按快递100 最低充值 100 元算，并呼只能同时挂 1 单，只呼最低价能挂 6 单。
+   * 且**每一家在下单瞬间各冻结一笔**（那一单冻了 ¥75.08，实付 ¥23.32）。
    *
-   * mode:
-   *   SOLO_LOWEST 默认。按报价快照里的最低价只呼那一家；查不到报价则退回并呼（不因此拒绝呼叫）。
-   *   ALL         今天的行为：并呼设置里的全部运力。**这是不必部署就能关掉策略的开关**。
-   * escalateAfterMin: SOLO 单等这么久仍无人接 → 取消 D-1、并呼建 D-2。0 = 不自动升级
+   * mode（2026-09-07 店主定为 CHEAPEST_N=3）：
+   *   CHEAPEST_N  默认。按报价从低到高取 cheapestN 家并呼，谁先接算谁的。
+   *               为什么不是只呼最低那一家：最贵的通常是闪送（一对一专送，快但贵），
+   *               而最便宜的几家多是顺路带单，**一家一家呼容易没人接**。三家一起抢，
+   *               既避开了闪送的价，也不至于干等。
+   *   SOLO_LOWEST 只呼报价最低那一家。最省冻结额度，但抢单成功率最低。
+   *   ALL         并呼设置里的全部运力。**这是不必部署就能关掉策略的开关**。
+   *   查不到报价一律退回 ALL（不因此拒绝呼叫）。
+   *
+   * ⚠️ 冻结额度按「同时并呼几家」放大，这是选 N 时唯一要算的账。按首单那组报价：
+   *      只呼最低 ¥16.23／单 · 最便宜 3 家 ≈ ¥51.76／单 · 并呼 7 家 ¥75.08／单
+   *    以充值 100 元计，能同时挂的单数分别是 6 / 1 / 1。**N=3 时余额要备足**，
+   *    否则第二单就会因余额不足呼不出去（kd100.autoDowngradeToSelfOnNoBalance 是最后一道兜底）。
+   *
+   * cheapestN: CHEAPEST_N 模式下并呼几家。可选家数不足时有几家呼几家。
+   * escalateAfterMin: 呼了这么久仍无人接 → 取消旧单、并呼全表建新单。0 = 不自动升级
    *   （只靠 callTimeoutMin 的人工提醒）。调度器 60 秒一跳，所以实际升级发生在 N ~ N+1 分钟之间。
    */
-  callStrategy: { mode: 'SOLO_LOWEST' | 'ALL'; escalateAfterMin: number }
+  callStrategy: { mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'; cheapestN: number; escalateAfterMin: number }
   limits: { maxItems: number; maxWeightKg: number }
   callTimeoutMin: number
   acceptedStuckMin: number
@@ -151,7 +162,7 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   },
   // 3 分钟：凉菜等不起再挑一轮（挑第二便宜要再等 3 分钟）。升级一步到位并呼全部，
   // 与 docs/design/workbench-ui-spec.md §6b 一致。
-  callStrategy: { mode: 'SOLO_LOWEST', escalateAfterMin: 3 },
+  callStrategy: { mode: 'CHEAPEST_N', cheapestN: 3, escalateAfterMin: 3 },
   limits: { maxItems: 30, maxWeightKg: 10 },
   callTimeoutMin: 10,
   acceptedStuckMin: 30,
@@ -243,9 +254,13 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       soloProvider: typeof kd.soloProvider === 'string' && (KD100_PROVIDERS as readonly string[]).includes(kd.soloProvider) ? kd.soloProvider : null,
     },
     callStrategy: {
-      // 只认这两个值，别的（含未来某天写进去的错拼）一律回落默认。⚠️ 生产库里已有的
-      // local_delivery 行没有这个字段 → 回落 SOLO_LOWEST → **部署即生效**，不需要店主再点一次。
-      mode: cs.mode === 'ALL' ? 'ALL' : D.callStrategy.mode,
+      // 只认这三个值，别的（含未来某天写进去的错拼）一律回落默认。⚠️ 生产库里已有的
+      // local_delivery 行若没有这个字段 → 回落默认 → **部署即生效**，不需要店主再点一次。
+      // 反过来说：改默认值等于改生产行为，改之前必须先跟店主确认（2026-09-07 已确认 CHEAPEST_N=3）。
+      mode: cs.mode === 'ALL' || cs.mode === 'SOLO_LOWEST' || cs.mode === 'CHEAPEST_N' ? cs.mode : D.callStrategy.mode,
+      // 上界取运力表长度：填 9 也只有 7 家可呼，把它夹到真实可选范围内，
+      // 免得后台显示一个永远达不到的数
+      cheapestN: int(cs.cheapestN, D.callStrategy.cheapestN, 1, KD100_PROVIDERS.length),
       escalateAfterMin: int(cs.escalateAfterMin, D.callStrategy.escalateAfterMin, 0, 30),
     },
     limits: { maxItems: int(lim.maxItems, D.limits.maxItems, 1, 500), maxWeightKg: num(lim.maxWeightKg, D.limits.maxWeightKg, 0.5, 100) },

@@ -36,6 +36,10 @@ export function callStrategyLabel(
       return `只呼最低价（${providerLabel(calledProviders?.[0] ?? courierCompany)}）`
     case 'SOLO_HELD':
       return `只呼最低价（${providerLabel(calledProviders?.[0])}）· 已放弃自动并呼`
+    case 'CHEAPEST':
+      return `并呼最便宜 ${n} 家（${(calledProviders ?? []).map(providerLabel).join('、') || '—'}）`
+    case 'CHEAPEST_HELD':
+      return `并呼最便宜 ${n} 家（${(calledProviders ?? []).map(providerLabel).join('、') || '—'}）· 已放弃自动升级`
     case 'ALL':
       return `并呼 ${n || '全部'} 家`
     case 'MANUAL':

@@ -355,9 +355,10 @@ export interface LocalDeliverySettings {
   autoCallDelayMin: number
   defaultProvider: 'KD100' | 'SELF'
   kd100: { providers: string[]; goodsType: string; defaultItemWeightG: number; insurance: boolean; autoDowngradeToSelfOnNoBalance: boolean }
-  // 呼叫策略。SOLO_LOWEST = 只呼报价最低那一家（省钱，且余额只冻结一笔）；ALL = 并呼全表（旧行为）。
+  // 呼叫策略。CHEAPEST_N = 并呼报价最低的 N 家（默认 N=3，2026-09-07 店主定）；
+  // SOLO_LOWEST = 只呼最低那一家（最省冻结额度，但抢单成功率最低）；ALL = 并呼全表（旧行为）。
   // escalateAfterMin 分钟无人接单则自动取消重呼、升级为并呼；0 = 不自动升级。
-  callStrategy: { mode: 'SOLO_LOWEST' | 'ALL'; escalateAfterMin: number }
+  callStrategy: { mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'; cheapestN: number; escalateAfterMin: number }
   limits: { maxItems: number; maxWeightKg: number }
   callTimeoutMin: number
   acceptedStuckMin: number
@@ -414,7 +415,7 @@ export interface DeliveryInfo {
   quotedAt: string | null
   /** 本单实际呼了哪些运力（kuaidicom 编码） */
   calledProviders: string[] | null
-  /** SOLO | ALL | MANUAL | SOLO_HELD；null = 策略上线前的历史单 */
+  /** SOLO | CHEAPEST | ALL | MANUAL | SOLO_HELD | CHEAPEST_HELD；null = 策略上线前的历史单 */
   callStrategy: string | null
   /** 下单那一刻**各家各自的预扣**（batchOrder 的 fee[]），比呼叫前的报价快照更权威 */
   orderFees: ProviderQuote[] | null

@@ -236,15 +236,27 @@ interface ConfirmSpec {
   amber?: string
   /**
    * 确认块与琥珀之间的自定义内容（呼叫弹窗用它放各家报价，见 CallQuoteBlock）。
-   * 收一个「把最新最低价报上来」的回调：报价块里点刷新之后，确认键上的运力名与金额
-   * 必须跟着变——spec 是点击那一刻存进 state 的，不回传就会停在旧数字上。
+   * 收一个「当前要呼哪几家」的回调：报价块里点刷新或改选之后，确认键的文案和真正发出去的
+   * providers 都必须跟着变——spec 是点击那一刻存进 state 的，不回传就会停在旧值上。
    */
-  extra?: (onLowest: (l: { provider: string; feeFen: number } | null) => void) => ReactNode
-  /** 有实时最低价时用它生成确认键文案；没有就退回 confirmText */
-  confirmTextOf?: (lowest: { provider: string; feeFen: number }) => string
+  extra?: (onPick: (p: CallPick | null) => void) => ReactNode
+  /** 有实时选择时用它生成确认键文案；没有就退回 confirmText */
+  confirmTextOf?: (pick: CallPick) => string
   confirmText: string
   okMsg: string
-  run: () => Promise<unknown>
+  /** 呼叫弹窗把当前选择传进来；其它弹窗忽略这个参数即可 */
+  run: (pick?: CallPick | null) => Promise<unknown>
+}
+
+/**
+ * 呼叫弹窗里「这一次要呼谁」。
+ * providers 为空 = 不指定，按后台策略走（服务端自己挑最便宜的 N 家）；
+ * 非空 = 店员手点过，覆盖策略，服务端记成 MANUAL。
+ */
+interface CallPick {
+  providers: string[]
+  quotes: { provider: string; feeFen: number }[]
+  manual: boolean
 }
 
 /**
@@ -255,19 +267,18 @@ interface ConfirmSpec {
  *
  * batchPrice 免费、不下单、不落库，所以刷新按钮可以随便点。
  */
-function CallQuoteBlock({ orderId, initial, onLowest }: {
+function CallQuoteBlock({ orderId, initial, mode, cheapestN, onPick }: {
   orderId: number
   initial: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
-  onLowest: (l: { provider: string; feeFen: number } | null) => void
+  /** 后台设定的呼叫方式，决定「不动手时默认呼谁」 */
+  mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'
+  cheapestN: number
+  onPick: (p: CallPick | null) => void
 }) {
   const [q, setQ] = useState(initial)
   const [busy, setBusy] = useState(false)
-  // 把「当前这份报价的最低价」报给弹窗，让确认键上的运力名与金额始终与眼前这块一致。
-  // 报价已过期时报 null：过期意味着服务端在真正下单前会自己重查一次，那时挑中的
-  // 可能是另一家——此刻在按钮上写死一个价就是空头承诺。
-  useEffect(() => {
-    onLowest(q?.stale ? null : q?.snapshot?.lowest ?? null)
-  }, [q, onLowest])
+  /** null = 不指定，按后台策略走；非 null = 店员点中的那一家 */
+  const [sel, setSel] = useState<string | null>(null)
   const refresh = async () => {
     setBusy(true)
     try {
@@ -276,8 +287,29 @@ function CallQuoteBlock({ orderId, initial, onLowest }: {
     } catch { /* 查价失败不影响呼叫本身：呼叫时服务端还会自己再查一次 */ }
     finally { setBusy(false) }
   }
-  const quotes = q?.snapshot?.quotes ?? []
-  if (!quotes.length) {
+  const sorted = useMemo(
+    () => [...(q?.snapshot?.quotes ?? [])].sort((a, b) => a.feeFen - b.feeFen),
+    [q],
+  )
+  // 不动手时策略会呼谁——高亮的就是这几家，让店员在按下去之前看到系统的选择
+  const byStrategy = useMemo(() => {
+    if (!sorted.length) return []
+    if (mode === 'ALL') return sorted
+    if (mode === 'SOLO_LOWEST') return sorted.slice(0, 1)
+    return sorted.slice(0, Math.max(1, cheapestN))
+  }, [sorted, mode, cheapestN])
+  const picked = sel ? sorted.filter((x) => x.provider === sel) : byStrategy
+  // 报价过期时不把金额报上去：过期意味着服务端下单前会自己重查一次，那时的价可能不是
+  // 眼前这个——此刻在按钮上写死一个数字就是空头承诺。运力选择本身仍然有效（MANUAL 只认家数）。
+  const stale = !!q?.stale
+  useEffect(() => {
+    onPick(sorted.length
+      ? { providers: sel ? [sel] : [], quotes: stale ? [] : picked, manual: !!sel }
+      : null)
+    // picked 是每次渲染新建的数组，放进依赖会自激；用它的内容做依赖
+  }, [onPick, sel, stale, sorted.length, picked.map((x) => `${x.provider}:${x.feeFen}`).join(',')])
+
+  if (!sorted.length) {
     return (
       <div className="wb__quote">
         <span className="wb__muted">暂无报价（呼叫时会自动查一次）</span>
@@ -285,19 +317,46 @@ function CallQuoteBlock({ orderId, initial, onLowest }: {
       </div>
     )
   }
-  const min = Math.min(...quotes.map((x) => x.feeFen))
+  const min = sorted[0].feeFen
+  const extraFen = sel ? (sorted.find((x) => x.provider === sel)?.feeFen ?? min) - min : 0
   return (
-    <div className={`wb__quote${q?.stale ? ' wb__quote--stale' : ''}`}>
+    <div className={`wb__quote${stale ? ' wb__quote--stale' : ''}`}>
       <div className="wb__quote-head">
-        <span>{q?.stale ? '报价已过期' : '当前报价'}</span>
+        <span>{stale ? '报价已过期' : '当前报价 · 点一行可改成只呼那一家'}</span>
         <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 刷新'}</button>
       </div>
-      {[...quotes].sort((a, b) => a.feeFen - b.feeFen).map((x) => (
-        <div className="wb__line" key={x.provider}>
-          <span>{providerLabel(x.provider)}{x.feeFen === min && <span className="wb__muted"> 最低</span>}</span>
-          <span className="wb__fee">¥{yuan(x.feeFen)}</span>
-        </div>
-      ))}
+      {sorted.map((x) => {
+        const on = picked.some((p) => p.provider === x.provider)
+        return (
+          <button
+            type="button"
+            key={x.provider}
+            className={`wb__quote-row${on ? ' wb__quote-row--on' : ''}`}
+            aria-pressed={on}
+            /* 再点一次选中的那一家 = 取消手选、回到策略默认。没有这条，店员点错了就只能关掉弹窗重来 */
+            onClick={() => setSel(sel === x.provider ? null : x.provider)}
+          >
+            <span>
+              <span className="wb__quote-tick">{on ? '✓' : ''}</span>
+              {providerLabel(x.provider)}
+              {x.feeFen === min && <span className="wb__muted"> 最低</span>}
+            </span>
+            <span className="wb__fee">¥{yuan(x.feeFen)}</span>
+          </button>
+        )
+      })}
+      {sel
+        ? (
+          <div className="wb__quote-note wb__quote-note--warn">
+            已改成只呼 {providerLabel(sel)}
+            {extraFen > 0 ? `，比最低价多 ¥${yuan(extraFen)}` : ''}。再点一次可取消手选。
+          </div>
+        )
+        : (
+          <div className="wb__quote-note">
+            打勾的是按后台设置会呼的{mode === 'SOLO_LOWEST' ? '那一家' : ` ${picked.length} 家`}，谁先接算谁的。
+          </div>
+        )}
     </div>
   )
 }
@@ -305,14 +364,14 @@ function CallQuoteBlock({ orderId, initial, onLowest }: {
 function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: () => void; onDone: (msg: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  // 报价块回传的实时最低价（点了刷新之后会变）。useCallback 定住引用，
+  // 报价块回传的「当前要呼谁」（点刷新或改选之后会变）。useCallback 定住引用，
   // 否则每次渲染都是新函数，会把子组件的 useEffect 变成无限循环。
-  const [liveLowest, setLiveLowest] = useState<{ provider: string; feeFen: number } | null>(null)
-  const onLowest = useCallback((l: { provider: string; feeFen: number } | null) => setLiveLowest(l), [])
-  const confirmText = liveLowest && spec.confirmTextOf ? spec.confirmTextOf(liveLowest) : spec.confirmText
+  const [pick, setPick] = useState<CallPick | null>(null)
+  const onPick = useCallback((p: CallPick | null) => setPick(p), [])
+  const confirmText = pick && spec.confirmTextOf ? spec.confirmTextOf(pick) : spec.confirmText
   const submit = async () => {
     setBusy(true); setError('')
-    try { await spec.run(); onDone(spec.okMsg) }
+    try { await spec.run(pick); onDone(spec.okMsg) }
     catch (e) { setError(apiMessage(e, '操作失败，请重试')) }
     finally { setBusy(false) }
   }
@@ -331,7 +390,7 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
       }
     >
       <WhatBlock what={spec.what} customer={spec.customer} cost={spec.cost} />
-      {spec.extra?.(onLowest)}
+      {spec.extra?.(onPick)}
       {spec.amber && <div className="wb__amber">{spec.amber}</div>}
     </WbModal>
   )
@@ -1131,9 +1190,10 @@ export default function Workbench() {
     // 「实际约 ¥5–8」这句已被实测推翻（2026-09-06 首单 8.94 km 实扣 ¥23.32，1.1 km 那组
     // 最贵的也报 ¥11.22），改成不给死数字，让店员看下面报价块里的真实金额。
     const CALL_AMBER = '会预扣配送费，实际以中标运力的预扣为准。若之后取消已接单的骑手，可能产生约 ¥2 取消费。'
-    // 呼叫方式来自设置（默认只呼最低价）。拿不到设置时按「并呼」措辞——宁可文案保守，
-    // 也不要让店员以为只花一家的钱、结果按并呼冻结了 N 笔。
-    const solo = settings?.callStrategy?.mode === 'SOLO_LOWEST'
+    // 呼叫方式来自设置（默认并呼最便宜的 N 家）。拿不到设置时按「并呼全部」措辞——
+    // 宁可文案保守，也不要让店员以为只花一家的钱、结果按并呼冻结了 N 笔。
+    const callMode = settings?.callStrategy?.mode ?? 'ALL'
+    const cheapestN = settings?.callStrategy?.cheapestN ?? 3
     // 最低价不在这里取：确认键的金额由弹窗内的报价块实时回传（见 ConfirmSpec.confirmTextOf），
     // 这里取一次会停在打开抽屉那一刻的快照上，店员在弹窗里点过刷新之后就成了错数字。
     const escalateMin = settings?.callStrategy?.escalateAfterMin ?? 0
@@ -1149,33 +1209,49 @@ export default function Workbench() {
       <a key={key} className="wb__btn wb__btn--ghost" href={`tel:${phone}`}><Phone className="w-4 h-4" />{label}</a>
     )
     /**
-     * 呼叫确认弹窗。文案随呼叫方式变——「只呼最低价」和「并呼」在**花多少钱**上差一个数量级
-     * （首单实测：并呼 7 家一次冻结 ¥75.08，只呼一家冻 ¥16.23），店员按下去之前必须知道是哪种。
-     * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，只能说明会先查价。
+     * 呼叫确认弹窗。文案随呼叫方式变——呼几家在**冻结多少钱**上差一个数量级
+     * （首单那组报价：只呼最低 ¥16.23／最便宜 3 家约 ¥51.76／全部 7 家 ¥75.08），
+     * 店员按下去之前必须知道是哪种。
+     * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，
+     * 也就没得选——只能说明会先查价，选运力这件事留给之后单独点「呼叫骑手」。
      */
-    const callSpec = (title: string, confirmText: string, what: string, run: () => Promise<unknown>, hasQuote = true): ConfirmSpec => {
+    const strategyText = callMode === 'SOLO_LOWEST' ? '按最低价只呼一家'
+      : callMode === 'CHEAPEST_N' ? `并呼最便宜的 ${cheapestN} 家，谁先接算谁的`
+        : '并呼设置里的全部运力，谁先接算谁的'
+    const escalateText = escalateMin > 0 && callMode !== 'ALL' ? `，约 ${escalateMin} 分钟无人接自动改为并呼全部运力` : ''
+    const callSpec = (
+      title: string, confirmText: string, what: string,
+      run: (pick?: CallPick | null) => Promise<unknown>, hasQuote = true,
+    ): ConfirmSpec => {
       return {
         title, channel: ch,
         // 确认键上带运力名与金额，是「按下去要花多少钱」最后一道提示。
-        // 金额取**弹窗里那块报价当前显示的**最低价（点了刷新会跟着变），而不是打开抽屉那一刻
-        // 的快照；报价过期时 CallQuoteBlock 会报 null，这里就退回不带金额的通用文案——
+        // 取的是**弹窗里那块报价当前的选择**（点刷新或改选都会跟着变），而不是打开抽屉那一刻
+        // 的快照；报价过期时 CallQuoteBlock 报空 quotes，这里就退回不带金额的文案——
         // 过期意味着服务端下单前会自己重查，此刻写死一个价就是空头承诺。
-        confirmTextOf: solo && hasQuote
-          ? (l) => `呼叫${providerLabel(l.provider)} ¥${yuan(l.feeFen)}`
+        confirmTextOf: hasQuote
+          ? (p) => {
+            const sum = p.quotes.reduce((n, x) => n + x.feeFen, 0)
+            if (p.manual) return `只呼${providerLabel(p.providers[0])}${p.quotes.length ? ` ¥${yuan(sum)}` : ''}`
+            if (p.quotes.length === 1) return `呼叫${providerLabel(p.quotes[0].provider)} ¥${yuan(p.quotes[0].feeFen)}`
+            if (p.quotes.length > 1) return `并呼 ${p.quotes.length} 家 共冻 ¥${yuan(sum)}`
+            return confirmText
+          }
           : undefined,
         confirmText,
         okMsg: '已呼叫骑手',
-        what: solo
-          ? (hasQuote
-            ? `${what}按最低价只呼一家${escalateMin > 0 ? `，约 ${escalateMin} 分钟无人接自动改为并呼全部运力` : ''}。`
-            : `${what}接单后先查价，再按最低价只呼一家。`)
-          : `${what}并呼设置里的全部运力，谁先接算谁的。`,
+        what: hasQuote ? `${what}${strategyText}${escalateText}。` : `${what}接单后先查价，再${strategyText}。`,
         customer: '顾客看到「正在为您呼叫骑手」。',
-        cost: solo
+        cost: callMode === 'SOLO_LOWEST'
           ? '只冻结这一家的配送费。'
-          : '每一家各冻结一笔预扣，只有中标那家最终扣款，其余释放。',
+          : '并呼几家就同时冻结几笔预扣，只有中标那家最终扣款，其余释放。',
         extra: hasQuote
-          ? (onLowest) => <CallQuoteBlock orderId={order.id} initial={detail?.quote ?? null} onLowest={onLowest} />
+          ? (onPick) => (
+            <CallQuoteBlock
+              orderId={order.id} initial={detail?.quote ?? null}
+              mode={callMode} cheapestN={cheapestN} onPick={onPick}
+            />
+          )
           : undefined,
         amber: CALL_AMBER, run,
       }
@@ -1218,7 +1294,9 @@ export default function Workbench() {
           btns.push(fill('call', failed ? '重新呼叫骑手' : '呼叫骑手', () => confirm(callSpec(
             failed ? '重新呼叫骑手' : '呼叫骑手', failed ? '确认重呼' : '确认呼叫',
             '向快递100 发单，等骑手接单并到店取货。',
-            () => callRider(order.id),
+            // 手选了才传 providers：传了服务端就记 MANUAL、原样照办；
+            // 不传才走后台策略（并呼最便宜的 N 家），两条路在配送单上分得开，事后能对账
+            (pick) => callRider(order.id, pick?.manual ? pick.providers : undefined),
           ))))
           btns.push(ghost('self', '自己送', () => setModal({ kind: 'self' })))
         }
