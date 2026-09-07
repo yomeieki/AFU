@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Printer, PlusCircle, Trash2, RefreshCw, Send, Eraser } from 'lucide-react'
+import { PlusCircle, Trash2, RefreshCw, Send, Eraser } from 'lucide-react'
 import {
   getPrinterSettings, updatePrinterSettings, bindPrinter, unbindPrinter, testPrinter,
   clearPrinterQueue, getPrinterStatus, getPrintJobs, retryPrintJob,
 } from '../api/admin'
 import Button from '../components/ui/Button'
+import { CenterAction } from '../components/BusinessCenter'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import type { PrinterChannel, PrinterEntry, PrinterHealthEntry, PrinterSettings as PrinterSettingsT, PrintJob } from '../types'
@@ -101,7 +102,6 @@ export default function PrinterSettings() {
   if (loadFailed) {
     return (
       <div className="space-y-3">
-        <h2 className="text-xl font-semibold text-gray-800">打印机设置</h2>
         <div className="text-red-600">加载失败，下拉重试。</div>
         <Button size="sm" variant="secondary" onClick={() => window.location.reload()}>重新加载</Button>
       </div>
@@ -251,10 +251,9 @@ export default function PrinterSettings() {
 
   return (
     <div className="space-y-4 max-w-4xl">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-1.5"><Printer className="w-5 h-5" />打印机设置</h2>
+      <CenterAction>
         <Button loading={saving} onClick={handleSave}>{saving ? '保存中...' : '保存'}</Button>
-      </div>
+      </CenterAction>
 
       <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
         <div className="flex items-center justify-between">

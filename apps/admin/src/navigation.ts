@@ -77,7 +77,19 @@ export const readChannel = (params: URLSearchParams): Channel => {
   return isChannel(value) ? value : 'EXPRESS'
 }
 
+/**
+ * 「这个地址该去哪儿」的唯一映射表，两类都在这儿：
+ *   1. 改造前的旧地址（/products、/banners…）——保住书签与外部链接；
+ *   2. 业务中心根（/catalog、/system…）——落到该中心的默认子页。
+ * 两类都经 legacyTarget 走同一条重定向，因此都会原样带上查询参数。
+ * 用 <Navigate to="products"> 那种相对跳转做第 2 类会把 search 丢掉。
+ */
 const legacyRoutes: Record<string, string> = {
+  '/catalog': '/catalog/products',
+  '/membership': '/membership/coupons',
+  '/settings': '/settings/express',
+  '/promotion': '/promotion/banners',
+  '/system': '/system/printer',
   '/products': '/catalog/products',
   '/categories': '/catalog/categories',
   '/orders': '/orders/express',

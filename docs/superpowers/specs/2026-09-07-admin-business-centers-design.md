@@ -2,7 +2,7 @@
 
 日期：2026-09-07
 
-状态：方案已口头确认，等待文档复核
+状态：第二轮已实现，等待店主验收
 
 范围：`apps/admin` 前端信息架构、导航、页面组合与本地预览；不修改业务规则，不部署生产
 
@@ -385,6 +385,18 @@
 | `/scan-stats` | `/promotion/scan-stats` |
 | `/printer-settings` | `/system/printer` |
 | `/system` | `/system/printer`（`/system` 由独立页变为中心根，重定向到默认子页；旧书签落在 `/system` 时进的是打印机页，不再是系统状态页） |
+
+业务中心根（`/catalog`、`/membership`、`/settings`、`/promotion`、`/system`）也走同一张
+映射表落到各自默认子页，不用 `<Navigate to="products">` 那种相对跳转——相对跳转会把
+查询参数丢掉，`/system?status=PAID` 会变成没有参数的 `/system/printer`。
+
+| 中心根 | 默认子页 |
+|---|---|
+| `/catalog` | `/catalog/products` |
+| `/membership` | `/membership/coupons` |
+| `/settings` | `/settings/express` |
+| `/promotion` | `/promotion/banners` |
+| `/system` | `/system/printer` |
 
 重定向必须保留原查询参数。例如 `/orders?status=PAID` 应到达 `/orders/express?status=PAID`。通知铃铛、订单提醒和会员设置内部链接直接改用新地址，不依赖重定向作为长期逻辑。
 

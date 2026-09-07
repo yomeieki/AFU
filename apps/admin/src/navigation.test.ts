@@ -76,3 +76,15 @@ test('still exposes all nine entries for the narrow-screen grid', () => {
   assert.equal(topNavigation.length, 9)
   assert.equal(topNavigation[0], workbenchNav)
 })
+
+test('sends every business-center root to its default child, query intact', () => {
+  assert.deepEqual(legacyTarget('/catalog', '?channel=LOCAL'), {
+    pathname: '/catalog/products',
+    search: '?channel=LOCAL',
+  })
+  assert.equal(legacyTarget('/membership', '').pathname, '/membership/coupons')
+  assert.equal(legacyTarget('/settings', '').pathname, '/settings/express')
+  assert.equal(legacyTarget('/promotion', '').pathname, '/promotion/banners')
+  // 打印机是系统维护的默认子页，旧书签 /system 落在这儿而不是系统状态
+  assert.equal(legacyTarget('/system', '').pathname, '/system/printer')
+})
