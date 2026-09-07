@@ -67,15 +67,19 @@
    *   pending —— 显示「待计算」（正在算，或还缺前置条件）
    *   error   —— 显示「待重新计算」（报价失败）
    *   blocked —— 显示「待计算」，同时页面提示区给出原因与出口
+   *
+   * action 决定点下去干什么：submit | retry | none。
+   * ⚠️ 报价失败时按钮是**可点的**（店主 2026-09-07 选的方案 B），所以页面必须按 action 分派，
+   * 绝不能写成「按钮没禁用就去提交」——那一刻没有有效 quoteToken，提交会被服务端 42239 拒掉。
    */
   function checkoutAction(s) {
-    if (!s.hasAddress) return { disabled: true, text: '请选择地址', amountState: 'pending' }
-    if (!s.hasLocation) return { disabled: true, text: '请补充定位', amountState: 'pending' }
-    if (s.quoting) return { disabled: true, text: '正在计算运费', amountState: 'pending' }
-    if (s.quoteError) return { disabled: true, text: '重新获取运费', amountState: 'error' }
-    if (s.blockReason) return { disabled: true, text: '暂不可配送', amountState: 'blocked' }
-    if (s.submitting) return { disabled: true, text: '提交中', amountState: 'ready' }
-    return { disabled: false, text: '提交订单', amountState: 'ready' }
+    if (!s.hasAddress) return { disabled: true, text: '请选择地址', amountState: 'pending', action: 'none' }
+    if (!s.hasLocation) return { disabled: true, text: '请补充定位', amountState: 'pending', action: 'none' }
+    if (s.quoting) return { disabled: true, text: '正在计算运费', amountState: 'pending', action: 'none' }
+    if (s.quoteError) return { disabled: false, text: '重新获取运费', amountState: 'error', action: 'retry' }
+    if (s.blockReason) return { disabled: true, text: '暂不可配送', amountState: 'blocked', action: 'none' }
+    if (s.submitting) return { disabled: true, text: '提交中', amountState: 'ready', action: 'submit' }
+    return { disabled: false, text: '提交订单', amountState: 'ready', action: 'submit' }
   }
 
   /** 把预览面板上的九种状态翻译成 checkoutAction 的输入，外加页面要用的展示数据。 */
