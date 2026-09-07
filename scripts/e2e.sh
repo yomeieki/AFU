@@ -964,6 +964,16 @@ OPT1=$(req GET "/api/admin/local/orders/$OPO1/delivery" "$AT" | jq -r .data.deli
 # —— 加小费（CALLING 才能加；上限来自设置 tip.maxPerCall=2000/maxPerOrder=5000）
 R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":500}'); assert_eq "加小费 code 0" "$(code "$R")" "0"
 assert_eq "tipFee 累加 500" "$(jq -r .data.tipFeeFen <<<"$R")" "500"
+# 规格 §6 要的是「金额由店员定，不写死」——弹窗是 ¥1 步长的步进器，不是固定档。
+# 这两条守服务端那一侧：**任意**整元金额都收得下，尤其是老的固定档 [2,5,10,20] 之外的数。
+# 前端从第一版起就做成了固定四档（2026-09-07 店主发现），改回步进器后加这两条，
+# 免得哪天又有人以为「只有那四个档位是合法的」而把服务端也收窄。
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":700}')
+assert_eq "非固定档的 ¥7 也收得下（步进器的意义所在）" "$(code "$R")" "0"
+assert_eq "tipFee 累加到 1200" "$(jq -r .data.tipFeeFen <<<"$R")" "1200"
+R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":100}')
+assert_eq "步进器下限 ¥1 收得下" "$(code "$R")" "0"
+assert_eq "tipFee 累加到 1300" "$(jq -r .data.tipFeeFen <<<"$R")" "1300"
 R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":2100}'); assert_eq "超单次上限 42235" "$(code "$R")" "42235"
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"addTip","directive":{"kind":"error","code":"50000"}}' >/dev/null
 R=$(req POST "/api/admin/local/orders/$OPO1/delivery/tip" "$AT" '{"amount":500}'); assert_eq "运力拒绝加小费 42236" "$(code "$R")" "42236"

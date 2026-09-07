@@ -84,7 +84,20 @@ const DEFAULT_QUOTE_FRESH_MS = 5 * 60 * 1000
  */
 const isQuoteStaleNow = (quotedAt: string | null | undefined, freshMs: number, skewMs = 0) =>
   !quotedAt || (Date.now() + skewMs) - Date.parse(quotedAt) > freshMs
-const TIP_STEPS = [200, 500, 1000, 2000]
+/**
+ * 小费步进器（规格 §6）：**步长 ¥1、默认 ¥3、下限 ¥1**，上限取「单次上限」与「本单剩余额度」的小者。
+ *
+ * 原来这里是四个固定档 `[200, 500, 1000, 2000]`，从第一版起就是，规格那条一直没落地
+ * （2026-09-07 店主发现）。两处代价：
+ *   · ¥1/¥3/¥4/¥6… 全点不出来，而规格要的正是「金额由店员定，不写死」；
+ *   · 默认落在 ¥5，而规格白纸黑字写「默认取 ¥3 而非 ¥5，是不想用系统默认值把店员
+ *     锚定在高位」——固定档把要避免的那件事正好做成了。
+ * 服务端 `tipSchema` 收任意 ≥1 分的整数、上限交给 tip.maxPerCall/maxPerOrder 校验，
+ * 所以 ¥1 步长不需要任何服务端改动。
+ */
+const TIP_STEP = 100
+const TIP_MIN = 100
+const TIP_DEFAULT = 300
 const OTHER_COMPANY = '__other__'
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
@@ -513,8 +526,13 @@ function TipModal({ orderId, tippedFen, limits, onClose, onDone }: {
   const maxPerCall = limits?.maxPerCall ?? 2000
   const maxPerOrder = limits?.maxPerOrder ?? 5000
   const remain = Math.max(0, maxPerOrder - tippedFen)
-  const options = TIP_STEPS.filter((v) => v <= maxPerCall && v <= remain)
-  const [amount, setAmount] = useState(() => options.find((v) => v === 500) ?? options[0] ?? 0)
+  const lo = TIP_MIN
+  // 上限同时受「单次上限」和「本单还剩多少额度」约束——只看单次上限的话，
+  // 累计快满时步进器还能加到 ¥20，点确认才被服务端打回来
+  const hi = Math.min(maxPerCall, remain)
+  const canTip = hi >= lo
+  const [amount, setAmount] = useState(() => Math.min(Math.max(TIP_DEFAULT, lo), Math.max(hi, lo)))
+  const bump = (d: number) => setAmount((a) => Math.min(hi, Math.max(lo, a + d)))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const submit = async () => {
@@ -531,7 +549,7 @@ function TipModal({ orderId, tippedFen, limits, onClose, onDone }: {
       footer={
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
-          <FillButton channel="LOCAL" onClick={submit} disabled={busy || amount <= 0}>
+          <FillButton channel="LOCAL" onClick={submit} disabled={busy || !canTip}>
             {busy ? '处理中…' : `确认加 ¥${yuan(amount)}`}
           </FillButton>
         </>
@@ -542,20 +560,28 @@ function TipModal({ orderId, tippedFen, limits, onClose, onDone }: {
         customer="顾客看不到小费，页面上仍是「正在为您呼叫骑手」。"
         cost={`本次 ¥${yuan(amount)}，由门店承担。`}
       />
-      <div className="wb__actions">
-        {options.map((v) => (
-          <button key={v} className={`wb__btn ${v === amount ? 'wb__btn--fill' : 'wb__btn--ghost'}`}
-            style={v === amount ? { background: chColor('LOCAL') } : undefined} onClick={() => setAmount(v)}>
-            ¥{yuan(v)}
-          </button>
-        ))}
+      {/* 加减步进器，不是固定档：规格 §6「小费金额由店员定，不写死」。
+          到边界置灰而不是隐藏——按钮位置不变，店员不用重新找。 */}
+      <div className="wb__stepper">
+        <button type="button" className="wb__step-btn" aria-label="减 1 元"
+          onClick={() => bump(-TIP_STEP)} disabled={busy || !canTip || amount <= lo}>−</button>
+        <div className="wb__step-val" aria-live="polite">¥{yuan(amount)}</div>
+        <button type="button" className="wb__step-btn" aria-label="加 1 元"
+          onClick={() => bump(TIP_STEP)} disabled={busy || !canTip || amount >= hi}>+</button>
       </div>
+      {/* 规格 §6 要求「旁边给区间参考」。没有参考值，步进器就只是让店员在真空里猜数字——
+          固定档时代至少还暗示了「常见档位」，改成自由步进后这句话反而更不能少。
+          规格另有一档「骑手已接单」的参考语，但那一档现在**走不到**：加小费按钮只在
+          待抢单（CALLING）时出现，服务端 addTip 也只放行 CALLING。要么把按钮开放到
+          已接单，要么把规格那一行退掉——这是产品决定，先不在这里替它做主。 */}
       <div className="wb__amber">
-        本次 ¥{yuan(amount)}。单次上限 ¥{(maxPerCall / 100).toFixed(0)}，本单已加 ¥{yuan(tippedFen)}，累计上限 ¥{(maxPerOrder / 100).toFixed(0)}。
+        高峰期通常 ¥3–5 就有人接；偏远或恶劣天气可能要更多。
+        单次上限 ¥{(maxPerCall / 100).toFixed(0)}，本单已加 ¥{yuan(tippedFen)}，累计上限 ¥{(maxPerOrder / 100).toFixed(0)}。
       </div>
       {remain <= 0 && <div className="wb__redbar">本单小费已到累计上限，无法再加。</div>}
-      {remain > 0 && options.length === 0 && (
-        <div className="wb__redbar">本单小费剩余额度不足最小档位 ¥{(TIP_STEPS[0] / 100).toFixed(0)}，无法再加。</div>
+      {/* 剩余额度不足 ¥1 时步进器一格也走不了，说清楚为什么，别让店员对着置灰的键猜 */}
+      {remain > 0 && !canTip && (
+        <div className="wb__redbar">本单小费剩余额度不足 ¥{(TIP_MIN / 100).toFixed(0)}，无法再加。</div>
       )}
     </WbModal>
   )

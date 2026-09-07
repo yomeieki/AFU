@@ -175,6 +175,16 @@
 /* 颜色由渲染处按卡片渠道传行内 style（邮寄单不该被染成同城红，避免「红」一色二义，§3） */
 .wb__tel { font-weight:600; text-decoration:none; }
 .wb__actions { display:flex; flex-wrap:wrap; gap:8px; }
+/* 小费步进器（规格 §6）。44px 不放进手机媒体查询里：规格给的理由是「店员多半单手在
+   手机上点」，而这个控件在桌面上也是一个要连点好几下的加减键，小了同样难点。
+   金额用等宽数字 + 固定宽度：不定宽的话 ¥9→¥10 会把两个按钮推得左右跳。 */
+.wb__stepper { display:flex; align-items:center; justify-content:center; gap:14px; padding:4px 0; }
+.wb__step-btn { width:44px; height:44px; flex:none; border-radius:10px; border:1px solid var(--line);
+  background:var(--surface); color:var(--text-1); font-size:22px; line-height:1; cursor:pointer; }
+.wb__step-btn:hover:not(:disabled) { background:var(--bg); }
+.wb__step-btn:disabled { opacity:.35; cursor:not-allowed; }
+.wb__step-val { min-width:92px; text-align:center; font-size:22px; font-weight:700;
+  font-variant-numeric:tabular-nums; color:var(--text-1); }
 .wb__reject { align-self:center; background:none; border:none; color:var(--danger); font-size:13px;
   text-decoration:underline; cursor:pointer; padding:2px 4px; }
 /* 刷新窗口内/订单已离开看板时置灰拒单按钮——不加这条，disabled 只挡点击事件，
