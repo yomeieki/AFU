@@ -326,9 +326,11 @@ assert_eq "同城购物车小计=2400" "$(jq -r .data.totalAmount <<<"$R")" "240
 echo "== 20b. 购物车叠加超库存：静默封顶要带 capped=true + 真实数量 =="
 # 之前 cart.ts 只按「本次增量」校验库存、按库存 Math.min 封顶后响应只回 {id, channel}，
 # 前端两个加购入口拿到成功响应一律弹「已加入」，顾客不知道实际只加了差额。
-# $LCID 这一行此刻已有 quantity=2；把库存钉到 5，再加 10 件 → 2+10=12 被封顶到 5。
+# $LCID 这一行此刻已有 quantity=2；把库存钉到 5，再加 4 件 → 2+4=6 被封顶到 5。
+# 本次增量必须 ≤ 库存：cart.ts 的前置校验「availableStock < quantity → 42201」只比本次
+# 增量不比合并后总量，加 10 件会在封顶逻辑之前就被 42201 拒掉，测不到封顶分支。
 req PUT "/api/admin/products/$LPID" "$AT" '{"stock":5}' >/dev/null
-R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":10}")
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":4}")
 assert_eq "叠加超库存 code 0（服务端封顶而非报错）" "$(code "$R")" "0"
 assert_eq "封顶后 quantity=库存(5)" "$(jq -r .data.quantity <<<"$R")" "5"
 assert_eq "封顶标记 capped=true" "$(jq -r .data.capped <<<"$R")" "true"
@@ -1364,6 +1366,14 @@ done
 # M4 的五个会员页按这些名字取值。三处是 M4 Wave 0 补的：小程序在此之前**拿不到**
 # 规则公示要的比例与有效期，只能写死数字——而 docs/member-terms-copy.md 开篇就禁止写死
 # （「文案说 100 分、实际发 50 分」是最难解释的场面）。锁在这里，改名会当场红。
+# 干净库上 $UT 此刻**一条流水都没有**：它的已完成单来自 §16 的自动收货，那条路径不主动调
+# settlePoints，只靠 settleMissedPoints 2 分钟兜底（且积分开关默认关着，兜底也不发）。
+# 审计库里这段一直绿，是历史轮次的残留流水在撑着——2026-09-07 换全新库首次暴露。
+# 这里显式开一次开关 + 跑一轮兜底（下界传 0）把分补上，段末复原设置，让下面的字段契约
+# 不再依赖库里有没有前几轮的尸体。
+M4_ORIG_MEMBER=$(req GET /api/admin/settings/member "$AT" | jq -c .data)
+req PUT /api/admin/settings/member "$AT" '{"points":{"enabled":true,"earnRatePerYuan":1,"validDays":365},"newcomer":{"templateId":null},"rulesText":""}' >/dev/null
+sched '{"settleMissedPointsAfterMin":0}' >/dev/null
 M4_SUM=$(req GET /api/member/summary "$UT")
 for k in pointsBalance expiringSoon pointsExpireAt availableCoupons points rulesText; do
   assert_eq "memberSummary.$k 存在" "$(jq -r ".data | has(\"$k\")" <<<"$M4_SUM")" "true"
@@ -1400,6 +1410,8 @@ M4_LED_REFID=$(jq -r '.refId // 0' <<<"$M4_LED_ORD")
 M4_LED_REAL=$(req GET "/api/orders/$M4_LED_REFID" "$UT" | jq -r '.data.orderNo // "MISSING"')
 assert_eq "pointsLedger 的 ORDER 行补出了真实单号" \
   "$(jq -r '.orderNo // "MISSING"' <<<"$M4_LED_ORD")" "$M4_LED_REAL"
+# 复原会员设置：上面为了补流水临时开过积分开关，后面 §36/§41 各自有对开关状态的假设
+req PUT /api/admin/settings/member "$AT" "$M4_ORIG_MEMBER" >/dev/null
 
 # 我的券：「已用于订单 …」要能点进详情（详情页接的就是 Order.id）
 M4_CPN=$(req GET "/api/member/coupons?status=available" "$UT")
@@ -1973,7 +1985,17 @@ M2_TAG=$RANDOM$RANDOM
 M2_ORIG_SHIP=$(req GET /api/admin/settings/shipping "$AT" | jq -c .data)
 
 m2_login() { req POST /api/auth/wechat-login "" "{\"code\":\"$1\"}" | jq -r '.data.token'; }
-m2_uid()   { echo "$1" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.userId'; }
+# JWT payload 是无补位的 base64url；macOS 的 base64 -d 遇到长度不是 4 的倍数会**静默截断**
+# 尾部字节（实测 `{"userId":123}` 去补位后解出 `{"userId":12`），jq 随即 parse error、userId 为空，
+# m2_grant 的 INSERT 跟着静默失败，§39/§48 整段连环红——且只在 userId 位数恰好让 payload
+# 长度 mod 4 ≠ 0 时发作，看起来像随机 flaky。这里按 (4 - len%4)%4 补回 '='。
+m2_uid()   {
+  local p pad
+  p=$(echo "$1" | cut -d. -f2 | tr '_-' '/+')
+  pad=$(( (4 - ${#p} % 4) % 4 ))
+  # 注意 printf '=%.0s' 在零参数时仍会打出一个 '='，所以用 %*s 按 pad 宽度补空格再换成 '='
+  printf '%s%s' "$p" "$(printf '%*s' "$pad" '' | tr ' ' '=')" | base64 -d 2>/dev/null | jq -r '.userId'
+}
 m2_addr()  { req POST /api/addresses "$1" '{"receiverName":"M2","receiverPhone":"13800009999","province":"浙江省","city":"杭州市","district":"西湖区","detail":"x","isDefault":1}' | jq -r '.data.id // .data.addressId'; }
 # 造券：建 CAMPAIGN 模板 → 顾客自己领。走真实发放路径，不直接 INSERT user_coupons
 m2_coupon() { # $1=token $2=名称 $3=面额 $4=门槛 $5=渠道
