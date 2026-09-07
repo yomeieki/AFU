@@ -67,13 +67,30 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
     ], { key: `kd-cb-720-unclaimed:${delivery.id}` })
     return { http: 200 }
   }
-  // 并呼假撤单过滤：多运力并呼时未中标运力也推 720；已锁定 taskId 且不匹配 → 不得终态化
-  if (p.providerStatus === '720' && delivery.providerTaskId && p.taskId && p.taskId !== delivery.providerTaskId) {
-    try {
-      await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, `720@${p.taskId}`, null, rawBody), source: 'CALLBACK', providerStatus: 720, statusDesc: `未中标运力撤单（taskId=${p.taskId}），忽略`, rawPayload: body })
-    } catch { /* 同上 */ }
-    if (delivery.statusRank < 20) notifySystemAlert('快递100 呼叫阶段收到 taskId 不匹配的 720', [`deliveryNo=${deliveryNo}`, `锁定=${delivery.providerTaskId} 回调=${p.taskId}`, '真实联调时请核实并呼语义（spec §5.4）'], { key: `kd-cb-720x:${deliveryNo}` })
-    return { http: 200 }
+  // 并呼假撤单过滤：多运力并呼时未中标运力也推 720。快递100 的 taskId 是**批次级**的——
+  // 同批次所有被呼运力共享同一个 taskId（docs/research/2026-09-03-kuaidi100-same-city-api.md
+  // :174,181,238-244），真正区分「这条 720 是谁的」的字段是 kuaidicom（即下面的 p.courierCompany，
+  // verifyAndParseCallback 已从 param.kuaidicom 解出，见 kd100.ts:227）。原判定只比 taskId，
+  // 同批次任何真实回调恒相等，这条护栏与它挂着的 kd-cb-720x 告警在真实语义下从未生效——
+  // 落空方的 720 会直接把中标方的在途单终态化，中标骑手后续 100/310/520 全部撞 TERMINAL
+  // 被静默丢弃（见 :123 的 moved===0 分支）。现在的判定口径：
+  //  - 本地已锁定中标运力（statusRank>=20 时的 courierCompany，与下面 actualFee 认领 :150
+  //    同一口径）且回调 kuaidicom 与其不一致 → 确认是未中标方撤单，忽略；taskId 不匹配保留作
+  //    附加信号（不再是唯一依据，两者任一命中都判定为假撤单）
+  //  - 尚未锁定中标方（还在 CALLING/呼叫阶段）：无法判断这条 720 到底是谁的，按 :59 未认领
+  //    占位单同样的口径只留痕不终态化——判错的代价不对称：错杀会撞死中标方的在途单，
+  //    错放最多是让一条真撤单晚一点被人工核对处理
+  if (p.providerStatus === '720' && delivery.providerTaskId) {
+    const lockedWinner = delivery.statusRank >= 20 ? delivery.courierCompany : null
+    const mismatchByCourier = !!lockedWinner && !!p.courierCompany && p.courierCompany !== lockedWinner
+    const mismatchByTaskId = !!p.taskId && p.taskId !== delivery.providerTaskId
+    if (!lockedWinner || mismatchByCourier || mismatchByTaskId) {
+      try {
+        await recordDeliveryEvent(prisma, { deliveryId: delivery.id, dedupeKey: makeCallbackDedupeKey(deliveryNo, `720@${p.courierCompany || p.taskId || 'unknown'}`, null, rawBody), source: 'CALLBACK', providerStatus: 720, statusDesc: lockedWinner ? `未中标运力撤单（kuaidicom=${p.courierCompany || '空'}，中标=${lockedWinner}），忽略` : `尚未锁定中标运力，无法判断撤单归属（kuaidicom=${p.courierCompany || '空'}），不终态化，待人工核对`, rawPayload: body })
+      } catch { /* 同上 */ }
+      if (delivery.statusRank < 20) notifySystemAlert('快递100 呼叫阶段收到疑似未中标方 720', [`deliveryNo=${deliveryNo}`, `中标=${lockedWinner || '尚未锁定'} 回调 kuaidicom=${p.courierCompany || '空'} taskId=${p.taskId || '空'}`, '真实联调时请核实并呼语义（spec §5.4）'], { key: `kd-cb-720x:${deliveryNo}` })
+      return { http: 200 }
+    }
   }
   const mapped = PROVIDER_STATUS_MAP[p.providerStatus]
   const updateTimeIso = updateTimeIsoOf(p)

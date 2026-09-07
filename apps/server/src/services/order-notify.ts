@@ -6,7 +6,7 @@
  * fire-and-forget：失败仅 console.warn 并重试一次，绝不 throw、绝不阻塞支付流程。
  */
 
-import { sendWecomMarkdown, sendPushPlus } from './notify'
+import { sendWecomMarkdown, sendPushPlus, shouldSendAlert } from './notify'
 
 interface NotifyOrderInfo {
   orderNo: string
@@ -102,11 +102,18 @@ export function notifyCancelRequest(order: {
   if (pushplusToken) sendPushPlus(pushplusToken, '同城订单申请取消', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }
 
-/** 同城配送异常告警（呼叫失败/运力异常/回调超时等，orchestrator 调用）：店员双通道，自由行文本。 */
-export function notifyLocalDeliveryAlert(title: string, lines: string[]): void {
+/**
+ * 同城配送异常告警（呼叫失败/运力异常/回调超时等，orchestrator 调用）：店员双通道，自由行文本。
+ * @param opts.key 可选限频键，走 notify.ts 的 shouldSendAlert 与 notifySystemAlert 共享同一套
+ * 5 分钟同 key 抑制。不传就是原来的无限频行为——本函数原来完全没有去重，配合 autoCallRiders
+ * 每分钟重试的场景（如运力异常 CAPACITY）会对同一个原因反复刷屏；调用方按需要传 key 才会变化，
+ * 不传的既有调用点行为不受影响。
+ */
+export function notifyLocalDeliveryAlert(title: string, lines: string[], opts: { key?: string } = {}): void {
   const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
   if (!wecom && !pushplusToken) return
+  if (opts.key && !shouldSendAlert(opts.key)) return
   const content = [`**🛵 ${title}**`, ...lines.map((l) => `> ${l}`)].join('\n')
   if (wecom) sendWecomMarkdown(wecom, content)
   if (pushplusToken) sendPushPlus(pushplusToken, title, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)

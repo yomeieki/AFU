@@ -80,9 +80,15 @@ export interface CreateDeliveryOrderResult {
 }
 
 export interface DeliveryCallbackPayload {
+  /** 批次级：同一次并呼下单里所有被呼运力共享同一个 taskId，不能用它区分「哪一家」 */
   taskId: string
   providerStatus: string
   statusDesc: string | null
+  /**
+   * 即回调 param.kuaidicom（快递100 官方拼写，见 docs/research/2026-09-03-kuaidi100-same-city-api.md
+   * :238-244）——并呼时唯一能区分「这条回调是哪一家运力发的」的字段。callback.ts 的并呼假撤单
+   * 过滤与 actualFee 认领都必须比它，不能比 taskId（taskId 恒相等，比了等于没比）。
+   */
   courierCompany: string | null
   courierName: string | null
   courierMobile: string | null

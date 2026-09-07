@@ -86,6 +86,26 @@ function pruneAlertRecords(now: number): void {
 }
 
 /**
+ * 与 notifySystemAlert 共享同一张限频记录表（alertRecords），供不走 notifySystemAlert 的其它
+ * 告警函数（如 order-notify.ts 的 notifyLocalDeliveryAlert）按需接入同一套「同 key 窗口期内只发
+ * 一次」的抑制——否则每个调用点各自维护一份计数，同一个 key 在两处会各发各的，起不到抑制作用。
+ * 返回 true = 本次未被抑制，调用方应当真的发送；false = 命中限频，调用方不该再发。
+ * @param key 限频键
+ * @param windowMs 窗口期，默认与 notifySystemAlert 一致（5 分钟）
+ */
+export function shouldSendAlert(key: string, windowMs: number = ALERT_WINDOW_MS): boolean {
+  const now = Date.now()
+  const record = alertRecords.get(key)
+  if (record && now - record.lastSentAt < windowMs) {
+    record.suppressed += 1
+    return false
+  }
+  alertRecords.set(key, { lastSentAt: now, suppressed: 0 })
+  pruneAlertRecords(now)
+  return true
+}
+
+/**
  * 系统告警。不 await 也安全。
  * @param key 限频键，缺省用 title；同 key 在 windowMs 内只发一次，被抑制的次数会附在下次消息里
  */

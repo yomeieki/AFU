@@ -38,7 +38,15 @@ async function doAccept(id: number) {
   if (!target) throw new AppError(40401, '订单不存在', 404)
   if (target.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单可在此接单')
   const moved = await prisma.order.updateMany({ where: { id, status: 'PAID' }, data: { status: 'PREPARING', acceptedAt: new Date() } })
-  if (moved.count === 0) throw new AppError(42204, `订单状态为 ${target.status}，仅已付款订单可接单`)
+  if (moved.count === 0) {
+    // 竞态文案：上面 :37 早读到的 target.status 到这里可能已经不是真的了——双标签页接单，
+    // 或顾客在这几毫秒内自助取消（走 orders.ts 的条件写），都会让 updateMany 落空却仍拿旧值
+    // 拼错误，说出「订单状态为 PAID，仅已付款订单可接单」这种自相矛盾的话。重新读一次当前
+    // 状态再报：已被接单（PREPARING）明确告诉店员「已被接单」，而不是复述早已过期的 PAID。
+    const now = await prisma.order.findUnique({ where: { id }, select: { status: true } })
+    const cur = now?.status ?? target.status
+    throw new AppError(42204, cur === 'PREPARING' ? '订单已被接单，请刷新查看' : `订单状态为 ${cur}，仅已付款订单可接单`)
+  }
   return prisma.order.findUnique({ where: { id } })
 }
 
