@@ -61,10 +61,10 @@
 /* 图例里的紧急度小样：照抄卡片那一圈光晕，店员对得上号 */
 .wb__chip { display:inline-block; padding:1px 8px; border-radius:6px; background:var(--surface);
   border:1px solid var(--line); color:var(--text-2); }
-.wb__chip--warn { background:var(--urge-warn-bg); color:var(--urge-warn); border:none;
-  box-shadow:0 0 0 1.5px var(--urge-warn); }
-.wb__chip--late { background:var(--urge-late-bg); color:var(--urge-late); border:none;
-  box-shadow:0 0 0 1.5px var(--urge-late); }
+.wb__chip--warn { background:var(--urge-warn-bg); color:var(--urge-warn); border-color:var(--urge-warn);
+  box-shadow:inset 0 0 0 1px var(--urge-warn); }
+.wb__chip--late { background:var(--urge-late-bg); color:var(--urge-late); border-color:var(--urge-late);
+  box-shadow:inset 0 0 0 1px var(--urge-late); }
 
 /* ── 看板（§1/§9）── */
 /* 四个干活的列均分，「已完成」收起时只留一条 44px 的窄边栏（展开时回到第五等份）。
@@ -85,17 +85,26 @@
 /* ── 卡片（§3/§4）── */
 .wb__card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:10px;
   padding:10px 10px 10px 14px; margin-bottom:8px; cursor:pointer; }
-.wb__card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:4px; border-radius:10px 0 0 10px; }
+/* 渠道竖条：往外挪 1px 盖住 border，z-index 压住 inset 那圈紧急色——
+   两层都盖掉，左边才真的只剩这一根线（PO：一根线就行）。 */
+.wb__card::before { content:''; position:absolute; left:-1px; top:-1px; bottom:-1px; width:5px;
+  border-radius:10px 0 0 10px; z-index:1; }
 .wb__card--local::before { background:var(--local); }
 .wb__card--express::before { background:var(--express); }
-/* 紧急度：整圈光晕 + 极淡底色。用 box-shadow 而不是加粗 border——
-   border 变粗会挤动卡片内容，一列里几张卡先后变色就会看到整列在抖。
-   光晕落在圆角轮廓之外，和轮廓之内的 4px 渠道竖条分处两个平面。 */
-.wb__card--warn { box-shadow:0 0 0 2px var(--urge-warn); background:var(--urge-warn-bg); }
-.wb__card--late { box-shadow:0 0 0 2px var(--urge-late); background:var(--urge-late-bg); }
-/* 「立即处理」比「要延误」还高一档：同色再加一圈外扩的软光晕，隔着几米也能挑出来 */
+/* 紧急度：**一根线**，不是两根（PO 2026-09-07）。
+   第一版把光晕画在轮廓之外，于是卡片左边出现两条平行竖线——外面一条紧急色、
+   里面一条渠道色，挤在一起很难看。改成 inset：紧急色沿着卡片内缘走一圈，
+   左边那 4px 由渠道竖条盖住。看到的就是一圈连续的边，**左边一段是渠道色、
+   其余三边是紧急色**——一根线同时说清「什么单」和「急不急」。
+   inset 不占外部空间，变色时也不会挤动卡片内容（一列里几张卡先后变色不会抖）。 */
+.wb__card--warn { border-color:var(--urge-warn); background:var(--urge-warn-bg);
+  box-shadow:inset 0 0 0 2px var(--urge-warn); }
+.wb__card--late { border-color:var(--urge-late); background:var(--urge-late-bg);
+  box-shadow:inset 0 0 0 2px var(--urge-late); }
+/* 「立即处理」比「要延误」还高一档：内缘那圈之外再加一圈外扩的软光晕。
+   软光晕是发散的、没有硬边，不会被看成第二根线。 */
 .wb__card--alert { border-color:var(--danger); background:var(--danger-soft);
-  box-shadow:0 0 0 2px var(--danger), 0 0 0 6px var(--danger-soft); }
+  box-shadow:inset 0 0 0 2px var(--danger), 0 0 0 4px var(--danger-soft); }
 .wb__card-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .wb__badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px;
   font-size:12px; font-weight:600; }
