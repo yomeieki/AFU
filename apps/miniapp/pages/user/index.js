@@ -126,14 +126,9 @@ Page({
   },
 
   goLocal() {
-    // 与封面/购物车/商品详情的同城入口同一套契约：先过位置许可再进
-    getApp().ensurePrivacyAuthorize()
-      .then(function() {
-        wx.navigateTo({ url: '/pages/local/index' })
-      })
-      .catch(function() {
-        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
-      })
+    // 六个同城入口的唯一出口（app.js）：位置许可 → 定渠道 LOCAL → switchTab 进共享主页。
+    // 许可被拒与跳转失败的反馈都由它给，这里不再各写一遍。
+    getApp().enterLocalChannel()
   },
 
   goToAddresses() {

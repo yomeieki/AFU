@@ -1,5 +1,6 @@
 const { wechatLogin } = require('./api/auth')
 const { getCart } = require('./api/cart')
+const channelUtil = require('./utils/channel')
 
 // tabBar 中购物车的索引（主页/分类/购物车/我的）
 var CART_TAB_INDEX = 2
@@ -11,6 +12,9 @@ App({
     userInfo: null,
     token: null,
     cartCount: 0,
+    // 当前购物渠道 'EXPRESS' | 'LOCAL'。四个 tabBar 页共用同一套壳，靠它决定加载哪边的内容。
+    // **内存里这一份是权威值**；storage 只在冷启动/热重载时把它补回来（见 utils/channel.js）。
+    shoppingChannel: 'EXPRESS',
     // Stores a pending categoryId when navigating from homepage to product list via switchTab
     pendingCategoryId: null,
     pendingCategoryName: null,
@@ -22,6 +26,8 @@ App({
     privacyResolve: null,
   },
   onLaunch() {
+    // 渠道要在任何一次 getCart / 拉商品之前恢复好，否则冷启动第一屏会按错的渠道拉一轮。
+    this.globalData.shoppingChannel = channelUtil.getShoppingChannel()
     const token = wx.getStorageSync('token')
     if (token) {
       this.globalData.token = token
@@ -100,12 +106,56 @@ App({
       })
     })
   },
-  // 刷新购物车数量并更新 tabBar 角标（登录成功、加购、购物车变更、下单后调用）
+  // ── 渠道上下文 ──────────────────────────────────────────────
+  getShoppingChannel() {
+    return channelUtil.normalizeChannel(this.globalData.shoppingChannel)
+  },
+
+  // 定渠道。除了写内存与落盘，还要做两件收尾，漏了都会表现成「切了渠道但页面没跟上」：
+  //   ① 清掉待决的分类意图——从同城切回邮寄时，globalData 里可能还压着一个同城分类 id，
+  //      分类页 onShow 会照它去选中一个当前渠道根本没有的分类；
+  //   ② 立刻刷新角标——角标只统计当前渠道，不刷的话顾客会看到上一个渠道的件数。
+  setShoppingChannel(value) {
+    var channel = channelUtil.setShoppingChannel(value)
+    this.globalData.shoppingChannel = channel
+    this.globalData.pendingCategoryId = null
+    this.globalData.pendingCategoryName = null
+    this.globalData.pendingCategoryAll = false
+    this.updateCartCount()
+    return channel
+  },
+
+  // 六个同城入口的唯一出口（封面 / 购物车跨渠道提示 / 商品详情 / 会员商城 / 「我的」/ 旧路由）。
+  // 顺序不可换：**先过位置许可，再定渠道，最后才跳**。
+  //   先跳后定渠道 → 主页 onShow 已按旧渠道拉过一轮，顾客会看到上个渠道的商品闪一下；
+  //   不问许可就进 → 顾客一路选完菜、到地图选点才被拦，前面全白填。
+  // 用两参数 then 而不是 .catch：否则 switchTab 的失败也会掉进「拒绝许可」那条分支，
+  // 顾客看到一句莫名其妙的「需要同意位置许可」。
+  enterLocalChannel() {
+    var self = this
+    return this.ensurePrivacyAuthorize().then(
+      function() {
+        self.setShoppingChannel('LOCAL')
+        wx.switchTab({
+          url: '/pages/index/index',
+          fail: function(err) {
+            console.error('[channel] 进入同城失败', err)
+            wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
+          },
+        })
+      },
+      function() {
+        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+      }
+    )
+  },
+
+  // 刷新购物车数量并更新 tabBar 角标（登录成功、加购、购物车变更、下单/切渠道后调用）
   updateCartCount() {
     var self = this
-    // tabBar 角标只统计邮寄购物车——同城购物车的件数由 pages/local/index 底部条自己显示。
-    // 两个渠道的件数加在一个角标上，顾客点进购物车会发现数字对不上。
-    getCart('EXPRESS')
+    // 角标只统计**当前渠道**的车。两个渠道的件数加在一个角标上，顾客点进购物车会发现数字对不上；
+    // 而两个车本身是分开的（服务端按 channel 隔离），合起来也没有任何一页能显示这个和。
+    getCart(this.getShoppingChannel())
       .then(function(data) {
         var items = (data && data.items) || []
         var count = items.reduce(function(sum, item) {

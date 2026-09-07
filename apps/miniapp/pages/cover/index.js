@@ -92,23 +92,20 @@ Page({
     this.track(entry.event, entry.id)
 
     if (entry.action === 'local') {
-      // 与购物车/商品详情/「我的」同一套契约：先过位置许可再进，
-      // 避免顾客进到地图选点那一步才被拦。
-      var route = entry.route
-      var self = this
-      app
-        .ensurePrivacyAuthorize()
-        .then(function () {
-          wx.navigateTo({ url: route, fail: function (err) { self.onNavFail(entry, err) } })
-        })
-        .catch(function () {
-          wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
-        })
+      // 六个同城入口的唯一出口，实现在 app.js：位置许可 → 定渠道 LOCAL → switchTab 进共享主页。
+      // 反馈（许可被拒 / 跳转失败）由它自己给，这里不再各写一遍。
+      app.enterLocalChannel()
       return
     }
 
-    // pages/index/index 是 tabBar[0]，只能 switchTab；switchTab 会销毁本页，
-    // 顾客之后要换回同城走「我的 → 同城配送」那个常驻入口。
+    // 两个邮寄入口（全国邮寄 / 全国冷链）：**必须显式定渠道**，不能靠上一次会话的残留值。
+    // 顾客上次停在同城、这次从封面点「全国邮寄」，不显式改的话主页会拉出同城的菜单。
+    if (entry.action === 'switchTab') {
+      app.setShoppingChannel('EXPRESS')
+    }
+
+    // pages/index/index 是 tabBar[0]，只能 switchTab；switchTab 会销毁本页（含封面）。
+    // 顾客要换回另一个渠道走主页顶栏的「‹ 封面」。
     var open = entry.action === 'switchTab' ? wx.switchTab : wx.navigateTo
     var that = this
     open({

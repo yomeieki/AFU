@@ -196,22 +196,17 @@ Page({
     })
   },
 
-  // 「去下单」：与封面 pages/cover/index.js 的 goLocal/goExpress 同一套契约。
-  // 同城要先过位置许可（避免进到地图选点那一步才被拦）；邮寄主页是 tabBar[0]，只能 switchTab。
+  // 「去下单」：与封面 pages/cover/index.js 同一套契约。
+  // 同城走 app.enterLocalChannel()（位置许可 → 定渠道 → switchTab）；
+  // 邮寄要**显式定渠道**再 switchTab——不定的话，顾客上次停在同城时会拉出同城的菜单。
   onGoOrder: function(e) {
     var item = this.data.gifts[e.currentTarget.dataset.idx]
     if (!item) return
     if (item.isLocal) {
-      getApp()
-        .ensurePrivacyAuthorize()
-        .then(function() {
-          wx.navigateTo({ url: '/pages/local/index' })
-        })
-        .catch(function() {
-          wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
-        })
+      getApp().enterLocalChannel()
       return
     }
+    getApp().setShoppingChannel('EXPRESS')
     wx.switchTab({ url: '/pages/index/index' })
   },
 })

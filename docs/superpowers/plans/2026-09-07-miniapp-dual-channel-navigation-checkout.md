@@ -377,7 +377,7 @@ git commit -m "feat(order): expose quote expiry and idempotent channel orders"
 - Consumes: Task 2 `channel.js`。
 - Produces: `app.setShoppingChannel(channel)`, `app.getShoppingChannel()`, `app.updateCartCount(channel)`。
 
-- [ ] **Step 1: 写页面导航行为失败测试**
+- [x] **Step 1: 写页面导航行为失败测试**
 
 用轻量 Page/wx harness 加载封面页：点击 LOCAL 后断言顺序为“隐私授权成功 → 设置 LOCAL → `wx.switchTab('/pages/index/index')`”；点击 EXPRESS 断言设置 EXPRESS 后进入同一路径。
 
@@ -385,23 +385,23 @@ Run: `node --test tests/miniapp/navigation.test.cjs`
 
 Expected: FAIL because cover still uses `navigateTo('/pages/local/index')`。
 
-- [ ] **Step 2: 初始化并暴露渠道上下文**
+- [x] **Step 2: 初始化并暴露渠道上下文**
 
 `app.globalData.shoppingChannel` 从 storage 恢复；setter 清理待处理分类意图并刷新当前渠道角标。`updateCartCount` 改为 `getCart(this.getShoppingChannel())`。
 
-- [ ] **Step 3: 改封面入口**
+- [x] **Step 3: 改封面入口**
 
 LOCAL 仍先经过隐私授权；成功后设置 LOCAL 并 `switchTab` 到主页。EXPRESS 显式设置 EXPRESS。跳转失败沿用现有可见反馈。
 
-- [ ] **Step 4: 保留旧同城路由兼容**
+- [x] **Step 4: 保留旧同城路由兼容**
 
 `pages/local/index` 不再承载新主页面；它在 `onLoad` 设置 LOCAL 后 `switchTab` 到共享主页。保留 loading 文字和失败提示，避免旧分享链接白屏。
 
-- [ ] **Step 5: 改所有旧同城入口**
+- [x] **Step 5: 改所有旧同城入口**
 
 购物车跨渠道提示、商品详情、会员商城、“我的”页均调用同一个 `enterLocalChannel()` 行为，不再 `navigateTo('/pages/local/index')`。
 
-- [ ] **Step 6: 验证**
+- [x] **Step 6: 验证**
 
 Run: `node --test tests/miniapp/navigation.test.cjs tests/miniapp/channel.test.cjs`
 
@@ -411,7 +411,7 @@ Run: `node scripts/check-miniapp-es5.mjs apps/miniapp/utils/channel.js apps/mini
 
 Expected: PASS。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/miniapp/app.js apps/miniapp/pages/cover apps/miniapp/pages/local apps/miniapp/pages/user/index.js apps/miniapp/pages/cart/index.js apps/miniapp/pages/product/detail.js apps/miniapp/pages/member/mall.js tests/miniapp/navigation.test.cjs

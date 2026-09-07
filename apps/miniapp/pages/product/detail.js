@@ -181,13 +181,7 @@ Page({
   },
 
   goLocalCheckout: function() {
-    // 与封面/购物车/「我的」的同城入口保持一致：先过位置许可，避免进到地图选点才被拦
-    getApp().ensurePrivacyAuthorize()
-      .then(function() {
-        wx.navigateTo({ url: '/pages/local/index' })
-      })
-      .catch(function() {
-        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
-      })
+    // 统一出口，见 app.js 的 enterLocalChannel
+    getApp().enterLocalChannel()
   },
 })

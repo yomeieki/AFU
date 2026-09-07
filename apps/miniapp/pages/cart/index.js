@@ -96,14 +96,8 @@ Page({
   },
 
   goLocal: function() {
-    var app = getApp()
-    app.ensurePrivacyAuthorize()
-      .then(function() {
-        wx.navigateTo({ url: '/pages/local/index' })
-      })
-      .catch(function() {
-        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
-      })
+    // 统一出口，见 app.js 的 enterLocalChannel
+    getApp().enterLocalChannel()
   },
 
   formatTotal() {

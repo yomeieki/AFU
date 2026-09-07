@@ -7,10 +7,12 @@
 //   三段文字的视觉中心 218.5 / 375.5 / 532 保持不变，视觉零改动。
 //
 // action —— 跳转方式，三种：
-//   'local'     先过 app.ensurePrivacyAuthorize() 再 navigateTo（同城要用位置能力，
-//               不先过许可，顾客会走到地图选点那一步才被拦）
-//   'switchTab' 目标是 tabBar 页，只能用 switchTab，navigateTo 会失败
-//   'navigate'  普通 navigateTo
+//   'local'     走 app.enterLocalChannel()：位置许可 → 定渠道 LOCAL → switchTab 进共享主页。
+//               ⚠️ 这一档**不读 route**（双渠道改版后同城与邮寄共用同一个主页），
+//               下面那个 route 只留作「旧兼容路由在哪」的记录，改它不会改变跳转行为。
+//   'switchTab' 目标是 tabBar 页，只能用 switchTab；跳之前会显式把渠道定成 EXPRESS，
+//               否则顾客上次停在同城时，主页会拉出同城的菜单
+//   'navigate'  普通 navigateTo（会员三页，与渠道无关，不碰渠道）
 module.exports = [
   {
     id: 'local_delivery',
