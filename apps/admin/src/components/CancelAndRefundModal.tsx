@@ -102,7 +102,8 @@ export default function CancelAndRefundModal({
             <span className="wb__step-sep">›</span>
             {stepDot(2, '全额退款')}
           </div>
-          <div className="wb__meta">订单 {orderNo}</div>
+          {/* 与卡片、小票同口径：只显示后四位。店员手上是小票，跟整串对不上位 */}
+          <div className="wb__meta">订单 <b>#{orderNo.slice(-4)}</b></div>
 
           {step === 1 ? (
             <>

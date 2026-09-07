@@ -69,6 +69,14 @@ function autoRejectLeft(acceptedAt: string | null | undefined, graceMin: number,
   return `（约 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 后自动回绝）`
 }
 
+/**
+ * 屏幕上一律只显示后四位（与小票同口径，PO 2026-09-07）。
+ * 完整单号在这一屏里没有用处——店员比对的是手上那张小票，而后四位就够区分同时在做的十几单；
+ * 整串 ORD+日期+序号 反而把卡片最显眼的一行挤满，读起来还得逐位对。
+ * 需要完整单号的场合只有一个（退款/客诉时去微信、快递100后台查），那里留了整串 + 复制按钮。
+ */
+const shortNo = (no: string | null | undefined) => (no ? `#${no.slice(-4)}` : '--')
+
 /** 米 → 给人读的距离。1 km 以内用米（「800 m」比「0.8 km」好判断要不要等） */
 const km = (m: number | null | undefined) =>
   m == null ? '--' : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`
@@ -607,7 +615,9 @@ function Card({ card, colKey, now, graceMin, onOpen, onHandleCancel }: {
   // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
   // 改显示静态的完成时刻（服务端给 done 列的锚点就是 completedAt，即 card.waitSince）。
   const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now)
-  const km = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : '--'
+  // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
+  // 印一行「距离 --」只是在卡片上占一格空话，所以整行不渲染（PO 2026-09-07）。
+  const kmText = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : null
   return (
     <div
       className={`wb__card ${local ? 'wb__card--local' : 'wb__card--express'} ${alert ? 'wb__card--alert' : ''}`}
@@ -624,7 +634,7 @@ function Card({ card, colKey, now, graceMin, onOpen, onHandleCancel }: {
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
-      <div className="wb__no"><span>{card.orderNo}</span><b>¥{yuan(card.amountFen)}</b></div>
+      <div className="wb__no"><span className="wb__shortno">{shortNo(card.orderNo)}</span><b>¥{yuan(card.amountFen)}</b></div>
       <div className="wb__items">{itemsSummary(card.items, card.channel)}</div>
 
       {/* 无备注必须明写，留空则「没看见」与「没有」无法区分（§4） */}
@@ -633,7 +643,7 @@ function Card({ card, colKey, now, graceMin, onOpen, onHandleCancel }: {
       <div className="wb__fields">
         {local ? (
           <>
-            <span>距离 {km}</span>
+            {kmText && <span>距离 {kmText}</span>}
             <span>骑手 {d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}</span>
             <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>
           </>
@@ -1193,7 +1203,7 @@ export default function Workbench() {
               {local ? <Bike className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
               {local ? '同城配送' : '全国邮寄'}
             </span>
-            <span>{card.orderNo}</span>
+            <span className="wb__shortno">{shortNo(card.orderNo)}</span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
 
@@ -1244,7 +1254,9 @@ export default function Workbench() {
               <div className="wb__line"><span>地址</span><span style={{ textAlign: 'right' }}>{o?.receiverDisplayAddress ?? o?.receiverFullAddress ?? '--'}</span></div>
               {local ? (
                 <>
-                  <div className="wb__line"><span>距离</span><span>{card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : '--'}</span></div>
+                  {card.local?.distanceM != null && (
+                    <div className="wb__line"><span>距离</span><span>{(card.local.distanceM / 1000).toFixed(1)} km</span></div>
+                  )}
                   <div className="wb__line"><span>预计送达</span><span>{hhmm(o?.estimatedDeliveryAt)}</span></div>
                 </>
               ) : (

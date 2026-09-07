@@ -84,6 +84,8 @@
 .wb__wait--danger { background:var(--danger); color:#fff; }
 .wb__no { margin-top:6px; font-size:12px; color:var(--text-2); display:flex; justify-content:space-between; gap:8px; }
 .wb__no b { color:var(--text-1); font-size:13px; font-variant-numeric:tabular-nums; }
+/* 后四位现在是卡片上唯一的单号标识，不能再当灰色附注排版：与金额同级 */
+.wb__shortno { color:var(--text-1); font-weight:700; font-size:13px; font-variant-numeric:tabular-nums; letter-spacing:.02em; }
 .wb__items { margin-top:4px; line-height:1.5; }
 .wb__kinds { font-weight:600; }
 .wb__note { background:var(--note-bg); border-left:3px solid var(--note-line); font-weight:600;
