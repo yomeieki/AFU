@@ -85,7 +85,11 @@ const DEFAULT_QUOTE_FRESH_MS = 5 * 60 * 1000
 const isQuoteStaleNow = (quotedAt: string | null | undefined, freshMs: number, skewMs = 0) =>
   !quotedAt || (Date.now() + skewMs) - Date.parse(quotedAt) > freshMs
 /**
- * 小费步进器（规格 §6）：**步长 ¥1、默认 ¥3、下限 ¥1**，上限取「单次上限」与「本单剩余额度」的小者。
+ * 小费步进器（规格 §6）：**步长 ¥1、默认 ¥1、下限 ¥1**，上限取「单次上限」与「本单剩余额度」的小者。
+ *
+ * 默认值 2026-09-07 由店主从规格里的 ¥3 再压到 ¥1：从下限起步，加多少全是店员按着
+ * 当时的情况一次次点出来的，系统一分钱都不替他先垫。规格那条「不想用系统默认值把店员
+ * 锚定在高位」的理由，压到 ¥1 是它的极端形式。
  *
  * 原来这里是四个固定档 `[200, 500, 1000, 2000]`，从第一版起就是，规格那条一直没落地
  * （2026-09-07 店主发现）。两处代价：
@@ -97,7 +101,7 @@ const isQuoteStaleNow = (quotedAt: string | null | undefined, freshMs: number, s
  */
 const TIP_STEP = 100
 const TIP_MIN = 100
-const TIP_DEFAULT = 300
+const TIP_DEFAULT = 100
 const OTHER_COMPANY = '__other__'
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
