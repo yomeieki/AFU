@@ -681,6 +681,12 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: 
   // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
   // 改显示静态的完成时刻（服务端给 done 列的锚点就是 completedAt，即 card.waitSince）。
   const urg = alert ? 'late' : urgencyOf(card, colKey, now, prepMin)
+  // 已完成列用：自送和骑手送要分开说，不然「骑手 店员小李」读着别扭
+  const doneBy = !d
+    ? '送达方式未记录'
+    : d.provider === 'SELF'
+      ? `自送${d.courierName ? ` ${d.courierName}` : ''}`
+      : `骑手 ${d.courierName ?? d.statusLabel}`
   const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg)
   // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
   // 印一行「距离 --」只是在卡片上占一格空话，所以整行不渲染（PO 2026-09-07）。
@@ -708,13 +714,23 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: 
       {card.note ? <div className="wb__note">{card.note}</div> : <div className="wb__nonote">无备注</div>}
 
       <div className="wb__fields">
-        {local ? (
+        {local ? (colKey === 'done' ? (
+          /* 已完成的单只回答一件事：**最后是谁送的**。
+             这里原来照抄了在途卡片的两行，于是显示成「骑手 未呼叫 · 预计送达 15:06」——
+             送到了却说没呼叫骑手，还配一个未来时刻的预计送达，两条都是假的
+             （送达时 activeOrderId 被清空，服务端就查不到那张配送单了，现已按 orderId 补回）。
+             送达时刻不用再写一遍：右上角那枚胶囊已经是「完成于 14:36」。 */
+          <>
+            {kmText && <span>距离 {kmText}</span>}
+            <span>{doneBy}</span>
+          </>
+        ) : (
           <>
             {kmText && <span>距离 {kmText}</span>}
             <span>骑手 {d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}</span>
             <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>
           </>
-        ) : (
+        )) : (
           <>
             <span>{card.express?.province}{card.express?.city && card.express.city !== card.express.province ? ` ${card.express.city}` : ''}</span>
             <span>{card.express?.expressCompany ?? '未发货'}</span>
@@ -1626,17 +1642,22 @@ export default function Workbench() {
                   <button className="wb__iconbtn" onClick={() => setDoneOpen(false)}>收起</button>
                 )}
               </div>
-              {list.length === 0
-                ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
-                : list.map((c) => (
-                  <Card
-                    key={c.orderId} card={c} colKey={col.key} now={now}
-                    onOpen={() => openCard(c, col.key)}
-                    graceMin={snap?.acceptGraceMin ?? 0}
-                    prepMin={prepMin}
-                    onHandleCancel={() => openCard(c, col.key, true)}
-                  />
-                ))}
+              {/* 卡片区单独滚动：每列各滚各的，列头和另外四列都不动。
+                  整页滚的话，滑到备餐中的第 12 张，待接单那一列就被推出屏幕了——
+                  而「有没有新单等着接」恰恰是这一屏最不能丢的信息。 */}
+              <div className="wb__col-body">
+                {list.length === 0
+                  ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
+                  : list.map((c) => (
+                    <Card
+                      key={c.orderId} card={c} colKey={col.key} now={now}
+                      onOpen={() => openCard(c, col.key)}
+                      graceMin={snap?.acceptGraceMin ?? 0}
+                      prepMin={prepMin}
+                      onHandleCancel={() => openCard(c, col.key, true)}
+                    />
+                  ))}
+              </div>
             </section>
           )
         })}

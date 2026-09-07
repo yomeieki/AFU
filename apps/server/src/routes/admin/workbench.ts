@@ -49,7 +49,7 @@ async function loadOrders() {
   })
 }
 
-function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null): Record<string, unknown> {
+function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null): Record<string, unknown> {
   const units = o.items.reduce((n, it) => n + it.quantity, 0)
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
@@ -74,7 +74,8 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courie
           // 「还剩多久自动驳回」的倒计时基准：接单时刻 +ackGraceMin（甲口径）。
           // 给前端原始时刻而不是算好的秒数——卡片每秒重渲染，服务端算的数一到前端就过时了。
           acceptedAt: o.acceptedAt?.toISOString() ?? null,
-          delivery: d ? { status: d.status, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
+          // provider 给「已完成」列用：SELF 要显示「自送 店员小李」而不是「骑手 店员小李」
+          delivery: d ? { status: d.status, provider: d.provider ?? null, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
         }
       : null,
   }
@@ -96,9 +97,21 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     const [orders, settings] = await Promise.all([loadOrders(), getLocalSettings()])
     const localIds = orders.filter((o) => o.deliveryType === 'LOCAL').map((o) => o.id)
     const actives = localIds.length
-      ? await prisma.delivery.findMany({ where: { activeOrderId: { in: localIds } }, select: { activeOrderId: true, status: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, pickedUpAt: true } })
+      ? await prisma.delivery.findMany({ where: { activeOrderId: { in: localIds } }, select: { activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, pickedUpAt: true } })
       : []
     const byOrder = new Map(actives.map((d) => [d.activeOrderId!, d]))
+    // 已完成的单按 activeOrderId 是查不到的——送达时那个字段被清空了（唯一索引要腾给下一单）。
+    // 结果「已完成」列常年显示「骑手 未呼叫」，还跟着一个未来时刻的「预计送达」：两条都是假的。
+    // 这里按 orderId 把最后一张配送单补回来，让那一列能如实回答「这单最后是谁送的」。
+    const doneLocalIds = orders.filter((o) => o.status === 'COMPLETED' && o.deliveryType === 'LOCAL').map((o) => o.id)
+    if (doneLocalIds.length) {
+      const finished = await prisma.delivery.findMany({
+        where: { orderId: { in: doneLocalIds } },
+        orderBy: { id: 'asc' },  // 一单可能有多张（取消重呼、改自送），升序遍历后留下的就是最后一张
+        select: { orderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, pickedUpAt: true },
+      })
+      for (const d of finished) byOrder.set(d.orderId, { ...d, activeOrderId: d.orderId })
+    }
 
     const cols: Record<string, ReturnType<typeof toCard>[]> = { pending: [], preparing: [], waitingCourier: [], delivering: [], done: [] }
     for (const o of orders) {

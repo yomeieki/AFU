@@ -463,6 +463,8 @@ export interface WorkbenchCard {
     acceptedAt: string | null
     delivery: {
       status: string; statusLabel: string; courierName: string | null; courierMobile: string | null
+      /** 'SELF' = 店内自送，其余是快递100 的运力方。「已完成」列靠它区分「自送」与「骑手」 */
+      provider?: string | null
       /** 最近一次呼叫骑手失败（运力方拒单/下单报错），订单还停在备餐中等店员重呼或改自送。服务端可选下发 */
       callFailed?: boolean
     } | null

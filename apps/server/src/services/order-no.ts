@@ -8,9 +8,17 @@
  * 9 张单就撞出一对 #8779。撞号之后店员拿着票在工作台上点「同意退款」，退的可能
  * 是另一个人的钱——这是这次必须改掉它的原因。
  *
- * 换成当日流水后：后四位 = 当天第几单，**当天内保证唯一**，还自带先后顺序，
- * 跟餐馆叫号是同一个心智模型。新号 15 位、旧号 18 位，两者不可能重号，
- * 所以历史单不用动。
+ * 换成当日流水后后四位当天唯一。但**流水号不能直接印在票上**（PO 2026-09-07 追加）：
+ * `#0087` 等于告诉顾客「你是今天第 87 单」，中午一单、晚上一单就能算出当天的营业量，
+ * 这是外人不该知道的经营数据。
+ *
+ * 所以取号仍走流水（唯一性靠它），显示前再过一层 **4 轮 Feistel 置换**：
+ * 0000–9999 一一映射到 0000–9999，是**双射**，所以「当天唯一」原样保住；
+ * 而相邻流水映射出来的值毫无关联（1→7314、2→0925、3→4460），看不出先后、
+ * 更算不出总量。置换的密钥里掺了日期，所以换一天整张映射表就变了，
+ * 拿昨天的号推今天也无效。
+ *
+ * 新号 15 位、旧号 18 位，两者不可能重号，所以历史单不用动。
  *
  * ── 两个必须写下来的实现选择 ──────────────────────────────────────────
  *
@@ -54,11 +62,51 @@ async function nextSeq(dayKey: string): Promise<number> {
   })
 }
 
+// ── 把流水号打散成看不出顺序的四位数 ─────────────────────────────────────
+//
+// 4 轮平衡 Feistel，两半各 0–99（100 × 100 = 10000）。Feistel 的性质：**无论轮函数
+// 是什么，整体都是双射**——这正是这里需要的，因为「当天唯一」全靠双射保住，
+// 不能退化成「随机数 + 查重」（那要么有并发竞态，要么要额外的重试）。
+//
+// 密钥只写在代码里，没有放进 .env：它防的是顾客拿着两张小票倒推营业量，不是防拿到
+// 源码的人。真要提高强度，把 SCRAMBLE_KEY 挪到环境变量即可，但**换密钥会让当天已发
+// 出的号与之后的号落在两张映射表上**，同一天内可能撞号——只能在跨日的时候换。
+const SCRAMBLE_KEY = 0x5f3a9c7b
+
+/** 32 位雪崩混合。轮函数只要求「输入变一点、输出面目全非」，不要求可逆 */
+function mix(x: number): number {
+  let h = x >>> 0
+  h ^= h >>> 15; h = Math.imul(h, 2246822519) >>> 0
+  h ^= h >>> 13; h = Math.imul(h, 3266489917) >>> 0
+  h ^= h >>> 16
+  return h >>> 0
+}
+
+/** 日盐：同一个流水号在不同日期映射到不同的四位数，昨天的号推不出今天的 */
+function daySalt(dayKey: string): number {
+  return mix(Number(dayKey) ^ SCRAMBLE_KEY)
+}
+
+/** 0–9999 → 0–9999 的双射 */
+export function scramble4(n: number, dayKey: string): number {
+  const salt = daySalt(dayKey)
+  let l = Math.floor(n / 100) % 100
+  let r = n % 100
+  for (let i = 0; i < 4; i++) {
+    const f = mix(r ^ Math.imul(salt ^ i, 0x9e3779b1)) % 100
+    const prevL = l
+    l = r
+    r = (prevL + f) % 100
+  }
+  return l * 100 + r
+}
+
 /**
- * `ORD` + 8 位日期 + 4 位当日流水，例如 `ORD202609070087`（今天第 87 单，票面显示 `#0087`）。
+ * `ORD` + 8 位日期 + 4 位**打散后**的当日号，例如 `ORD202609077314`，票面显示 `#7314`。
+ * 当天内唯一（双射保证），但看不出是第几单。
  *
- * 超过 9999 单/天时流水位自然变长，后四位这才可能重复一次——本店日均两位数，
- * 真到那个量级时该做的是把票面位数一起加宽，而不是在这里悄悄取模。
+ * 超过 9999 单/天时会多出一位（`ORD` + 日期 + 4 位 + 圈数），此时后四位才可能重复一次。
+ * 本店日均两位数，真到那个量级该做的是把票面位数一起加宽，而不是在这里悄悄取模。
  *
  * 兜底重试：只有在计数器被人为重置（还原旧库、手工清表）时才可能撞上已存在的号。
  * 撞上就再取一个，不做别的补偿——`orders.order_no` 上的唯一索引是最后一道闸。
@@ -66,7 +114,9 @@ async function nextSeq(dayKey: string): Promise<number> {
 export async function allocateOrderNo(at: Date = new Date()): Promise<string> {
   const dayKey = shanghaiDayKey(at)
   for (let i = 0; i < 5; i++) {
-    const orderNo = `ORD${dayKey}${String(await nextSeq(dayKey)).padStart(4, '0')}`
+    const seq = await nextSeq(dayKey)
+    const cycle = Math.floor(seq / 10000)
+    const orderNo = `ORD${dayKey}${String(scramble4(seq % 10000, dayKey)).padStart(4, '0')}${cycle || ''}`
     if (!(await prisma.order.findUnique({ where: { orderNo }, select: { id: true } }))) return orderNo
   }
   throw new Error(`单号连续 5 次重复，检查 order_no_seq 是否被重置：day_key=${dayKey}`)

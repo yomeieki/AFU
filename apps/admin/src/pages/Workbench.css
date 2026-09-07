@@ -11,7 +11,11 @@
      两者都不会被读成「这是同城单」。 */
   --urge-warn:#c9971a; --urge-warn-bg:#fffbef;
   --urge-late:#a81f16; --urge-late-bg:#fdf1f0;
-  min-height:100vh; background:var(--bg); color:var(--text-1); font-size:14px;
+  /* 整屏定高 + 纵向 flex：顶栏/图例/底部提示各占自然高度，看板吃掉剩下的，
+     滚动交给每一列自己（.wb__col-body）。页面本身不滚——工作台是「一屏看全」的，
+     一旦整页能滚，滑到下面就看不见待接单了。 */
+  height:100vh; overflow:hidden; display:flex; flex-direction:column;
+  background:var(--bg); color:var(--text-1); font-size:14px;
   -webkit-tap-highlight-color:transparent; }
 .wb[data-theme="dark"] { --local:#ff7a54; --local-soft:#33191180; --express:#8fa5ff; --express-soft:#1a1f3d80;
   --ok:#4ade80; --warn:#fbbf24; --danger:#f87171;
@@ -31,7 +35,7 @@
 
 /* ── 顶栏（§8）── */
 .wb__top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
-  padding:10px 14px; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:20; }
+  padding:10px 14px; background:var(--surface); border-bottom:1px solid var(--line); flex:none; z-index:20; }
 .wb__top-l, .wb__top-r { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .wb__shop { font-size:16px; font-weight:700; }
 .wb__meta { color:var(--text-2); font-size:12px; display:inline-flex; align-items:center; gap:5px; }
@@ -54,7 +58,7 @@
   border-bottom:1px solid var(--line); }
 
 /* 图例条（§3）——专注模式下隐藏 */
-.wb__legend { display:flex; align-items:center; gap:10px 16px; flex-wrap:wrap;
+.wb__legend { display:flex; align-items:center; gap:10px 16px; flex-wrap:wrap; flex:none;
   padding:8px 14px; font-size:12px; color:var(--text-2); border-bottom:1px solid var(--line); }
 .wb__legend-g { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .wb__legend-sep { width:1px; height:14px; background:var(--line); }
@@ -69,10 +73,23 @@
 /* ── 看板（§1/§9）── */
 /* 四个干活的列均分，「已完成」收起时只留一条 44px 的窄边栏（展开时回到第五等份）。
    用 grid-template-columns 而不是给那一列设宽度：前四列要真的把腾出来的宽度分掉。 */
-.wb__board { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)) 44px; gap:12px; padding:12px; align-items:start; }
+/* align-items:stretch（默认）让每列都撑满看板高度，列内才有固定的滚动容器；
+   min-height:0 是 flex 子项能收缩的前提，缺了它 overflow 不会生效。 */
+.wb__board { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)) 44px; gap:12px; padding:12px;
+  flex:1; min-height:0; }
 .wb__board--done-open { grid-template-columns:repeat(5,minmax(0,1fr)); }
-.wb__col { background:color-mix(in srgb, var(--surface) 55%, var(--bg)); border-radius:12px; padding:8px; min-height:60vh; }
-.wb__col-head { display:flex; align-items:center; justify-content:space-between; padding:2px 4px 8px; font-weight:700; }
+.wb__col { background:color-mix(in srgb, var(--surface) 55%, var(--bg)); border-radius:12px; padding:8px;
+  display:flex; flex-direction:column; min-height:0; }
+/* 列头 flex:none 固定在列顶，卡片区自己滚。overscroll-behavior:contain 防止滚到底之后
+   把滚动传给外层（触屏上会整屏跟着弹） */
+/* 滚动条整条藏掉（PO 2026-09-07：露出来的那条不好看）。
+   系统默认的滚动条会常驻占位，五列各挂一条就是五条灰杠横在卡片之间。
+   藏了也不会让人不知道「下面还有」——列头写着本列有几张，而且滚动位置在中间时
+   上下两端都能看到卡片被截断的边。 */
+.wb__col-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+  scrollbar-width:none; -ms-overflow-style:none; }
+.wb__col-body::-webkit-scrollbar { width:0; height:0; }
+.wb__col-head { display:flex; align-items:center; justify-content:space-between; padding:2px 4px 8px; font-weight:700; flex:none; }
 .wb__col-count { font-size:12px; color:var(--text-2); font-variant-numeric:tabular-nums; }
 .wb__empty { color:var(--text-2); font-size:12px; text-align:center; padding:18px 0; }
 /* 收起态的「已完成」：竖排标题 + 计数，整条可点展开。min-height 与其它列一致，
@@ -223,8 +240,13 @@
   .wb__board { grid-template-columns:none; grid-auto-flow:column; grid-auto-columns:86vw;
     overflow-x:auto; scroll-snap-type:x mandatory; }
   .wb__col { scroll-snap-align:start; }
+  /* 窄屏一次只看一列，列内滚动照旧；但整屏定高在移动端浏览器地址栏收放时会跳，
+     所以这里放开高度、让页面自己滚 */
+  .wb { height:auto; min-height:100vh; overflow:visible; }
+  .wb__board { min-height:70vh; }
+  .wb__col-body { overflow-y:visible; }
   .wb__drawer { width:100vw; }
   .wb__top { position:static; }
 }
 
-.wb__hint { padding:0 14px 18px; font-size:12px; color:var(--text-2); line-height:1.6; }
+.wb__hint { padding:6px 14px 10px; font-size:12px; color:var(--text-2); line-height:1.6; flex:none; }
