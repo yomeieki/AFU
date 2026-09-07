@@ -662,7 +662,7 @@ git commit -m "feat(miniapp): complete local checkout states and amount breakdow
 - Consumes: `quoteLocalByLocation(latE6, lngE6)`、地址创建/更新返回值。
 - Produces: 保存成功时 `app.globalData.selectedAddress = savedAddress`（仅 select 模式来源）。
 
-- [ ] **Step 1: 写地址回传与取消无副作用失败测试**
+- [x] **Step 1: 写地址回传与取消无副作用失败测试**
 
 覆盖三条行为：从结算页新增后自动选中新地址；地图选择取消保持旧坐标；导入微信地址后旧定位变 stale 且不能直接提交同城订单。
 
@@ -670,15 +670,15 @@ Run: `node --test tests/miniapp/address-flow.test.cjs`
 
 Expected: 新增地址自动回传用例 FAIL。
 
-- [ ] **Step 2: 显式传来源参数**
+- [x] **Step 2: 显式传来源参数**
 
 结算页进入地址列表时带 `mode=select&channel=LOCAL&returnTo=checkout`；地址列表进入新增/编辑时继续透传 `mode=select&returnTo=checkout`。
 
-- [ ] **Step 3: 保存成功自动回传地址**
+- [x] **Step 3: 保存成功自动回传地址**
 
 `createAddress/updateAddress` 成功值就是完整地址。来自结算选择流程时写入 `selectedAddress` 并连续返回到结算页；普通地址管理仍只返回列表页。
 
-- [ ] **Step 4: 匿名报价改走统一 API 包装层**
+- [x] **Step 4: 匿名报价改走统一 API 包装层**
 
 `api/local.js` 新增：
 
@@ -695,11 +695,11 @@ function quoteLocalByLocation(latE6, lngE6) {
 
 地址编辑页删除 `baseURL` 和直连 `wx.request`；失败只清报价条，不弹全局 toast。
 
-- [ ] **Step 5: 地址卡空间与状态验收**
+- [x] **Step 5: 地址卡空间与状态验收**
 
 姓名、电话、默认标、长地址、距离标同时出现时不横向溢出；缺定位卡保持可读，不使用整卡 0.55 opacity 降低姓名电话可读性，改为局部警示。
 
-- [ ] **Step 6: 验证**
+- [x] **Step 6: 验证**
 
 Run: `node --test tests/miniapp/address-flow.test.cjs`
 
@@ -707,7 +707,7 @@ Expected: PASS。
 
 （`pages/address/*.js` 与 `api/local.js` 本来就不是 ES5，跳过 ES5 闸门。）
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/miniapp/pages/address apps/miniapp/api/local.js tests/miniapp/address-flow.test.cjs

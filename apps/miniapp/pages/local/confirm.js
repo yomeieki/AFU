@@ -436,7 +436,9 @@ Page({
   },
 
   onSelectAddress: function() {
-    wx.navigateTo({ url: '/pages/address/list?mode=select&channel=LOCAL' })
+    // returnTo=checkout：地址列表会把它继续传给编辑页，
+    // 顾客在编辑页保存后直接带着新地址回到本页，不必再回列表点一次
+    wx.navigateTo({ url: '/pages/address/list?mode=select&channel=LOCAL&returnTo=checkout' })
   },
 
   onFixAddress: function() {

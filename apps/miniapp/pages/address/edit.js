@@ -1,5 +1,6 @@
 const { getAddresses, createAddress, updateAddress } = require('../../api/address')
-const { baseURL } = require('../../config/index')
+const { quoteLocalByLocation } = require('../../api/local')
+const app = getApp()
 
 var PHONE_RE = /^1[3-9]\d{9}$/
 
@@ -44,6 +45,10 @@ Page({
     id: null,
     // EXPRESS=全国邮寄（默认，行为与既有一致）；LOCAL=同城配送，必须地图选点
     channel: 'EXPRESS',
+    // 'checkout' = 本页是从结算页发起的（结算 → 地址列表 → 本页）。
+    // 保存成功后要把新地址直接交给结算页并回退两层——否则顾客填完地址回去，
+    // 发现选中的还是旧地址，而页面不解释为什么。
+    returnTo: '',
     form: {
       receiverName: '',
       receiverPhone: '',
@@ -77,7 +82,7 @@ Page({
 
   onLoad(options) {
     var channel = options.channel === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
-    this.setData({ channel: channel })
+    this.setData({ channel: channel, returnTo: options.returnTo || '' })
     if (options.id) {
       this.setData({ id: Number(options.id) })
       wx.setNavigationBarTitle({ title: '编辑地址' })
@@ -201,28 +206,19 @@ Page({
   /**
    * 拉取配送报价（距离 / 运费 / 是否超范围）。
    *
-   * 这里直连 wx.request 而不是 utils/request：报价失败（网络抖动、接口未部署）
-   * 不该打断顾客填地址，静默隐藏运费条就行，而 utils/request 会统一弹 toast。
-   * 距离与运费一律以服务端为准，前端不复刻算法（邮寄运费两端各写一遍的教训）。
+   * 走 api/local 的 quoteLocalByLocation（silent:true）。原来这里直连 wx.request
+   * 自己拼 baseURL、自己拼 Authorization——理由是「不想让统一请求层弹 toast」，
+   * 但代价是绕过了整个请求层：token 过期不会自动续签重试、baseURL 改了这里不跟、
+   * 错误码不经过统一映射。silent 这个开关本来就是为这种场景准备的。
+   *
+   * 失败一律只收起报价条，不打断顾客填地址；距离与运费以服务端为准，前端不复刻算法。
    */
   refreshQuote() {
     var self = this
     if (this.data.channel !== 'LOCAL' || this.data.latE6 === null) return
-    var token = wx.getStorageSync('token')
-    wx.request({
-      url: baseURL + '/local/quote',
-      method: 'POST',
-      header: token
-        ? { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }
-        : { 'Content-Type': 'application/json' },
-      data: { latE6: this.data.latE6, lngE6: this.data.lngE6 },
-      success(res) {
-        var body = res.data
-        if (!body || body.code !== 0 || !body.data) {
-          self.setData({ quoteText: '' })
-          return
-        }
-        var q = body.data
+    quoteLocalByLocation(this.data.latE6, this.data.lngE6)
+      .then(function(q) {
+        if (!q) { self.setData({ quoteText: '' }); return }
         var km = (q.distanceM / 1000).toFixed(1)
         if (!q.inRange) {
           self.setData({
@@ -232,13 +228,17 @@ Page({
           return
         }
         var text = '距门店约 ' + km + ' km · 配送费 ¥' + (q.fee / 100).toFixed(2)
-        if (q.estimatedMinutes) text += ' · 约 ' + q.estimatedMinutes + ' 分钟送达'
+        if (q.estimatedMaxRange) {
+          text += q.estimatedMinRange && q.estimatedMinRange !== q.estimatedMaxRange
+            ? ' · 约 ' + q.estimatedMinRange + '–' + q.estimatedMaxRange + ' 分钟送达'
+            : ' · 约 ' + q.estimatedMaxRange + ' 分钟送达'
+        }
         self.setData({ quoteOk: true, quoteText: text })
-      },
-      fail() {
+      })
+      .catch(function() {
+        // 报价失败（网络抖动、限流）不该打断填地址，收起报价条即可
         self.setData({ quoteText: '' })
-      },
-    })
+      })
   },
 
   // 导入微信收货地址（只有用户主动取消才静默，其余一律给出可见反馈）
@@ -261,6 +261,13 @@ Page({
         })
         // 导入会整段覆盖文字地址，和顾客手改文字一样可能让已选的坐标对不上——
         // 走同一条 stale 检测，别漏了这条路径。
+        //
+        // ⚠️ 还必须清掉 coordPickedThisSession：onSave 判「坐标过期」的前提是
+        // 「本次会话没有重新选过点」。顾客先在地图上选了 A 的门口、再导入微信里
+        // 的地址 B，这个标志若还留着 true，onSave 会直接跳过过期判断，把 **A 的坐标**
+        // 连同 B 的文字一起提交——骑手被派到上一个地址去，而顾客与店员都看不出来。
+        // 导入只带回文字与联系人，微信不给坐标，所以它绝不算「选过点」。
+        self.setData({ coordPickedThisSession: false })
         self.refreshCoordStale()
       },
       fail(err) {
@@ -359,9 +366,17 @@ Page({
       : createAddress(payload)
 
     promise
-      .then(function() {
+      .then(function(saved) {
+        // 从结算页发起的新增/编辑：把这张地址**立刻**交给结算页。
+        // 立刻而不是放进下面的定时器里——它是已经确定的事实，没有理由等动画。
+        // 回退两层是因为页栈是 结算 → 地址列表 → 本页；只回一层会停在列表上，
+        // 顾客得再点一次刚存好的那条，而他刚刚已经表达过意图了。
+        var toCheckout = self.data.returnTo === 'checkout' && saved && saved.id
+        if (toCheckout) app.globalData.selectedAddress = saved
         wx.showToast({ title: '保存成功', icon: 'success' })
-        setTimeout(function() { wx.navigateBack() }, 1000)
+        setTimeout(function() {
+          wx.navigateBack({ delta: toCheckout ? 2 : 1 })
+        }, 800)
       })
       .catch(function() {
         self.setData({ saving: false })

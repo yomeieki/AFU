@@ -81,8 +81,12 @@
   color: var(--text-2);
   line-height: 1.5;
 }
+/* 缺定位的地址：**不整卡压暗**。原来是 opacity:0.55，把姓名与电话一起变灰——
+   那两项完全是好的，压暗它们既没道理又让顾客看不清自己填的是谁。
+   缺的只是坐标，所以警示只画在左侧的一根竖条与那颗标签上（见 .local-distance-tag-missing），
+   卡片本身照常可读、照常可点（点它进编辑页补定位）。 */
 .address-card-location-missing {
-  opacity: 0.55;
+  border-left: 6rpx solid var(--warning, #ff9500);
 }
 .local-distance-tag {
   align-self: flex-start;

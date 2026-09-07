@@ -39,10 +39,17 @@ Page({
     // 'select' mode: choosing address for order confirm page
     mode: 'normal',
     channel: 'EXPRESS',
+    returnTo: '',
   },
 
   onLoad(options) {
-    this.setData({ mode: options.mode || 'normal', channel: options.channel === 'LOCAL' ? 'LOCAL' : 'EXPRESS' })
+    this.setData({
+      mode: options.mode || 'normal',
+      channel: options.channel === 'LOCAL' ? 'LOCAL' : 'EXPRESS',
+      // 由结算页传来，原样继续传给编辑页。本页自己不用它——
+      // 它只表示「这条链路的起点是结算页」。
+      returnTo: options.returnTo || '',
+    })
   },
 
   onShow() {
@@ -76,13 +83,22 @@ Page({
       })
   },
 
+  // 把「从哪来」显式传下去。edit 页据此决定：保存成功后是回列表，
+  // 还是把新地址交给结算页并直接回退两层。
+  editQuery: function(prefix) {
+    var q = prefix
+    if (this.data.channel === 'LOCAL') q += 'channel=LOCAL&'
+    if (this.data.returnTo) q += 'returnTo=' + this.data.returnTo + '&'
+    return q.slice(0, -1)
+  },
+
   onAddAddress() {
-    wx.navigateTo({ url: '/pages/address/edit' + (this.data.channel === 'LOCAL' ? '?channel=LOCAL' : '') })
+    wx.navigateTo({ url: '/pages/address/edit' + this.editQuery('?') })
   },
 
   onEditAddress(e) {
     var id = e.currentTarget.dataset.id
-    wx.navigateTo({ url: '/pages/address/edit?id=' + id + (this.data.channel === 'LOCAL' ? '&channel=LOCAL' : '') })
+    wx.navigateTo({ url: '/pages/address/edit' + this.editQuery('?id=' + id + '&') })
   },
 
   onDeleteAddress(e) {
@@ -102,7 +118,9 @@ Page({
     if (this.data.mode !== 'select') return
     var address = e.currentTarget.dataset.address
     if (this.data.channel === 'LOCAL' && address.localStatus === 'missing') {
-      wx.navigateTo({ url: '/pages/address/edit?id=' + address.id + '&channel=LOCAL' })
+      // 补完定位同样要能一路回到结算页——否则顾客补完坐标回到列表，
+      // 还得再点一次同一条地址，而他刚才点的就是它。
+      wx.navigateTo({ url: '/pages/address/edit' + this.editQuery('?id=' + address.id + '&') })
       return
     }
     app.globalData.selectedAddress = address

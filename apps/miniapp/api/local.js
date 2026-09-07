@@ -11,4 +11,21 @@ function quoteLocal(addressId, subtotal) {
   return request({ url: '/local/quote', method: 'POST', silent: true, data: { addressId: addressId, subtotal: subtotal } })
 }
 
-module.exports = { getLocalMeta: getLocalMeta, quoteLocal: quoteLocal }
+// 匿名报价：只给坐标、不给 addressId。地址编辑页在顾客选完点后用它显示一条参考运费。
+// 服务端在这条路径上**不签 quoteToken**（local.ts:97），所以它拿不到能下单的凭证——
+// 这正是想要的：编辑页只是给个参考，真正的报价在结算页按 addressId 重新签。
+// silent=true：顾客正在填地址，报价失败不该弹一个全局 toast 打断他。
+function quoteLocalByLocation(latE6, lngE6) {
+  return request({
+    url: '/local/quote',
+    method: 'POST',
+    silent: true,
+    data: { latE6: latE6, lngE6: lngE6, subtotal: 0 },
+  })
+}
+
+module.exports = {
+  getLocalMeta: getLocalMeta,
+  quoteLocal: quoteLocal,
+  quoteLocalByLocation: quoteLocalByLocation,
+}
