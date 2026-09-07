@@ -89,6 +89,7 @@
       hasAddress: true, hasLocation: true, quoting: false, quoteError: false,
       blockReason: '', submitting: false,
       items: ITEMS, distanceKm: 2.4, distanceSrc: '实测道路', fee: 600,
+      etaText: '约 36 分钟送达', peakHint: '',
       couponId: 1, discount: 500, gift: true,
       headNotice: '', blockActions: [],
       addrState: 'ok', status: 'open',
@@ -129,7 +130,11 @@
       default:
         break
     }
-    if (stress) m.distanceSrc = '估算'
+    if (stress) {
+      m.distanceSrc = '估算'
+      m.etaText = '约 35–40 分钟送达'
+      m.peakHint = '当前为高峰时段，出餐较慢'
+    }
     m.subtotal = m.items.reduce((a, i) => a + i.price * i.qty, 0)
     m.action = checkoutAction(m)
     m.payAmount = m.action.amountState === 'ready' ? m.subtotal - m.discount + (m.fee || 0) : null
@@ -378,11 +383,16 @@
       dlv = `<div class="dlv-err"><span>网络不好，配送费没算出来</span>
         <div class="retry-inline">重新获取运费</div></div>`
     } else {
-      dlv = `<div class="dlv-line">距离 <b>${m.distanceKm} km</b>
-          <span class="src-tag ${m.distanceSrc === '估算' ? 'est' : ''}">${m.distanceSrc}</span></div>
-        ${m.fee != null ? `<div class="dlv-line">配送费 <b>¥${yuan(m.fee)}</b></div>
-        <div class="dlv-line">预计 <b>36 分钟</b> · 19:41 送达</div>` : ''}
-        <div class="dlv-foot">配送时间以骑手接单后实际安排为准</div>`
+      // 文案与 pages/local/confirm.js:37-50 的 decorateQuote 保持一致。
+      // ⚠️ 这里**故意不给钟点**（PO 2026-09-07 决定）：备餐是从店员点「接单」才开始计时的，
+      // 顾客看结算页这一刻还没人接单，写死一个「19:41 送达」等于替店员打包票，必然偏早。
+      // 高峰时段给区间（约 35–40 分钟），平时退化成单值。
+      dlv = `<div class="dlv-line">${m.distanceSrc === '估算'
+            ? `约 <b>${m.distanceKm} km</b>（估算）` : `距门店 <b>${m.distanceKm} km</b>`}</div>
+        ${m.fee != null ? `<div class="dlv-line">${m.fee > 0 ? `配送费 <b>¥${yuan(m.fee)}</b>` : '<b>免运费</b>'}</div>
+        <div class="dlv-line">${m.etaText}</div>` : ''}
+        ${m.peakHint ? `<div class="dlv-foot">${m.peakHint}</div>` : ''}
+        <div class="dlv-foot">备餐从商家接单开始计时，具体送达时间以骑手取货后为准</div>`
     }
 
     // ⑤ 优惠券与积分赠品
