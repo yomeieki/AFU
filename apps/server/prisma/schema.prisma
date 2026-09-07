@@ -271,6 +271,13 @@ model Order {
   // M2 定时任务「每单只提醒一次」标记（备餐超时未呼叫 / 顾客取消申请未处理）
   localUncalledRemindedAt  DateTime? @map("local_uncalled_reminded_at")
   cancelRequestRemindedAt  DateTime? @map("cancel_request_reminded_at")
+  // 取消申请被驳回的时刻（人工驳回或超时自动驳回都写）。
+  // 驳回的动作是把上面几个 cancelRequest* 标记清空——不留这一列的话，驳回之后**没有任何痕迹**，
+  // 工作台就无从显示「已驳回 · 继续完成此订单」，顾客端也无从显示「商家未同意取消」。
+  cancelRequestRejectedAt  DateTime? @map("cancel_request_rejected_at")
+  // 驳回是谁做的：MANUAL（店员点的）| AUTO（接单满 5 分钟没人处理，系统自动驳回）。
+  // 两者对顾客的说法不同，也决定要不要在卡片上区分显示，所以必须分得开。
+  cancelRequestRejectedBy  String?   @map("cancel_request_rejected_by") @db.VarChar(8)
   // 最近一次六家运力报价快照（结构见 services/delivery/quote.ts）。放在 Order 上是因为
   // 接单转备餐的那一刻就要查价，而 Delivery 行要等呼叫时才创建；呼叫时再复制到 Delivery。
   quoteSnapshot       Json?     @map("quote_snapshot")

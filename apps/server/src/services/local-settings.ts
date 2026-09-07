@@ -33,7 +33,27 @@ export interface LocalDeliverySettings {
   detourFactor: number
   fee: { baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number }
   businessHours: BusinessHour[]
+  /**
+   * 平时的备餐时长（分钟）。**这段时间是从店员点「接单」开始算的**，不是从顾客下单开始——
+   * 顾客下单到店员接单之间那一段（等付款、店里正忙）不属于备餐，也不该由这个数来兜。
+   * 预计送达因此在**接单那一刻**才计算（routes/admin/delivery.ts 的 doAccept）。
+   */
   prepMinutes: number
+  /**
+   * 高峰时段：备餐排队，出餐比平时慢。
+   *
+   * 为什么要单列而不是把 prepMinutes 直接调大：一天里只有两个小时是高峰，用高峰的数去报
+   * 全天的单，平时那些单会被报得离谱地晚，顾客看到「预计 45 分钟」就走了。
+   *
+   * prepMin/prepMax 是**范围**：结算页如实告诉顾客「25–30 分钟」，而算预计送达一律取
+   * **上界**——报晚了顾客早收到是惊喜，报早了是投诉。
+   */
+  peak: {
+    /** 高峰时段（Asia/Shanghai，与营业时段同结构，后台可改） */
+    windows: BusinessHour[]
+    prepMinMinutes: number
+    prepMaxMinutes: number
+  }
   riderSpeedKmh: number
   acceptGraceMin: number
   autoCallDelayMin: number
@@ -108,7 +128,17 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   // 只有把客单价推上去才摊得平。先跑一个月看单量与距离分布再调。
   fee: { baseFee: 600, baseKm: 3, perKmFee: 250, freeThreshold: 9900, minOrderAmount: 4000 },
   businessHours: [{ start: '09:00', end: '20:00' }],
-  prepMinutes: 15,
+  // 15 → 20（PO 2026-09-07）：15 是拍脑袋的初值。首单实测接单→取货 10.4 分钟，看着够，
+  // 但那是晚上 8 点的单；而且原来的预计送达从**下单**起算，把「下单→付款→接单」那一段
+  // 白送掉了，两个误差正好被偏慢的骑行均速（15 vs 实测 25.5）盖住。现在计时改到接单起算，
+  // 这个数就必须是真实的备餐时长。
+  prepMinutes: 20,
+  peak: {
+    // 午市与晚市各一小时（PO 2026-09-07 定，后台可改）
+    windows: [{ start: '12:00', end: '13:00' }, { start: '17:00', end: '18:00' }],
+    prepMinMinutes: 25,
+    prepMaxMinutes: 30,
+  },
   riderSpeedKmh: 15,
   acceptGraceMin: 5,
   autoCallDelayMin: 0,
@@ -152,7 +182,7 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
   const o = asObj(raw)
   const D = DEFAULT_LOCAL_SETTINGS
   const store = asObj(o.store), fee = asObj(o.fee), kd = asObj(o.kd100), lim = asObj(o.limits), tip = asObj(o.tip)
-  const cs = asObj(o.callStrategy)
+  const cs = asObj(o.callStrategy), peak = asObj(o.peak)
   const paused = o.paused && typeof o.paused === 'object'
     ? { until: str(asObj(o.paused).until, '', 40) || null, reason: str(asObj(o.paused).reason, '', 60) }
     : null
@@ -184,6 +214,23 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
     },
     businessHours: hours,
     prepMinutes: int(o.prepMinutes, D.prepMinutes, 0, 180),
+    peak: {
+      // 与 businessHours 同一套过滤：格式不合法的行直接丢掉，不让脏值进来。
+      // 高峰时段允许为空数组（= 全天不分高峰），所以这里不做「空则回默认」的兜底——
+      // 店主真想关掉高峰加时，清空这一栏就该真的关掉。
+      windows: Array.isArray(peak.windows)
+        ? peak.windows
+            .map((h) => ({ start: str(asObj(h).start, '', 5), end: str(asObj(h).end, '', 5) }))
+            .filter((h) => HHMM.test(h.start) && HHMM.test(h.end))
+        : D.peak.windows,
+      prepMinMinutes: int(peak.prepMinMinutes, D.peak.prepMinMinutes, 0, 180),
+      // 上界不得小于下界：范围倒置会让结算页打出「30–25 分钟」，也会让取上界算出来的
+      // 预计送达比下界还早。取两者的大值，而不是丢弃或报错——这里是 sanitize，职责是给出可用值。
+      prepMaxMinutes: Math.max(
+        int(peak.prepMaxMinutes, D.peak.prepMaxMinutes, 0, 180),
+        int(peak.prepMinMinutes, D.peak.prepMinMinutes, 0, 180),
+      ),
+    },
     riderSpeedKmh: num(o.riderSpeedKmh, D.riderSpeedKmh, 5, 60),
     acceptGraceMin: int(o.acceptGraceMin, D.acceptGraceMin, 0, 30),
     autoCallDelayMin: int(o.autoCallDelayMin, D.autoCallDelayMin, 0, 60),
@@ -408,8 +455,46 @@ export function calcLocalFee(
   return { fee, inRange, belowMin }
 }
 
-export function estimateMinutes(s: LocalDeliverySettings, distanceM: number): number {
-  return Math.round(s.prepMinutes + (distanceM / 1000 / s.riderSpeedKmh) * 60)
+/** 此刻是不是高峰时段（Asia/Shanghai）。空窗口列表 = 全天不分高峰 */
+export function isPeakNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
+  const cur = shanghaiMinutes(now)
+  return s.peak.windows.some((h) => cur >= toMin(h.start) && cur < toMin(h.end))
+}
+
+/** 骑手在路上的分钟数（不含备餐）。距离是门店→收货地址的道路距离 */
+export function rideMinutes(s: LocalDeliverySettings, distanceM: number): number {
+  return Math.round((distanceM / 1000 / s.riderSpeedKmh) * 60)
+}
+
+/**
+ * 「从现在开始，还要多少分钟送到」的区间（分钟）。
+ *
+ * ⚠️ **计时起点是调用这个函数的那一刻**，而备餐是从店员点「接单」才开始的。
+ * 所以它只有在**接单那一刻**调用才等于真实的预计送达；在下单那一刻调用得到的是
+ * 「假设立刻接单」的乐观值——顾客下单到店员接单之间那一段（等付款、店里正忙）不在里面。
+ * 这正是 2026-09-07 之前 estimatedDeliveryAt 系统性偏早的根因：它在下单时就写死了。
+ * 现在下单路径只用它给顾客一个**大概**（结算页不显示钟点），真正的钟点在接单时才落库。
+ *
+ * 高峰返回真区间（如 25–30 + 路上），平时 min===max。调用方要一个单值时**一律取 max**：
+ * 报晚了顾客早收到是惊喜，报早了是投诉。
+ */
+export function estimateMinutesRange(
+  s: LocalDeliverySettings, distanceM: number, now: Date = new Date()
+): { min: number; max: number; isPeak: boolean } {
+  const ride = rideMinutes(s, distanceM)
+  const peak = isPeakNow(s, now)
+  const prepMin = peak ? s.peak.prepMinMinutes : s.prepMinutes
+  const prepMax = peak ? s.peak.prepMaxMinutes : s.prepMinutes
+  return { min: prepMin + ride, max: prepMax + ride, isPeak: peak }
+}
+
+/**
+ * 单值版（取区间上界）。用于要落一个具体时刻的地方——主要是接单时写 estimatedDeliveryAt。
+ * 保留这个名字是因为它已经被小票、订阅消息等多处引用，语义没变（仍是「还要多少分钟」），
+ * 变的只是它现在会按当前是否高峰给出不同的备餐时长。
+ */
+export function estimateMinutes(s: LocalDeliverySettings, distanceM: number, now: Date = new Date()): number {
+  return estimateMinutesRange(s, distanceM, now).max
 }
 
 // ── 报价签名（防 quote 与下单之间金额漂移）───────────────────

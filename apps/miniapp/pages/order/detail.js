@@ -265,9 +265,22 @@ function decorateOrder(order) {
     deliveryNeutralHint: isDeliveryNeutral ? '如超过预计时间请联系商家' : '',
     showCourierCard: !!delivery && COURIER_LIVE_STATUSES.indexOf(deliveryStatus) !== -1,
     distanceText: order.distanceM == null ? '' : (order.distanceM / 1000).toFixed(1),
-    estimatedDeliveryText: isLocal ? deadlineText(order.estimatedDeliveryAt) : '',
+    // 预计送达分三段说，越往后越确定（PO 2026-09-07）：
+    //  ① 还没接单：不给钟点——备餐从接单才开始计时，此刻任何钟点都是替商家打包票；
+    //  ② 已接单、骑手还没取货：给接单时算好的钟点，但标「预计」；
+    //  ③ 骑手已取货：这才是真正的预计送达（剩下的只有路上那一段，最确定）。
+    // estimatedDeliveryAt 现在是**接单时**才落库的，所以 ① 里它本来就是空的。
+    estimatedDeliveryText: isLocal && order.estimatedDeliveryAt ? deadlineText(order.estimatedDeliveryAt) : '',
+    estimatedDeliveryHint: !isLocal ? '' : (
+      !order.acceptedAt ? '商家接单后显示'
+        : (delivery && delivery.pickedUpAt ? '' : '骑手取货后更准')
+    ),
     localCancelDeadlineText: isLocal ? deadlineText(order.cancelRequestDeadline) : '',
-    showLocalCancelUnavailable: isLocal && order.status === 'PREPARING' && !order.cancelRequestedAt && order.canRequestCancel !== true,
+    // 申请被驳回过（人工或超时自动）。顾客上一次看到的是「已提交，商家会尽快处理」，
+    // 不给个结论他会一直等——而驳回把 cancelRequestedAt 清空了，只能靠这条痕迹。
+    showLocalCancelRejected: isLocal && !order.cancelRequestedAt && !!order.cancelRequestRejectedAt
+      && ['PAID', 'PREPARING'].indexOf(order.status) !== -1,
+    showLocalCancelUnavailable: isLocal && order.status === 'PREPARING' && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true,
     // 自助取消/退款：待付款，或已付款且商家未接单
     canSelfCancel: order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt),
     totalAmountText: formatPrice(order.totalAmount),
@@ -315,6 +328,8 @@ Page({
     countdown: '',
     courierLoc: null,
     courierDistanceText: '',
+    // 骑手取货后由实时位置算出的送达钟点（第三段）。空串 = 还没到那一步，页面显示大概值
+    liveEtaText: '',
     storeLoc: null,
     graceMin: '',
   },
@@ -372,6 +387,7 @@ Page({
           countdown: order.status === 'PENDING_PAYMENT' ? countdownText(order.payExpireAt) : '',
           courierLoc: null,
           courierDistanceText: '',
+          liveEtaText: '',
         })
         if (order.deliveryType === 'LOCAL') self.loadStoreLoc()
         if (self._pageShown) self.startCourierPoll()
@@ -442,9 +458,13 @@ Page({
           // location 为 null 是正常情况：整块位置示意图随之隐藏。
           // courierDistanceText 为展示用直线距离，不参与计费。
           var loc = r.location || null
+          // 第三段（PO 2026-09-07）：骑手取货之后，服务端用**骑手实时位置**算出的
+          // 剩余分钟数才是「真正的预计送达」——取货前给的都是「备餐 + 距离÷均速」的大概。
+          // 服务端只在 DELIVERING 时给 etaMinutes，所以这里不用再判状态。
           self.setData({
             courierLoc: loc,
             courierDistanceText: courierDistanceText(loc, self.data.order),
+            liveEtaText: typeof r.etaMinutes === 'number' ? timeUtil.fmtAfterMinutes(r.etaMinutes) : '',
           })
         })
         .catch(function() {})

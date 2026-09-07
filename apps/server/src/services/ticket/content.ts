@@ -330,7 +330,12 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     `运费：${yuan(o.shippingFee)}`,
     `<B>实付：${yuan(o.actualAmount)}</B>`,
     ...(o.pointsUsed && o.pointsUsed > 0 ? [`赠品抵扣：${o.pointsUsed} 积分`] : []),
-    `单号：${o.orderNo}`,
+    // PO 2026-09-07 定：**票面一律只印后四位，不印完整单号**。
+    // 这推翻了 09-06 那次「完整单号挪到 footer 小字，客服对单/查退款仍需要」的决定——
+    // 实际店里认单、报单、对账全靠这四位，没人念完整的 20 位；印全串只是把票拉长。
+    // 代价（已与 PO 确认后接受）：后四位取自 6 位随机数，按 20 单/天算，同一天出现两张
+    // 后四位相同的票概率约 2%。真撞上时靠时间与菜品区分；完整单号在后台订单页随时可查。
+    `单号：#${o.orderNo.slice(-4)}`,
     '接单请在工作台操作',
   ]
 
@@ -404,7 +409,8 @@ export function renderOrderTicket(o: TicketOrderInput): string {
 export function renderReminderTicket(input: { orderNo: string; channel: TicketChannel; waitedMin: number; announceNo: number }): string {
   const lines = [
     '<CB>催接单</CB>',
-    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单：${input.orderNo}`,
+    `<CB>#${input.orderNo.slice(-4)}</CB>`,
+    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单`,
     `<B>已等待 ${input.waitedMin} 分钟未接单（第 ${input.announceNo} 次催单）</B>`,
     '请到工作台接单',
   ]
@@ -415,35 +421,46 @@ export function renderReminderTicket(input: { orderNo: string; channel: TicketCh
 export function renderCancelTicket(input: { orderNo: string; channel: TicketChannel; reason: string; at: Date }): string {
   const lines = [
     '<CB>订单取消</CB>',
-    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单：${input.orderNo}`,
+    `<CB>#${input.orderNo.slice(-4)}</CB>`,
+    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单`,
     `时间：${fmtDateTime(input.at)}`,
     `<BOLD>原因：${input.reason}</BOLD>`,
   ]
   return assemble(lines)
 }
 
-/** 顾客申请取消（H6）：订单状态未变，只是店员还没确认，票面必须跟真正的「取消」区分开，
- *  厨房看到这张要暂停制作，等结果，不是当场停工。 */
-export function renderCancelRequestTicket(input: { orderNo: string; channel: TicketChannel; at: Date }): string {
+/**
+ * 顾客申请取消。**这是取消流程里唯一一张票**（PO 2026-09-07 定）。
+ *
+ * 它的读者是**店员**，不是厨房——「厨房不用管，店员会通知」。所以票面回答两个问题：
+ *  ① 停哪一单的哪几道菜（菜名 + 份数，照着停手就行，不必再拿单号去比对挂着的单）；
+ *  ② 该不该退（顾客自己写的理由——「点错了」和「太久了」是两回事）。
+ *
+ * **不印时长**：这张票是在顾客点下申请的那一刻打的，而顾客只有接单后 5 分钟内点得动，
+ * 所以任何「已备餐 X 分钟」印出来恒小于 5，是个废数字。要看等了多久请看工作台卡片。
+ * 也不印地址金额：那些在新单票上已经有了，这张票不负责配送。
+ */
+export function renderCancelRequestTicket(input: {
+  orderNo: string; channel: TicketChannel; at: Date
+  items: TicketItemInput[]; note?: string | null
+}): string {
   const lines = [
     '<CB>顾客申请取消</CB>',
-    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单：${input.orderNo}`,
-    `时间：${fmtDateTime(input.at)}`,
-    '<BOLD>待店员确认，请暂停制作</BOLD>',
+    `<CB>#${input.orderNo.slice(-4)}</CB>`,
+    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单 · ${fmtDateTime(input.at)}`,
+    HR,
+    // 菜名与份数用厨房联那套放大渲染：这两样是隔着灶台要看清的
+    ...input.items.flatMap((it) => kitchenItemLines(it, 0)),
+    HR,
+    ...(input.note ? wrapByWidth(`顾客说：${esc(input.note)}`, LINE_WIDTH) : []),
+    '<BOLD>请到工作台确认处理</BOLD>',
   ]
   return assemble(lines)
 }
 
-/** 取消申请被店员驳回（H6）：顾客还是要这一单，厨房该继续做 */
-export function renderResumeTicket(input: { orderNo: string; channel: TicketChannel; at: Date }): string {
-  const lines = [
-    '<CB>取消申请已驳回</CB>',
-    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单：${input.orderNo}`,
-    `时间：${fmtDateTime(input.at)}`,
-    '<BOLD>请继续制作</BOLD>',
-  ]
-  return assemble(lines)
-}
+// renderResumeTicket（取消申请被驳回 → 出票让厨房继续做）已于 2026-09-07 删除：
+// PO 定「取消流程只留一张票，厨房不用管、店员会通知」，驳回改为在工作台卡片上显示
+// 「已驳回 · 继续完成此订单」。见 routes/admin/delivery.ts 的驳回端点。
 
 /** 后台「打印测试页」 */
 export function renderTestTicket(printerName?: string): string {

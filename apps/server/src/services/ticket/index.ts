@@ -23,7 +23,7 @@ import {
 import { feieProvider } from './feie'
 import { mockPrinterProvider } from './mock'
 import {
-  renderOrderTicket, renderReminderTicket, renderCancelTicket, renderCancelRequestTicket, renderResumeTicket,
+  renderOrderTicket, renderReminderTicket, renderCancelTicket, renderCancelRequestTicket,
   renderTestTicket, TicketOrderInput,
 } from './content'
 import { getLocalSettings, isShopOpenNow } from '../local-settings'
@@ -159,6 +159,8 @@ type OrderForTicket = {
   discountAmount: number
   pointsUsed: number
   items: { productName: string; specText: string | null; quantity: number; subtotal: number; isGift: boolean; pointsCost: number }[]
+  /** 顾客申请取消时自己写的理由。只有 CANCEL_REQUEST 票用它——它是店员判断退不退的主要依据 */
+  cancelRequestNote: string | null
 }
 
 const ORDER_SELECT = {
@@ -167,7 +169,7 @@ const ORDER_SELECT = {
   receiverName: true, receiverPhone: true, receiverFullAddress: true,
   receiverDistrict: true, receiverDetail: true,
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
-  discountAmount: true, pointsUsed: true,
+  discountAmount: true, pointsUsed: true, cancelRequestNote: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
 
@@ -208,10 +210,10 @@ function renderForKind(
     return renderCancelTicket({ orderNo: order.orderNo, channel, reason: '订单取消/退款', at: new Date() })
   }
   if (kind === 'CANCEL_REQUEST') {
-    return renderCancelRequestTicket({ orderNo: order.orderNo, channel, at: new Date() })
-  }
-  if (kind === 'RESUME') {
-    return renderResumeTicket({ orderNo: order.orderNo, channel, at: new Date() })
+    return renderCancelRequestTicket({
+      orderNo: order.orderNo, channel, at: new Date(),
+      items: order.items, note: order.cancelRequestNote,
+    })
   }
   if (kind === 'REPEAT' && !settings.repeat.reprint) {
     return renderReminderTicket({ orderNo: order.orderNo, channel, waitedMin: waitedMin ?? 0, announceNo })
@@ -268,9 +270,9 @@ export async function enqueueOrderTicket(
     return { enqueued: false, reason: 'SETTINGS_UNREADABLE' }
   }
   if (!settings.enabled) return { enqueued: false, reason: 'PRINTER_DISABLED' }
-  // H6：CANCEL_REQUEST（申请取消）、RESUME（驳回后继续制作）与 CANCEL（真正取消）都是「取消类」票，
-  // 同受 printCancel 开关管——开关本意是「取消/退款相关的提醒要不要打」，不是只认字面的 CANCEL。
-  const isCancelKind = kind === 'CANCEL' || kind === 'CANCEL_REQUEST' || kind === 'RESUME'
+  // CANCEL_REQUEST（顾客申请取消）与 CANCEL（真正取消/退款）都是「取消类」票，同受 printCancel
+  // 开关管——开关本意是「取消/退款相关的提醒要不要打」，不是只认字面的 CANCEL。
+  const isCancelKind = kind === 'CANCEL' || kind === 'CANCEL_REQUEST'
   if (isCancelKind && !settings.printCancel) return { enqueued: false, reason: 'CANCEL_TICKET_DISABLED' }
 
   const order = await prisma.order.findUnique({ where: { id: orderId }, select: ORDER_SELECT })

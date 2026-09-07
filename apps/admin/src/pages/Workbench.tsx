@@ -50,6 +50,25 @@ const TIP_STEPS = [200, 500, 1000, 2000]
 const OTHER_COMPANY = '__other__'
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
+/**
+ * 「还剩多久自动回绝退菜」。接单 + acceptGraceMin 分钟到点，服务端会自动回绝并放行呼叫。
+ *
+ * 倒计时**走本地秒表**（每秒重渲染），不依赖 10 秒轮询；`now` 已用服务端时间校准过时钟偏差
+ * （见 skewRef），所以店员那台电脑时间不准也不会算歪。
+ *
+ * 归零之后**不显示 0:00 也不留空**：真正的回绝由调度器执行，60 秒一跳，再加一次快照轮询，
+ * 最坏要等约 70 秒才翻成「已回绝」。这段空窗里若什么都不写，店员会以为倒计时卡死了；
+ * 写死「0:00」同样像卡住。所以归零后改说「即将自动回绝」——它描述的是真实状态。
+ */
+function autoRejectLeft(acceptedAt: string | null | undefined, graceMin: number, now: number): string | null {
+  if (!acceptedAt || !graceMin) return null
+  const deadline = new Date(acceptedAt).getTime() + graceMin * 60_000
+  if (!Number.isFinite(deadline)) return null
+  const left = Math.floor((deadline - now) / 1000)
+  if (left <= 0) return '（即将自动回绝）'
+  return `（约 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 后自动回绝）`
+}
+
 /** 米 → 给人读的距离。1 km 以内用米（「800 m」比「0.8 km」好判断要不要等） */
 const km = (m: number | null | undefined) =>
   m == null ? '--' : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`
@@ -572,8 +591,11 @@ function RejectModal({ order, channel, onClose, onDone }: {
 // ─────────────────────────────────────────────────────────
 // 卡片（§3/§4）：三重编码 = 4px 色条 + 徽章（图标+文字）+ 渠道各自的字段
 // ─────────────────────────────────────────────────────────
-function Card({ card, colKey, now, onOpen, onHandleCancel }: {
-  card: WorkbenchCard; colKey: ColKey; now: number; onOpen: () => void; onHandleCancel: () => void
+function Card({ card, colKey, now, graceMin, onOpen, onHandleCancel }: {
+  card: WorkbenchCard; colKey: ColKey; now: number
+  /** 顾客可申请取消 / 店员可处理的窗口（分钟，接单起算），用来算「还剩多久自动回绝」 */
+  graceMin: number
+  onOpen: () => void; onHandleCancel: () => void
 }) {
   const local = card.channel === 'LOCAL'
   const d = card.local?.delivery ?? null
@@ -624,10 +646,20 @@ function Card({ card, colKey, now, onOpen, onHandleCancel }: {
         )}
       </div>
 
+      {/* 取消申请：不用「去处理」，因为**不处理就是驳回**——接单满 acceptGraceMin 分钟系统自动
+          回绝（服务端 autoRejectStaleCancelRequests，「甲」口径）。所以这条只需要回答一件事：
+          「你要不要退他钱」，以及「不动的话还剩多久自动回绝」。倒计时归零后本条会随下一次
+          快照刷新自然消失（变成下面那条「已驳回」）。 */}
       {card.local?.cancelRequested && (
         <div className="wb__strip wb__strip--warn">
-          <span>顾客申请取消</span>
-          <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>去处理</button>
+          <span>顾客要退菜{autoRejectLeft(card.local.acceptedAt, graceMin, now) ?? ''}</span>
+          <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>同意退款</button>
+        </div>
+      )}
+      {/* 驳回之后厨房要继续做。PO 2026-09-07 定：这件事只显示在屏幕上，不再出票 */}
+      {!card.local?.cancelRequested && card.local?.cancelRejected && (
+        <div className="wb__strip">
+          <span>{card.local.cancelRejected === 'AUTO' ? '超时未处理，已自动回绝退菜' : '已回绝退菜'} · 继续完成此订单</span>
         </div>
       )}
       {(badFlow || callFailed) && d && (
@@ -766,6 +798,8 @@ export default function Workbench() {
   } | null>(null)
   // 骑手实时位置：只在骑手真的上路的那几个状态下轮询，抽屉一关就停（见下面的 useEffect）
   const [courier, setCourier] = useState<CourierLive | null>(null)
+  // 已完成列默认收起（见下面渲染处的注释）。刻意不持久化：每天开工都是干净的四列。
+  const [doneOpen, setDoneOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
   const [modal, setModal] = useState<ModalState>(null)
@@ -1467,15 +1501,34 @@ export default function Workbench() {
         <span>快递发出，可以稍后处理</span>
       </div>
 
-      <div className="wb__board" ref={boardRef}>
+      <div className={`wb__board${doneOpen ? ' wb__board--done-open' : ''}`} ref={boardRef}>
         {COLUMNS.map((col) => {
           // 顺序由服务端排定（同城恒上），前端只按数组顺序渲染，不再排一次
           const list = snap ? snap.columns[col.key] : []
+          // 「已完成」默认折叠成一条窄边栏（PO 2026-09-07 定）：这一列里没有任何待办，
+          // 却常年占着和前四列一样的宽度。收起来之后干活的四列各自变宽约 25%，
+          // 卡片上的地址、备注、骑手电话少折一行。默认每次进页面都是收起的——
+          // 不记忆展开状态：每天开工看到的应该是干净的四列，想看完成情况点开即可。
+          const collapsed = col.key === 'done' && !doneOpen
+          if (collapsed) {
+            return (
+              <section className="wb__col wb__col--collapsed" key={col.key}
+                onClick={() => setDoneOpen(true)} title="点击展开已完成">
+                <div className="wb__col-collapsed-inner">
+                  <span className="wb__col-count">{list.length}</span>
+                  <span className="wb__col-collapsed-t">{col.title}</span>
+                </div>
+              </section>
+            )
+          }
           return (
             <section className="wb__col" key={col.key}>
               <div className="wb__col-head">
                 <span>{col.title}</span>
                 <span className="wb__col-count">{list.length}</span>
+                {col.key === 'done' && (
+                  <button className="wb__iconbtn" onClick={() => setDoneOpen(false)}>收起</button>
+                )}
               </div>
               {list.length === 0
                 ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
@@ -1483,6 +1536,7 @@ export default function Workbench() {
                   <Card
                     key={c.orderId} card={c} colKey={col.key} now={now}
                     onOpen={() => openCard(c, col.key)}
+                    graceMin={snap?.acceptGraceMin ?? 0}
                     onHandleCancel={() => openCard(c, col.key, true)}
                   />
                 ))}

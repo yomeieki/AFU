@@ -143,6 +143,11 @@ export default function LocalSettings() {
     return `¥${toYuan(baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * perKm)}`
   }
   const hoursText = s.businessHours.map((h) => `${h.start}-${h.end}`).join('\n')
+  const peakText = s.peak.windows.map((h) => `${h.start}-${h.end}`).join('\n')
+  // 与营业时段同一套解析：每行 HH:mm-HH:mm，空行忽略。**允许清空**（= 全天不分高峰），
+  // 所以不做「空则回默认」的兜底——店主清空这一栏就该真的关掉高峰加时。
+  const parseWindows = (v: string) => v.split('\n').map((l) => l.trim()).filter(Boolean)
+    .map((l) => { const [start, end] = l.split('-'); return { start: start?.trim() ?? '', end: end?.trim() ?? '' } })
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -219,12 +224,36 @@ export default function LocalSettings() {
               onBlur={(e) => patch({ businessHours: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [start, end] = l.split('-'); return { start: start?.trim() ?? '', end: end?.trim() ?? '' } }) })} />
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="备餐时长（分）"><input className={inputCls} type="number" min={0} value={s.prepMinutes} onChange={(e) => patch({ prepMinutes: Number(e.target.value) })} /></Field>
+            <Field label="备餐时长（分）" hint="从点「接单」开始算，不含顾客下单到接单那一段"><input className={inputCls} type="number" min={0} value={s.prepMinutes} onChange={(e) => patch({ prepMinutes: Number(e.target.value) })} /></Field>
             <Field label="骑行均速（km/h）"><input className={inputCls} type="number" min={5} value={s.riderSpeedKmh} onChange={(e) => patch({ riderSpeedKmh: Number(e.target.value) })} /></Field>
             <Field label="接单后可取消（分）" hint="顾客申请取消的窗口"><input className={inputCls} type="number" min={0} max={30} value={s.acceptGraceMin} onChange={(e) => patch({ acceptGraceMin: Number(e.target.value) })} /></Field>
             <Field label="接单后自动呼叫（分）" hint="0 = 手动呼叫；须 ≥ 可取消窗口"><input className={inputCls} type="number" min={0} max={15} value={s.autoCallDelayMin} onChange={(e) => patch({ autoCallDelayMin: Number(e.target.value) })} /></Field>
             <Field label="单次最多件数"><input className={inputCls} type="number" min={1} value={s.limits.maxItems} onChange={(e) => patch({ limits: { ...s.limits, maxItems: Number(e.target.value) } })} /></Field>
             <Field label="单次最大重量（kg）"><input className={inputCls} type="number" step="0.5" min={0.5} value={s.limits.maxWeightKg} onChange={(e) => patch({ limits: { ...s.limits, maxWeightKg: Number(e.target.value) } })} /></Field>
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <h3 className="font-medium text-gray-800">高峰时段</h3>
+        <p className="text-xs text-gray-500">
+          高峰期出餐排队，备餐比平时慢。这里设的时长只在高峰时段生效，平时仍用上面的「备餐时长」——
+          用高峰的数去报全天的单，平时那些单会被报得离谱地晚。
+          顾客在结算页看到的是区间（如「约 35–40 分钟送达」）；接单时落库的预计送达取<b>上界</b>，
+          报晚了顾客早收到是惊喜，报早了是投诉。
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="高峰时段（每行一段 HH:mm-HH:mm）" hint="留空 = 全天不分高峰">
+            <textarea className={inputCls} rows={3} defaultValue={peakText}
+              onBlur={(e) => patch({ peak: { ...s.peak, windows: parseWindows(e.target.value) } })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="高峰备餐最短（分）">
+              <input className={inputCls} type="number" min={0} value={s.peak.prepMinMinutes}
+                onChange={(e) => patch({ peak: { ...s.peak, prepMinMinutes: Number(e.target.value) } })} /></Field>
+            <Field label="高峰备餐最长（分）" hint="预计送达按这个算">
+              <input className={inputCls} type="number" min={0} value={s.peak.prepMaxMinutes}
+                onChange={(e) => patch({ peak: { ...s.peak, prepMaxMinutes: Number(e.target.value) } })} /></Field>
           </div>
         </div>
       </section>

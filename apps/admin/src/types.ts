@@ -346,7 +346,10 @@ export interface LocalDeliverySettings {
   detourFactor: number
   fee: { baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number }
   businessHours: { start: string; end: string }[]
+  /** 平时备餐时长（分）。**从店员点接单开始算**，不含顾客下单到接单那一段 */
   prepMinutes: number
+  /** 高峰时段：备餐排队。prepMin/prepMax 是范围——结算页如实给顾客看区间，算预计送达取上界 */
+  peak: { windows: { start: string; end: string }[]; prepMinMinutes: number; prepMaxMinutes: number }
   riderSpeedKmh: number
   acceptGraceMin: number
   autoCallDelayMin: number
@@ -454,6 +457,10 @@ export interface WorkbenchCard {
     distanceM: number | null
     estimatedDeliveryAt: string | null   // 规格 §3 要求同城卡片出现「预计送达」，来自 Order.estimatedDeliveryAt
     cancelRequested: boolean
+    /** 取消申请被驳回过：AUTO=接单满 5 分钟系统自动驳回，MANUAL=店员点的。null=没被驳回过 */
+    cancelRejected: 'AUTO' | 'MANUAL' | null
+    /** 接单时刻。卡片用它 + snapshot.acceptGraceMin 自己算「还剩多久自动驳回」的倒计时 */
+    acceptedAt: string | null
     delivery: {
       status: string; statusLabel: string; courierName: string | null; courierMobile: string | null
       /** 最近一次呼叫骑手失败（运力方拒单/下单报错），订单还停在备餐中等店员重呼或改自送。服务端可选下发 */
@@ -475,6 +482,8 @@ export interface WorkbenchSnapshot {
   circuit: { tripped: boolean }
   localEnabled: boolean
   localOpenNow: boolean
+  /** 顾客可申请取消 / 店员可处理的窗口（分钟，从接单起算）——同一条线，见服务端「甲」口径 */
+  acceptGraceMin: number
   paused: { reason: string; until: string | null } | null
   /** 多台打印机取「最差」状态归并（见服务端 workbench.ts 的 summarizePrinterStatus） */
   printer: {

@@ -178,24 +178,27 @@ export function sendRefundSubscribeMessage(
 
 /** 配送通知（快递100 回调 310：骑手已取货出发）。模板字段见 .env WECHAT_TMPL_DELIVER_FIELDS */
 /**
- * 「预计到达」的取数。运力方**不提供真实 ETA**（快递100 没有这个接口），所以只能自己估，
- * 三处口径必须一致（顾客结算页 / 小票 / 这条通知），否则顾客会在三个地方看到三个时间。
+ * 「预计到达」的取数。这条通知在 `310`（骑手已取货）时发出。
  *
- * 原来这里写死「取货时刻 + 30 分钟」——2026-09-06 首单实测 20:06 取货、20:28 送达，
- * 而这条通知说 20:37，比实际晚 9 分钟，也和订单上的 estimatedDeliveryAt（20:46）对不上。
+ * 快递100 **不提供预计送达时间**（调研文档 §6：接口不返回，旧版的 `predictDeliveryTime`
+ * 已经拿掉了）。它给的是**真实道路距离**，所以时间只能由我们自己换算：距离 ÷ 骑行均速。
  *
- * 现在取两者里**更晚**的那个：
- *  - `order.estimatedDeliveryAt`：下单那一刻按 prepMinutes + 距离/均速 算的（local-settings.ts）；
- *  - 此刻 + 本单实际道路距离/均速：骑手已经在路上了，这个更贴近现实。
- * 取更晚的一个是**故意的**：报晚了顾客早收到是惊喜，报早了是投诉。
+ * 这一刻骑手刚拿到货，**剩下的只有路上那一段，备餐已经结束了**——所以这里
+ * **不再叠加备餐时间**，只算路程。这也是它与订单上 `estimatedDeliveryAt` 的区别：
+ * 那个是接单时算的「备餐 + 路上」，此刻只剩后半段。
+ *
+ * 取两者里**更晚**的一个：接单时那个承诺已经发给顾客了，此刻若算出更早的时间就等于
+ * 悄悄提前了承诺，顾客反而会觉得晚了。报晚了是惊喜，报早了是投诉。
  */
 async function estimateArrival(order: { estimatedDeliveryAt?: Date | null }, providerDistanceM?: number | null): Promise<Date> {
   const now = Date.now()
-  let byDistance = now + 30 * 60 * 1000   // 拿不到距离时退回原来的固定 30 分钟
+  // 拿不到距离时退回固定 30 分钟——这是本函数唯一还留着魔数的分支，
+  // 而它只在「配送单上没有 providerDistanceM」时才走到（下单超时留下的占位单等）。
+  let byDistance = now + 30 * 60 * 1000
   if (providerDistanceM != null && providerDistanceM > 0) {
-    const { getLocalSettings } = await import('./local-settings')
+    const { getLocalSettings, rideMinutes } = await import('./local-settings')
     const s = await getLocalSettings()
-    byDistance = now + (providerDistanceM / 1000 / s.riderSpeedKmh) * 3600 * 1000
+    byDistance = now + rideMinutes(s, providerDistanceM) * 60 * 1000
   }
   const planned = order.estimatedDeliveryAt ? order.estimatedDeliveryAt.getTime() : 0
   return new Date(Math.max(byDistance, planned))

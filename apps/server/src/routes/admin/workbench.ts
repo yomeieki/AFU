@@ -66,6 +66,14 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; courie
           distanceM: d?.providerDistanceM ?? null,
           estimatedDeliveryAt: o.estimatedDeliveryAt?.toISOString() ?? null,
           cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
+          // 取消申请被驳回之后卡片要显示「继续完成此订单」——驳回把 cancelRequestedAt 清空了，
+          // 只能靠这条痕迹。只在订单还没走完时显示：单都送到了再提示「继续做」是噪音。
+          cancelRejected: !!o.cancelRequestRejectedAt && ['PAID', 'PREPARING'].includes(o.status)
+            ? (o.cancelRequestRejectedBy === 'AUTO' ? 'AUTO' : 'MANUAL')
+            : null,
+          // 「还剩多久自动驳回」的倒计时基准：接单时刻 +ackGraceMin（甲口径）。
+          // 给前端原始时刻而不是算好的秒数——卡片每秒重渲染，服务端算的数一到前端就过时了。
+          acceptedAt: o.acceptedAt?.toISOString() ?? null,
           delivery: d ? { status: d.status, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
         }
       : null,
@@ -132,6 +140,9 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       },
       circuit: { tripped: circuit.tripped },
       localEnabled: settings.enabled, localOpenNow: isOpenNow(settings),
+      // 「甲」口径：顾客可申请取消的窗口 = 店员可处理的窗口 = 接单后这么多分钟。
+      // 卡片用它 + acceptedAt 自己算倒计时（每秒重渲染，不能让服务端算好再传）。
+      acceptGraceMin: settings.acceptGraceMin,
       paused: settings.paused ? { reason: settings.paused.reason, until: settings.paused.until } : null,
       printer: {
         status: summarizePrinterStatus(printerEntries),

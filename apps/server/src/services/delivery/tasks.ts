@@ -132,6 +132,59 @@ export async function remindCancelRequestPending(min = 5): Promise<number> {
 }
 
 /**
+ * 取消申请超时未处理 → **自动驳回**（PO 2026-09-07 定的「甲」口径）。
+ *
+ * 计时从**接单**起算，阈值直接复用 `acceptGraceMin`——这不是偷懒，是「甲」的定义：
+ * 顾客能申请的窗口与店员能处理的窗口是**同一条线**，一句话说得清：
+ * 「接单 5 分钟之后这一单就不能取消了，无论谁点」。所以这里绝不能引入第二个阈值设置，
+ * 否则两条线一旦被调成不一样，就会出现「顾客还能申请、但申请一落地就被自动驳回」的荒谬状态。
+ *
+ * 为什么必须有这个任务：顾客在第 4 分钟申请、店员在忙——这条申请会一直挂着，而它
+ * **挡着「呼叫骑手」**（callRider 对 cancelRequestedAt 是硬拦截），订单就卡在备餐中走不了。
+ *
+ * 代价（PO 已知悉并接受）：顾客第 4:30 申请，店员只剩 30 秒。调度器 60 秒一跳，
+ * 所以实际驳回落在 5:00–6:00 之间。
+ *
+ * ⚠️ 与 `remindCancelRequestPending` 的关系：那个任务在 acceptGraceMin=5 的当前配置下
+ * 基本永远轮不到（自动驳回总是先到），但它**不是死代码**——店主若把可取消窗口调大到 30 分钟，
+ * 申请就能真的挂很久，那时它才是有用的。两者阈值不同、语义不同，保留。
+ */
+export async function autoRejectStaleCancelRequests(min?: number): Promise<number> {
+  const s = await getLocalSettings()
+  const threshold = min ?? s.acceptGraceMin
+  const rows = await prisma.order.findMany({
+    where: {
+      deliveryType: 'LOCAL', status: 'PREPARING',
+      cancelRequestedAt: { not: null },
+      acceptedAt: { lt: ago(threshold) },
+    },
+    take: BATCH, select: { id: true, orderNo: true, cancelRequestNote: true },
+  })
+  let n = 0
+  for (const o of rows) {
+    // 与人工驳回同一套写法：条件带上 cancelRequestedAt 非空，店员在这一瞬间抢先处理了就让给他
+    const moved = await prisma.order.updateMany({
+      where: { id: o.id, status: 'PREPARING', cancelRequestedAt: { not: null } },
+      data: {
+        cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
+        cancelRequestRejectedAt: new Date(), cancelRequestRejectedBy: 'AUTO',
+      },
+    })
+    if (moved.count === 0) continue
+    n++
+    // 告知而不是告警：这是预期内的规则生效，不是异常。但店员该知道「有个顾客想取消、
+    // 系统按规则替你回绝了」——他可能想主动打个电话，而不是等顾客打进来。
+    notifyLocalDeliveryAlert('取消申请已自动驳回', [
+      `订单 ${o.orderNo}`,
+      `接单已超过 ${threshold} 分钟仍无人处理，按规则不再受理取消`,
+      ...(o.cancelRequestNote ? [`顾客当时写的理由：${o.cancelRequestNote}`] : []),
+      '订单继续制作。如需协商请主动联系顾客',
+    ])
+  }
+  return n
+}
+
+/**
  * 报价保鲜（规格 §6b 保鲜第一层）：「备餐中 + 无在途配送单 + 报价早于 N 分钟」的单重查一次。
  * 备餐时长不固定（十分钟到半小时都有），报价会过时；查价免费不扣费，所以定时刷比在
  * 点呼叫时强制重查更好——最坏也就旧 N 分钟，而店员点下去的那一刻不会卡。

@@ -51,11 +51,20 @@
   padding:8px 14px; font-size:12px; color:var(--text-2); border-bottom:1px solid var(--line); }
 
 /* ── 看板（§1/§9）── */
-.wb__board { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; padding:12px; align-items:start; }
+/* 四个干活的列均分，「已完成」收起时只留一条 44px 的窄边栏（展开时回到第五等份）。
+   用 grid-template-columns 而不是给那一列设宽度：前四列要真的把腾出来的宽度分掉。 */
+.wb__board { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)) 44px; gap:12px; padding:12px; align-items:start; }
+.wb__board--done-open { grid-template-columns:repeat(5,minmax(0,1fr)); }
 .wb__col { background:color-mix(in srgb, var(--surface) 55%, var(--bg)); border-radius:12px; padding:8px; min-height:60vh; }
 .wb__col-head { display:flex; align-items:center; justify-content:space-between; padding:2px 4px 8px; font-weight:700; }
 .wb__col-count { font-size:12px; color:var(--text-2); font-variant-numeric:tabular-nums; }
 .wb__empty { color:var(--text-2); font-size:12px; text-align:center; padding:18px 0; }
+/* 收起态的「已完成」：竖排标题 + 计数，整条可点展开。min-height 与其它列一致，
+   否则收起时看板右缘会缺一块。 */
+.wb__col--collapsed { padding:8px 4px; cursor:pointer; }
+.wb__col--collapsed:hover { background:color-mix(in srgb, var(--surface) 75%, var(--bg)); }
+.wb__col-collapsed-inner { display:flex; flex-direction:column; align-items:center; gap:8px; padding-top:2px; }
+.wb__col-collapsed-t { writing-mode:vertical-rl; letter-spacing:2px; font-weight:700; color:var(--text-2); font-size:13px; }
 
 /* ── 卡片（§3/§4）── */
 .wb__card { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:10px;
