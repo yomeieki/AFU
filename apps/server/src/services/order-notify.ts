@@ -7,6 +7,7 @@
  */
 
 import { sendWecomMarkdown, sendPushPlus, shouldSendAlert } from './notify'
+import { getLocalSettings } from './local-settings'
 
 interface NotifyOrderInfo {
   orderNo: string
@@ -80,18 +81,26 @@ export function notifyRefundRequest(order: {
 }
 
 /** 顾客在接单后宽限期内申请取消同城订单，需店员到工作台确认并退款。 */
-export function notifyCancelRequest(order: {
+export async function notifyCancelRequest(order: {
   orderNo: string
   actualAmount: number
   receiverName: string
   receiverPhone: string
   note?: string | null
-}): void {
+}): Promise<void> {
   const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
   if (!wecom && !pushplusToken) return
+  // 窗口分钟数曾经是写死的字面量「5」，而真值是可配置的 acceptGraceMin（后台 0-30 可调，
+  // 默认 5，见 local-settings.ts）——orders.ts 的 cancelWindowOf 每次都实时读它判定窗口。
+  // 店主一旦把窗口改成比如 15，这条推送若还硬编码 5，就会把第 10 分钟的合法申请
+  // 说成「超出 5 分钟窗口」，店员核对/驳回全靠误导文案，所以这里必须现读一次配置。
+  const graceMin = (await getLocalSettings()).acceptGraceMin
+  // graceMin === 0 表示店主把窗口关掉了——此时顾客理应申请不了取消，
+  // 旧文案「接单后即可申请」把这个「关闭」说成了「随时可申请」，语义正好反了
+  const windowText = graceMin > 0 ? `接单后 ${graceMin} 分钟内` : '接单后不可申请（窗口已关闭）'
   const content = [
-    `**🛵 同城订单：顾客申请取消（接单后 5 分钟内，需确认全额退款）**`,
+    `**🛵 同城订单：顾客申请取消（${windowText}，需确认全额退款）**`,
     `订单号：${order.orderNo}`,
     `金额：**¥${fmtYuan(order.actualAmount)}**`,
     `顾客：${order.receiverName} ${order.receiverPhone}`,

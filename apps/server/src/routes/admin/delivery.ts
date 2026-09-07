@@ -7,7 +7,7 @@ import { AppError } from '../../middlewares/error'
 import {
   callRider, voidUnknownDelivery, precancelDelivery, cancelDelivery, addTip, selfDeliver, markDelivered,
 } from '../../services/delivery/orchestrator'
-import { refreshOrderQuote, kickOffQuote, isQuoteStale } from '../../services/delivery/quote'
+import { refreshOrderQuote, kickOffQuote, isQuoteStale, QUOTE_FRESH_MS } from '../../services/delivery/quote'
 import { getCourierLocationByOrder } from '../../services/delivery/courier-location'
 import { getLocalSettings, haversineM } from '../../services/local-settings'
 import { enqueueOrderTicket } from '../../services/ticket'
@@ -177,9 +177,18 @@ router.get('/:id/delivery', async (req: Request, res: Response, next: NextFuncti
       events: delivery?.events ?? [],
       costFen,
       // 呼叫弹窗要的那一块：六家报价 + 查询时间 + 是否已过期（>5 分钟转琥珀底并标「已过期」）。
-      // stale 在服务端算，免得前端各自复刻一遍阈值。
+      // stale 仍在这里算一次给首屏用，但它是「取详情这一刻」的快照——抽屉一旦被店员晾在
+      // 那不关，10 秒轮询只换列位置/卡片，不会重新调这个接口，stale 就冻结在旧值上，
+      // 久留之后确认框会承诺一个其实已经过期的报价。所以额外把 quoteFreshMs 阈值也下发，
+      // 前端（CallQuoteBlock）改成拿 quotedAt + quoteFreshMs 每次渲染时自己重算，
+      // 不再只读这个一次性布尔；阈值仍由服务端定义并下发，前端不复刻常量。
       quote: order
-        ? { snapshot: order.quoteSnapshot ?? null, quotedAt: order.quotedAt?.toISOString() ?? null, stale: isQuoteStale(order.quotedAt) }
+        ? {
+            snapshot: order.quoteSnapshot ?? null,
+            quotedAt: order.quotedAt?.toISOString() ?? null,
+            stale: isQuoteStale(order.quotedAt),
+            quoteFreshMs: QUOTE_FRESH_MS,
+          }
         : null,
     })
   } catch (e) { next(e) }

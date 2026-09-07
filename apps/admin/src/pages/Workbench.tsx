@@ -46,6 +46,17 @@ const PRINTER_DOT_CLS: Record<WorkbenchSnapshot['printer']['status'], string> = 
   NOT_CONNECTED: '', ONLINE: 'wb__dot--ok', ABNORMAL: 'wb__dot--warn', OFFLINE: 'wb__dot--danger',
 }
 const EXPRESS_COMPANIES = ['顺丰速运', '京东物流', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政 EMS', '德邦快递']
+/** 服务端 QUOTE_FRESH_MS 的兜底值（quote.ts:36），仅在旧版接口没下发 quoteFreshMs 时使用 */
+const DEFAULT_QUOTE_FRESH_MS = 5 * 60 * 1000
+/**
+ * 按当前时间对 quotedAt 实时判定新鲜度，不读服务端一次性算好又被前端冻住的 stale 布尔。
+ *
+ * skewMs（服务端时间 - 本机时间，见 Workbench 组件的 skewRef）默认 0，但呼叫弹窗必须传真值——
+ * 店里的平板时钟经常偏几分钟，纯用 Date.now() 比服务端 quotedAt 会在平板慢表时把已经过期
+ * 的报价误判成新鲜（平板慢 3 分钟时，7 分钟前的报价算出来只有 4 分钟，蹭进 5 分钟阈值内）。
+ */
+const isQuoteStaleNow = (quotedAt: string | null | undefined, freshMs: number, skewMs = 0) =>
+  !quotedAt || (Date.now() + skewMs) - Date.parse(quotedAt) > freshMs
 const TIP_STEPS = [200, 500, 1000, 2000]
 const OTHER_COMPANY = '__other__'
 
@@ -164,19 +175,37 @@ interface ConfirmSpec {
  *
  * batchPrice 免费、不下单、不落库，所以刷新按钮可以随便点。
  */
-function CallQuoteBlock({ orderId, initial, onLowest }: {
+function CallQuoteBlock({ orderId, initial, freshMs, skewMs, onLowest }: {
   orderId: number
   initial: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+  /** 服务端定义的新鲜度阈值（quote.ts 的 QUOTE_FRESH_MS），与 quotedAt 一起实时重算 stale */
+  freshMs: number
+  /**
+   * 服务端时间 - 本机时间（Workbench 组件的 skewRef.current）。传常量、不要传每秒变的 now——
+   * spec 是点击那一刻建好的快照，传 now 只会把某一秒的偏移值冻进去，毫无意义；
+   * 传 skewRef.current 才能让每次渲染都按「服务端此刻的真实时间」校正过期判断。
+   */
+  skewMs: number
   onLowest: (l: { provider: string; feeFen: number } | null) => void
 }) {
   const [q, setQ] = useState(initial)
   const [busy, setBusy] = useState(false)
+  // initial.stale 只是「打开抽屉那一刻」服务端算好的快照，弹窗可能被店员晾很久才点确认——
+  // 久留期间不会有任何请求把它刷新掉。改成每次渲染都用 quotedAt+freshMs 对着当前时间重算，
+  // 并用一个每秒跳一次的 tick 强制重新渲染，这样弹窗开着不动时新鲜度也会自己翻成「已过期」，
+  // 而不是停在打开那一刻的判断上把一个其实已经过期的报价/运力承诺给店员。
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const t = window.setInterval(() => setTick((n) => n + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+  const stale = isQuoteStaleNow(q?.quotedAt, freshMs, skewMs)
   // 把「当前这份报价的最低价」报给弹窗，让确认键上的运力名与金额始终与眼前这块一致。
   // 报价已过期时报 null：过期意味着服务端在真正下单前会自己重查一次，那时挑中的
   // 可能是另一家——此刻在按钮上写死一个价就是空头承诺。
   useEffect(() => {
-    onLowest(q?.stale ? null : q?.snapshot?.lowest ?? null)
-  }, [q, onLowest])
+    onLowest(stale ? null : q?.snapshot?.lowest ?? null)
+  }, [q, stale, onLowest])
   const refresh = async () => {
     setBusy(true)
     try {
@@ -196,11 +225,14 @@ function CallQuoteBlock({ orderId, initial, onLowest }: {
   }
   const min = Math.min(...quotes.map((x) => x.feeFen))
   return (
-    <div className={`wb__quote${q?.stale ? ' wb__quote--stale' : ''}`}>
+    <div className={`wb__quote${stale ? ' wb__quote--stale' : ''}`}>
       <div className="wb__quote-head">
-        <span>{q?.stale ? '报价已过期' : '当前报价'}</span>
+        <span>{stale ? '报价已过期' : '当前报价'}</span>
         <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 刷新'}</button>
       </div>
+      {/* 报价新鲜度靠时钟偏移校正过，店员没法从「过期/未过期」倒推查价的实际时间——
+          直接写出查价时刻（按上海时区，与小票/其他时间戳同口径），比自己心算靠谱 */}
+      <div className="wb__muted">查于 {fmtHHmm(q?.quotedAt)}</div>
       {[...quotes].sort((a, b) => a.feeFen - b.feeFen).map((x) => (
         <div className="wb__line" key={x.provider}>
           <span>{providerLabel(x.provider)}{x.feeFen === min && <span className="wb__muted"> 最低</span>}</span>
@@ -750,6 +782,10 @@ export default function Workbench() {
   /** load() 请求序号：只应用「已发出的请求里最新那个」的响应，丢弃后到的旧快照（I2） */
   const loadSeqRef = useRef(0)
   const appliedSeqRef = useRef(0)
+  /** loadDetail() 请求序号：openCard / afterAction / 轮询换列都会调它，网络不保序时
+   *  必须丢弃后发先至的旧响应，否则可能用旧详情覆盖刚刚才落地的新详情（同 I2 的道理） */
+  const detailSeqRef = useRef(0)
+  const appliedDetailSeqRef = useRef(0)
 
   const [snap, setSnap] = useState<WorkbenchSnapshot | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -761,9 +797,18 @@ export default function Workbench() {
   const [detail, setDetail] = useState<{
     order: Order; delivery: DeliveryInfo | null; events: DeliveryEventInfo[]
     // 服务端早就返回 quote/costFen 了，此前前端一直原样丢掉——报价块与「配送成本」都要用
-    quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+    // quoteFreshMs：服务端下发的新鲜度阈值，配合 quotedAt 由 CallQuoteBlock 自己实时重算 stale
+    quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean; quoteFreshMs: number } | null
     costFen: number
   } | null>(null)
+  // 轮询发现抽屉换列/配送状态变了，但新详情还没拉回来这段窗口期：renderActions 的按钮
+  // 全部由 detail.delivery 算，此时 detail 仍是旧列的——不置这个标记的话按钮会短暂
+  // 全部消失或显示上一列的按钮（见复核纪要「抽屉随快照轮询自动换列」）。
+  const [detailRefreshing, setDetailRefreshing] = useState(false)
+  // 轮询发现抽屉里的卡片在所有列里都找不到了（订单被取消/退款/以其他方式离开看板）：
+  // 不是「换列」，是「消失」——detail.delivery 停在最后一次落地的旧值，renderActions
+  // 继续用它算按钮会显示一堆再也点不动（或点了也没意义）的操作。见下面轮询换列的 useEffect。
+  const [gone, setGone] = useState(false)
   // 骑手实时位置：只在骑手真的上路的那几个状态下轮询，抽屉一关就停（见下面的 useEffect）
   const [courier, setCourier] = useState<CourierLive | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -874,9 +919,14 @@ export default function Workbench() {
   }, [])
 
   const loadDetail = useCallback(async (orderId: number, channel: Channel) => {
+    const seq = ++detailSeqRef.current
     setDetailLoading(true)
     try {
       const [o, d] = await Promise.all([getOrder(orderId), channel === 'LOCAL' ? getOrderDelivery(orderId) : null])
+      // 弱网下这次响应可能是后发先至的旧请求（openCard/afterAction/轮询换列都会调 loadDetail）：
+      // 只应用最新那一发，否则旧详情落地会把刚刚已经生效的新详情又盖回去
+      if (seq < appliedDetailSeqRef.current) return
+      appliedDetailSeqRef.current = seq
       setDetail({
         order: o.data.data,
         delivery: d?.data.data.delivery ?? null,
@@ -884,21 +934,30 @@ export default function Workbench() {
         quote: d?.data.data.quote ?? null,
         costFen: d?.data.data.costFen ?? 0,
       })
+      setDetailRefreshing(false)
     } catch (e) {
+      if (seq < appliedDetailSeqRef.current) return
       toast.error(apiMessage(e, '订单详情加载失败'))
       // 卡片「去处理」把标志位置了 true，详情却加载失败：不复位的话下一次任意一次成功加载都会莫名弹出退款引导
       setPendingCancelRefund(false)
+      setDetailRefreshing(false)
     } finally { setDetailLoading(false) }
   }, [])
 
   const openCard = (card: WorkbenchCard, colKey: ColKey, wantCancelRefund = false) => {
     setDrawer({ card, colKey })
     setDetail(null); setShowEvents(false); setModal(null)
+    setDetailRefreshing(false)
+    setGone(false)
     setPendingCancelRefund(wantCancelRefund)
     void loadDetail(card.orderId, card.channel)
   }
 
-  const closeDrawer = () => { setDrawer(null); setDetail(null); setModal(null); setPendingCancelRefund(false); setCourier(null) }
+  const closeDrawer = () => {
+    setDrawer(null); setDetail(null); setModal(null); setPendingCancelRefund(false); setCourier(null)
+    setDetailRefreshing(false)
+    setGone(false)
+  }
 
   /**
    * 骑手位置轮询：30 秒一次，只在骑手真的上路的那几个状态下开（服务端还有 20 秒缓存兜着，
@@ -930,17 +989,37 @@ export default function Workbench() {
     if (pendingCancelRefund && detail) { setModal({ kind: 'cancelRefund' }); setPendingCancelRefund(false) }
   }, [pendingCancelRefund, detail])
 
-  // 快照刷新后把抽屉里的卡片换成新的一份（订单可能已经换列）
+  // 快照刷新后把抽屉里的卡片换成新的一份（订单可能已经换列）。
+  //
+  // 列位置/卡片来自这份快照，10 秒一轮；但按钮真正依赖的 detail.delivery 只在 openCard/
+  // afterAction 两处加载，不会因为这里换了列就跟着重取。以前只换 drawer.card/colKey、
+  // 不重拉详情，会出现两种情况：①换列瞬间 renderActions 用旧 detail.delivery 算出的
+  // active 跟新列对不上，一个操作按钮都不出（或还显示上一列的按钮）；②同一列内配送状态
+  // 变了（如骑手接单 CALLING→ACCEPTED，colKey 仍是 waitingCourier）也不会被发现，「打给
+  // 骑手」永远不出现、姓名电话卡死在旧值。这里额外比对 colKey 与卡片自身的状态字段，
+  // 两者任一变化都同步重拉详情；重拉期间用 detailRefreshing 标记，renderActions 据此
+  // 显示「刷新中…」占位而不是让按钮区空白或显示错列的按钮。
   useEffect(() => {
     if (!snap || !drawer) return
     for (const col of COLUMNS) {
       const found = snap.columns[col.key].find((c) => c.orderId === drawer.card.orderId)
       if (found) {
-        if (found !== drawer.card || col.key !== drawer.colKey) setDrawer({ card: found, colKey: col.key })
+        const colChanged = col.key !== drawer.colKey
+        const statusChanged = found.status !== drawer.card.status
+          || found.local?.delivery?.status !== drawer.card.local?.delivery?.status
+        if (found !== drawer.card || colChanged) setDrawer({ card: found, colKey: col.key })
+        if (colChanged || statusChanged) {
+          setDetailRefreshing(true)
+          void loadDetail(found.orderId, found.channel)
+        }
         return
       }
     }
-  }, [snap, drawer])
+    // 五列都没找到：订单已经离开看板（顾客取消退款、或被别的渠道/店员处理掉）。
+    // 抽屉还开着，但 detail 是最后一次成功加载时的旧快照——不置 gone 的话 renderActions
+    // 会照旧渲染上一列的按钮，店员点下去大概率是对着一个已经不存在的状态操作。
+    setGone(true)
+  }, [snap, drawer, loadDetail])
 
   const afterAction = async (msg: string) => {
     toast.success(msg)
@@ -995,6 +1074,13 @@ export default function Workbench() {
   // ── 操作区（§6 分级确认：改状态或花钱的全弹；打给骑手/看进度/查物流不弹）──
   const renderActions = (): ReactNode => {
     if (!drawer || !detail) return null
+    // 订单已经离开看板（顾客取消退款等）：detail 是留在手里的最后一份旧快照，继续用它
+    // 渲染按钮就是在给一个不存在的状态配操作。让店员明确知道要关闭重开，而不是照旧点按钮。
+    if (gone) return <span className="wb__muted">该单已离开看板，请关闭重开</span>
+    // 轮询发现列/配送状态变了、新详情还在路上：detail 此刻仍是上一列的，renderActions
+    // 下面全部靠它算 active——不挡住的话要么按钮全消失，要么显示上一列的按钮。
+    // 用占位文案顶住这段窗口（通常一次轮询周期内、≤10 秒），比空白或错误按钮更不容易让店员误操作。
+    if (detailRefreshing) return <span className="wb__muted">刷新中…</span>
     const { card, colKey } = drawer
     const { order, delivery } = detail
     const ch = card.channel
@@ -1048,7 +1134,15 @@ export default function Workbench() {
           ? '只冻结这一家的配送费。'
           : '每一家各冻结一笔预扣，只有中标那家最终扣款，其余释放。',
         extra: hasQuote
-          ? (onLowest) => <CallQuoteBlock orderId={order.id} initial={detail?.quote ?? null} onLowest={onLowest} />
+          ? (onLowest) => (
+              <CallQuoteBlock
+                orderId={order.id}
+                initial={detail?.quote ?? null}
+                freshMs={detail?.quote?.quoteFreshMs ?? DEFAULT_QUOTE_FRESH_MS}
+                skewMs={skewRef.current}
+                onLowest={onLowest}
+              />
+            )
           : undefined,
         amber: CALL_AMBER, run,
       }
@@ -1167,7 +1261,9 @@ export default function Workbench() {
             {card.local?.cancelRequested && (
               <div className="wb__strip wb__strip--warn">
                 <span>顾客申请取消{o?.cancelRequestNote ? `：${o.cancelRequestNote}` : ''}</span>
-                <button className="wb__iconbtn" disabled={!detail} onClick={() => setModal({ kind: 'cancelRefund' })}>去处理</button>
+                {/* 详情刷新中/订单已离开看板时置灰：退款引导要用可退余额，这两种情况下
+                    detail 要么还没落地要么已经是废弃的旧快照，点了要么弹不出、要么金额是错的 */}
+                <button className="wb__iconbtn" disabled={!detail || detailRefreshing || gone} onClick={() => setModal({ kind: 'cancelRefund' })}>去处理</button>
               </div>
             )}
 
@@ -1381,7 +1477,9 @@ export default function Workbench() {
             >{reprinting ? '发送中…' : '重打小票'}</button>
             {/* 拒单入口只在抽屉底部（§7）：低频但要退款，放卡片上容易误点 */}
             {canReject && (
-              <button className="wb__reject" onClick={() => setModal({ kind: 'reject' })}>拒单并全额退款</button>
+              // 同样的道理：刷新窗口内 canReject 是按旧 detail.order.status 算出来的，
+              // 订单已离开看板时更是对着废弃状态操作，两种情况都先置灰
+              <button className="wb__reject" disabled={detailRefreshing || gone} onClick={() => setModal({ kind: 'reject' })}>拒单并全额退款</button>
             )}
           </div>
         </aside>
