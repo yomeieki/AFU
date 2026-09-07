@@ -81,7 +81,7 @@ export function usePendingOrders(options?: UsePendingOrdersOptions) {
           n.onclick = () => {
             window.focus()
             if (optionsRef.current?.onNotificationClick) optionsRef.current.onNotificationClick()
-            else navigate('/orders?status=PAID')
+            else navigate('/orders/express?status=PAID')
             n.close()
           }
         }

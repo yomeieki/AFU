@@ -5,6 +5,7 @@ import Button from '../components/ui/Button'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import type { LocalDeliverySettings } from '../types'
+import { useUnsavedSettings } from '../components/UnsavedSettings'
 
 const toYuan = (fen: number) => (fen / 100).toFixed(2)
 function toFen(input: string): number | null {
@@ -26,6 +27,7 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
 )
 
 export default function LocalSettings() {
+  const { setDirty } = useUnsavedSettings()
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
   const [money, setMoney] = useState({ baseFee: '', perKmFee: '', freeThreshold: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
@@ -44,6 +46,7 @@ export default function LocalSettings() {
     })
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
     setCoordDirty(false)
+    setDirty(false)
   }
   const editCoord = (p: Partial<typeof coord>) => { setCoord({ ...coord, ...p }); setCoordDirty(true) }
   const [loadFailed, setLoadFailed] = useState(false)
@@ -150,9 +153,9 @@ export default function LocalSettings() {
     .map((l) => { const [start, end] = l.split('-'); return { start: start?.trim() ?? '', end: end?.trim() ?? '' } })
 
   return (
-    <div className="space-y-4 max-w-3xl">
+    <div className="space-y-4 max-w-3xl" onChangeCapture={() => setDirty(true)}>
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-800">同城设置</h2>
+        <h3 className="text-lg font-semibold text-gray-800">同城配送设置</h3>
         <div className="flex items-center gap-2">
           {s.paused ? (
             <Button variant="secondary" size="sm" onClick={handleResume}><PlayCircle className="w-4 h-4" />恢复接单</Button>

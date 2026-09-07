@@ -7,6 +7,7 @@ import {
   getCouponTemplateIssued,
 } from '../api/admin'
 import Button from '../components/ui/Button'
+import { CenterAction } from '../components/BusinessCenter'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
@@ -116,6 +117,9 @@ export default function Coupons() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [filterSource, setFilterSource] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  const [filterChannel, setFilterChannel] = useState('')
+  const [templatePage, setTemplatePage] = useState(1)
+  const templatePageSize = 20
 
   const load = () => {
     setLoading(true)
@@ -130,6 +134,9 @@ export default function Coupons() {
   }
 
   useEffect(() => { load() }, [filterSource, filterStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredTemplates = list.filter((template) => !filterChannel || template.channel === filterChannel || template.channel === 'ALL')
+  const templateRows = filteredTemplates.slice((templatePage - 1) * templatePageSize, templatePage * templatePageSize)
 
   // ── 新建 / 编辑 ────────────────────────────────────────────────────────
   const [showModal, setShowModal] = useState(false)
@@ -327,20 +334,19 @@ export default function Coupons() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-800">券模板管理</h2>
+      <CenterAction>
         <Button onClick={openCreate}>
           <Plus className="w-4 h-4" />
           新建模板
         </Button>
-      </div>
+      </CenterAction>
 
       <div className="bg-white rounded-lg shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <div>
           <label className="block text-xs text-gray-500 mb-1">来源</label>
           <select
             value={filterSource}
-            onChange={(e) => setFilterSource(e.target.value)}
+            onChange={(e) => { setFilterSource(e.target.value); setTemplatePage(1) }}
             className="border border-gray-300 rounded-md px-3 py-1.5 text-sm"
           >
             <option value="">全部</option>
@@ -351,10 +357,22 @@ export default function Coupons() {
           </select>
         </div>
         <div>
+          <label className="block text-xs text-gray-500 mb-1">适用渠道</label>
+          <select
+            value={filterChannel}
+            onChange={(e) => { setFilterChannel(e.target.value); setTemplatePage(1) }}
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+          >
+            <option value="">全部</option>
+            <option value="EXPRESS">全国邮寄</option>
+            <option value="LOCAL">同城配送</option>
+          </select>
+        </div>
+        <div>
           <label className="block text-xs text-gray-500 mb-1">状态</label>
           <select
             value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
+            onChange={(e) => { setFilterStatus(e.target.value); setTemplatePage(1) }}
             className="border border-gray-300 rounded-md px-3 py-1.5 text-sm"
           >
             <option value="">全部</option>
@@ -376,7 +394,7 @@ export default function Coupons() {
           <Table
             columns={10}
             loading={loading}
-            isEmpty={list.length === 0}
+            isEmpty={templateRows.length === 0}
             emptyText="暂无券模板"
             head={
               <tr>
@@ -394,7 +412,7 @@ export default function Coupons() {
             }
             mobileCards={
               <>
-                {list.map((t) => (
+                {templateRows.map((t) => (
                   <div key={t.id} className="border border-gray-100 rounded-lg p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -448,7 +466,7 @@ export default function Coupons() {
               </>
             }
           >
-            {list.map((t) => (
+            {templateRows.map((t) => (
               <tr key={t.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3">
                   <div className="text-gray-800">
@@ -506,7 +524,10 @@ export default function Coupons() {
                 </td>
               </tr>
             ))}
-          </Table>
+        </Table>
+        )}
+        {!loading && !loadFailed && (
+          <Pagination page={templatePage} total={filteredTemplates.length} pageSize={templatePageSize} onChange={setTemplatePage} />
         )}
       </div>
 

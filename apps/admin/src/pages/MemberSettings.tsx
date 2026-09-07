@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Star, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { getMemberSettings, updateMemberSettings, getCouponTemplates } from '../api/admin'
 import Button from '../components/ui/Button'
 import { toast } from '../components/ui/Toast'
@@ -194,7 +194,7 @@ export default function MemberSettings() {
   return (
     <div className="space-y-4 max-w-3xl">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-1.5"><Star className="w-5 h-5" />会员设置</h2>
+        <p className="text-sm text-gray-500">修改积分和新客券后，需要保存才会对顾客侧生效。</p>
         <div className="flex items-center gap-2">
           {dirty && <span className="text-xs text-amber-700">有未保存的修改</span>}
           <Button loading={saving} onClick={handleSave}>{saving ? '保存中...' : '保存'}</Button>
@@ -303,14 +303,14 @@ export default function MemberSettings() {
           {newcomerHealth.level === 'warn' && (
             <>
               {' '}
-              请到 <Link to="/coupons" className="underline">「优惠券」</Link> 页把它重新上架，
+              请到 <Link to="/membership/coupons?source=NEWCOMER" className="underline">「优惠券」</Link> 页把它重新上架，
               或在上面改选别的模板 / 改成「不发新客券」。
             </>
           )}
         </div>
         {!tplFailed && !tplLoading && onTemplates.length === 0 && strayId === null && (
           <p className="text-xs text-gray-500">
-            还没有上架中的新客券模板。先到 <Link to="/coupons" className="underline">「优惠券」</Link> 页新建一个来源为「新客券」的模板并上架，再回来选。
+            还没有上架中的新客券模板。先到 <Link to="/membership/coupons?source=NEWCOMER" className="underline">「优惠券」</Link> 页新建一个来源为「新客券」的模板并上架，再回来选。
           </p>
         )}
       </section>

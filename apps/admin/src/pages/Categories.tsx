@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { getCategories, createCategory, updateCategory, deleteCategory } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
+import { CenterAction } from '../components/BusinessCenter'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
@@ -9,11 +11,13 @@ import ChannelTabs from '../components/ui/ChannelTabs'
 import type { Category, Channel } from '../types'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
+import { readChannel } from '../navigation'
 
 const emptyForm = { name: '', iconUrl: '', sortOrder: 0, status: 1, channel: 'EXPRESS' as Channel }
 
 export default function Categories() {
-  const [channel, setChannel] = useState<Channel>('EXPRESS')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const channel = readChannel(searchParams)
   const [list, setList] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -23,6 +27,14 @@ export default function Categories() {
   const [error, setError] = useState('')
   // 没有 catch 的话接口一挂就渲染「暂无分类」，店主会当成真的没有分类
   const [loadFailed, setLoadFailed] = useState(false)
+
+  const setChannel = (next: Channel) => {
+    setSearchParams((previous) => {
+      const params = new URLSearchParams(previous)
+      params.set('channel', next)
+      return params
+    }, { replace: true })
+  }
 
   const load = () => {
     setLoading(true)
@@ -87,13 +99,12 @@ export default function Categories() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-800">分类管理</h2>
+      <CenterAction>
         <Button onClick={openCreate}>
           <Plus className="w-4 h-4" />
           新增分类
         </Button>
-      </div>
+      </CenterAction>
 
       <ChannelTabs value={channel} onChange={setChannel} />
 

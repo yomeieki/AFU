@@ -92,8 +92,6 @@ export default function ScanStats() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-gray-800">扫码统计</h2>
-
       {/* 日期筛选 */}
       <div className="bg-white rounded-lg shadow-card p-4 flex flex-wrap items-center gap-3">
         <div className="flex rounded-md border border-gray-200 overflow-hidden">
