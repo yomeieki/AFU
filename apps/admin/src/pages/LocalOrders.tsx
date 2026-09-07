@@ -119,8 +119,7 @@ export default function LocalOrders() {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold text-gray-800">同城订单</h1>
+      <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-gray-400">查账与检索用；接单、呼叫骑手、取消配送等操作请到「接单工作台」</p>
       </div>
 

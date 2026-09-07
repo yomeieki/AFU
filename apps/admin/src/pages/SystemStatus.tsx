@@ -4,6 +4,7 @@ import client from '../api/client'
 import type { ApiResponse } from '../types'
 import Spinner from '../components/ui/Spinner'
 import Button from '../components/ui/Button'
+import { CenterAction } from '../components/BusinessCenter'
 
 interface SystemStatusData {
   env: string
@@ -197,13 +198,12 @@ export default function SystemStatus() {
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-800">系统状态</h2>
+      <CenterAction>
         <Button variant="secondary" size="sm" onClick={load} loading={loading}>
           <RefreshCw className="w-4 h-4" />
           刷新
         </Button>
-      </div>
+      </CenterAction>
 
       {/* 总览横幅 */}
       <div

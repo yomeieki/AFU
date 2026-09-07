@@ -2,9 +2,11 @@
   "name": "@food-shop/admin",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "node ../../scripts/check-admin-timezone.mjs && tsc && vite build",
+    "test": "node --test src/navigation.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

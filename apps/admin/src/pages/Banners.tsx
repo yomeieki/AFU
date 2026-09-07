@@ -10,6 +10,7 @@ import {
 } from '../api/admin'
 import type { Banner, Product } from '../types'
 import Button from '../components/ui/Button'
+import { CenterAction } from '../components/BusinessCenter'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import ImageUploader from '../components/ImageUploader'
@@ -145,13 +146,12 @@ export default function Banners() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-800">轮播管理</h2>
+      <CenterAction>
         <Button onClick={() => openEdit('new')}>
           <Plus className="w-4 h-4" />
           新增 Banner
         </Button>
-      </div>
+      </CenterAction>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
         {loadFailed ? (

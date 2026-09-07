@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getShippingSettings, updateShippingSettings } from '../api/admin'
 import Button from '../components/ui/Button'
 import { toast } from '../components/ui/Toast'
+import { useUnsavedSettings } from '../components/UnsavedSettings'
 
 /** 分 → 元字符串（输入框用） */
 const toYuan = (fen: number) => (fen / 100).toFixed(2)
@@ -25,6 +26,7 @@ interface FormState {
 }
 
 export default function ShopSettings() {
+  const { setDirty } = useUnsavedSettings()
   const [form, setForm] = useState<FormState>({ fee: '0.00', freeThreshold: '0.00', minOrderAmount: '0.00' })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -35,13 +37,14 @@ export default function ShopSettings() {
 
   useEffect(() => {
     getShippingSettings()
-      .then((s) =>
+      .then((s) => {
         setForm({
           fee: toYuan(s.fee),
           freeThreshold: toYuan(s.freeThreshold),
           minOrderAmount: toYuan(s.minOrderAmount),
         })
-      )
+        setDirty(false)
+      })
       .catch(() => { setLoadFailed(true); toast.error('运费规则加载失败，请刷新') })
       .finally(() => setLoading(false))
   }, [])
@@ -66,6 +69,7 @@ export default function ShopSettings() {
         freeThreshold: toYuan(saved.freeThreshold),
         minOrderAmount: toYuan(saved.minOrderAmount),
       })
+      setDirty(false)
       toast.success('已保存，新下单立即按新规则计费')
     } catch (e) {
       toast.error((e as Error).message || '保存失败')
@@ -113,8 +117,7 @@ export default function ShopSettings() {
   if (loading) return <div className="text-gray-500">加载中...</div>
 
   return (
-    <div className="space-y-4 max-w-2xl">
-      <h2 className="text-xl font-semibold text-gray-800">店铺设置</h2>
+    <div className="space-y-4 max-w-2xl" onChangeCapture={() => setDirty(true)}>
 
       <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
         <div>
