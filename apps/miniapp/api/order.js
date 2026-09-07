@@ -1,6 +1,8 @@
 const { request } = require('../utils/request')
 const { baseURL } = require('../config/index')
 
+// data 原样透传，**这里不生成 clientRequestId**：幂等键必须由页面持有，
+// 重试时沿用同一个才有意义；在 API 层生成的话每次调用都是新 id，等于没有幂等。
 function createOrder(data, silent) {
   return request({ url: '/orders', method: 'POST', data: data, silent: !!silent })
 }
@@ -8,7 +10,10 @@ function createOrder(data, silent) {
 function getOrders(params) {
   var parts = []
   if (params) {
-    if (params.status) parts.push('status=' + params.status)
+    if (params.status) parts.push('status=' + encodeURIComponent(params.status))
+    // 渠道过滤由服务端做。客户端拿分页结果再筛会漏单——第一页 20 条里可能一条同城都没有。
+    // 只在明确要过滤时才带这个参数；传空串会被服务端按「不过滤」处理，但不如不传干净。
+    if (params.deliveryType) parts.push('deliveryType=' + encodeURIComponent(params.deliveryType))
     if (params.page) parts.push('page=' + params.page)
     if (params.pageSize) parts.push('pageSize=' + params.pageSize)
   }

@@ -85,6 +85,16 @@
         "5195"
       ],
       "port": 5195
+    },
+    {
+      "name": "api-3107",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd apps/server && PORT=3107 WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true WECHAT_QRCODE_MOCK=true LOCAL_DELIVERY_PROVIDER_MOCK=true PRINTER_PROVIDER_MOCK=true npx ts-node-dev --respawn --transpile-only src/app.ts"
+      ],
+      "port": 3107,
+      "autoPort": false
     }
   ]
 }

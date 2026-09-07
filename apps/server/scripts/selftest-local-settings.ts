@@ -19,6 +19,7 @@ import {
   estimateMinutes,
   signQuote,
   verifyQuote,
+  quoteExpiresAt,
 } from '../src/services/local-settings'
 
 let pass = 0
@@ -179,6 +180,28 @@ t('道路距离进了 token：同一地址不同实测距离 → 不同运费档
   assert.strictEqual(calcLocalFee(base, 2100, 3000).fee, 300)
   // 直线 3 km 在范围内（× 1.7 = 5.1 km 其实已超），实测 5.4 km → 必须判超范围
   assert.strictEqual(calcLocalFee(base, 5400, 3000).inRange, false)
+})
+
+t('quoteExpiresAt 与 token 里的 e 是同一个时刻，客户端不必再硬编码 TTL', () => {
+  // 小程序原来自己写死「超过 10 分钟就算陈旧」（confirm.js:398），
+  // 而服务端的 TTL 是 15 分钟——两个数字各写各的，改一边另一边不知道。
+  // 现在过期时刻由服务端随报价一起下发，两边共用这一个函数。
+  const issuedAt = new Date('2026-09-07T00:00:00.000Z')
+  assert.strictEqual(quoteExpiresAt(issuedAt).toISOString(), '2026-09-07T00:15:00.000Z')
+
+  // 同一个 issuedAt 签出来的 token，在过期时刻前一毫秒仍可兑付、到点即失效。
+  const payload = {
+    fee: 600, distanceM: 2400, addressId: 7, latE6: 29350000, lngE6: 104790000,
+    storeLatE6: 29339500, storeLngE6: 104778500, distanceSource: 'MEASURED' as const,
+  }
+  const token = signQuote(payload, issuedAt)
+  // 边界口径：verifyQuote 判的是 `e < now`（local-settings.ts:606），
+  // 所以**过期时刻那一毫秒本身仍然有效**，下一毫秒才失效。
+  // 客户端拿 quoteExpiresAt 做「还新不新鲜」的判断时按同一口径，不要自己再留余量。
+  const exp = quoteExpiresAt(issuedAt).getTime()
+  assert.ok(verifyQuote(token, new Date(exp - 1)) !== null, '过期前一毫秒应当有效')
+  assert.ok(verifyQuote(token, new Date(exp)) !== null, '过期时刻当毫秒仍然有效')
+  assert.strictEqual(verifyQuote(token, new Date(exp + 1)), null, '过期时刻之后即失效')
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

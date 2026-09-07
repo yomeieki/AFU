@@ -11,7 +11,7 @@ import { optionalUserAuth } from '../middlewares/auth'
 import { localQuoteLimiter } from '../middlewares/rate-limit'
 import {
   getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText,
-  billableDistanceM, haversineM, calcLocalFee, estimateMinutesRange, signQuote,
+  billableDistanceM, haversineM, calcLocalFee, estimateMinutesRange, signQuote, quoteExpiresAt,
 } from '../services/local-settings'
 import { measureRoadDistanceM } from '../services/delivery/quote'
 
@@ -63,6 +63,10 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
     const distanceSource: 'MEASURED' | 'ESTIMATED' = measuredM === null ? 'ESTIMATED' : 'MEASURED'
     const q = calcLocalFee(s, distanceM, body.subtotal)
     const est = estimateMinutesRange(s, distanceM)
+    // token 与 quoteExpiresAt 必须出自**同一个 issuedAt**：分别取 new Date() 的话，
+    // 两次调用之间的毫秒差会让客户端算出的过期时刻比 token 里的 e 早或晚，
+    // 边界上会出现「页面以为还新鲜、服务端已经拒了」。
+    const issuedAt = new Date()
     success(res, {
       enabled: s.enabled,
       isOpen: isOpenNow(s),
@@ -94,8 +98,11 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
             fee: q.fee, distanceM, addressId, latE6, lngE6,
             storeLatE6: s.store.latE6, storeLngE6: s.store.lngE6,
             distanceSource,
-          })
+          }, issuedAt)
         : null,
+      // 没签 token 就没有「过期」可言（匿名报价、超范围）——给 null 而不是给一个
+      // 悬空的时刻，免得客户端拿它去判一张根本不存在的凭证还新不新鲜。
+      quoteExpiresAt: q.inRange && addressId > 0 ? quoteExpiresAt(issuedAt).toISOString() : null,
     })
   } catch (e) {
     next(e)

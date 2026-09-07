@@ -103,6 +103,9 @@ const createOrderSchema = z
     // 两列），255 字在 58mm 纸上要占约 17 行放大字，把订单信息全挤没，而且配送联厨房联各印一遍。
     // 数据库仍是 varchar(255)，故意不收窄——不需要迁移，已有数据也不会因为收紧入口变非法。
     remark: z.string().max(20).optional(),
+    // 客户端下单幂等键（UUID）。**必须可选**：邮寄结算页与 e2e 里几十处下单都不传，
+    // 写成必填会让那些调用方当场全红。不传时行为与本字段上线前逐字节一致。
+    clientRequestId: z.string().uuid().optional(),
     // 会员优惠（M2）。两个都可选——不传时整条链路的行为与改前逐字节一致。
     couponId: z.number().int().positive().optional(),
     gifts: z
@@ -125,10 +128,47 @@ interface OrderLine {
   sku: Prisma.ProductSkuGetPayload<Record<string, never>> | null
 }
 
+/**
+ * 「订单已创建」的返回体。首次创建与幂等重试**必须逐字段相同**——
+ * 客户端拿这个返回去跳详情页、拉起支付、显示券名，任何一个字段在重试时缺了或变了，
+ * 都会表现成「第一次下单正常、超时重试后页面少一块」这种极难复现的故障。
+ *
+ * couponName 首次由调用方传进来（那时券对象就在手上）；重试路径没有那个对象，
+ * 按 order.couponId 现查一次。券名是发券时的快照（UserCoupon.name），模板改名不影响它。
+ */
+async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, never>>, couponName?: string | null) {
+  let name = couponName ?? null
+  if (couponName === undefined && order.couponId) {
+    const c = await prisma.userCoupon.findFirst({ where: { id: order.couponId }, select: { name: true } })
+    name = c?.name ?? null
+  }
+  return {
+    orderId: order.id,
+    orderNo: order.orderNo,
+    totalAmount: order.totalAmount,
+    shippingFee: order.shippingFee,
+    actualAmount: order.actualAmount,
+    discountAmount: order.discountAmount,
+    pointsUsed: order.pointsUsed,
+    couponName: name,
+    status: order.status,
+    payExpireAt: payExpireAtOf(order.createdAt, config.order.payTimeoutMin),
+    subscribeTemplateIds: getSubscribeTemplateIds(),
+  }
+}
+
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const { cartItemIds, directItem, addressId, deliveryType, quoteToken, remark, couponId, gifts } = createOrderSchema.parse(req.body)
+    const { cartItemIds, directItem, addressId, deliveryType, quoteToken, remark, couponId, gifts, clientRequestId } =
+      createOrderSchema.parse(req.body)
+
+    // 幂等前置查询：客户端超时重试时，绝大多数情况在这里就命中并原样返回，
+    // 连库存与券都不会再碰一次。真正并发的两次提交靠唯一索引在事务里挡（见下面的 P2002 分支）。
+    if (clientRequestId) {
+      const existing = await prisma.order.findFirst({ where: { userId, clientRequestId } })
+      if (existing) return success(res, await orderCreatedView(existing))
+    }
 
     // 1. 组装下单行：购物车项 或 立即购买单品（不经购物车，避免与已加购数量合并）
     let lines: OrderLine[]
@@ -372,6 +412,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       const newOrder = await tx.order.create({
         data: {
           orderNo,
+          clientRequestId: clientRequestId ?? null,
           userId,
           status: 'PENDING_PAYMENT',
           totalAmount,
@@ -432,21 +473,24 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         await tx.cart.deleteMany({ where: { id: { in: cartItemIds }, userId } })
       }
       return newOrder
-    }, { timeout: 15000 })
-
-    success(res, {
-      orderId: order.id,
-      orderNo: order.orderNo,
-      totalAmount: order.totalAmount,
-      shippingFee: order.shippingFee,
-      actualAmount: order.actualAmount,
-      discountAmount: order.discountAmount,
-      pointsUsed: order.pointsUsed,
-      couponName: coupon?.name ?? null,
-      status: order.status,
-      payExpireAt: payExpireAtOf(order.createdAt, config.order.payTimeoutMin),
-      subscribeTemplateIds: getSubscribeTemplateIds(),
+    }, { timeout: 15000 }).catch(async (e) => {
+      // 并发重试：两次提交几乎同时到达，前置查询都落空，唯一索引让其中一个的事务整体回滚
+      // （库存、券、积分一起回滚，不会出现「扣了库存但没建单」）。输的那一边把赢家原样返回。
+      // 只吞 (user_id, client_request_id) 这一个索引的冲突——别的 P2002（比如 orderNo 撞车）
+      // 是真问题，必须继续往上抛。
+      if (
+        clientRequestId &&
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002' &&
+        String((e.meta as { target?: string } | undefined)?.target ?? '').includes('client_request_id')
+      ) {
+        const winner = await prisma.order.findFirst({ where: { userId, clientRequestId } })
+        if (winner) return winner
+      }
+      throw e
     })
+
+    success(res, await orderCreatedView(order, coupon?.name ?? null))
   } catch (e) {
     next(e)
   }
@@ -461,9 +505,21 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const status = req.query.status as string | undefined
     // 支持逗号分隔多状态（如「待发货」tab = PAID,PREPARING）
     const statuses = status ? status.split(',').filter(Boolean) : []
+    // 渠道过滤（「我的订单」默认只看当前渠道，可切「全部」）。
+    // **必须在服务端过滤**：客户端拿分页结果再筛会漏单——第 1 页 20 条里可能一条同城都没有，
+    // 顾客会以为自己的同城单丢了。
+    //
+    // 非法值走 zod 抛错（→ HTTP 400），**不静默回退成「全部」**：
+    // 前端把参数拼错时那样会毫无征兆，顾客在「同城」页里看到邮寄单而没有任何人收到信号。
+    // 空串按不传处理——前端拼 query 时很容易拼出一个 `&deliveryType=`。
+    const rawDeliveryType = req.query.deliveryType
+    const deliveryType = rawDeliveryType
+      ? z.enum(['EXPRESS', 'LOCAL']).parse(rawDeliveryType)
+      : undefined
 
     const where = {
       userId,
+      ...(deliveryType ? { deliveryType } : {}),
       ...(statuses.length === 1 ? { status: statuses[0] } : statuses.length > 1 ? { status: { in: statuses } } : {}),
     }
 

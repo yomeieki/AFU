@@ -565,12 +565,24 @@ interface QuotePayload {
 const b64u = (s: string) => Buffer.from(s, 'utf8').toString('base64url')
 const hmac = (s: string) => crypto.createHmac('sha256', `quote:${config.jwt.userSecret}`).update(s).digest('hex').slice(0, 32)
 
+/**
+ * 报价凭证的过期时刻。
+ *
+ * 抽出来是为了让**客户端不再自己写一个 TTL**：小程序原来在 confirm.js 里硬编码
+ * 「超过 10 分钟就算陈旧」，而这里签的是 15 分钟——两个数字各写各的，改一边另一边
+ * 不知道，中间那 5 分钟里页面以为凭证还新鲜、服务端已经准备拒了。
+ * 现在 /local/quote 随报价一起把这个时刻下发给客户端，两边共用同一个来源。
+ */
+export function quoteExpiresAt(now: Date = new Date()): Date {
+  return new Date(now.getTime() + QUOTE_TTL_MS)
+}
+
 export function signQuote(p: QuotePayload, now: Date = new Date()): string {
   const body = b64u(JSON.stringify({
     f: p.fee, d: p.distanceM, a: p.addressId,
     la: p.latE6, ln: p.lngE6, sla: p.storeLatE6, sln: p.storeLngE6,
     ds: p.distanceSource,
-    e: now.getTime() + QUOTE_TTL_MS,
+    e: quoteExpiresAt(now).getTime(),
   }))
   return `${body}.${hmac(body)}`
 }

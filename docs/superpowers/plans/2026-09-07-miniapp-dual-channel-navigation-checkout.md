@@ -252,9 +252,9 @@ git commit -m "test(miniapp): lock dual-channel and checkout states"
 - Modify: `apps/server/src/routes/local.ts`
 - Modify: `apps/server/src/routes/orders.ts`
 - Modify: `apps/server/prisma/schema.prisma`
-- Create: `apps/server/prisma/migrations/20260907000000_order_client_request_id/migration.sql`
+- Create: `apps/server/prisma/migrations/20260911000000_order_client_request_id/migration.sql`（改日期：main 已有 20260909 / 20260910 两条迁移，20260907 会排到它们前面）
 - Modify: `apps/server/scripts/selftest-local-settings.ts`
-- Modify: `scripts/e2e.sh`
+- Create: `scripts/e2e.d/53-order-contract.sh`（不是改 `scripts/e2e.sh`——Global Constraints 要求新用例放 e2e.d/NN-*.sh）
 - Modify: `apps/miniapp/api/order.js`
 
 **Interfaces:**
@@ -262,7 +262,7 @@ git commit -m "test(miniapp): lock dual-channel and checkout states"
 - Produces: `GET /orders?deliveryType=LOCAL|EXPRESS`。
 - Produces: `POST /orders.clientRequestId: UUID`，同一用户重复提交同一个 ID 返回同一订单。
 
-- [ ] **Step 1: 给报价过期时间写失败测试**
+- [x] **Step 1: 给报价过期时间写失败测试**
 
 在 `selftest-local-settings.ts` 使用固定时间：
 
@@ -275,7 +275,7 @@ Run: `npm exec --workspace=apps/server -- ts-node --transpile-only scripts/selft
 
 Expected: FAIL because `quoteExpiresAt` is not exported。
 
-- [ ] **Step 2: 导出与 token 共用的过期时间函数**
+- [x] **Step 2: 导出与 token 共用的过期时间函数**
 
 ```ts
 export function quoteExpiresAt(now: Date = new Date()): Date {
@@ -285,7 +285,7 @@ export function quoteExpiresAt(now: Date = new Date()): Date {
 
 `signQuote` 内的 `e` 改为 `quoteExpiresAt(now).getTime()`；`POST /local/quote` 用同一个 `issuedAt` 生成 token 和 ISO 时间。匿名报价没有 token 时 `quoteExpiresAt` 返回 `null`。
 
-- [ ] **Step 3: 给订单渠道过滤和幂等写 e2e 失败断言**
+- [x] **Step 3: 给订单渠道过滤和幂等写 e2e 失败断言**
 
 新增用例必须实际发请求并断言：
 
@@ -300,7 +300,7 @@ Run: `bash scripts/e2e.sh`
 
 Expected: 新增断言失败；既有断言结果不变。
 
-- [ ] **Step 4: 增加幂等列和唯一约束**
+- [x] **Step 4: 增加幂等列和唯一约束**
 
 ```prisma
 clientRequestId String? @map("client_request_id") @db.VarChar(36)
@@ -315,7 +315,7 @@ CREATE UNIQUE INDEX `orders_user_id_client_request_id_key`
   ON `orders`(`user_id`, `client_request_id`);
 ```
 
-- [ ] **Step 5: 实现订单接口校验和幂等返回**
+- [x] **Step 5: 实现订单接口校验和幂等返回**
 
 `createOrderSchema` 增加 `clientRequestId: z.string().uuid().optional()`——**必须可选**。
 `POST /api/orders` 是两个渠道共用的同一个 schema（`routes/orders.ts:100-124`），
@@ -323,7 +323,7 @@ CREATE UNIQUE INDEX `orders_user_id_client_request_id_key`
 也不会传这个字段；写成必填会让邮寄下单与整套 e2e 当场全红。
 不传时行为与改前逐字节一致（不写该列、不做幂等查询）。事务创建订单时写入该值；事务前先查已存在订单，并在并发唯一键冲突时再次查询返回。复用一个 `orderCreatedView(order)` 生成首次和重试完全相同的返回字段。
 
-- [ ] **Step 6: 实现订单渠道过滤**
+- [x] **Step 6: 实现订单渠道过滤**
 
 ```ts
 const deliveryType = z.enum(['EXPRESS', 'LOCAL']).optional().parse(req.query.deliveryType)
@@ -334,11 +334,11 @@ const where = {
 }
 ```
 
-- [ ] **Step 7: 小程序订单 API 显式透传渠道与 request id**
+- [x] **Step 7: 小程序订单 API 显式透传渠道与 request id**
 
 `getOrders(params)` 追加编码后的 `deliveryType`；`createOrder` 保持请求体透传，不在 API 层生成 ID，确保页面重试仍使用同一个值。
 
-- [ ] **Step 8: 验证**
+- [x] **Step 8: 验证**
 
 Run: `npm run build --workspace=apps/server`
 
@@ -352,7 +352,7 @@ Run: `bash scripts/e2e.sh`
 
 Expected: 新增和既有断言全部 PASS，真实配送 provider 未被调用。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add apps/server/src apps/server/prisma apps/server/scripts scripts/e2e.sh apps/miniapp/api/order.js
