@@ -1,35 +1,68 @@
-<!-- 封面分流页：pages[0]，非 tabBar。整屏一张图 + 透明热区。
-     热区坐标全部取自 Figma 导出 SVG 里的真实矩形（几何见 index.wxss 底部注释），
-     不是目测估的；改版时重新从 SVG 的 rect 元素取值即可。 -->
+<!-- 封面分流页：pages[0]，非 tabBar。方案 C 青瓦简约版。
+     三层结构：背景层 + Logo 图片层 + 原生交互层。刻意不做成「一张大图 + 透明热区」——
+     旧亭子版是那样，换背景就得重切热区；现在换背景只动 assets，热区与路由不受影响。
+     热区坐标见 config/cover-entries.js，出自设计交付包的 SVG 真实矩形，不是目测。 -->
 <view class="cover-root">
-  <view class="cover-stage" style="{{stageStyle}}">
-    <image class="cover-img" src="/assets/cover/cover.jpg" mode="scaleToFill" binderror="onImgError" />
 
-    <view class="hot hot-local {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goLocal"></view>
-    <view class="hot hot-express {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goExpress"></view>
+  <!-- 背景。同一张图铺两次：下面一张锚顶，给长屏补足上半部分的宣纸纹理；
+       上面一张锚底，保证青瓦院墙无论屏幕多高都贴着屏幕底边。
+       WXSS 的 background-image 不支持本地路径，所以只能用 image 组件。 -->
+  <image class="cover-bg cover-bg-paper" src="/assets/cover/home-bg-courtyard-wall.jpg"
+         mode="widthFix" binderror="onImgError" aria-hidden="true" />
+  <image class="cover-bg cover-bg-wall" src="/assets/cover/home-bg-courtyard-wall.jpg"
+         mode="widthFix" aria-hidden="true" />
 
-    <view class="hot hot-member {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goMember" data-key="member"></view>
-    <view class="hot hot-coupon {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goMember" data-key="coupon"></view>
-    <view class="hot hot-points {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goMember" data-key="points"></view>
+  <!-- 舞台。stageOffset 让开微信胶囊按钮，stageScale 只在极短屏上兜底。
+       六个热区都在舞台内，跟着一起变换，不会出现「视觉动了热区没动」。 -->
+  <view class="cover-stage" style="transform: translateY({{stageOffset}}rpx) scale({{stageScale}});">
 
-    <view class="hot hot-banner {{debug ? 'hot-debug' : ''}}" hover-class="hot-hover" hover-stay-time="60" bindtap="goExpress"></view>
+    <image class="cover-logo" src="/assets/cover/logo-anniversary.png" mode="aspectFit"
+           binderror="onImgError" aria-role="img" aria-label="丹桂阿福凉菜 30TH 老店" />
+
+    <!-- 会员导航的两条竖线：装饰，落在热区之间的 12rpx 间隙里，不接收点击 -->
+    <view class="cover-divider" style="left: 297rpx;" aria-hidden="true"></view>
+    <view class="cover-divider" style="left: 454rpx;" aria-hidden="true"></view>
+
+    <view wx:for="{{entries}}" wx:key="id"
+          class="hot"
+          style="left:{{item.rect.x}}rpx; top:{{item.rect.y}}rpx; width:{{item.rect.width}}rpx; height:{{item.rect.height}}rpx;"
+          hover-class="hot-hover" hover-start-time="0" hover-stay-time="120"
+          aria-role="button" aria-label="{{item.label}}"
+          data-id="{{item.id}}" bindtap="onTapEntry">
+
+      <view wx:if="{{item.variant === 'delivery'}}" class="card card-delivery">
+        <text class="delivery-cn">{{item.label}}</text>
+        <text class="delivery-en">{{item.en}}</text>
+      </view>
+
+      <view wx:elif="{{item.variant === 'text'}}" class="nav-text">{{item.label}}</view>
+
+      <view wx:else class="card card-cold">
+        <text class="cold-cn">{{item.label}}</text>
+        <text class="cold-en">{{item.en}}</text>
+        <view class="cold-divider" aria-hidden="true"></view>
+        <view class="cold-action">
+          <view class="l1">点击</view>
+          <view class="l2">查看</view>
+        </view>
+      </view>
+
+    </view>
   </view>
 </view>
 
-<!-- 「我的订单」常驻入口。
-     必须是 .cover-root 的兄弟、不能放进 .cover-stage：舞台带负偏移，放进去会被一起拖歪
-     （同下面 privacy-popup 的理由）。也不动封面图本身——图是设计给的位图，改图是另一件事。
+<!-- 「我的订单」常驻入口。必须是 .cover-root 的兄弟、不能放进 .cover-stage：
+     舞台带 translate/scale，放进去会被一起拖歪。
 
-     为什么加这个：同城页不在 tabBar 里，靠 navigateTo 打开，底部天然没有导航栏。
-     顾客下完单再开小程序，要走 封面→全国邮寄(switchTab)→底部「我的」→我的订单 才看得到
-     自己的单。订单列表本身**不按渠道过滤**，同城单一直都在里面，只是路径太绕。
-     用 navigateTo 而不是 switchTab：switchTab 会销毁本页页栈（goExpress 已经踩过一次）。 -->
+     为什么留着：同城页不在 tabBar 里，靠 navigateTo 打开，底部天然没有导航栏。
+     顾客下完单再开小程序，要走 封面→全国邮寄(switchTab)→底部「我的」→我的订单
+     才看得到自己的单。订单列表本身不按渠道过滤，同城单一直都在里面，只是路径太绕。
+     方案 C 的设计稿里没有这个入口，但它是 1c9de11 为了解决真实问题加的，不能跟着改版丢掉。
+     用 navigateTo 而不是 switchTab：switchTab 会销毁本页页栈（同 goExpress 那个坑）。 -->
 <view class="cover-orders" hover-class="cover-orders-hover" hover-stay-time="60" bindtap="goOrders">
   <text class="cover-orders-text">我的订单 ›</text>
 </view>
 
-<!-- 必须是 .cover-root 的兄弟而不是 .cover-stage 的子节点：
-     舞台带负偏移，放进去会把固定定位的遮罩一起拖歪。
-     也必须存在——app.js 的 onNeedPrivacyAuthorization 是按当前页找 #privacy-popup 的，
-     找不到就静默 resolve(disagree)，同城入口会永远失败且不报错。 -->
+<!-- 必须存在且必须是 .cover-root 的兄弟：app.js 的 onNeedPrivacyAuthorization 是按当前页
+     找 #privacy-popup 的，找不到就静默 resolve(disagree)，同城入口会永远失败且不报错。 -->
 <privacy-popup id="privacy-popup" />
