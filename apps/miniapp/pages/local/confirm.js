@@ -130,9 +130,23 @@ Page({
   loadMeta: function() {
     var self = this
     getLocalMeta().then(function(meta) {
-      self.setData({ meta: meta })
+      // meta 独立于 refreshQuote 拉取——refreshQuote 在缺地址/缺坐标/购物车为空三种
+      // 情况下会在发请求前直接 return（下面 refreshQuote 里的三个早退分支），永远不会
+      // 走到 getHeadNotice(quote) 那一步。若这里不单独算一次头条通知，顾客在这三种
+      // 状态下会看不到「同城已暂停/未开通/已打烊」，只看到「缺地址/缺定位」之类的
+      // 引导性文案，误以为补完资料就能下单，白跑一趟地图选点/换地址流程。
+      // 只在 meta 判定为阻塞时才写 headNotice/headBlocking：meta 说「不阻塞」不代表
+      // 比这之前已经由 refreshQuote 算出的更权威（有并发时序），不能反过来把已经
+      // 展示的阻塞提示悄悄清空。
+      var notice = getHeadNotice(meta)
+      self._metaNotice = notice
+      if (notice.blocking) {
+        self.setData({ meta: meta, headNotice: notice.text, headBlocking: true })
+      } else {
+        self.setData({ meta: meta })
+      }
     }).catch(function() {
-      // 报价结果才是确认页的最终状态；meta 仅为报价前的店头信息兜底。
+      // 报价结果才是确认页的最终状态；meta 仅为报价前的店头信息兜底，拉取失败不影响主流程。
     })
   },
 
@@ -179,12 +193,16 @@ Page({
         if (seq !== self._quoteSeq) return
         var quote = decorateQuote(rawQuote)
         var notice = getHeadNotice(quote)
+        // meta 判定的阻塞结论优先于这次报价——两边算法一致，只是取数时间不同；
+        // 一旦 loadMeta 已经判定「暂停/打烊/未开通」，就不再用本次报价结果覆盖头条
+        // 提示，避免极端时序下（meta 比 quote 略新或略旧）来回闪烁/互相打架。
+        var metaNotice = self._metaNotice
         var patch = {
           quoting: false,
           quote: quote,
           quotedAt: Date.now(),
-          headNotice: notice.text,
-          headBlocking: notice.blocking,
+          headNotice: (metaNotice && metaNotice.blocking) ? metaNotice.text : notice.text,
+          headBlocking: (metaNotice && metaNotice.blocking) ? true : notice.blocking,
           quoteError: '',
         }
         // 服务端的状态结论优先级：未开通/暂停 > 打烊 > 超范围 > 未达起送。
