@@ -333,6 +333,11 @@ assert_eq "叠加超库存 code 0（服务端封顶而非报错）" "$(code "$R"
 assert_eq "封顶后 quantity=库存(5)" "$(jq -r .data.quantity <<<"$R")" "5"
 assert_eq "封顶标记 capped=true" "$(jq -r .data.capped <<<"$R")" "true"
 req PUT "/api/admin/products/$LPID" "$AT" '{"stock":50}' >/dev/null # 复位库存，避免影响后续分段
+# 上面把 $LCID 这一行封顶到了 5——同一行会在 §22 被 LCID2（同 userId+productId+skuId，
+# cart.ts:98 按此合并）叠加，8400 的小计会越过 §21 钉的 freeThreshold=8000，把 LO1
+# 的运费顶成 0，assert_eq "运费=报价 fee" 必红。这里把数量复位回 §20 加购时的 2 件，
+# 避免 §20b 的测试状态泄漏进 §22。
+req PUT "/api/cart/$LCID" "$UT" '{"quantity":2}' >/dev/null
 
 echo "== 21. 同城设置/报价 =="
 # enabled 初值与 version 初值都是持久化状态，重复跑 e2e 时不为默认值：

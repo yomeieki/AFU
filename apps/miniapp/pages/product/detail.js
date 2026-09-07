@@ -163,9 +163,13 @@ Page({
         wx.hideLoading()
         self.setData({ skuPopupShow: false, selectedSkuText: selectedSkuText })
         // 同 pages/local/index.js：叠加超库存会被服务端静默封顶，result.capped 时
-        // 用真实加购件数提示，避免顾客以为选的数量全部加上了。
+        // 用真实加购件数提示，避免顾客以为选的数量全部加上了。result.added 是本次
+        // 真正加入的件数（被封顶时小于顾客选的数量，购物车里已到库存上限时为 0）。
         if (result && result.capped) {
-          wx.showToast({ title: '库存不足，已按最多 ' + result.quantity + ' 件加入', icon: 'none', duration: 2000 })
+          var cappedMsg = result.added > 0
+            ? '库存不足，本次加入 ' + result.added + ' 件，购物车内共 ' + result.quantity + ' 件'
+            : '库存不足，购物车内已是最多 ' + result.quantity + ' 件'
+          wx.showToast({ title: cappedMsg, icon: 'none', duration: 2000 })
         } else {
           wx.showToast({ title: isLocal ? '已加入同城购物车' : '已加入购物车', icon: 'success', duration: 1500 })
         }
