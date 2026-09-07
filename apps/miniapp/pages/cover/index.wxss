@@ -1,12 +1,17 @@
-/* 封面分流页｜方案 C 青瓦简约版
-   设计基准 750 × 1333，设计稿 1px === 1rpx。坐标出自设计交付包的
-   specs/hotspots.json、specs/design-tokens.json 与 previews/homepage-formal.svg。
-   所有文字的行盒顶边都是按 SVG 里的基线 y 反算的，不是目测对齐；
-   已在浏览器里逐项实测到 0.00px（12 项几何量，见 config/cover-entries.js 顶部说明）。
+/* 封面分流页｜方案 C 青瓦版 v3
+   设计基准 750 × 1333，设计稿 1px === 1rpx。
+   几何逐项取自 v3 交付包 previews/homepage-formal.svg，配色取自 specs/design-tokens.json。
+   文字行盒顶边按 SVG 基线 y 反算，已在浏览器逐项实测到 0.00px（17 项几何量）。
 
-   底色写死 #F1E9DA（取自背景原图顶部 60px 均值）而不是继承 app.wxss 的 --bg：
-   冷启动时 WeChat 先画 page 背景再渲染，同色才不会闪一下灰白。
-   （旧亭子版这里是 #FBF5E7，跟着换背景一起改了。） */
+   两条踩过的坑，改这个文件前先看：
+   1. 带小数边框（1.25 / 1.7rpx）的盒子，其内绝对定位子元素相对 padding box 排布，
+      而渲染器会把边框按设备像素取整，padding box 原点因此漂移 0.2~0.25rpx。
+      所以所有内框都与外框**平级**，用绝对设计坐标定位，不嵌套。
+   2. .hot 自带 z-index，让热区成为独立堆叠上下文；否则冷链内部 1~5 的层级
+      会窜到页面根层级，盖住「我的订单」等本该更高的元素。
+
+   底色写死 #F1E9DA（背景原图顶部 60px 均值）：冷启动时先画 page 背景再渲染，
+   同色才不会闪一下灰白。 */
 page {
   height: 100%;
   overflow: hidden;
@@ -22,12 +27,7 @@ page {
 }
 
 /* ---------- 背景 ---------- */
-.cover-bg {
-  position: absolute;
-  left: 0;
-  width: 750rpx;
-  z-index: 1;
-}
+.cover-bg { position: absolute; left: 0; width: 750rpx; z-index: 1; }
 .cover-bg-paper { top: 0; }
 .cover-bg-wall { bottom: 0; }
 
@@ -42,162 +42,155 @@ page {
   transform-origin: 375rpx 135rpx;
 }
 
-.cover-logo {
-  position: absolute;
-  left: 125rpx;
-  top: 135rpx;
-  width: 500rpx;
-  height: 292.86rpx;
-}
+.cover-logo { position: absolute; left: 125rpx; top: 135rpx; width: 500rpx; height: 292.86rpx; }
 
-.cover-divider {
-  position: absolute;
-  top: 748rpx;
-  width: 1rpx;
-  height: 38rpx;
-  background: #7A684E;
+/* ---------- 会员浅纸托盘（装饰层，横跨三个热区之下）---------- */
+/* 托盘 140.75→609.25 是一整块，不属于任何单个热区，所以放在热区之前、由舞台直接持有。
+   按下某一项时只有该项文字下移，托盘不动——这正是设计要的效果。 */
+.tray {
+  position: absolute; left: 140.75rpx; top: 732.75rpx; width: 468.5rpx; height: 69.5rpx;
+  box-sizing: border-box; border: 1.25rpx solid #9F7F50; border-radius: 13rpx;
+  background: linear-gradient(180deg, rgba(255, 251, 239, .86), rgba(246, 236, 217, .76));
+  box-shadow: 0 2.5rpx 3.6rpx rgba(89, 66, 38, .14);
+}
+.tray-inner {
+  position: absolute; left: 145rpx; top: 737rpx; width: 460rpx; height: 61rpx;
+  box-sizing: border-box; border: .9rpx solid #BDA477; border-radius: 10rpx;
+}
+.tray-rule { position: absolute; width: 1rpx; background: #AD9163; }
+.tray-diamond {
+  position: absolute; width: 5.66rpx; height: 5.66rpx; background: #A74337;
+  transform: translate(-50%, -50%) rotate(45deg);
 }
 
 /* ---------- 热区 ---------- */
-.hot {
-  position: absolute;
-  z-index: 3;
-  box-sizing: border-box;
-}
-
-/* 按下反馈。旧版按钮画在位图里只能整块压暗；现在是原生元素，
-   直接作用在看得见的框/文字上，反馈更准。 */
-.card,
-.nav-text {
-  transition: background-color .16s ease, opacity .16s ease, transform .16s ease;
-}
-.hot-hover .card {
-  background: rgba(181, 139, 81, .16);
-  border-color: #9C763F;
-  transform: scale(.985);
-}
-.hot-hover .nav-text {
-  opacity: .55;
-  transform: scale(.985);
-}
-
-/* 注意：卡片带 1rpx 边框且 box-sizing 为 border-box，其内绝对定位子元素相对
-   padding box 排布，所以下面所有 top/left 都已经扣掉了这 1rpx。 */
+.hot { position: absolute; z-index: 3; box-sizing: border-box; }
 
 /* ---------- 同城配送 / 全国邮寄 ---------- */
-.card-delivery {
-  position: absolute;
-  left: .5rpx;
-  top: 4.5rpx;
-  width: 305rpx;
-  height: 111rpx;
-  box-sizing: border-box;
-  border: 1rpx solid #B58B51;
-  border-radius: 16rpx;
-  background: rgba(251, 245, 231, .12);
+/* 阶梯式转角 + 双层金线 + 下缘纸层 + 投影。CSS 的 border-radius 做不出这个轮廓，
+   整块框做成矢量 SVG 数据 URI 当背景（任意倍率都清晰，1.7KB，不占素材文件）；
+   文字仍是原生节点，字体、可访问性、按下态都不受影响。
+   viewBox 向外扩 6，投影才不会被自身画布裁掉，故左 -6 上 -2。 */
+.df {
+  position: absolute; left: -6rpx; top: -2rpx; width: 320rpx; height: 132rpx;
+  background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMjAiIGhlaWdodD0iMTMyIiB2aWV3Qm94PSItNiAtNiAzMjAgMTMyIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InAiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNGRkZCRUYiIHN0b3Atb3BhY2l0eT0iLjg2Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRjZFQ0Q5IiBzdG9wLW9wYWNpdHk9Ii43NiIvPjwvbGluZWFyR3JhZGllbnQ+PGZpbHRlciBpZD0icyIgeD0iLTEwJSIgeT0iLTMwJSIgd2lkdGg9IjEyMCUiIGhlaWdodD0iMTY1JSI+PGZlR2F1c3NpYW5CbHVyIGluPSJTb3VyY2VBbHBoYSIgc3RkRGV2aWF0aW9uPSIyLjIiLz48ZmVPZmZzZXQgZHk9IjMuNSIvPjxmZUNvbG9yTWF0cml4IHR5cGU9Im1hdHJpeCIgdmFsdWVzPSIwIDAgMCAwIC4zNSAwIDAgMCAwIC4yNiAwIDAgMCAwIC4xNSAwIDAgMCAuMTggMCIvPjxmZU1lcmdlPjxmZU1lcmdlTm9kZS8+PGZlTWVyZ2VOb2RlIGluPSJTb3VyY2VHcmFwaGljIi8+PC9mZU1lcmdlPjwvZmlsdGVyPjwvZGVmcz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDIpIiBkPSJNMjUgMUgyODFRMjk0IDEgMjk0IDEzUTMwNSAxMyAzMDUgMjRWODhRMzA1IDk5IDI5NCA5OVEyOTQgMTExIDI4MSAxMTFIMjVRMTIgMTExIDEyIDk5UTEgOTkgMSA4OFYyNFExIDEzIDEyIDEzUTEyIDEgMjUgMVoiIGZpbGw9IiNENEJGOTkiIGZpbGwtb3BhY2l0eT0iLjY1Ii8+PHBhdGggZD0iTTI1IDFIMjgxUTI5NCAxIDI5NCAxM1EzMDUgMTMgMzA1IDI0Vjg4UTMwNSA5OSAyOTQgOTlRMjk0IDExMSAyODEgMTExSDI1UTEyIDExMSAxMiA5OVExIDk5IDEgODhWMjRRMSAxMyAxMiAxM1ExMiAxIDI1IDFaIiBmaWxsPSJ1cmwoI3ApIiBzdHJva2U9IiM5NjcxM0UiIHN0cm9rZS13aWR0aD0iMS43IiBmaWx0ZXI9InVybCgjcykiLz48cGF0aCBkPSJNMjUgNkgyODFRMjg5IDYgMjg5IDE4UTMwMCAxOCAzMDAgMjVWODdRMzAwIDk0IDI4OSA5NFEyODkgMTA2IDI4MSAxMDZIMjVRMTcgMTA2IDE3IDk0UTYgOTQgNiA4N1YyNVE2IDE4IDE3IDE4UTE3IDYgMjUgNloiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0I3OTU1RiIgc3Ryb2tlLXdpZHRoPSIxIi8+PHBhdGggZD0iTTI3IDNIMjc5TTMgMjdWODQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkRGMyIgc3Ryb2tlLXdpZHRoPSIxLjciIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==") no-repeat 0 0;
+  background-size: 320rpx 132rpx;
 }
 .delivery-cn {
-  display: block;
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 24.5rpx;
-  height: 32rpx;
-  line-height: 32rpx;
-  box-sizing: border-box;
-  text-align: center;
-  font-size: 32rpx;
-  letter-spacing: 10rpx;
-  /* letter-spacing 会在最后一个字后面留下等宽空隙，居中文本因此整体左偏半格；
+  display: block; position: absolute; left: 0; right: 0; top: 30rpx;
+  height: 32rpx; line-height: 32rpx; box-sizing: border-box;
+  text-align: center; font-size: 32rpx;
+  /* letter-spacing 会在最后一个字后留下等宽空隙，居中文本因此整体左偏半格；
      同值 padding-left 正好抵消，视觉中心才回到设计值 211 / 539。 */
-  padding-left: 10rpx;
-  color: #1E1914;
+  letter-spacing: 2rpx; padding-left: 2rpx;
+  color: #2B2118;
   font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
 }
 .delivery-en {
-  display: block;
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 63rpx;
-  height: 18rpx;
-  line-height: 18rpx;
-  box-sizing: border-box;
-  text-align: center;
-  font-size: 18rpx;
-  letter-spacing: 1.4rpx;
-  padding-left: 1.4rpx;
-  color: #8B6B40;
-  font-family: Georgia, "Times New Roman", serif;
+  display: block; position: absolute; left: 0; right: 0; top: 71rpx;
+  height: 16rpx; line-height: 16rpx; box-sizing: border-box;
+  text-align: center; font-size: 16rpx; color: #806844;
+  font-family: Baskerville, Georgia, "Times New Roman", serif;
 }
 
 /* ---------- 会员中心 / 优惠券 / 积分商城 ---------- */
 .nav-text {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 30rpx;
-  height: 29rpx;
-  line-height: 29rpx;
-  text-align: center;
-  font-size: 29rpx;
-  color: #1E1914;
+  position: absolute; left: 0; right: 0; top: 30rpx;
+  height: 29rpx; line-height: 29rpx; text-align: center;
+  font-size: 29rpx; color: #2B2118;
   font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
 }
 
 /* ---------- 全国冷链配送 ---------- */
-.card-cold {
-  position: absolute;
-  left: .5rpx;
-  top: 14.5rpx;
-  width: 469rpx;
-  height: 100rpx;
+.cc-under { position: absolute; left: 1rpx; top: 17rpx; width: 468rpx; height: 100rpx; border-radius: 14rpx; background: rgba(212, 191, 153, .65); z-index: 1; }
+.cc-main {
+  position: absolute; left: .75rpx; top: 14.75rpx; width: 468.5rpx; height: 99.5rpx; z-index: 2;
+  box-sizing: border-box; border: 1.7rpx solid #96713E; border-radius: 14rpx;
+  background: linear-gradient(180deg, rgba(255, 251, 239, .86), rgba(246, 236, 217, .76));
+  box-shadow: 0 3.5rpx 4.4rpx rgba(89, 66, 38, .18);
+}
+.cc-inner { position: absolute; left: 6rpx; top: 20rpx; width: 458rpx; height: 89rpx; z-index: 3; box-sizing: border-box; border: 1rpx solid #B7955F; border-radius: 10rpx; }
+.cc-highlight { position: absolute; left: 19rpx; top: 17rpx; width: 431rpx; height: 1.5rpx; background: #FFFDF3; z-index: 3; }
+.cold-cn { display: block; position: absolute; left: 30rpx; top: 35rpx; height: 36rpx; line-height: 36rpx; font-size: 36rpx; color: #2B2118; z-index: 3; font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif; }
+.cold-en { display: block; position: absolute; left: 30rpx; top: 82rpx; height: 15rpx; line-height: 15rpx; font-size: 15rpx; letter-spacing: 1.2rpx; color: #806844; z-index: 3; font-family: Baskerville, Georgia, "Times New Roman", serif; }
+.cc-rule { position: absolute; left: 304rpx; top: 37rpx; width: 1rpx; height: 55rpx; background: #AD9163; z-index: 3; }
+.cc-tag {
+  position: absolute; left: 357rpx; top: 25rpx; width: 63rpx; height: 79rpx; z-index: 4;
+  box-sizing: border-box; border: 1rpx solid #8E302A; border-radius: 10rpx;
+  background: linear-gradient(180deg, #AD3936, #92302E);
+  box-shadow: 0 2.5rpx 3.6rpx rgba(89, 66, 38, .14);
+}
+.cc-tag-inner { position: absolute; left: 361rpx; top: 29rpx; width: 55rpx; height: 71rpx; z-index: 5; box-sizing: border-box; border: .75rpx solid rgba(226, 184, 146, .8); border-radius: 7rpx; }
+.cc-tag-cha, .cc-tag-kan {
+  display: block; position: absolute; left: 357rpx; width: 63rpx; text-align: center; z-index: 5;
+  height: 23rpx; line-height: 23rpx; font-size: 23rpx; color: #FFF1D8;
+  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
+}
+.cc-tag-cha { top: 40rpx; }
+.cc-tag-kan { top: 66rpx; }
+
+/* ---------- 按下态 ---------- */
+/* v2 交互规范：视觉内容下移 1rpx、阴影减半、纸底略暖，100~140ms 恢复，
+   不做缩放和弹跳；热区本身固定不动。 */
+.df, .delivery-cn, .delivery-en, .nav-text,
+.cc-under, .cc-main, .cc-inner, .cc-highlight,
+.cold-cn, .cold-en, .cc-rule, .cc-tag, .cc-tag-inner, .cc-tag-cha, .cc-tag-kan {
+  transition: transform .12s ease, box-shadow .12s ease, background-image .12s ease;
+}
+.hot-hover .df,
+.hot-hover .delivery-cn, .hot-hover .delivery-en,
+.hot-hover .nav-text,
+.hot-hover .cc-under, .hot-hover .cc-main, .hot-hover .cc-inner, .hot-hover .cc-highlight,
+.hot-hover .cold-cn, .hot-hover .cold-en, .hot-hover .cc-rule,
+.hot-hover .cc-tag, .hot-hover .cc-tag-inner, .hot-hover .cc-tag-cha, .hot-hover .cc-tag-kan {
+  transform: translateY(1rpx);
+}
+/* 阴影减半 + 纸底略暖。配送框的投影烘在 SVG 里，所以换一张按下态的 SVG。 */
+.hot-hover .df {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMjAiIGhlaWdodD0iMTMyIiB2aWV3Qm94PSItNiAtNiAzMjAgMTMyIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InAiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNGRkY4RTYiIHN0b3Atb3BhY2l0eT0iLjkwIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRjJFNUNEIiBzdG9wLW9wYWNpdHk9Ii44MCIvPjwvbGluZWFyR3JhZGllbnQ+PGZpbHRlciBpZD0icyIgeD0iLTEwJSIgeT0iLTMwJSIgd2lkdGg9IjEyMCUiIGhlaWdodD0iMTY1JSI+PGZlR2F1c3NpYW5CbHVyIGluPSJTb3VyY2VBbHBoYSIgc3RkRGV2aWF0aW9uPSIxLjEiLz48ZmVPZmZzZXQgZHk9IjEuNzUiLz48ZmVDb2xvck1hdHJpeCB0eXBlPSJtYXRyaXgiIHZhbHVlcz0iMCAwIDAgMCAuMzUgMCAwIDAgMCAuMjYgMCAwIDAgMCAuMTUgMCAwIDAgLjA5IDAiLz48ZmVNZXJnZT48ZmVNZXJnZU5vZGUvPjxmZU1lcmdlTm9kZSBpbj0iU291cmNlR3JhcGhpYyIvPjwvZmVNZXJnZT48L2ZpbHRlcj48L2RlZnM+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCAyKSIgZD0iTTI1IDFIMjgxUTI5NCAxIDI5NCAxM1EzMDUgMTMgMzA1IDI0Vjg4UTMwNSA5OSAyOTQgOTlRMjk0IDExMSAyODEgMTExSDI1UTEyIDExMSAxMiA5OVExIDk5IDEgODhWMjRRMSAxMyAxMiAxM1ExMiAxIDI1IDFaIiBmaWxsPSIjRDRCRjk5IiBmaWxsLW9wYWNpdHk9Ii42NSIvPjxwYXRoIGQ9Ik0yNSAxSDI4MVEyOTQgMSAyOTQgMTNRMzA1IDEzIDMwNSAyNFY4OFEzMDUgOTkgMjk0IDk5UTI5NCAxMTEgMjgxIDExMUgyNVExMiAxMTEgMTIgOTlRMSA5OSAxIDg4VjI0UTEgMTMgMTIgMTNRMTIgMSAyNSAxWiIgZmlsbD0idXJsKCNwKSIgc3Ryb2tlPSIjOTY3MTNFIiBzdHJva2Utd2lkdGg9IjEuNyIgZmlsdGVyPSJ1cmwoI3MpIi8+PHBhdGggZD0iTTI1IDZIMjgxUTI4OSA2IDI4OSAxOFEzMDAgMTggMzAwIDI1Vjg3UTMwMCA5NCAyODkgOTRRMjg5IDEwNiAyODEgMTA2SDI1UTE3IDEwNiAxNyA5NFE2IDk0IDYgODdWMjVRNiAxOCAxNyAxOFExNyA2IDI1IDZaIiBmaWxsPSJub25lIiBzdHJva2U9IiNCNzk1NUYiIHN0cm9rZS13aWR0aD0iMSIvPjxwYXRoIGQ9Ik0yNyAzSDI3OU0zIDI3Vjg0IiBmaWxsPSJub25lIiBzdHJva2U9IiNGRkZERjMiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L3N2Zz4=");
+}
+.hot-hover .cc-main {
+  box-shadow: 0 1.75rpx 2.2rpx rgba(89, 66, 38, .09);
+  background: linear-gradient(180deg, rgba(255, 248, 230, .90), rgba(242, 229, 205, .80));
+}
+.hot-hover .cc-tag { box-shadow: 0 1.25rpx 1.8rpx rgba(89, 66, 38, .07); }
+
+/* 系统开了「减少动画」就不做位移，只保留阴影与底色变化 */
+@media (prefers-reduced-motion: reduce) {
+  .hot-hover .df,
+  .hot-hover .delivery-cn, .hot-hover .delivery-en,
+  .hot-hover .nav-text,
+  .hot-hover .cc-under, .hot-hover .cc-main, .hot-hover .cc-inner, .hot-hover .cc-highlight,
+  .hot-hover .cold-cn, .hot-hover .cold-en, .hot-hover .cc-rule,
+  .hot-hover .cc-tag, .hot-hover .cc-tag-inner, .hot-hover .cc-tag-cha, .hot-hover .cc-tag-kan {
+    transform: none;
+  }
+}
+
+/* ── 「我的订单」常驻入口 ─────────────────────────────────
+   设计稿里没有这个入口，是 1c9de11 为解决「同城下单后找不到订单」加的，改版不能丢。
+   z-index 要高过热区（热区是 3）。44pt 可点下限：min-height 88rpx。 */
+.cover-orders {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + 32rpx);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 88rpx;
+  padding: 0 44rpx;
+  border-radius: 44rpx;
   box-sizing: border-box;
-  border: 1rpx solid #B58B51;
-  border-radius: 8rpx;
-  background: rgba(251, 245, 231, .12);
+  border: 1.25rpx solid #9F7F50;
+  background: linear-gradient(180deg, rgba(255, 251, 239, .92), rgba(246, 236, 217, .86));
+  box-shadow: 0 2.5rpx 3.6rpx rgba(89, 66, 38, .14);
 }
-.cold-cn {
-  display: block;
-  position: absolute;
-  left: 28.5rpx;
-  top: 19.5rpx;
-  height: 36rpx;
-  line-height: 36rpx;
-  font-size: 36rpx;
-  color: #1E1914;
+.cover-orders-hover { background: linear-gradient(180deg, rgba(255, 248, 230, .96), rgba(242, 229, 205, .90)); }
+.cover-orders-text {
+  color: #2B2118;
+  font-size: 28rpx;
+  letter-spacing: 1rpx;
   font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
 }
-.cold-en {
-  display: block;
-  position: absolute;
-  left: 28.5rpx;
-  top: 64rpx;
-  height: 17rpx;
-  line-height: 17rpx;
-  font-size: 17rpx;
-  letter-spacing: 1.3rpx;
-  color: #8B6B40;
-  font-family: Georgia, "Times New Roman", serif;
-}
-.cold-divider {
-  position: absolute;
-  left: 302.5rpx;
-  top: 15.5rpx;
-  width: 1rpx;
-  height: 69rpx;
-  background: #7A684E;
-}
-.cold-action {
-  position: absolute;
-  left: 304.5rpx;
-  width: 164rpx;
-  top: 0;
-  height: 100rpx;
-  text-align: center;
-  font-size: 24rpx;
-  color: #1E1914;
-  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
-}
-.cold-action .l1 { position: absolute; left: 0; right: 0; top: 21.5rpx; height: 24rpx; line-height: 24rpx; }
-.cold-action .l2 { position: absolute; left: 0; right: 0; top: 51.5rpx; height: 24rpx; line-height: 24rpx; }
