@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阿福凉菜 · 双渠道导航与同城结算预览</title>
+<link rel="stylesheet" href="preview.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <h1>双渠道导航与同城结算</h1>
+    <p class="sub">静态预览，不接接口、不改业务代码。<br>对应 Task 1，供确认版式与文案。</p>
+
+    <h2>渠道</h2>
+    <div class="chips">
+      <button class="chip" data-k="channel" data-v="LOCAL">同城配送</button>
+      <button class="chip" data-k="channel" data-v="EXPRESS">全国邮寄</button>
+    </div>
+
+    <h2>四栏主页面</h2>
+    <div class="chips">
+      <button class="chip" data-k="page" data-v="home">主页</button>
+      <button class="chip" data-k="page" data-v="category">分类</button>
+      <button class="chip" data-k="page" data-v="cart">购物车</button>
+      <button class="chip" data-k="page" data-v="user">我的</button>
+    </div>
+
+    <h2>流程页（无四栏导航）</h2>
+    <div class="chips">
+      <button class="chip" data-k="page" data-v="checkout">同城结算</button>
+      <button class="chip" data-k="page" data-v="addressList">地址列表</button>
+      <button class="chip" data-k="page" data-v="addressEdit">地址编辑</button>
+    </div>
+
+    <h2>结算页状态</h2>
+    <div class="chips" id="ckStates"></div>
+
+    <h2>叠加</h2>
+    <div class="chips">
+      <button class="chip" id="sheetBtn">优惠券弹层</button>
+      <button class="chip" id="stressBtn">极限内容</button>
+    </div>
+    <p class="sub" style="margin:8px 0 0">「极限内容」= 超长店名 + 超长地址 + 超长券名 + 估算距离，
+      用来看会不会撑破版面。</p>
+
+    <button class="probe-btn" id="probeBtn">跑一次溢出自检</button>
+    <div class="probe-out" id="probeOut"></div>
+  </aside>
+
+  <main class="stage">
+    <div class="device">
+      <div class="device-label">iPhone 15 · 375 × 812</div>
+      <div class="frame w375">
+        <div class="statusbar"><span>9:41</span><span class="capsule">••• ⊙</span></div>
+        <div class="viewport"><div class="screen"></div></div>
+      </div>
+    </div>
+    <div class="device">
+      <div class="device-label">iPhone SE · 320 × 568</div>
+      <div class="frame w320">
+        <div class="statusbar"><span>9:41</span><span class="capsule">••• ⊙</span></div>
+        <div class="viewport"><div class="screen"></div></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="preview-icons.js"></script>
+<script src="preview.js"></script>
+</body>
+</html>

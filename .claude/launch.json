@@ -75,6 +75,16 @@
         "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3100 npm run dev -- --port 5190 --strictPort"
       ],
       "port": 5190
+    },
+    {
+      "name": "design-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "docs/design/miniapp-local-v2/serve.mjs",
+        "--port",
+        "5195"
+      ],
+      "port": 5195
     }
   ]
 }
