@@ -95,6 +95,24 @@
       ],
       "port": 3107,
       "autoPort": false
+    },
+    {
+      "name": "api-wbui-3108",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd apps/server && DATABASE_URL=\"mysql://foodshop_user:foodshop_password@localhost:3306/food_shop_wbui\" PORT=3108 WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true WECHAT_QRCODE_MOCK=true LOCAL_DELIVERY_PROVIDER_MOCK=true PRINTER_PROVIDER_MOCK=true npx ts-node-dev --respawn --transpile-only src/app.ts"
+      ],
+      "port": 3108
+    },
+    {
+      "name": "admin-wbui-5196",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd apps/admin && VITE_PROXY_TARGET=http://localhost:3108 npm run dev -- --port 5196 --strictPort"
+      ],
+      "port": 5196
     }
   ]
 }
