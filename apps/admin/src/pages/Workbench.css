@@ -6,20 +6,27 @@
   --bg:#f6f5f3; --surface:#fff; --text-1:#1b1918; --text-2:#6b6461; --line:#e8e4e1;
   --note-bg:#fdf6e3; --note-line:#d9b23a;
   --warn-soft:#fff3d6; --danger-soft:#fdecea;
+  /* 紧急度专用色：故意不复用 --local/--express，那两个是渠道色，改了就串味。
+     琥珀取偏黄的一支（不是 --local 的橘红），红取比 --local 更深更闷的一支，
+     两者都不会被读成「这是同城单」。 */
+  --urge-warn:#c9971a; --urge-warn-bg:#fffbef;
+  --urge-late:#a81f16; --urge-late-bg:#fdf1f0;
   min-height:100vh; background:var(--bg); color:var(--text-1); font-size:14px;
   -webkit-tap-highlight-color:transparent; }
 .wb[data-theme="dark"] { --local:#ff7a54; --local-soft:#33191180; --express:#8fa5ff; --express-soft:#1a1f3d80;
   --ok:#4ade80; --warn:#fbbf24; --danger:#f87171;
   --bg:#171412; --surface:#211d1a; --text-1:#f0ece9; --text-2:#a39c96; --line:#37312d;
   --note-bg:#332b12; --note-line:#a1802a;
-  --warn-soft:#3a2f10; --danger-soft:#3a1b1b; }
+  --warn-soft:#3a2f10; --danger-soft:#3a1b1b;
+  --urge-warn:#e3b33f; --urge-warn-bg:#2b2411; --urge-late:#e05a52; --urge-late-bg:#331b19; }
 @media (prefers-color-scheme: dark) {
   /* 默认跟随系统：未点过日夜切换时不写 data-theme（规格 §8） */
   .wb:not([data-theme="light"]) { --local:#ff7a54; --local-soft:#33191180; --express:#8fa5ff; --express-soft:#1a1f3d80;
     --ok:#4ade80; --warn:#fbbf24; --danger:#f87171;
     --bg:#171412; --surface:#211d1a; --text-1:#f0ece9; --text-2:#a39c96; --line:#37312d;
     --note-bg:#332b12; --note-line:#a1802a;
-    --warn-soft:#3a2f10; --danger-soft:#3a1b1b; }
+    --warn-soft:#3a2f10; --danger-soft:#3a1b1b;
+    --urge-warn:#e3b33f; --urge-warn-bg:#2b2411; --urge-late:#e05a52; --urge-late-bg:#331b19; }
 }
 
 /* ── 顶栏（§8）── */
@@ -47,8 +54,17 @@
   border-bottom:1px solid var(--line); }
 
 /* 图例条（§3）——专注模式下隐藏 */
-.wb__legend { display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+.wb__legend { display:flex; align-items:center; gap:10px 16px; flex-wrap:wrap;
   padding:8px 14px; font-size:12px; color:var(--text-2); border-bottom:1px solid var(--line); }
+.wb__legend-g { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.wb__legend-sep { width:1px; height:14px; background:var(--line); }
+/* 图例里的紧急度小样：照抄卡片那一圈光晕，店员对得上号 */
+.wb__chip { display:inline-block; padding:1px 8px; border-radius:6px; background:var(--surface);
+  border:1px solid var(--line); color:var(--text-2); }
+.wb__chip--warn { background:var(--urge-warn-bg); color:var(--urge-warn); border:none;
+  box-shadow:0 0 0 1.5px var(--urge-warn); }
+.wb__chip--late { background:var(--urge-late-bg); color:var(--urge-late); border:none;
+  box-shadow:0 0 0 1.5px var(--urge-late); }
 
 /* ── 看板（§1/§9）── */
 /* 四个干活的列均分，「已完成」收起时只留一条 44px 的窄边栏（展开时回到第五等份）。
@@ -72,7 +88,14 @@
 .wb__card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:4px; border-radius:10px 0 0 10px; }
 .wb__card--local::before { background:var(--local); }
 .wb__card--express::before { background:var(--express); }
-.wb__card--alert { border-color:var(--danger); box-shadow:0 0 0 1px var(--danger); }
+/* 紧急度：整圈光晕 + 极淡底色。用 box-shadow 而不是加粗 border——
+   border 变粗会挤动卡片内容，一列里几张卡先后变色就会看到整列在抖。
+   光晕落在圆角轮廓之外，和轮廓之内的 4px 渠道竖条分处两个平面。 */
+.wb__card--warn { box-shadow:0 0 0 2px var(--urge-warn); background:var(--urge-warn-bg); }
+.wb__card--late { box-shadow:0 0 0 2px var(--urge-late); background:var(--urge-late-bg); }
+/* 「立即处理」比「要延误」还高一档：同色再加一圈外扩的软光晕，隔着几米也能挑出来 */
+.wb__card--alert { border-color:var(--danger); background:var(--danger-soft);
+  box-shadow:0 0 0 2px var(--danger), 0 0 0 6px var(--danger-soft); }
 .wb__card-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .wb__badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px;
   font-size:12px; font-weight:600; }

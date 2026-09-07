@@ -91,12 +91,76 @@ const apiCode = (e: unknown) => (e as { response?: { data?: { code?: number } } 
 const hhmm = fmtHHmm
 const dateTime = fmtMonthDayTime
 
+// ─────────────────────────────────────────────────────────
+// 卡片紧急度（PO 2026-09-07）
+//
+// 屏幕上有两套颜色，各管各的，任何时候都不许互相顶替：
+//   · **渠道** = 左侧 4px 竖条 + 徽章（同城橘红 / 邮寄蓝）。这两个颜色**永不随状态变化**，
+//     所以「卡片变热」永远读不成「换了渠道」。
+//   · **紧急度** = 整卡外圈光晕 + 极淡底色。光晕画在卡片轮廓**之外**（box-shadow 扩散），
+//     竖条在轮廓**之内**——不同的平面、不同的形状，扫一眼不会看成同一根线。
+//
+// 紧急度由两把尺子取更严重的那把：
+//   ① 列内停留时长——「这张单没人碰」
+//   ② 距承诺送达还剩多久——「这张单要迟到了」，顾客感知的是这把
+// ─────────────────────────────────────────────────────────
+type Urgency = '' | 'warn' | 'late'
+
+/**
+ * 每列「正常停留多久」差得很远：付了钱该秒回，而备餐本来就要 20 分钟。
+ * 原来五列共用一套 3 分钟 / 6 分钟阈值，于是备餐中的卡片开工六分钟后**全部**变红——
+ * 全红等于没有红（§0：红是这一屏最稀缺的信号）。所以阈值按列给，备餐那一档
+ * 直接取设置里的备餐时长（高峰自动取高峰值），店主改设置这里跟着走。
+ * 邮寄单图例写明「可以稍后处理」，给一套宽得多的阈值：只有真被忘了才亮。
+ * 返回 null = 这一列不看停留时长（配送中在路上多久取决于距离，只看承诺送达）。
+ */
+function dwellBudget(colKey: ColKey, channel: Channel, prepMin: number): [number, number] | null {
+  if (channel === 'EXPRESS') return [60, 240]
+  switch (colKey) {
+    case 'pending': return [2, 5]
+    case 'preparing': return [prepMin, prepMin + 8]
+    case 'waitingCourier': return [6, 12]
+    default: return null
+  }
+}
+/** 距承诺送达还剩这么多分钟就开始烧（第二把尺子）。已经过点一律算超时。 */
+const DEADLINE_WARN_MIN = 15
+const DEADLINE_LATE_MIN = 5
+
+/** 当下该用哪个备餐时长：高峰取上界。窗口比较用 Asia/Shanghai 的 'HH:mm' 字符串——
+ *  零填充过的时刻串可以直接比大小，也就不用在前端再引一套时区换算。 */
+function prepMinutesNow(s: LocalDeliverySettings | null, now: number): number {
+  if (!s) return 20
+  const cur = fmtHHmm(now, '')
+  const peak = !!cur && s.peak.windows.some((w) => cur >= w.start && cur < w.end)
+  return peak ? s.peak.prepMaxMinutes : s.prepMinutes
+}
+
+/** 「已完成」列永不参与：给已经做完的事上色只会稀释红色（I7）。 */
+function urgencyOf(card: WorkbenchCard, colKey: ColKey, now: number, prepMin: number): Urgency {
+  if (colKey === 'done') return ''
+  let u: Urgency = ''
+  const budget = dwellBudget(colKey, card.channel, prepMin)
+  if (budget) {
+    const min = (now - Date.parse(card.waitSince)) / 60_000
+    if (min >= budget[1]) u = 'late'
+    else if (min >= budget[0]) u = 'warn'
+  }
+  const est = card.local?.estimatedDeliveryAt
+  if (est) {
+    const left = (Date.parse(est) - now) / 60_000
+    if (left <= DEADLINE_LATE_MIN) u = 'late'
+    else if (left <= DEADLINE_WARN_MIN && u !== 'late') u = 'warn'
+  }
+  return u
+}
+
 /** 等待胶囊：m:ss 等宽数字；>3:00 琥珀、>6:00 红底白字（§4）—— 按秒比较，3:00/6:00 整点不提前变色 */
-function waitLabel(sinceIso: string, now: number): { text: string; cls: string } {
+function waitLabel(sinceIso: string, now: number, urgency: Urgency): { text: string; cls: string } {
   const sec = Math.max(0, Math.floor((now - Date.parse(sinceIso)) / 1000))
   const min = Math.floor(sec / 60)
   const text = `${min}:${String(sec % 60).padStart(2, '0')}`
-  return { text, cls: sec > 360 ? 'wb__wait--danger' : sec > 180 ? 'wb__wait--warn' : '' }
+  return { text, cls: urgency === 'late' ? 'wb__wait--danger' : urgency === 'warn' ? 'wb__wait--warn' : '' }
 }
 
 /** ≤2 样列全名；≥3 样给「前两菜名 等 N 样 / M 份」，「等 N 样」用渠道色（§4） */
@@ -599,10 +663,12 @@ function RejectModal({ order, channel, onClose, onDone }: {
 // ─────────────────────────────────────────────────────────
 // 卡片（§3/§4）：三重编码 = 4px 色条 + 徽章（图标+文字）+ 渠道各自的字段
 // ─────────────────────────────────────────────────────────
-function Card({ card, colKey, now, graceMin, onOpen, onHandleCancel }: {
+function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: {
   card: WorkbenchCard; colKey: ColKey; now: number
   /** 顾客可申请取消 / 店员可处理的窗口（分钟，接单起算），用来算「还剩多久自动回绝」 */
   graceMin: number
+  /** 当下的备餐时长（分，高峰取上界）——「备餐中」那一列的正常停留时长就是它 */
+  prepMin: number
   onOpen: () => void; onHandleCancel: () => void
 }) {
   const local = card.channel === 'LOCAL'
@@ -614,13 +680,14 @@ function Card({ card, colKey, now, graceMin, onOpen, onHandleCancel }: {
   // 已完成列不再用等待胶囊的琥珀/红底：红是本页面最稀缺的信号（§0/§5「红框=立即处理」），
   // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
   // 改显示静态的完成时刻（服务端给 done 列的锚点就是 completedAt，即 card.waitSince）。
-  const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now)
+  const urg = alert ? 'late' : urgencyOf(card, colKey, now, prepMin)
+  const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg)
   // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
   // 印一行「距离 --」只是在卡片上占一格空话，所以整行不渲染（PO 2026-09-07）。
   const kmText = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : null
   return (
     <div
-      className={`wb__card ${local ? 'wb__card--local' : 'wb__card--express'} ${alert ? 'wb__card--alert' : ''}`}
+      className={`wb__card ${local ? 'wb__card--local' : 'wb__card--express'} ${alert ? 'wb__card--alert' : urg ? `wb__card--${urg}` : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -1184,6 +1251,9 @@ export default function Workbench() {
     return btns
   }
 
+  // 每秒重渲染一次，卡片有几十张——高峰判定只算一次，别每张卡各跑一遍 Intl
+  const prepMin = prepMinutesNow(settings, now)
+
   // ── 详情抽屉（§5）──
   const renderDrawer = (): ReactNode => {
     if (!drawer) return null
@@ -1191,8 +1261,11 @@ export default function Workbench() {
     const local = card.channel === 'LOCAL'
     const o = detail?.order
     const d = detail?.delivery ?? null
-    // 与卡片同规则：已完成不再用会变色的等待胶囊（I7）
-    const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now)
+    // 与卡片同规则：已完成不再用会变色的等待胶囊（I7）；紧急度也走同一个函数，
+    // 否则抽屉里的胶囊会和它背后那张卡片显示不同的颜色
+    const w = colKey === 'done'
+      ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' }
+      : waitLabel(card.waitSince, now, urgencyOf(card, colKey, now, prepMin))
     const canReject = !!o && ['PENDING_PAYMENT', 'PAID', 'PREPARING'].includes(o.status)
     return (
       <>
@@ -1506,11 +1579,22 @@ export default function Workbench() {
       />
 
       {/* 图例常驻（§3）；专注模式下让位给看板 */}
+      {/* 两组颜色分工写在屏幕上：左边一组是「这是什么单」（永不变），右边一组是「急不急」（会变）。
+          不写的话，新店员看到一张烧红的邮寄单，第一反应会是「这是同城吧？」 */}
       <div className="wb__legend">
-        <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
-        <span>骑手送，晚十分钟菜就凉了——每列里恒排在邮寄单上面</span>
-        <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
-        <span>快递发出，可以稍后处理</span>
+        <span className="wb__legend-g">
+          <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
+          <span>骑手送，恒排在邮寄单上面</span>
+          <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
+          <span>可以稍后处理</span>
+        </span>
+        <span className="wb__legend-sep" />
+        <span className="wb__legend-g">
+          <span className="wb__chip">正常</span>
+          <span className="wb__chip wb__chip--warn">该催了</span>
+          <span className="wb__chip wb__chip--late">要延误</span>
+          <span>整圈发光 = 急，左边那条竖色条只说渠道、不会变色</span>
+        </span>
       </div>
 
       <div className={`wb__board${doneOpen ? ' wb__board--done-open' : ''}`} ref={boardRef}>
@@ -1549,6 +1633,7 @@ export default function Workbench() {
                     key={c.orderId} card={c} colKey={col.key} now={now}
                     onOpen={() => openCard(c, col.key)}
                     graceMin={snap?.acceptGraceMin ?? 0}
+                    prepMin={prepMin}
                     onHandleCancel={() => openCard(c, col.key, true)}
                   />
                 ))}
