@@ -1016,13 +1016,10 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: 
 // 顶栏（§8）
 // ─────────────────────────────────────────────────────────
 function TopBar({
-  snap, shopName, targetTheme, onToggleTheme, focus, isFullscreen, onFullscreen, onExit, onResetCircuit, circuitBusy, staleMinutes,
+  snap, shopName, targetTheme, onToggleTheme, focus, isFullscreen, onFullscreen, onExit,
 }: {
   snap: WorkbenchSnapshot | null; shopName: string; targetTheme: 'light' | 'dark'
   onToggleTheme: () => void; focus: boolean; isFullscreen: boolean; onFullscreen: () => void; onExit: () => void
-  onResetCircuit: () => void; circuitBusy: boolean
-  /** 连续轮询失败达到阈值时的「已停摆多久」；null = 正常（I1） */
-  staleMinutes: number | null
 }) {
   const today = new Date()
   const openState = openStateOf(snap)
@@ -1067,6 +1064,27 @@ function TopBar({
           <button className="wb__iconbtn" onClick={onExit}><LogOut className="w-4 h-4" />退出工作台</button>
         </div>
       </div>
+    </>
+  )
+}
+
+/**
+ * 断线提示与熔断横幅。**故意不放在 TopBar 里**——它们是两种顶栏都必须有的东西。
+ *
+ * 手机模式（2026-09-07 上线）把 TopBar 整个换成了 PhoneTopBar，这两条就跟着一起没了：
+ * 余额一空系统悄悄停呼，店员在手机上点「呼叫骑手」只拿到 42232，看不出原因，
+ * 「恢复」按钮也一起消失，只能先退出工作台去系统状态页。同理，轮询连续失败时
+ * 手机上没有「数据已 N 分钟未更新」，店员会对着一块已经不动的板子接单。
+ * 提到顶栏之外由两种模式共用，就不会再随顶栏的改版丢一次。
+ */
+function TopAlerts({ snap, staleMinutes, onResetCircuit, circuitBusy }: {
+  snap: WorkbenchSnapshot | null
+  staleMinutes: number | null
+  onResetCircuit: () => void
+  circuitBusy: boolean
+}) {
+  return (
+    <>
       {/* 细条，不是满屏红字（I1 原注释的道理一样适用）：断线时店员该知道，但不该被吓到 */}
       {staleMinutes != null && (
         <div className="wb__stale">
@@ -1925,26 +1943,29 @@ export default function Workbench() {
   return (
     <div className={`wb ${focus ? 'wb--focus' : ''}`} data-theme={theme ?? undefined} ref={rootRef}>
       {isPhone ? (
-        <>
-          <PhoneTopBar
-            snap={snap} shopName={settings?.store.name || '接单工作台'}
-            onExplain={() => setSheet('explain')} onMenu={() => setSheet('menu')}
-          />
-          <ColumnTabs snap={snap} active={phoneCol} onPick={setPhoneCol} />
-        </>
+        <PhoneTopBar
+          snap={snap} shopName={settings?.store.name || '接单工作台'}
+          onExplain={() => setSheet('explain')} onMenu={() => setSheet('menu')}
+        />
       ) : (
-        <>
-          <TopBar
-            snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
-            focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={exitWorkbench}
-            onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy} staleMinutes={staleMinutes}
-          />
+        <TopBar
+          snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
+          focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={exitWorkbench}
+        />
+      )}
 
-          {/* 图例常驻（§3）；专注模式下让位给看板 */}
-          {/* 两组颜色分工写在屏幕上：左边一组是「这是什么单」（永不变），右边一组是「急不急」（会变）。
-              不写的话，新店员看到一张烧红的邮寄单，第一反应会是「这是同城吧？」 */}
-          <div className="wb__legend"><LegendContent /></div>
-        </>
+      {/* 紧贴顶栏之下，两种模式共用：断线提示与熔断横幅在手机上同样要出现，
+          «恢复» 是余额充值后唯一的入口，藏在桌面顶栏里等于手机上没有。
+          位置也要紧跟顶栏——排到图例下面会把这一屏最紧急的一条压到第三行去。 */}
+      <TopAlerts snap={snap} staleMinutes={staleMinutes} onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy} />
+
+      {isPhone ? (
+        <ColumnTabs snap={snap} active={phoneCol} onPick={setPhoneCol} />
+      ) : (
+        /* 图例常驻（§3）；专注模式下让位给看板。
+           两组颜色分工写在屏幕上：左边一组是「这是什么单」（永不变），右边一组是「急不急」（会变）。
+           不写的话，新店员看到一张烧红的邮寄单，第一反应会是「这是同城吧？」 */
+        <div className="wb__legend"><LegendContent /></div>
       )}
 
       <div className={`wb__board${doneOpen ? ' wb__board--done-open' : ''}`} ref={boardRef}>

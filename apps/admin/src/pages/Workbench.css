@@ -50,12 +50,13 @@
 .wb__iconbtn:hover { background:var(--bg); }
 .wb__alerts { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-2); }
 .wb__alerts--on { color:var(--danger); font-weight:600; }
+/* flex:none —— .wb 是纵向 flex 且整屏定高，不写死的话这条横幅会被看板挤扁到看不见 */
 .wb__banner { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
-  background:var(--danger); color:#fff; padding:8px 14px; font-size:13px; font-weight:600; }
+  background:var(--danger); color:#fff; padding:8px 14px; font-size:13px; font-weight:600; flex:none; }
 .wb__banner .wb__iconbtn { background:transparent; color:#fff; border-color:rgba(255,255,255,.6); }
 /* 一条细条，不是满屏红字（I1）：轮询连续失败时提醒店员数据可能不是实时的，但不用惊动他 */
 .wb__stale { padding:4px 14px; font-size:12px; color:var(--warn); background:var(--warn-soft);
-  border-bottom:1px solid var(--line); }
+  border-bottom:1px solid var(--line); flex:none; }
 
 /* 图例条（§3）——专注模式下隐藏 */
 .wb__legend { display:flex; align-items:center; gap:10px 16px; flex-wrap:wrap; flex:none;
@@ -317,8 +318,9 @@
   .wb__tabs { flex:none; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none;
     padding:8px 12px; background:var(--surface); border-bottom:1px solid var(--line); }
   .wb__tabs::-webkit-scrollbar { display:none; }
+  /* 44px：列切换页签是手机上最常点的控件，上一版补触控尺寸时漏了它（2026-09-07） */
   .wb__tab { flex:none; display:inline-flex; align-items:center; gap:6px;
-    min-height:36px; padding:6px 12px; border-radius:999px;
+    min-height:44px; padding:6px 14px; border-radius:999px;
     border:1px solid var(--line); background:var(--bg); color:var(--text-2);
     font-size:14px; font-weight:600; cursor:pointer; -webkit-tap-highlight-color:transparent; }
   .wb__tab--on { background:var(--text-1); border-color:var(--text-1); color:var(--surface); }
