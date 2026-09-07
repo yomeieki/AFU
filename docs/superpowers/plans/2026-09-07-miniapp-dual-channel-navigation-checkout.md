@@ -783,19 +783,19 @@ git commit -m "feat(miniapp): scope account orders to active channel"
 - Consumes: Tasks 2–9 全部实现与测试。
 - Produces: 可复查的自动化结果、开发者工具结果、真机待验列表；不产生部署。
 
-- [ ] **Step 1: 跑小程序单测**
+- [x] **Step 1: 跑小程序单测**
 
 Run: `node --test tests/miniapp/*.test.cjs`
 
 Expected: 0 failures；输出中每个测试名对应一个用户可见行为。
 
-- [ ] **Step 2: 跑 ES5 闸门**
+- [x] **Step 2: 跑 ES5 闸门**
 
 Run: `node scripts/check-miniapp-es5.mjs apps/miniapp/utils/channel.js apps/miniapp/utils/local-checkout-state.js apps/miniapp/api/catalog.js apps/miniapp/components/local-store-header/index.js apps/miniapp/pages/cover/index.js apps/miniapp/pages/local/confirm.js apps/miniapp/components/checkout-benefits/index.js`
 
 Expected: PASS。
 
-- [ ] **Step 3: 跑服务端构建、自测与 e2e**
+- [x] **Step 3: 跑服务端构建、自测与 e2e**
 
 Run: `npm run build --workspace=apps/server`
 
@@ -809,7 +809,7 @@ Run: `bash scripts/e2e.sh`
 
 Expected: 0 failures；mock provider，不产生真实配送费用。
 
-- [ ] **Step 4: 开发者工具完整操作矩阵**
+- [ ] **Step 4: 开发者工具完整操作矩阵**（**未执行**：本会话无可靠通道到开发者工具。已展开成 16 项写进 `docs/miniapp-release-checklist.md` §四，等店主过）
 
 逐条执行：
 
@@ -824,19 +824,19 @@ Expected: 0 failures；mock provider，不产生真实配送费用。
 返回全国邮寄→EXPRESS 商品与购物车未被 LOCAL 数据污染
 ```
 
-- [ ] **Step 5: 视觉回归**
+- [ ] **Step 5: 视觉回归**（**未执行**，同上。独立预览的零溢出自检是手写 HTML，不能替代）
 
 在 320×568、375×812、430×932 三个视口和系统最大字号检查：营业胶囊、长地址、优惠券名称、固定结算栏、键盘、安全区、优惠券弹层均无横向溢出或遮挡。
 
-- [ ] **Step 6: 写验证报告**
+- [x] **Step 6: 写验证报告**
 
 报告记录每条命令、退出码、开发者工具基础库版本、三种视口截图路径，以及只能真机完成的隐私授权、地图、支付和骑手定位条目。不得把未执行项目写成通过。
 
-- [ ] **Step 7: 交付第二道预览并停止**
+- [x] **Step 7: 交付第二道预览并停止**
 
 打开开发者工具预览供店主检查。未得到店主明确授权前，不上传体验版、不部署服务端、不执行数据库迁移。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add docs/miniapp-release-checklist.md docs/local-delivery-run-log.md docs/superpowers/reviews/2026-09-07-miniapp-local-v2-verification.md

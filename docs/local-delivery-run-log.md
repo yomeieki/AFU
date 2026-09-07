@@ -663,3 +663,35 @@ FROM deliveries d WHERE d.status='DELIVERED' AND d.picked_up_at IS NOT NULL ORDE
 2. **部署即生效**：生产库已有的 `local_delivery` 设置行没有 `callStrategy` 字段 →
    sanitize 回落默认 → **一部署就是「只呼最低价」**，不需要店主再点一次。
    想先按兵不动，就在部署前把设置里的「呼叫方式」改成「并呼全部运力」。
+
+# 【整改】小程序双渠道导航与同城结算 —— 2026-09-07
+
+> 方案：`docs/superpowers/plans/2026-09-07-miniapp-dual-channel-navigation-checkout.md`
+> 分支：`claude/mini-app-local-delivery-frontend-03df14`（**未部署、未传体验版、未合 main**）
+> 验证报告：`docs/superpowers/reviews/2026-09-07-miniapp-local-v2-verification.md`
+
+## 做了什么（Task 1–10，全部落地）
+
+同城与邮寄共用「主页 / 分类 / 购物车 / 我的」四个 tabBar 页，靠 `app.globalData.shoppingChannel`
+决定每页加载哪边；同城页不再是孤岛。同城结算页接上 `checkoutAction` 状态机 +
+服务端下发的 `quoteExpiresAt` + `clientRequestId` 幂等 + 金额明细卡。
+服务端加三条契约（报价过期时刻 / 订单渠道过滤 / 幂等下单），一条 additive 迁移 `20260911000000_order_client_request_id`。
+
+## 顺手抓到的两个真 bug（都不是本次改版引入的）
+
+1. **导入微信收货地址后会提交上一个地址的坐标**（`pages/address/edit.js`）：导入没清
+   `coordPickedThisSession`，`onSave` 的过期判断被短路——先在地图上选了 A、再导入 B，
+   提交的是 A 的坐标 + B 的文字，骑手被派到上一个地址。已修（Task 8）。
+2. 同城结算页 `loadData` 失败分支改了状态没同步按钮（Task 7 静态审计抓到）。
+
+## 验证口径
+
+- 单测 76/76、ES5 闸门 11/11、`tsc` 通过、`selftest-local-settings` 21/21、admin 构建通过
+- e2e **1158 / 3**（干净进程 + 干净库），3 条全在 `45-printer-offline.sh`，本分支零打印机文件改动；
+  本轮新增 §53 二十三条全绿
+- **开发者工具与真机一步都没跑**——报告 §3 列了全部未执行项，清单 §四新增 16 个勾选项
+
+## 跨轮污染的两条教训（e2e）
+
+- 自己造的待付款单不收尾，**下一轮**的 §16 会红（那段用 `payTimeoutMin=0` 取消库里所有待付款单再断言库存 +2），实测差过 7 件
+- 打印机 mock 状态在进程内存里，不重启进程跑第二轮会假红 4 条（§47），重启后消失。判打印机用例必须干净进程
