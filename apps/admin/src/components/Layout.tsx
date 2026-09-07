@@ -1,8 +1,7 @@
-import { useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useState, type MouseEvent } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
-  FolderTree,
   Package,
   ClipboardList,
   Users,
@@ -14,54 +13,59 @@ import {
   UtensilsCrossed,
   Bell,
   Menu,
-  Bike,
-  LayoutGrid,
-  History,
   Printer,
   Ticket,
-  Gift,
-  Star,
   LucideIcon,
 } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
+import { useUnsavedSettings } from './UnsavedSettings'
 
-const navItems: { to: string; label: string; icon: LucideIcon }[] = [
-  { to: '/workbench', label: '接单工作台', icon: LayoutGrid },
-  { to: '/dashboard', label: '概览', icon: LayoutDashboard },
-  { to: '/categories', label: '分类管理', icon: FolderTree },
-  { to: '/products', label: '商品管理', icon: Package },
-  { to: '/orders', label: '邮寄订单', icon: ClipboardList },
-  { to: '/users', label: '用户管理', icon: Users },
-  { to: '/scan-stats', label: '扫码统计', icon: ScanLine },
-  { to: '/banners', label: '轮播管理', icon: Image },
-  { to: '/shop-settings', label: '店铺设置', icon: Store },
-  // 会员三项平铺，不做二级分组（M3 D1）：侧栏总共十几项，多一层展开只是多一次点击
-  { to: '/coupons', label: '优惠券', icon: Ticket },
-  { to: '/points-goods', label: '积分赠品', icon: Gift },
-  { to: '/member-settings', label: '会员设置', icon: Star },
-  { to: '/local/orders', label: '同城订单', icon: History },
-  { to: '/local/settings', label: '同城设置', icon: Bike },
-  { to: '/printer-settings', label: '打印机设置', icon: Printer },
-  { to: '/system', label: '系统状态', icon: Settings },
+const navItems: { to: string; prefix: string; label: string; icon: LucideIcon }[] = [
+  { to: '/dashboard', prefix: '/dashboard', label: '经营概览', icon: LayoutDashboard },
+  { to: '/catalog/products', prefix: '/catalog', label: '商品管理', icon: Package },
+  { to: '/orders/local', prefix: '/orders', label: '订单管理', icon: ClipboardList },
+  { to: '/membership/coupons', prefix: '/membership', label: '会员营销', icon: Ticket },
+  { to: '/settings/express', prefix: '/settings', label: '店铺设置', icon: Store },
+  { to: '/users', prefix: '/users', label: '用户管理', icon: Users },
+  { to: '/scan-stats', prefix: '/scan-stats', label: '扫码统计', icon: ScanLine },
+  { to: '/banners', prefix: '/banners', label: '轮播管理', icon: Image },
+  { to: '/printer-settings', prefix: '/printer-settings', label: '打印机设置', icon: Printer },
+  { to: '/system', prefix: '/system', label: '系统状态', icon: Settings },
 ]
 
 export default function Layout() {
   const { admin, clearAuth } = useAuthStore()
   const navigate = useNavigate()
+  const location = useLocation()
+  const { dirty, confirmLeave } = useUnsavedSettings()
   const { count: pendingCount, afterSaleCount, localPendingCount } = usePendingOrders()
-  const orderBadge = pendingCount + afterSaleCount
-  const navBadge: Record<string, number> = { '/orders': orderBadge, '/workbench': localPendingCount }
+  const orderBadge = pendingCount + afterSaleCount + localPendingCount
+  const navBadge: Record<string, number> = { '/orders/local': orderBadge }
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const handleBellClick = () => {
     requestNotifyPermission()
-    navigate('/orders?status=PAID')
+    navigate('/orders/express?status=PAID')
   }
 
   const handleLogout = () => {
     clearAuth()
     navigate('/login')
+  }
+
+  const handleNavigation = (event: MouseEvent, to: string) => {
+    if (to === location.pathname) return
+    if (!dirty) {
+      setSidebarOpen(false)
+      return
+    }
+    event.preventDefault()
+    void confirmLeave().then((confirmed) => {
+      if (!confirmed) return
+      setSidebarOpen(false)
+      navigate(to)
+    })
   }
 
   return (
@@ -84,15 +88,36 @@ export default function Layout() {
           </span>
           <span className="text-lg font-bold text-gray-800">阿福凉菜</span>
         </div>
+        <div className="px-3 pt-4">
+          <NavLink
+            to="/workbench"
+            onClick={(event) => handleNavigation(event, '/workbench')}
+            className={`relative flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors ${
+              location.pathname === '/workbench'
+                ? 'bg-brand-500 text-white shadow-sm'
+                : 'bg-brand-50 text-brand-700 hover:bg-brand-100'
+            }`}
+          >
+            <UtensilsCrossed className="h-5 w-5" strokeWidth={2} />
+            接单工作台
+            {orderBadge > 0 && (
+              <span className={`ml-auto flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1 text-xs ${
+                location.pathname === '/workbench' ? 'bg-white text-brand-600' : 'bg-red-500 text-white'
+              }`}>
+                {orderBadge > 99 ? '99+' : orderBadge}
+              </span>
+            )}
+          </NavLink>
+        </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
-              onClick={() => setSidebarOpen(false)}
-              className={({ isActive }) =>
+              onClick={(event) => handleNavigation(event, item.to)}
+              className={() =>
                 `relative flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-colors ${
-                  isActive
+                  location.pathname.startsWith(item.prefix)
                     ? 'bg-brand-50 text-brand-600 font-medium before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-1 before:rounded-full before:bg-brand-500'
                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`
@@ -103,11 +128,7 @@ export default function Layout() {
               {(navBadge[item.to] ?? 0) > 0 && (
                 <span
                   className="ml-auto min-w-[1.25rem] h-5 px-1 rounded-full bg-red-500 text-white text-xs flex items-center justify-center"
-                  title={
-                    item.to === '/orders'
-                      ? `待处理 ${pendingCount} · 售后 ${afterSaleCount}`
-                      : `同城待接单 ${localPendingCount}`
-                  }
+                  title={`待处理 ${pendingCount} · 售后 ${afterSaleCount} · 同城待接单 ${localPendingCount}`}
                 >
                   {navBadge[item.to] > 99 ? '99+' : navBadge[item.to]}
                 </span>

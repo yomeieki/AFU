@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus, Search, Download, QrCode } from 'lucide-react'
 import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
@@ -13,6 +14,7 @@ import { toast } from '../components/ui/Toast'
 import QRCodeLib from 'qrcode'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import { fmtDateTime } from '../utils/time'
+import { readChannel } from '../navigation'
 
 const emptyForm = {
   categoryId: 0,
@@ -35,7 +37,8 @@ const emptyForm = {
 }
 
 export default function Products() {
-  const [channel, setChannel] = useState<Channel>('EXPRESS')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const channel = readChannel(searchParams)
   const [list, setList] = useState<Product[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -58,6 +61,14 @@ export default function Products() {
   const [qrModal, setQrModal] = useState<Product | null>(null)
   // 没有 catch 的话接口一挂就渲染「暂无商品」，店主会以为商品库被清空了
   const [loadFailed, setLoadFailed] = useState(false)
+
+  const setChannel = (next: Channel) => {
+    setSearchParams((previous) => {
+      const params = new URLSearchParams(previous)
+      params.set('channel', next)
+      return params
+    }, { replace: true })
+  }
 
   const load = (p = page) => {
     setLoading(true)
@@ -348,8 +359,7 @@ export default function Products() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-800">商品管理</h2>
+      <div className="flex justify-end">
         <Button onClick={openCreate}>
           <Plus className="w-4 h-4" />
           新增商品

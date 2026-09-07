@@ -349,8 +349,6 @@ export default function Orders() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold text-gray-800">邮寄订单</h2>
-
       {/* 状态 Tab */}
       <div className="bg-white rounded-lg shadow-card px-2 overflow-x-auto">
         <div className="flex min-w-max">

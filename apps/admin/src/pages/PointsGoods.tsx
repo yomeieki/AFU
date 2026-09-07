@@ -17,6 +17,7 @@ import {
 } from '../api/admin'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
+import Pagination from '../components/ui/Pagination'
 import Table from '../components/ui/Table'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
@@ -143,6 +144,10 @@ export default function PointsGoods() {
   const [loadFailed, setLoadFailed] = useState(false)
   // 每消费 1 元得多少分；null = 没取到，此时不显示任何估算
   const [earnRate, setEarnRate] = useState<number | null>(null)
+  const [filterChannel, setFilterChannel] = useState<Channel | ''>('')
+  const [filterStatus, setFilterStatus] = useState<OnOff | ''>('')
+  const [page, setPage] = useState(1)
+  const pageSize = 20
 
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<PointsGood | null>(null)
@@ -183,6 +188,11 @@ export default function PointsGoods() {
 
   // 已配置过的 (商品, 规格) —— 服务端会拦重复，这里先标出来，省得店主选完才被打回
   const configuredKeys = new Set(list.map((g) => `${g.productId}:${g.skuId ?? ''}`))
+  const filteredGoods = list.filter((good) =>
+    (!filterChannel || good.productChannel === filterChannel) &&
+    (!filterStatus || good.status === filterStatus)
+  )
+  const pageGoods = filteredGoods.slice((page - 1) * pageSize, page * pageSize)
 
   const runSearch = (kw: string) => {
     const seq = ++searchSeq.current
@@ -361,7 +371,7 @@ export default function PointsGoods() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-xl font-semibold text-gray-800">随单赠品</h2>
+          <p className="text-sm font-medium text-gray-700">随单赠品</p>
           <p className="text-xs text-gray-500 mt-0.5">
             顾客在结算页用积分加购、跟着付费订单一起送出；不是单独的 0 元兑换单。
           </p>
@@ -370,6 +380,25 @@ export default function PointsGoods() {
           <Plus className="w-4 h-4" />
           新增赠品
         </Button>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm p-4 flex flex-wrap gap-3 items-end">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">渠道</label>
+          <select value={filterChannel} onChange={(e) => { setFilterChannel(e.target.value as Channel | ''); setPage(1) }} className="border border-gray-300 rounded-md px-3 py-1.5 text-sm">
+            <option value="">全部</option>
+            <option value="EXPRESS">全国邮寄</option>
+            <option value="LOCAL">同城配送</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">状态</label>
+          <select value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value as OnOff | ''); setPage(1) }} className="border border-gray-300 rounded-md px-3 py-1.5 text-sm">
+            <option value="">全部</option>
+            <option value="ON">启用</option>
+            <option value="OFF">停用</option>
+          </select>
+        </div>
       </div>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
@@ -384,7 +413,7 @@ export default function PointsGoods() {
           <Table
             columns={8}
             loading={loading}
-            isEmpty={list.length === 0}
+            isEmpty={pageGoods.length === 0}
             emptyText="还没有配置随单赠品"
             head={
               <tr>
@@ -400,7 +429,7 @@ export default function PointsGoods() {
             }
             mobileCards={
               <>
-                {list.map((g) => {
+                {pageGoods.map((g) => {
                   const ps = productStatusOf(g.productStatus)
                   return (
                     <div key={g.id} className="border border-gray-100 rounded-lg p-3 flex gap-3">
@@ -450,7 +479,7 @@ export default function PointsGoods() {
               </>
             }
           >
-            {list.map((g) => {
+            {pageGoods.map((g) => {
               const ps = productStatusOf(g.productStatus)
               return (
                 <tr key={g.id} className="hover:bg-gray-50">
@@ -500,8 +529,9 @@ export default function PointsGoods() {
                 </tr>
               )
             })}
-          </Table>
+        </Table>
         )}
+        {!loading && !loadFailed && <Pagination page={page} total={filteredGoods.length} pageSize={pageSize} onChange={setPage} />}
       </div>
 
       {showModal && (
