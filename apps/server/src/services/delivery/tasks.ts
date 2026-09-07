@@ -7,7 +7,7 @@ import prisma from '../../utils/prisma'
 import { config } from '../../config'
 import { getLocalSettings, isOpenNow } from '../local-settings'
 import { isCircuitTripped } from './circuit'
-import { callRider, cancelDelivery, precancelDelivery, getActiveDelivery, HELD_OF, DeliveryCallStrategy } from './orchestrator'
+import { callRider, cancelDelivery, precancelDelivery, getActiveDelivery, HELD_OF, NEXT_RUNG, DeliveryCallStrategy } from './orchestrator'
 import { refreshOrderQuote, QUOTE_FRESH_MS } from './quote'
 import { recordDeliveryEvent, adminEventKey } from './events'
 import { notifySystemAlert } from '../notify'
@@ -232,12 +232,16 @@ export async function refreshStaleQuotes(min?: number): Promise<number> {
  *  - 预估取消费 > 0：说明骑手多半已经接单了（未接单的单撤销不要钱）。这时自动撤单要真花钱，
  *    改标 `*_HELD` 交给人决定。这个标记同时让该行离开扫描范围，不会每分钟重复 precancel + 重复告警。
  *
- * 扫描范围含 SOLO / CHEAPEST / MANUAL：店主 2026-09-07 定的阶梯是
- * **第一次由店员从全部报价里挑，第二次一律并呼全部**，所以「怎么呼的第一次」不影响
- * 该不该有第二次——三家不接、一家不接、店员挑的那家不接，菜都一样做好了在等。
- * （MANUAL 原来被排除在外，理由是「不该在背后换掉店员的选择」；新阶梯下那等于
- * 店员一手选这单就永远等不到第二次。升级只在仍是 CALLING 且预估取消费为 0 时动手，
- * 不会撤掉已接单的骑手。）
+ * 店主 2026-09-07 定的是**三级阶梯**，一级一级往上加人，不一步跳到全表：
+ *      第一次 自动挑最便宜的一家  →  第二次 并呼最便宜 N 家  →  第三次 并呼全部
+ * 所以这里不再固定升到 ALL，而是按当前这一行的策略决定下一级（NEXT_RUNG）。
+ * 升到 CHEAPEST 之后那一行仍在扫描范围里，下一轮超时会自然接着升到 ALL——
+ * 三级不需要额外的计数器，靠「当前策略」本身就能表达走到哪一级了。
+ *
+ * 扫描范围含 SOLO / CHEAPEST / MANUAL。MANUAL 也在里面：店员手选的那一家没人接，
+ * 菜一样做好了在等，没有理由不给它后面两级（原来把它排除在外，理由是「不该在背后
+ * 换掉店员的选择」——那会让手选的单永远停在第一级）。升级只在仍是 CALLING 且
+ * 预估取消费为 0 时动手，不会撤掉已接单的骑手。
  *
  * 残余竞态：precancel 与 cancel 之间那约 1 秒里骑手恰好接单 → cancel 会真的取消已接单的骑手
  * 并产生约 ¥2 取消费。金额会落在 D-1 行的 cancelFee 上、事件里看得见；概率极低，接受并记录。
@@ -292,11 +296,16 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
       // 压到「一次本地查询」。仍不是原子的，但代价与概率都降了两个量级。
       const stillSame = await getActiveDelivery(d.orderId)
       if (!stillSame || stillSame.id !== d.id) continue
-      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为并呼` })
+      // 下一级：一家没人接 → 最便宜 N 家；N 家还没人接 → 全部。
+      // 挑谁交给 callRider/resolveCallProviders 按**当下**的报价现算（forceMode），
+      // 不拿三分钟前那份名单——那三分钟里报价会变，运力表也可能被店主改过。
+      const nextMode = NEXT_RUNG[d.callStrategy as DeliveryCallStrategy]
+      if (!nextMode) continue
+      const rungText = nextMode === 'ALL' ? '并呼全部运力' : `并呼最便宜 ${s.callStrategy.cheapestN} 家`
+      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为${rungText}` })
       try {
         await callRider({
-          orderId: d.orderId, operator: 'scheduler', source: 'SCHEDULER',
-          providers: s.kd100.providers, callStrategy: 'ALL',
+          orderId: d.orderId, operator: 'scheduler', source: 'SCHEDULER', forceMode: nextMode,
         })
         n++
       } catch (e) {

@@ -73,11 +73,13 @@ export interface LocalDeliverySettings {
    * 并呼 7 家，最贵的闪送 ¥23.32 抢到，而最低的达达报 ¥16.23 —— 一单多付 ¥7.09；
    * 且**每一家在下单瞬间各冻结一笔**（那一单冻了 ¥75.08，实付 ¥23.32）。
    *
-   * **店主 2026-09-07 最终定的阶梯（两级）**：
-   *   第一次 —— 工作台弹窗里列出全部报价，**由店员挑一家**；不动手就按 mode 决定
-   *             默认呼谁（默认 SOLO_LOWEST = 预选最便宜那一家，一路点确认也不会多花钱）。
-   *   第二次 —— escalateAfterMin 分钟仍无人接，系统取消旧单、**并呼全部运力**兜底。
-   *             这一级不分第一次是怎么呼的（SOLO / CHEAPEST / 店员手选 MANUAL 都算）。
+   * **店主 2026-09-07 最终定的阶梯（三级，一级一级加人，不一步跳到全表）**：
+   *   第一次 —— 自动挑**最便宜的一家**（mode 默认 SOLO_LOWEST）。工作台弹窗里仍然
+   *             列出全部报价，店员可以当场改选任意一家（急单挑闪送），改选记 MANUAL。
+   *   第二次 —— escalateAfterMin 分钟仍无人接：取消旧单，**并呼最便宜 cheapestN 家**。
+   *   第三次 —— 再过 escalateAfterMin 分钟仍无人接：**并呼全部运力**兜底。
+   *   前两级不分第一次是怎么呼的——SOLO 和店员手选 MANUAL 走同一条阶梯。
+   *   每一级都按**当时**的报价重新挑人（不拿三分钟前那份名单）。
    *
    * mode 决定的只是「店员不动手时第一次呼谁」：
    *   SOLO_LOWEST 默认。只呼报价最低那一家，冻结最省。
@@ -85,15 +87,16 @@ export interface LocalDeliverySettings {
    *   ALL         并呼设置里的全部运力。**这是不必部署就能关掉策略的开关**。
    *   查不到报价一律退回 ALL（不因此拒绝呼叫）。
    *
-   * ⚠️ 冻结额度按「同时并呼几家」放大，这是选 mode 时唯一要算的账。按首单那组报价：
-   *      只呼最低 ¥16.23／单 · 最便宜 3 家 ≈ ¥51.76／单 · 并呼 7 家 ¥75.08／单
-   *    以充值 100 元计，能同时挂的单数分别是 6 / 1 / 1。默认取 SOLO_LOWEST 正是为了这个：
-   *    第一次只冻一笔，真没人接时才由第二次摊开
+   * ⚠️ 冻结额度按「同时并呼几家」放大，这是三级阶梯存在的全部理由。按首单那组报价：
+   *      一家 ¥16.23／单 · 最便宜 3 家 ≈ ¥51.76／单 · 全部 7 家 ¥75.08／单
+   *    以充值 100 元计，能同时挂的单数分别是 6 / 1 / 1。绝大多数单在第一级就被接走，
+   *    只冻一笔；真没人接的那少数才逐级摊开
    *    （kd100.autoDowngradeToSelfOnNoBalance 是余额见底后的最后一道兜底）。
    *
-   * cheapestN: CHEAPEST_N 模式下并呼几家。可选家数不足时有几家呼几家。
-   * escalateAfterMin: 呼了这么久仍无人接 → 取消旧单、并呼全表建新单。0 = 不自动升级
-   *   （只靠 callTimeoutMin 的人工提醒）。调度器 60 秒一跳，所以实际升级发生在 N ~ N+1 分钟之间。
+   * cheapestN: 第二级并呼几家。可选家数不足时有几家呼几家。
+   * escalateAfterMin: 每一级等这么久仍无人接就升下一级。0 = 不自动升级
+   *   （只靠 callTimeoutMin 的人工提醒）。调度器 60 秒一跳，所以实际升级发生在 N ~ N+1 分钟之间；
+   *   走完三级最长约 2×(N+1) 分钟。
    */
   callStrategy: { mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'; cheapestN: number; escalateAfterMin: number }
   limits: { maxItems: number; maxWeightKg: number }
@@ -164,7 +167,7 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     providers: [...KD100_PROVIDERS], goodsType: '食品', defaultItemWeightG: 300,
     insurance: false, autoDowngradeToSelfOnNoBalance: false, soloProvider: null,
   },
-  // 第一次只呼一家（弹窗里预选最便宜那家，店员可改选）；3 分钟无人接一步到位并呼全部。
+  // 三级阶梯：一家 →（3 分钟）最便宜 3 家 →（再 3 分钟）全部。
   // 3 分钟这个数：凉菜等不起再挑一轮。与 docs/design/workbench-ui-spec.md §6b 一致。
   callStrategy: { mode: 'SOLO_LOWEST', cheapestN: 3, escalateAfterMin: 3 },
   limits: { maxItems: 30, maxWeightKg: 10 },

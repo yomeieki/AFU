@@ -46,6 +46,16 @@ export interface CallRiderInput {
    * 而 §7.2 的观察项（升级并呼到底会不会收到 720）恰恰要靠这个标签把这批单捞出来。
    */
   callStrategy?: DeliveryCallStrategy
+  /**
+   * **内部字段，不从 HTTP 收**：这一次按哪种方式挑运力，覆盖设置里的 callStrategy.mode。
+   *
+   * 只有自动升级任务用它。升级是一级一级往上走的（第一次一家 → 第二次最便宜 N 家 →
+   * 第三次全部），每一级都要重新按**当时**的报价挑人，而不能拿三分钟前那份快照里
+   * 算好的名单：报价会变，运力表也可能被店主改过。把「挑谁」这件事整个交回
+   * resolveCallProviders，就能顺带复用它的重新查价、按运力表过滤、挑不出来退回并呼
+   * 这三段逻辑，不用在升级任务里再抄一份。
+   */
+  forceMode?: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'
 }
 
 /**
@@ -72,6 +82,17 @@ export type DeliveryCallStrategy =
  */
 export const HELD_OF: Partial<Record<DeliveryCallStrategy, DeliveryCallStrategy>> = {
   SOLO: 'SOLO_HELD', CHEAPEST: 'CHEAPEST_HELD', MANUAL: 'MANUAL_HELD',
+}
+
+/**
+ * 超时未接时，当前策略的**下一级**该怎么呼（店主 2026-09-07 定的三级阶梯）：
+ *      一家（SOLO / 店员手选 MANUAL）→ 最便宜 N 家 → 全部
+ * 有对应值 = 还能往上升；ALL 与 *_HELD 不在表里，走到头了。
+ * 升到 CHEAPEST 的那一行仍会被升级任务扫到，下一轮超时自然接着升到 ALL——
+ * 「走到第几级」由当前策略本身表达，不需要另设计数器。
+ */
+export const NEXT_RUNG: Partial<Record<DeliveryCallStrategy, 'CHEAPEST_N' | 'ALL'>> = {
+  SOLO: 'CHEAPEST_N', MANUAL: 'CHEAPEST_N', CHEAPEST: 'ALL',
 }
 
 /**
@@ -129,7 +150,9 @@ async function resolveCallProviders(
   const none = { chosen: [] as { provider: string; feeFen: number }[] }
   if (input.callStrategy) return { providers: input.providers, callStrategy: input.callStrategy, lowest: null, fresh: null, ...none }
   if (input.providers?.length) return { providers: input.providers, callStrategy: 'MANUAL', lowest: null, fresh: null, ...none }
-  if (s.callStrategy.mode === 'ALL') return { providers: undefined, callStrategy: 'ALL', lowest: null, fresh: null, ...none }
+  // 升级任务用 forceMode 指定这一级该怎么挑；平时为空，走设置里的 mode
+  const mode = input.forceMode ?? s.callStrategy.mode
+  if (mode === 'ALL') return { providers: undefined, callStrategy: 'ALL', lowest: null, fresh: null, ...none }
 
   let snapshot: QuoteSnapshot | null = null
   let fresh: { snapshot: QuoteSnapshot; quotedAt: Date } | null = null
@@ -155,7 +178,7 @@ async function resolveCallProviders(
     .sort((a, b) => a.feeFen - b.feeFen)
     .map((q) => ({ provider: q.provider, feeFen: q.feeFen }))
 
-  if (s.callStrategy.mode === 'CHEAPEST_N') {
+  if (mode === 'CHEAPEST_N') {
     // 一家都挑不出来（没报价 / 全被摘了）才退回并呼；挑出 1 家也照呼——
     // 「只剩一家可呼」和「呼全表」是两回事，后者会多冻六笔钱。
     const chosen = usable.slice(0, s.callStrategy.cheapestN)

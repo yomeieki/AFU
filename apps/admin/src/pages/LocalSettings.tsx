@@ -270,7 +270,7 @@ export default function LocalSettings() {
           </Field>
           */}
           <Field label="第一次呼谁（店员没手选时）"
-            hint="工作台弹窗里始终列出全部报价，店员可以当场改选任意一家（急单选闪送）；这里定的是他不动手时默认呼谁。并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。">
+            hint="三级阶梯的第一级。工作台弹窗里始终列出全部报价，店员可以当场改选任意一家（急单选闪送）；这里定的是他不动手时默认呼谁。并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。">
             <select className={inputCls} value={s.callStrategy.mode}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL' } })}>
               <option value="SOLO_LOWEST">只呼最低价那一家（推荐）</option>
@@ -278,13 +278,12 @@ export default function LocalSettings() {
               <option value="ALL">并呼全部运力（旧行为）</option>
             </select>
           </Field>
-          {s.callStrategy.mode === 'CHEAPEST_N' && (
-            <Field label="并呼最便宜的几家" hint="按首单那组报价：1 家约冻 ¥16、3 家约冻 ¥52、7 家约冻 ¥75。家数越多抢单越快，但占用的余额也越多">
-              <input className={inputCls} type="number" min={1} max={7} value={s.callStrategy.cheapestN}
-                onChange={(e) => patch({ callStrategy: { ...s.callStrategy, cheapestN: Number(e.target.value) } })} /></Field>
-          )}
-          <Field label="无人接单几分钟后并呼全部"
-            hint="第二级兜底：到点仍没人接，系统取消原单、并呼全部运力（约冻 ¥75）。不分第一次是怎么呼的——店员手选的那一家同样会被兜。0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
+          <Field label="第二级并呼最便宜的几家"
+            hint="第一级没人接时升到这一级。按首单那组报价：1 家约冻 ¥16、3 家约冻 ¥52、7 家约冻 ¥75。家数越多抢单越快，但占用的余额也越多">
+            <input className={inputCls} type="number" min={1} max={7} value={s.callStrategy.cheapestN}
+              onChange={(e) => patch({ callStrategy: { ...s.callStrategy, cheapestN: Number(e.target.value) } })} /></Field>
+          <Field label="每一级等几分钟"
+            hint="一家没人接 → 等这么久 → 并呼最便宜几家 → 再等这么久 → 并呼全部运力（约冻 ¥75）。不分第一次是怎么呼的——店员手选的那一家同样会被逐级兜住。0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
             <input className={inputCls} type="number" min={0} max={30} value={s.callStrategy.escalateAfterMin}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, escalateAfterMin: Number(e.target.value) } })} /></Field>
           <Field label="商品默认净重（克）" hint="商品未填净重时用"><input className={inputCls} type="number" min={50} value={s.kd100.defaultItemWeightG} onChange={(e) => patch({ kd100: { ...s.kd100, defaultItemWeightG: Number(e.target.value) } })} /></Field>

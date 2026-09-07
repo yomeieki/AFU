@@ -1217,13 +1217,15 @@ export default function Workbench() {
      * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，
      * 也就没得选——只能说明会先查价，选运力这件事留给之后单独点「呼叫骑手」。
      */
-    // 两级阶梯（店主 2026-09-07 定）：第一次呼你在上面选中的，第二次由系统并呼全部兜底。
-    // 第二句对**任何**第一次都成立——包括手选的那一家（服务端已把 MANUAL 纳入升级范围），
-    // 所以这句话不能只在「没手选」时显示，否则店员会以为手选的单没人兜。
+    // 三级阶梯（店主 2026-09-07 定）：第一次呼你在上面选中的，之后系统一级一级往上加人。
+    // 后半句对**任何**第一次都成立——包括手选的那一家（服务端把 MANUAL 也纳入了升级范围），
+    // 所以不能只在「没手选」时显示，否则店员会以为手选的单没人兜。
     const strategyText = callMode === 'SOLO_LOWEST' ? '只呼你选中的那一家'
       : callMode === 'CHEAPEST_N' ? `并呼最便宜的 ${cheapestN} 家，谁先接算谁的`
         : '并呼设置里的全部运力，谁先接算谁的'
-    const escalateText = escalateMin > 0 && callMode !== 'ALL' ? `；约 ${escalateMin} 分钟仍无人接，系统会自动取消它、改为并呼全部运力` : ''
+    const escalateText = escalateMin > 0 && callMode !== 'ALL'
+      ? `；没人接的话系统会自动往上加人——约 ${escalateMin} 分钟后改为并呼最便宜 ${cheapestN} 家，再过 ${escalateMin} 分钟并呼全部运力`
+      : ''
     const callSpec = (
       title: string, confirmText: string, what: string,
       run: (pick?: CallPick | null) => Promise<unknown>, hasQuote = true,
