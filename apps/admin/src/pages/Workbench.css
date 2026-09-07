@@ -264,3 +264,75 @@
 }
 
 .wb__hint { padding:6px 14px 10px; font-size:12px; color:var(--text-2); line-height:1.6; flex:none; }
+
+/* ── 手机模式（≤700px，规格 §9.1）─────────────────────────────────────
+   700 这条线是为了把 iPad 排除在外：iPad mini 竖屏 744、iPad 竖屏 768/810/834
+   都落在上面那个 900px 档里，构造一行不变（店主 2026-09-07 定：只改手机）。
+   ⚠ 这个查询串必须和 Workbench.tsx 的 PHONE_QUERY 逐字一致——两边对不上会出现
+   「手机 DOM 套桌面样式」，比两端都不改更糟。 */
+@media (max-width:700px) {
+  /* 用 dvh 不用 vh：地址栏收放时 vh 会跳，上一版正是为躲这个跳而把列内滚动整个
+     关掉、改成整页滚，于是 120 张卡片把页面撑到 18,592px。dvh 没这个毛病，
+     所以这里能把「定高 + 列内滚动」一起要回来。vh 那行是老浏览器的兜底。 */
+  .wb { height:100vh; height:100dvh; min-height:0; overflow:hidden;
+    display:flex; flex-direction:column; }
+
+  /* 桌面顶栏、图例、底部阈值说明在手机上让位：前者收进「⋯」，后两者收进「?」 */
+  .wb__top, .wb__legend, .wb__hint { display:none; }
+
+  .wb__ptop { flex:none; display:flex; align-items:center; gap:8px;
+    padding:8px 12px; background:var(--surface); border-bottom:1px solid var(--line); }
+  .wb__ptop-l { flex:1; min-width:0; display:flex; align-items:center; gap:8px; overflow:hidden; }
+  .wb__ptop-r { flex:none; display:flex; align-items:center; gap:6px; }
+  .wb__ptop .wb__shop { font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .wb__ptop .wb__meta, .wb__ptop .wb__alerts { flex:none; }
+  .wb__ptop .wb__iconbtn { min-width:44px; min-height:44px; padding:6px 9px; justify-content:center; }
+
+  /* ── 触控尺寸 ──
+     规格 §6：「按钮 44px 触控尺寸——店员多半单手在手机上点」。
+     改造前实测（375px）：抽屉主操作 41、小费档位 41、拒单原因 41、报价行 32、
+     ↻刷新 34、弹窗关闭 30、「重打小票」与「拒单并全额退款」只有 24。
+     只有确认弹窗的两个大按钮达标（那条 .wb__modal-foot .wb__btn 早就写了 44）。
+     下面这些只在手机档生效，电脑与 iPad 的尺寸一行不变。 */
+  .wb__btn { min-height:44px; }
+  .wb__opt { min-height:44px; align-items:center; }
+  /* 点这一行就决定本单花多少钱（选哪家运力），32px 对一个花钱的选择太小 */
+  .wb__quote-row { min-height:44px; align-items:center; }
+  .wb__iconbtn { min-height:44px; }
+  /* 「重打小票」店员一天点几十次，24px 的下划线文字根本点不准；
+     「拒单并全额退款」同一个类，一起抬。 */
+  .wb__reject { min-height:44px; padding:0 12px; }
+
+  /* 列切换条：手机换列的主方式（横滑找列在 18,000px 高的页面上不可用） */
+  .wb__tabs { flex:none; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none;
+    padding:8px 12px; background:var(--surface); border-bottom:1px solid var(--line); }
+  .wb__tabs::-webkit-scrollbar { display:none; }
+  .wb__tab { flex:none; display:inline-flex; align-items:center; gap:6px;
+    min-height:36px; padding:6px 12px; border-radius:999px;
+    border:1px solid var(--line); background:var(--bg); color:var(--text-2);
+    font-size:14px; font-weight:600; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .wb__tab--on { background:var(--text-1); border-color:var(--text-1); color:var(--surface); }
+  .wb__tab-n { font-variant-numeric:tabular-nums; font-size:12px; opacity:.7; }
+  .wb__tab--on .wb__tab-n { opacity:.9; }
+
+  /* 一次一列：board 退成单块占满剩余高度，滚动只发生在 col-body 里 */
+  .wb__board { display:block; flex:1; min-height:0; overflow:hidden; padding:10px 12px; }
+  .wb__col { height:100%; display:flex; flex-direction:column;
+    padding:0; background:none; border-radius:0; }
+  /* 列名与条数已经在切换条上，列头再写一遍就是复述 */
+  .wb__col-head { display:none; }
+  .wb__col-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+    /* 底部安全区：iPhone 的 home indicator 会盖住最后一张卡的操作区 */
+    padding-bottom:calc(16px + env(safe-area-inset-bottom, 0px)); }
+
+  /* 说明层里的图例竖排，别再挤成一行行错位的样子 */
+  .wb__sheet-legend { display:flex; flex-direction:column; gap:10px; }
+  .wb__sheet-legend .wb__legend-g { gap:8px; }
+  /* 桌面那根竖线在竖排里会变成孤零零一小截；竖排本身已经把两组分开了 */
+  .wb__sheet-legend .wb__legend-sep { display:none; }
+  .wb__sheet-row { display:flex; align-items:center; justify-content:space-between;
+    gap:12px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .wb__sheet-row:last-child { border-bottom:none; }
+  .wb__sheet-row b { font-variant-numeric:tabular-nums; }
+}
