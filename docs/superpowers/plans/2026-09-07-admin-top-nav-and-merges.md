@@ -395,6 +395,11 @@ git commit -m "feat(admin): 轮播+扫码并为推广运营，打印机+系统�
 桌面两档和窄屏九宫格必须一起交付：只做桌面档会留下「窄屏完全没有导航」的半成品，
 评审无法只通过其中一半。
 
+> **实施后修正（d235942）**：本任务原写的断点 768 / 1100 实测两档都溢出——768px 时
+> 「系统维护」整个被切掉，1100px 时溢出 142px。实测最小视口为纯文字 878px、带图标
+> 1134px，断点已改为 `navrow: 960` / `nav: 1200`，并去掉了 `nav:px-3`、`nav:px-6`、
+> `nav:gap-1`。规格 §4.3 已同步。下面的类名以仓库现状为准。
+
 **Files:**
 - Modify: `apps/admin/tailwind.config.js`
 - Modify: `apps/admin/src/components/Layout.tsx`（整文件替换）
