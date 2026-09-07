@@ -3,6 +3,13 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      // 实测（9 项中文标签 + Logo + 右侧按钮 + 内边距的最小视口）：
+      //   纯文字一行 878px  → navrow 取 960，低于它改走九宫格面板
+      //   带图标一行 1134px → nav 取 1200，低于它去掉图标与「退出登录」文字
+      screens: {
+        navrow: '960px',
+        nav: '1200px',
+      },
       // 品牌色阶，规范见 docs/design-system.md
       colors: {
         brand: {
