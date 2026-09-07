@@ -228,7 +228,18 @@ Page({
           return
         }
         self.onSkuClose()
-        wx.showToast({ title: '已加入同城购物车', icon: 'none' })
+        // 服务端叠加超库存会静默按库存封顶（cart.ts 的 Math.min）：如果这里一律弹
+        // 「已加入」，顾客会以为按自己选的数量全加上了，实际只加了差额，只能到
+        // 结算页逐行核对才发现。result.capped 时改用带真实件数的提示；result.added
+        // 是本次真正加入的件数，购物车里已到库存上限时是 0，措辞要分开。
+        if (result && result.capped) {
+          var cappedMsg = result.added > 0
+            ? '库存不足，本次加入 ' + result.added + ' 件，购物车内共 ' + result.quantity + ' 件'
+            : '库存不足，购物车内已是最多 ' + result.quantity + ' 件'
+          wx.showToast({ title: cappedMsg, icon: 'none' })
+        } else {
+          wx.showToast({ title: '已加入同城购物车', icon: 'none' })
+        }
         self.loadCart()
         self._adding = false
       })

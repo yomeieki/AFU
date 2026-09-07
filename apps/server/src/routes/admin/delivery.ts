@@ -7,7 +7,7 @@ import { AppError } from '../../middlewares/error'
 import {
   callRider, voidUnknownDelivery, precancelDelivery, cancelDelivery, addTip, selfDeliver, markDelivered,
 } from '../../services/delivery/orchestrator'
-import { refreshOrderQuote, kickOffQuote, isQuoteStale } from '../../services/delivery/quote'
+import { refreshOrderQuote, kickOffQuote, isQuoteStale, QUOTE_FRESH_MS } from '../../services/delivery/quote'
 import { getCourierLocationByOrder } from '../../services/delivery/courier-location'
 import { getLocalSettings, haversineM, estimateMinutes } from '../../services/local-settings'
 
@@ -49,7 +49,15 @@ async function doAccept(id: number) {
     where: { id, status: 'PAID' },
     data: { status: 'PREPARING', acceptedAt, ...(estimatedDeliveryAt ? { estimatedDeliveryAt } : {}) },
   })
-  if (moved.count === 0) throw new AppError(42204, `订单状态为 ${target.status}，仅已付款订单可接单`)
+  if (moved.count === 0) {
+    // 竞态文案：上面 :37 早读到的 target.status 到这里可能已经不是真的了——双标签页接单，
+    // 或顾客在这几毫秒内自助取消（走 orders.ts 的条件写），都会让 updateMany 落空却仍拿旧值
+    // 拼错误，说出「订单状态为 PAID，仅已付款订单可接单」这种自相矛盾的话。重新读一次当前
+    // 状态再报：已被接单（PREPARING）明确告诉店员「已被接单」，而不是复述早已过期的 PAID。
+    const now = await prisma.order.findUnique({ where: { id }, select: { status: true } })
+    const cur = now?.status ?? target.status
+    throw new AppError(42204, cur === 'PREPARING' ? '订单已被接单，请刷新查看' : `订单状态为 ${cur}，仅已付款订单可接单`)
+  }
   return prisma.order.findUnique({ where: { id } })
 }
 
@@ -181,9 +189,18 @@ router.get('/:id/delivery', async (req: Request, res: Response, next: NextFuncti
       events: delivery?.events ?? [],
       costFen,
       // 呼叫弹窗要的那一块：六家报价 + 查询时间 + 是否已过期（>5 分钟转琥珀底并标「已过期」）。
-      // stale 在服务端算，免得前端各自复刻一遍阈值。
+      // stale 仍在这里算一次给首屏用，但它是「取详情这一刻」的快照——抽屉一旦被店员晾在
+      // 那不关，10 秒轮询只换列位置/卡片，不会重新调这个接口，stale 就冻结在旧值上，
+      // 久留之后确认框会承诺一个其实已经过期的报价。所以额外把 quoteFreshMs 阈值也下发，
+      // 前端（CallQuoteBlock）改成拿 quotedAt + quoteFreshMs 每次渲染时自己重算，
+      // 不再只读这个一次性布尔；阈值仍由服务端定义并下发，前端不复刻常量。
       quote: order
-        ? { snapshot: order.quoteSnapshot ?? null, quotedAt: order.quotedAt?.toISOString() ?? null, stale: isQuoteStale(order.quotedAt) }
+        ? {
+            snapshot: order.quoteSnapshot ?? null,
+            quotedAt: order.quotedAt?.toISOString() ?? null,
+            stale: isQuoteStale(order.quotedAt),
+            quoteFreshMs: QUOTE_FRESH_MS,
+          }
         : null,
     })
   } catch (e) { next(e) }

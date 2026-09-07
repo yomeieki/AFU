@@ -661,7 +661,10 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     })
     // 真并发兜底：两个请求同时读到 cancelRequestedAt=null，只有一个能写入
     if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')
+    // notifyCancelRequest 现在要读一次 getLocalSettings() 拼窗口分钟数，改成了 async——
+    // 通知本身仍是 fire-and-forget（不阻塞这次请求的响应），失败只留痕，不能让推送失败连累取消申请本身
     notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note })
+      .catch((err) => console.error('[orders] notifyCancelRequest 失败:', (err as Error).message))
     // 出票（规格 §8b「顾客申请取消」）：这一步只是挂起申请、订单状态未变，但厨房该立刻知道「先别做了」，
     // 不必等店员处理完才收到消息——票面是给店内看的物理提醒，与走推送通知的 notifyCancelRequest 并列。
     // H6：kind 用独立的 CANCEL_REQUEST（不是 CANCEL）——这只是「申请」，店员可能驳回，票面文案、

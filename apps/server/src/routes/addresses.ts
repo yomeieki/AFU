@@ -107,6 +107,12 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const textChanged = (['province', 'city', 'district', 'detail'] as const).some(
       (k) => data[k] !== undefined && data[k] !== exists[k]
     )
+    // 只看请求体带没带坐标键，**不能**按「值是否与库里不同」判定：小程序改了文字后会强制
+    // 顾客重新在地图上确认定位（edit.js onSave），而「就在原位置点确认」是最常见的动作，
+    // 回传的 latE6/lngE6 与库里完全相同——若按值判，这次合法的重新确认会被当成「没提供
+    // 坐标」，连同 textChanged 一起把坐标清空，顾客照着提示做了却仍拿到 42223。
+    // 代价是尚未更新的旧版小程序仍可能带着旧坐标改文字，这属于版本过渡期的已知缺口，
+    // 由新版客户端的「改文字必须重选点」闸门收口，服务端不为此牺牲正常路径。
     const coordProvided = 'latE6' in data || 'lngE6' in data
     const staleCoordPatch =
       textChanged && !coordProvided ? { latE6: null, lngE6: null, poiName: null } : {}

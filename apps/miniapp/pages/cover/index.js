@@ -1,30 +1,33 @@
 // 封面分流页（pages[0]，非 tabBar）。顾客冷启动看到它，选完渠道就进业务页。
 //
-// 为什么不能直接用 <image mode="aspectFill"> + 页面百分比定位热区：
-// aspectFill 按 s = max(W/375, H/812) 缩放后居中裁剪，屏幕坐标 = s·设计坐标 + 偏移；
-// 而 `left: 55%` 是页面宽高的百分比，没有那个偏移项，误差恰好等于裁剪量
-// （iPhone SE 上纵向裁 ±62pt，热区就偏 62pt）。
-// 所以这里改成：算一个「含被裁部分的完整缩放尺寸」的舞台，居中溢出到视口外，
-// 热区放在舞台内用百分比——舞台比例恒为 750:1624，百分比与设计坐标 1:1 对应。
+// 2026-09-07 从「亭子版整屏位图 + 透明热区」换成方案 C 青瓦简约版的三层结构：
+// 背景层 + Logo 图片层 + 原生交互层。旧版把按钮画进位图里，换背景就得重切热区；
+// 现在换背景只动 assets/cover 里的图，热区与路由不受影响。
+//
+// 版式基准 750 × 1333（旧版是 750 × 1624）。热区与跳转契约见 config/cover-entries.js。
 
-var DESIGN_W = 750
-var DESIGN_H = 1624
+var ENTRIES = require('../../config/cover-entries.js')
 
-// 可点带（设计坐标，已含 24px 余量）：最上是主按钮 y=902，最下是横幅底 y=1299；
-// 横向最左主按钮 x=69，最右 x=703。极端比例下用它把可点区钳回视口内。
-var BAND_TOP = 878
-var BAND_BOTTOM = 1323
-var BAND_LEFT = 45
-var BAND_RIGHT = 727
+var DESIGN_W = 750           // 设计画板宽
+var BG_W = 941               // 背景原图尺寸
+var BG_H = 1672
+var WALL_START_ROW = 1216    // 实测：这一行以上全是宣纸底纹，青瓦线稿从这里开始
+var BG_H_RPX = (DESIGN_W * BG_H) / BG_W                      // 背景按宽铺满后的高 ≈ 1332.6rpx
+var WALL_TOP_IN_BG_RPX = (BG_H_RPX * WALL_START_ROW) / BG_H  // 青瓦顶边距图顶 ≈ 969.5rpx
+
+var CONTENT_TOP = 135        // Logo 顶边
+var CONTENT_BOTTOM = 964     // 冷链热区底边
+var CLEARANCE = 24           // 内容与青瓦之间至少留出的间距
+var MIN_SCALE = 0.86
+var CAPSULE_GAP = 8          // 胶囊按钮下方额外留白（px）
 
 var app = getApp()
 
 Page({
   data: {
-    stageStyle: '',
-    // 开发期置 true 可显示热区虚线框，核对是否压在画上的按钮上。
-    // 2026-09-05 PO 已在开发者工具核对通过，改回 false。
-    debug: false,
+    entries: ENTRIES,
+    stageOffset: 0,
+    stageScale: 1,
   },
 
   onLoad: function () {
@@ -36,77 +39,108 @@ Page({
     this.layout()
   },
 
+  // 版式只有两个自由度，都作用在 .cover-stage 上，六个热区随之一起变换，
+  // 不会出现「视觉动了热区没动」：
+  //   stageOffset —— 整体下移，让开微信胶囊按钮，保证 Logo 不被遮挡；
+  //   stageScale  —— 只有极短屏（如 iPhone SE）内容仍会压到青瓦时才启用的等比兜底。
   layout: function () {
     var info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
-    var W = info.windowWidth
-    var H = info.windowHeight
+    var rpx = DESIGN_W / info.windowWidth       // 1px = rpx 个 rpx
+    var screenH = info.windowHeight * rpx
+    var wallTop = screenH - BG_H_RPX + WALL_TOP_IN_BG_RPX
 
-    // 舞台 = 铺满视口所需的完整尺寸（等价于 aspectFill 缩放后的图，含被裁部分）
-    var stageW = Math.max(W, (H * DESIGN_W) / DESIGN_H)
-    var stageH = Math.max(H, (W * DESIGN_H) / DESIGN_W)
-    var left = (W - stageW) / 2
-    var top = (H - stageH) / 2
+    var capsuleBottom
+    try {
+      capsuleBottom = (wx.getMenuButtonBoundingClientRect().bottom + CAPSULE_GAP) * rpx
+    } catch (err) {
+      // 低版本基础库拿不到胶囊位置时，按状态栏 + 44px 导航条估算
+      capsuleBottom = ((info.statusBarHeight || 20) + 44 + CAPSULE_GAP) * rpx
+    }
 
-    // 纯居中在 H/W < 1.30 时会切掉冷链横幅、> 2.48 时会切掉按钮右缘。
-    // 现役手机（1.78–2.33）上下面两句都是 no-op；平板/折叠屏上改为平移而不是切掉。
-    top = Math.min(Math.max(top, -(BAND_TOP / DESIGN_H) * stageH), H - (BAND_BOTTOM / DESIGN_H) * stageH)
-    left = Math.min(Math.max(left, -(BAND_LEFT / DESIGN_W) * stageW), W - (BAND_RIGHT / DESIGN_W) * stageW)
+    var maxOffset = Math.max(0, wallTop - CLEARANCE - CONTENT_BOTTOM)
+    var stageOffset = Math.min(Math.max(0, capsuleBottom - CONTENT_TOP), maxOffset)
+
+    var stageScale = 1
+    var room = wallTop - CLEARANCE - (CONTENT_TOP + stageOffset)
+    var needed = CONTENT_BOTTOM - CONTENT_TOP
+    if (room < needed) {
+      stageScale = Math.max(MIN_SCALE, room / needed)
+    }
 
     this.setData({
-      stageStyle:
-        'left:' + left + 'px;top:' + top + 'px;width:' + stageW + 'px;height:' + stageH + 'px',
+      stageOffset: Math.round(stageOffset * 100) / 100,
+      stageScale: Math.round(stageScale * 10000) / 10000,
     })
   },
 
-  goLocal: function () {
-    // 与购物车/商品详情/「我的」同一套契约：先过位置许可再进，
-    // 避免顾客进到地图选点那一步才被拦。
-    app
-      .ensurePrivacyAuthorize()
-      .then(function () {
-        wx.navigateTo({ url: '/pages/local/index' })
-      })
-      .catch(function () {
-        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
-      })
+  // 六个入口共用。跳转方式按 config 里的 action 分流。
+  //
+  // 这里**不做登录判断**：本页是 pages[0]，冷启动时 app._tryLogin() 可能还没回来，
+  // 在这儿判会把已登录的人误判成未登录。会员三页各自有登录门。
+  onTapEntry: function (e) {
+    var id = e.currentTarget.dataset.id
+    var entry = null
+    for (var i = 0; i < ENTRIES.length; i++) {
+      if (ENTRIES[i].id === id) { entry = ENTRIES[i]; break }
+    }
+    if (!entry) {
+      // 只可能是 wxml 的 data-id 写错/漏写，属于开发期错误，别静默吞掉
+      console.error('[cover] 未知的热区 data-id：', id)
+      return
+    }
+
+    this.track(entry.event, entry.id)
+
+    if (entry.action === 'local') {
+      // 与购物车/商品详情/「我的」同一套契约：先过位置许可再进，
+      // 避免顾客进到地图选点那一步才被拦。
+      var route = entry.route
+      var self = this
+      app
+        .ensurePrivacyAuthorize()
+        .then(function () {
+          wx.navigateTo({ url: route, fail: function (err) { self.onNavFail(entry, err) } })
+        })
+        .catch(function () {
+          wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+        })
+      return
+    }
+
+    // pages/index/index 是 tabBar[0]，只能 switchTab；switchTab 会销毁本页，
+    // 顾客之后要换回同城走「我的 → 同城配送」那个常驻入口。
+    var open = entry.action === 'switchTab' ? wx.switchTab : wx.navigateTo
+    var that = this
+    open({
+      url: entry.route,
+      fail: function (err) { that.onNavFail(entry, err) },
+    })
   },
 
-  // pages/index/index 是 tabBar[0]，只能 switchTab；switchTab 会销毁本页，
-  // 顾客之后要换回同城走「我的 → 同城配送」那个常驻入口。
-  goExpress: function () {
-    wx.switchTab({ url: '/pages/index/index' })
+  // 旧版跳转失败是静默的。热区压在位图上，顾客点了没反应会以为是自己没点准，
+  // 所以这里必须给可见反馈 + 控制台线索。
+  onNavFail: function (entry, err) {
+    console.error('[cover] 跳转失败', entry.id, entry.route, err)
+    wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
   },
 
   // 「我的订单」：navigateTo 而不是 switchTab —— 订单列表不是 tabBar 页，
-  // 而且 switchTab 会把封面页栈销毁掉（goExpress 那条注释里的坑）。
-  // 不做登录判断：本页是 pages[0]，冷启动时 app._tryLogin() 可能还没回来，
-  // 在这儿判会把已登录的人误判成未登录（同 goMember 的理由）。订单页自己有登录门。
+  // 而且 switchTab 会把封面页栈销毁掉。
+  // 同样不做登录判断，理由见 onTapEntry。
   goOrders: function () {
     wx.navigateTo({ url: '/pages/order/list' })
   },
 
-  // 三个会员热区共用，按 data-key 分流。
-  // 这里**不做登录判断**：本页是 pages[0]，冷启动时 app._tryLogin() 可能还没回来，
-  // 在这儿判会把已登录的人误判成未登录。三个目标页各自有登录门。
-  goMember: function (e) {
-    var key = e && e.currentTarget && e.currentTarget.dataset.key
-    var map = {
-      member: '/pages/member/index',
-      coupon: '/pages/member/coupons',
-      points: '/pages/member/mall',
-    }
-    var url = map[key]
-    if (!url) {
-      // 只可能是 wxml 的 data-key 写错/漏写，属于开发期错误，别静默吞掉
-      console.error('[cover] 未知的会员热区 data-key：', key)
-      return
-    }
-    wx.navigateTo({ url: url })
+  // 埋点出口。本仓库目前没有统一埋点层，先收敛成这一个函数：
+  // 平台定了（wx.reportEvent 或自建后端）只改这里，不用回头翻页面代码。
+  // 事件名沿用设计交付包的约定，见 config/cover-entries.js。
+  track: function (event, id) {
+    console.log('[track]', event, { id: id, page: 'cover', ts: Date.now() })
   },
 
   // 图是打进包里的本地资源，正常不会触发；真触发了说明路径写错，
   // 而 pages[0] 变成一整屏空白纸底是最糟的失败形态，必须让它在控制台可见。
   onImgError: function (e) {
-    console.error('[cover] 封面图加载失败，检查 /assets/cover/cover.jpg', e && e.detail)
+    console.error('[cover] 封面素材加载失败，检查 /assets/cover/', e && e.detail)
   },
 })

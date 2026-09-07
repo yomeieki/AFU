@@ -259,8 +259,10 @@ export const getOrderDelivery = (id: number) =>
     // 这一单**所有**配送单的成本合计（含升级留下的那张 D-1 的取消费），服务端算好，
     // 前端与退款弹窗共用，不要各算各的
     costFen: number
-    // 呼叫弹窗要的那一块：各家报价 + 查询时间 + 是否已过期（服务端算 stale，免得前端复刻阈值）
-    quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
+    // 呼叫弹窗要的那一块：各家报价 + 查询时间 + 是否已过期。stale 是取详情那一刻的快照，
+    // 抽屉久留不关、10 秒轮询也不会重取详情时会冻结在旧值上——quoteFreshMs 是服务端定义的
+    // 新鲜度阈值，一并下发，前端按 quotedAt 实时重算，不读 stale 本身，也不用复刻这个常量
+    quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean; quoteFreshMs: number } | null
   }>>(`/admin/local/orders/${id}/delivery`)
 /** 手动重查报价（呼叫弹窗上的刷新按钮）。batchPrice 免费、不下单、不落库，随便点 */
 export const refreshOrderQuote = (id: number) =>

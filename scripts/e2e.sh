@@ -323,6 +323,24 @@ R=$(req GET /api/cart "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] 
 R=$(req GET "/api/cart?channel=LOCAL" "$UT"); [[ "$(jq -r "[.data.items[] | select(.id==$LCID)] | length" <<<"$R")" == "1" ]] && ok "同城购物车含该行" || fail "同城购物车" "$R"
 assert_eq "同城购物车小计=2400" "$(jq -r .data.totalAmount <<<"$R")" "2400"
 
+echo "== 20b. 购物车叠加超库存：静默封顶要带 capped=true + 真实数量 =="
+# 之前 cart.ts 只按「本次增量」校验库存、按库存 Math.min 封顶后响应只回 {id, channel}，
+# 前端两个加购入口拿到成功响应一律弹「已加入」，顾客不知道实际只加了差额。
+# $LCID 这一行此刻已有 quantity=2；把库存钉到 5，再加 4 件 → 2+4=6 被封顶到 5。
+# 本次增量必须 ≤ 库存：cart.ts 的前置校验「availableStock < quantity → 42201」只比本次
+# 增量不比合并后总量，加 10 件会在封顶逻辑之前就被 42201 拒掉，测不到封顶分支。
+req PUT "/api/admin/products/$LPID" "$AT" '{"stock":5}' >/dev/null
+R=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":4}")
+assert_eq "叠加超库存 code 0（服务端封顶而非报错）" "$(code "$R")" "0"
+assert_eq "封顶后 quantity=库存(5)" "$(jq -r .data.quantity <<<"$R")" "5"
+assert_eq "封顶标记 capped=true" "$(jq -r .data.capped <<<"$R")" "true"
+req PUT "/api/admin/products/$LPID" "$AT" '{"stock":50}' >/dev/null # 复位库存，避免影响后续分段
+# 上面把 $LCID 这一行封顶到了 5——同一行会在 §22 被 LCID2（同 userId+productId+skuId，
+# cart.ts:98 按此合并）叠加，8400 的小计会越过 §21 钉的 freeThreshold=8000，把 LO1
+# 的运费顶成 0，assert_eq "运费=报价 fee" 必红。这里把数量复位回 §20 加购时的 2 件，
+# 避免 §20b 的测试状态泄漏进 §22。
+req PUT "/api/cart/$LCID" "$UT" '{"quantity":2}' >/dev/null
+
 echo "== 21. 同城设置/报价 =="
 # enabled 初值与 version 初值都是持久化状态，重复跑 e2e 时不为默认值：
 # 这里改成相对断言（记录旧 version，断言新 version = 旧值+1；enabled 断言保存开启后的值），
@@ -804,12 +822,15 @@ req PUT "/api/addresses/$LADDR" "$UT" '{"latE6":29350000,"lngE6":104790000}' >/d
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 md5hex() { if command -v md5sum >/dev/null 2>&1; then printf '%s' "$1" | md5sum | cut -d' ' -f1; else printf '%s' "$1" | md5 -q; fi; }
 KDCB_BODY=/tmp/e2e-kdcb.json
-kd_cb() { # deliveryNo taskId status desc updateTime [courierName] [courierMobile] → echo HTTP 状态码，响应体在 $KDCB_BODY
-  local dno="$1" task="$2" st="$3" desc="$4" ut="$5" cn="${6:-王骑手}" cm="${7:-13900001111}"
+kd_cb() { # deliveryNo taskId status desc updateTime [courierName] [courierMobile] [kuaidicom] → echo HTTP 状态码，响应体在 $KDCB_BODY
+  # kuaidicom 默认 shansongtongcheng：批次 taskId 恒相等，真正区分「哪一家」的是这个字段
+  # （callback.ts 的并呼假撤单过滤比它，不比 taskId），本段大多数用例不关心它、保持默认即可，
+  # 只有 §27 的并呼假撤单测试需要显式传一个不同的编码。
+  local dno="$1" task="$2" st="$3" desc="$4" ut="$5" cn="${6:-王骑手}" cm="${7:-13900001111}" kc="${8:-shansongtongcheng}"
   local salt param sign
   salt=$(req GET "/api/admin/system/kd100-mock/salt/$dno" "$AT" | jq -r '.data.salt // empty')
-  param=$(jq -cn --arg t "$task" --arg s "$st" --arg d "$desc" --arg u "$ut" --arg cn "$cn" --arg cm "$cm" \
-    '{taskId:$t,status:$s,statusDesc:$d,updateTime:$u,courierName:$cn,courierMobile:$cm,kuaidicom:"shansongtongcheng"}')
+  param=$(jq -cn --arg t "$task" --arg s "$st" --arg d "$desc" --arg u "$ut" --arg cn "$cn" --arg cm "$cm" --arg kc "$kc" \
+    '{taskId:$t,status:$s,statusDesc:$d,updateTime:$u,courierName:$cn,courierMobile:$cm,kuaidicom:$kc}')
   sign=$(md5hex "${param}${salt}" | tr 'a-f' 'A-F')
   curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$dno" \
     --data-urlencode "param=$param" --data-urlencode "sign=$sign" --data-urlencode "taskId=$task"
@@ -854,9 +875,24 @@ assert_eq "未知状态不动状态机" "$(dstat $CBO2)" "CALLING"
 # —— 入库失败返 500（N5）：providerStatus 超出 Int 列范围 → 事件落库抛错 → 500 让快递100 重推
 assert_eq "入库失败 http 500" "$(kd_cb "$CBD2" "$CBT2" 99999999999999999999 '溢出' '2026-09-04 12:02:00')" "500"
 assert_eq "500 应答 result=false" "$(jq -r .result "$KDCB_BODY")" "false"
-# —— 并呼假撤单：taskId 不匹配的 720 不得终态化；随后真 100 正常推进
-assert_eq "陌生 taskId 的 720 http 200" "$(kd_cb "$CBD2" "OTHER-TASK" 720 '未中标运力撤单' '2026-09-04 12:03:00')" "200"
-assert_eq "假撤单不终态化" "$(dstat $CBO2)" "CALLING"
+# —— 单运力（POST /call 默认 SOLO_LOWEST 建的，只呼一家）CALLING 阶段收到同 taskId 同
+# kuaidicom 的 720：这是这一家自己的真撤单，没有二义性，必须终态化 + 释放 activeOrderId，
+# 不能因为 statusRank 还没到 20（还没人「接单」）就当假撤单晾着——用一个独立的订单/配送单，
+# 避免打断下面 CBD2 那条正向剧本
+CBO2S=$(mk_local_paid); req POST "/api/admin/local/orders/$CBO2S/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$CBO2S/call" "$AT"); CBD2S=$(jq -r .data.deliveryNo <<<"$R")
+R=$(req GET "/api/admin/local/orders/$CBO2S/delivery" "$AT")
+CBT2S=$(jq -r .data.delivery.providerTaskId <<<"$R")
+CBP2S=$(jq -r '.data.delivery.calledProviders[0]' <<<"$R")
+assert_eq "默认 SOLO_LOWEST 只呼一家" "$(jq -r .data.delivery.callStrategy <<<"$R")" "SOLO"
+assert_eq "唯一被呼运力自己撤单 http 200" "$(kd_cb "$CBD2S" "$CBT2S" 720 '骑手取消订单' '2026-09-04 12:03:30' '王骑手' '13900001111' "$CBP2S")" "200"
+assert_eq "呼叫阶段唯一候选的真撤单→CANCELLED（不再误判假撤单卡死）" "$(dstat $CBO2S)" "CANCELLED"
+assert_eq "释放 activeOrderId" "$(req GET "/api/admin/local/orders/$CBO2S/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
+R=$(req POST "/api/admin/local/orders/$CBO2S/call" "$AT"); assert_eq "释放后订单回到可重呼状态 code 0" "$(code "$R")" "0"
+# —— 并呼假撤单（呼叫阶段，尚未锁定中标方）：taskId 是批次级的，此刻还没人接单，
+# 无法判断这条 720 到底是谁的，不管 taskId/kuaidicom 是否匹配都只留痕不得终态化
+assert_eq "呼叫阶段收到陌生 taskId 的 720 http 200" "$(kd_cb "$CBD2" "OTHER-TASK" 720 '未中标运力撤单' '2026-09-04 12:03:00')" "200"
+assert_eq "尚未锁定中标方，假撤单不终态化" "$(dstat $CBO2)" "CALLING"
 assert_eq "真 100 http 200" "$(kd_cb "$CBD2" "$CBT2" 100 '骑手已接单' '2026-09-04 12:04:00')" "200"
 assert_eq "推进 ACCEPTED" "$(dstat $CBO2)" "ACCEPTED"
 # —— N8：515 改派后收到 100，允许 rank 回拨、换新骑手
@@ -865,13 +901,18 @@ assert_eq "515→REASSIGNING" "$(dstat $CBO2)" "REASSIGNING"
 assert_eq "改派后新 100 http 200" "$(kd_cb "$CBD2" "$CBT2" 100 '新骑手接单' '2026-09-04 12:06:00' '李骑手' '13922223333')" "200"
 assert_eq "REASSIGNING→ACCEPTED（rank 回拨特例）" "$(dstat $CBO2)" "ACCEPTED"
 assert_eq "换成新骑手" "$(req GET "/api/admin/local/orders/$CBO2/delivery" "$AT" | jq -r .data.delivery.courierName)" "李骑手"
-# —— 720 匹配 taskId：终态化 + SHIPPED 回退 PREPARING（三重护栏都通过时）
+# —— 并呼假撤单（中标方已锁定，courierCompany=shansongtongcheng）：同 taskId 但 kuaidicom
+# 不同的 720 是真实语义下最该拦住的那条——taskId 恒相等挡不住它，必须靠 kuaidicom 判定是
+# 未中标方撤单，忽略、不终态化
+assert_eq "中标已锁定后同 taskId 不同 kuaidicom 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '未中标运力撤单' '2026-09-04 12:06:30' '假骑手' '10000000000' 'dadatongcheng')" "200"
+assert_eq "kuaidicom 不匹配的假撤单不终态化" "$(dstat $CBO2)" "ACCEPTED"
+# —— 720 匹配 taskId 且 kuaidicom 与中标方一致：终态化 + SHIPPED 回退 PREPARING（三重护栏都通过时）
 assert_eq "cb 310 http 200" "$(kd_cb "$CBD2" "$CBT2" 310 '骑手已取货' '2026-09-04 12:07:00')" "200"
 assert_eq "订单 →SHIPPED" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "SHIPPED"
 # 真已是 SHIPPED 的 LOCAL 单，邮寄端点 complete 必须仍拒（不是巧合命中「非 SHIPPED」分支的假阳性）
 R=$(req POST "/api/admin/orders/$CBO2/complete" "$AT"); assert_eq "已 SHIPPED 的 LOCAL 单邮寄 complete 仍拒 42204" "$(code "$R")" "42204"
 assert_eq "complete 被拒后订单仍 SHIPPED（未被误置 COMPLETED）" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "SHIPPED"
-assert_eq "匹配 taskId 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '骑手取消订单' '2026-09-04 12:08:00')" "200"
+assert_eq "同 taskId 同 kuaidicom 的 720 http 200" "$(kd_cb "$CBD2" "$CBT2" 720 '骑手取消订单' '2026-09-04 12:08:00')" "200"
 assert_eq "720→CANCELLED" "$(dstat $CBO2)" "CANCELLED"
 assert_eq "订单回退 PREPARING" "$(req GET "/api/admin/orders/$CBO2" "$AT" | jq -r .data.status)" "PREPARING"
 assert_eq "720 释放占位" "$(req GET "/api/admin/local/orders/$CBO2/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
@@ -904,6 +945,16 @@ SIGNMIN=$(md5hex "${PMIN}${salt4}" | tr 'a-f' 'A-F')
 HTTPMIN=$(curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$CBD4" --data-urlencode "param=$PMIN" --data-urlencode "sign=$SIGNMIN" --data-urlencode "taskId=$CBT4")
 assert_eq "缺字段（仅 taskId/status/updateTime）回调 http 200" "$HTTPMIN" "200"
 assert_eq "缺字段回调仍推进状态机 →DELIVERING" "$(dstat $CBO4)" "DELIVERING"
+# —— DELIVERING 之后收到不带 kuaidicom 字段的 720（回调不带 kuaidicom 是真实形态，上面那条
+# 缺字段 310 已经证明这种包会到达）：中标方已由更早的 100 锁定，此时不能因为这条 720 本身
+# 没重复带上 kuaidicom 就把它晾在「说不清归属」里——taskId 对得上就是真撤单，必须终态化
+salt4b=$(req GET "/api/admin/system/kd100-mock/salt/$CBD4" "$AT" | jq -r '.data.salt // empty')
+P720MIN=$(jq -cn --arg t "$CBT4" '{taskId:$t,status:"720",statusDesc:"骑手取消订单",updateTime:"2026-09-04 12:11:00"}')
+SIGN720MIN=$(md5hex "${P720MIN}${salt4b}" | tr 'a-f' 'A-F')
+HTTP720MIN=$(curl -s -o "$KDCB_BODY" -w '%{http_code}' -X POST "$BASE/api/kd/$CBD4" --data-urlencode "param=$P720MIN" --data-urlencode "sign=$SIGN720MIN" --data-urlencode "taskId=$CBT4")
+assert_eq "不带 kuaidicom 字段的 720 http 200" "$HTTP720MIN" "200"
+assert_eq "缺 kuaidicom 的真撤单仍终态化→CANCELLED" "$(dstat $CBO4)" "CANCELLED"
+assert_eq "缺 kuaidicom 的 720 也释放 activeOrderId" "$(req GET "/api/admin/local/orders/$CBO4/delivery" "$AT" | jq -r .data.delivery.activeOrderId)" "null"
 
 echo "== 28. 配送单操作与资金联动 =="
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
@@ -1320,6 +1371,14 @@ done
 # M4 的五个会员页按这些名字取值。三处是 M4 Wave 0 补的：小程序在此之前**拿不到**
 # 规则公示要的比例与有效期，只能写死数字——而 docs/member-terms-copy.md 开篇就禁止写死
 # （「文案说 100 分、实际发 50 分」是最难解释的场面）。锁在这里，改名会当场红。
+# 干净库上 $UT 此刻**一条流水都没有**：它的已完成单来自 §16 的自动收货，那条路径不主动调
+# settlePoints，只靠 settleMissedPoints 2 分钟兜底（且积分开关默认关着，兜底也不发）。
+# 审计库里这段一直绿，是历史轮次的残留流水在撑着——2026-09-07 换全新库首次暴露。
+# 这里显式开一次开关 + 跑一轮兜底（下界传 0）把分补上，段末复原设置，让下面的字段契约
+# 不再依赖库里有没有前几轮的尸体。
+M4_ORIG_MEMBER=$(req GET /api/admin/settings/member "$AT" | jq -c .data)
+req PUT /api/admin/settings/member "$AT" '{"points":{"enabled":true,"earnRatePerYuan":1,"validDays":365},"newcomer":{"templateId":null},"rulesText":""}' >/dev/null
+sched '{"settleMissedPointsAfterMin":0}' >/dev/null
 M4_SUM=$(req GET /api/member/summary "$UT")
 for k in pointsBalance expiringSoon pointsExpireAt availableCoupons points rulesText; do
   assert_eq "memberSummary.$k 存在" "$(jq -r ".data | has(\"$k\")" <<<"$M4_SUM")" "true"
@@ -1356,6 +1415,8 @@ M4_LED_REFID=$(jq -r '.refId // 0' <<<"$M4_LED_ORD")
 M4_LED_REAL=$(req GET "/api/orders/$M4_LED_REFID" "$UT" | jq -r '.data.orderNo // "MISSING"')
 assert_eq "pointsLedger 的 ORDER 行补出了真实单号" \
   "$(jq -r '.orderNo // "MISSING"' <<<"$M4_LED_ORD")" "$M4_LED_REAL"
+# 复原会员设置：上面为了补流水临时开过积分开关，后面 §36/§41 各自有对开关状态的假设
+req PUT /api/admin/settings/member "$AT" "$M4_ORIG_MEMBER" >/dev/null
 
 # 我的券：「已用于订单 …」要能点进详情（详情页接的就是 Order.id）
 M4_CPN=$(req GET "/api/member/coupons?status=available" "$UT")
@@ -1929,7 +1990,17 @@ M2_TAG=$RANDOM$RANDOM
 M2_ORIG_SHIP=$(req GET /api/admin/settings/shipping "$AT" | jq -c .data)
 
 m2_login() { req POST /api/auth/wechat-login "" "{\"code\":\"$1\"}" | jq -r '.data.token'; }
-m2_uid()   { echo "$1" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.userId'; }
+# JWT payload 是无补位的 base64url；macOS 的 base64 -d 遇到长度不是 4 的倍数会**静默截断**
+# 尾部字节（实测 `{"userId":123}` 去补位后解出 `{"userId":12`），jq 随即 parse error、userId 为空，
+# m2_grant 的 INSERT 跟着静默失败，§39/§48 整段连环红——且只在 userId 位数恰好让 payload
+# 长度 mod 4 ≠ 0 时发作，看起来像随机 flaky。这里按 (4 - len%4)%4 补回 '='。
+m2_uid()   {
+  local p pad
+  p=$(echo "$1" | cut -d. -f2 | tr '_-' '/+')
+  pad=$(( (4 - ${#p} % 4) % 4 ))
+  # 注意 printf '=%.0s' 在零参数时仍会打出一个 '='，所以用 %*s 按 pad 宽度补空格再换成 '='
+  printf '%s%s' "$p" "$(printf '%*s' "$pad" '' | tr ' ' '=')" | base64 -d 2>/dev/null | jq -r '.userId'
+}
 m2_addr()  { req POST /api/addresses "$1" '{"receiverName":"M2","receiverPhone":"13800009999","province":"浙江省","city":"杭州市","district":"西湖区","detail":"x","isDefault":1}' | jq -r '.data.id // .data.addressId'; }
 # 造券：建 CAMPAIGN 模板 → 顾客自己领。走真实发放路径，不直接 INSERT user_coupons
 m2_coupon() { # $1=token $2=名称 $3=面额 $4=门槛 $5=渠道

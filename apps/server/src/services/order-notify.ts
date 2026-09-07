@@ -6,7 +6,8 @@
  * fire-and-forget：失败仅 console.warn 并重试一次，绝不 throw、绝不阻塞支付流程。
  */
 
-import { sendWecomMarkdown, sendPushPlus } from './notify'
+import { sendWecomMarkdown, sendPushPlus, shouldSendAlert } from './notify'
+import { getLocalSettings } from './local-settings'
 
 interface NotifyOrderInfo {
   orderNo: string
@@ -80,18 +81,26 @@ export function notifyRefundRequest(order: {
 }
 
 /** 顾客在接单后宽限期内申请取消同城订单，需店员到工作台确认并退款。 */
-export function notifyCancelRequest(order: {
+export async function notifyCancelRequest(order: {
   orderNo: string
   actualAmount: number
   receiverName: string
   receiverPhone: string
   note?: string | null
-}): void {
+}): Promise<void> {
   const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
   if (!wecom && !pushplusToken) return
+  // 窗口分钟数曾经是写死的字面量「5」，而真值是可配置的 acceptGraceMin（后台 0-30 可调，
+  // 默认 5，见 local-settings.ts）——orders.ts 的 cancelWindowOf 每次都实时读它判定窗口。
+  // 店主一旦把窗口改成比如 15，这条推送若还硬编码 5，就会把第 10 分钟的合法申请
+  // 说成「超出 5 分钟窗口」，店员核对/驳回全靠误导文案，所以这里必须现读一次配置。
+  const graceMin = (await getLocalSettings()).acceptGraceMin
+  // graceMin === 0 表示店主把窗口关掉了——此时顾客理应申请不了取消，
+  // 旧文案「接单后即可申请」把这个「关闭」说成了「随时可申请」，语义正好反了
+  const windowText = graceMin > 0 ? `接单后 ${graceMin} 分钟内` : '接单后不可申请（窗口已关闭）'
   const content = [
-    `**🛵 同城订单：顾客申请取消（接单后 5 分钟内，需确认全额退款）**`,
+    `**🛵 同城订单：顾客申请取消（${windowText}，需确认全额退款）**`,
     `订单号：${order.orderNo}`,
     `金额：**¥${fmtYuan(order.actualAmount)}**`,
     `顾客：${order.receiverName} ${order.receiverPhone}`,
@@ -102,12 +111,25 @@ export function notifyCancelRequest(order: {
   if (pushplusToken) sendPushPlus(pushplusToken, '同城订单申请取消', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }
 
-/** 同城配送异常告警（呼叫失败/运力异常/回调超时等，orchestrator 调用）：店员双通道，自由行文本。 */
-export function notifyLocalDeliveryAlert(title: string, lines: string[]): void {
+/**
+ * 同城配送异常告警（呼叫失败/运力异常/回调超时等，orchestrator 调用）：店员双通道，自由行文本。
+ * @param opts.key 可选限频键，走 notify.ts 的 shouldSendAlert 与 notifySystemAlert 共享同一套
+ * 5 分钟同 key 抑制。不传就是原来的无限频行为——本函数原来完全没有去重，配合 autoCallRiders
+ * 每分钟重试的场景（如运力异常 CAPACITY）会对同一个原因反复刷屏；调用方按需要传 key 才会变化，
+ * 不传的既有调用点行为不受影响。被抑制期间的次数会拼进真正发出的那条消息里
+ * （「（期间抑制 N 次）」），与 notifySystemAlert 的口径保持一致。
+ */
+export function notifyLocalDeliveryAlert(title: string, lines: string[], opts: { key?: string } = {}): void {
   const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
   if (!wecom && !pushplusToken) return
-  const content = [`**🛵 ${title}**`, ...lines.map((l) => `> ${l}`)].join('\n')
+  let suppressedLine = ''
+  if (opts.key) {
+    const { send, suppressed } = shouldSendAlert(opts.key)
+    if (!send) return
+    if (suppressed > 0) suppressedLine = `\n> （期间抑制 ${suppressed} 次同类告警）`
+  }
+  const content = [`**🛵 ${title}**`, ...lines.map((l) => `> ${l}`)].join('\n') + suppressedLine
   if (wecom) sendWecomMarkdown(wecom, content)
   if (pushplusToken) sendPushPlus(pushplusToken, title, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }

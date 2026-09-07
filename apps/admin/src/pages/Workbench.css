@@ -177,6 +177,9 @@
 .wb__actions { display:flex; flex-wrap:wrap; gap:8px; }
 .wb__reject { align-self:center; background:none; border:none; color:var(--danger); font-size:13px;
   text-decoration:underline; cursor:pointer; padding:2px 4px; }
+/* 刷新窗口内/订单已离开看板时置灰拒单按钮——不加这条，disabled 只挡点击事件，
+   视觉上跟能点时一模一样，店员看不出为什么点了没反应 */
+.wb__reject:disabled { opacity:.5; cursor:not-allowed; text-decoration:none; }
 
 /* ── 按钮 ── */
 .wb__btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:9px 14px;

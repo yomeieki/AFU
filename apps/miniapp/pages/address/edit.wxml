@@ -14,13 +14,13 @@
             <text class="locate-title">{{poiName || '在地图上选择收货位置'}}</text>
             <text wx:if="{{!poiName}}" class="locate-required">必填</text>
           </view>
-          <text class="locate-sub">{{poiName ? pickedAddress : '同城配送按实际距离计费，需要定位到楼栋'}}</text>
+          <text class="locate-sub">{{coordStale ? '地址文字已修改，建议重选定位' : (poiName ? pickedAddress : '同城配送按实际距离计费，需要定位到楼栋')}}</text>
         </view>
         <text class="locate-action">{{locating ? '打开中' : (poiName ? '重选' : '去选点')}}</text>
       </view>
 
-      <view wx:if="{{quoteText}}" class="quote-strip {{quoteOk ? '' : 'quote-strip-warn'}}">
-        <text class="quote-text">{{quoteText}}</text>
+      <view wx:if="{{quoteText}}" class="quote-strip {{quoteOk && !coordStale ? '' : 'quote-strip-warn'}}">
+        <text class="quote-text">{{coordStale ? '地址已修改，运费需重新选点后计算' : quoteText}}</text>
       </view>
     </block>
 

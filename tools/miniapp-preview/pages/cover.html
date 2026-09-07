@@ -4,28 +4,53 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=375">
 <link rel="stylesheet" href="/cover.generated.css">
-<!-- 镜像说明：真机上 .cover-stage 的 left/top/width/height 是 index.js 按屏幕比例算出来的，
-     预览台不跑 JS，所以这里硬编码 375×812 这一种「设计比例完全吻合」的情况。
-     它能验的是「热区是否压在画上的按钮上」；裁剪与 clamp 行为验不了，那要去微信开发者工具。
+<!-- 镜像说明：真机上 .cover-stage 的 translateY/scale 是 index.js 按屏幕比例算出来的，
+     预览台不跑 JS，所以这里硬编码 375×812（状态栏 44pt）这一种情况的结果：
+     rpx=2 → 屏高 1624rpx，胶囊下沿+8 = 176rpx，stageOffset = 176-135 = 41rpx，无需缩放。
+     它能验的是「热区是否压在文字/框上」；clamp 与短屏缩放验不了，那要去微信开发者工具。
      .hot-debug 默认开着——这个镜像存在的意义就是看框对不对。 -->
 <style>
   html { --rpx: .5px }
-  body { margin: 0; width: 375px; height: 812px; background: #FBF5E7; overflow: hidden }
+  body { margin: 0; width: 375px; height: 812px; background: #F1E9DA; overflow: hidden }
   .mp-page { height: 812px }
+  /* 预览台没有 image 组件的 mode="widthFix"，用 img 的自然宽高比等价替代 */
+  .cover-bg { height: auto }
+  /* 镜像专用：让热区框可见 */
+  .hot-debug { background: rgba(195, 71, 58, .14); outline: 1px dashed rgba(195, 71, 58, .55) }
 </style>
 </head>
 <body>
 <div class="mp-page">
   <div class="cover-root">
-    <div class="cover-stage" style="left:0;top:0;width:375px;height:812px">
-      <img class="cover-img" src="/assets/cover/cover.jpg" style="width:100%;height:100%;display:block">
-      <div class="hot hot-local hot-debug"></div>
-      <div class="hot hot-express hot-debug"></div>
-      <div class="hot hot-member hot-debug"></div>
-      <div class="hot hot-coupon hot-debug"></div>
-      <div class="hot hot-points hot-debug"></div>
-      <div class="hot hot-banner hot-debug"></div>
+    <img class="cover-bg cover-bg-paper" src="/assets/cover/home-bg-courtyard-wall.jpg">
+    <img class="cover-bg cover-bg-wall" src="/assets/cover/home-bg-courtyard-wall.jpg">
+
+    <div class="cover-stage" style="transform: translateY(20.5px) scale(1)">
+      <img class="cover-logo" src="/assets/cover/logo-anniversary.png">
+      <div class="cover-divider" style="left:148.5px"></div>
+      <div class="cover-divider" style="left:227px"></div>
+
+      <div class="hot hot-debug" style="left:29px;top:279px;width:153px;height:60px">
+        <div class="card card-delivery"><span class="delivery-cn">同城配送</span><span class="delivery-en">LOCAL DELIVERY</span></div>
+      </div>
+      <div class="hot hot-debug" style="left:193px;top:279px;width:153px;height:60px">
+        <div class="card card-delivery"><span class="delivery-cn">全国邮寄</span><span class="delivery-en">NATIONWIDE SHIPPING</span></div>
+      </div>
+
+      <div class="hot hot-debug" style="left:73px;top:362px;width:72.5px;height:44px"><div class="nav-text">会员中心</div></div>
+      <div class="hot hot-debug" style="left:151.5px;top:362px;width:72.5px;height:44px"><div class="nav-text">优惠券</div></div>
+      <div class="hot hot-debug" style="left:230px;top:362px;width:72px;height:44px"><div class="nav-text">积分商城</div></div>
+
+      <div class="hot hot-debug" style="left:70px;top:422px;width:235px;height:60px">
+        <div class="card card-cold">
+          <span class="cold-cn">全国冷链配送</span><span class="cold-en">COLD-CHAIN DELIVERY</span>
+          <div class="cold-divider"></div>
+          <div class="cold-action"><div class="l1">点击</div><div class="l2">查看</div></div>
+        </div>
+      </div>
     </div>
+
+    <div class="cover-orders"><span class="cover-orders-text">我的订单 ›</span></div>
   </div>
 </div>
 </body>
