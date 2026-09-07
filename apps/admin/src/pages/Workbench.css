@@ -286,7 +286,22 @@
   .wb__ptop-r { flex:none; display:flex; align-items:center; gap:6px; }
   .wb__ptop .wb__shop { font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .wb__ptop .wb__meta, .wb__ptop .wb__alerts { flex:none; }
-  .wb__ptop .wb__iconbtn { min-width:36px; min-height:36px; padding:6px 9px; justify-content:center; }
+  .wb__ptop .wb__iconbtn { min-width:44px; min-height:44px; padding:6px 9px; justify-content:center; }
+
+  /* ── 触控尺寸 ──
+     规格 §6：「按钮 44px 触控尺寸——店员多半单手在手机上点」。
+     改造前实测（375px）：抽屉主操作 41、小费档位 41、拒单原因 41、报价行 32、
+     ↻刷新 34、弹窗关闭 30、「重打小票」与「拒单并全额退款」只有 24。
+     只有确认弹窗的两个大按钮达标（那条 .wb__modal-foot .wb__btn 早就写了 44）。
+     下面这些只在手机档生效，电脑与 iPad 的尺寸一行不变。 */
+  .wb__btn { min-height:44px; }
+  .wb__opt { min-height:44px; align-items:center; }
+  /* 点这一行就决定本单花多少钱（选哪家运力），32px 对一个花钱的选择太小 */
+  .wb__quote-row { min-height:44px; align-items:center; }
+  .wb__iconbtn { min-height:44px; }
+  /* 「重打小票」店员一天点几十次，24px 的下划线文字根本点不准；
+     「拒单并全额退款」同一个类，一起抬。 */
+  .wb__reject { min-height:44px; padding:0 12px; }
 
   /* 列切换条：手机换列的主方式（横滑找列在 18,000px 高的页面上不可用） */
   .wb__tabs { flex:none; display:flex; gap:6px; overflow-x:auto; scrollbar-width:none;
