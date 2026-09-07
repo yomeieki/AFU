@@ -70,11 +70,13 @@
   <!-- More menu -->
   <view class="menu-section card">
     <view class="menu-list">
-      <!-- 常驻同城入口：封面点「全国邮寄」走 switchTab 会销毁封面，
-           这一整个会话里顾客就再也回不到同城，这里是唯一的常驻回路 -->
-      <view class="menu-item" hover-class="menu-item-hover" bindtap="goLocal">
+      <!-- 渠道切换。文案指向**另一个**渠道：在邮寄里显示「同城配送」，在同城里显示「全国邮寄」。
+           写死成「同城配送」的话，顾客已经在同城时点它等于原地不动。
+           （它最早的理由「封面 switchTab 会销毁封面、这是唯一回路」在双渠道改版后已不成立：
+             主页顶栏有「‹ 封面」与渠道标识两个回路。但作为一步直达的切换它仍然有用。） -->
+      <view class="menu-item" hover-class="menu-item-hover" bindtap="goSwitchChannel">
         <view class="menu-icon icon icon-truck"></view>
-        <text class="menu-label">同城配送</text>
+        <text class="menu-label">切到{{otherChannelLabel}}</text>
         <view class="menu-arrow icon icon-arrow"></view>
       </view>
       <view class="menu-item" hover-class="menu-item-hover" bindtap="goCoupons">

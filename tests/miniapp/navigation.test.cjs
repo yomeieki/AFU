@@ -121,7 +121,6 @@ test('旧同城路由退化成兼容跳转：定渠道后转共享主页', async
 // 没有底部导航的孤岛页——正是这次要治的病。统一走 app.enterLocalChannel()。
 test('旧同城入口统一走 app.enterLocalChannel()，不再各自 navigateTo', async function () {
   const cases = [
-    ['../../apps/miniapp/pages/user/index.js', 'goLocal'],
     ['../../apps/miniapp/pages/product/detail.js', 'goLocalCheckout'],
   ]
   for (const [mod, fn] of cases) {
@@ -134,8 +133,32 @@ test('旧同城入口统一走 app.enterLocalChannel()，不再各自 navigateTo
   }
 })
 
-// 购物车页的跨渠道提示是**双向**的（Task 6）：站在邮寄车里提示同城、站在同城车里提示邮寄。
-// 所以它不能无条件调 enterLocalChannel——那样同城顾客点「去看看」会原地不动。
+// 「我的」页与购物车页的渠道入口都是**双向**的：去的是另一边，不是写死的同城。
+// 写死的话，顾客已经在同城里时点它等于原地不动——「我的」页那条一度就是这样
+// （店主 2026-09-07 发现：全国邮寄里显示「同城配送」，同城里**也**显示「同城配送」）。
+test('「我的」页渠道入口按当前渠道分流，文案指向另一边', async function () {
+  const toLocal = makeCtx()
+  const u1 = loadPage('../../apps/miniapp/pages/user/index.js', toLocal)
+  toLocal.app.globalData.shoppingChannel = 'EXPRESS'
+  u1.onShow.call(u1)
+  assert.equal(u1.data.otherChannelLabel, '同城配送', '在邮寄里应指向同城')
+  toLocal.calls.length = 0
+  u1.goSwitchChannel.call(u1)
+  await tick()
+  assert.deepEqual(toLocal.calls, ['enterLocal'], '去同城要过位置许可')
+
+  const toExpress = makeCtx()
+  const u2 = loadPage('../../apps/miniapp/pages/user/index.js', toExpress)
+  toExpress.app.globalData.shoppingChannel = 'LOCAL'
+  u2.onShow.call(u2)
+  assert.equal(u2.data.otherChannelLabel, '全国邮寄', '在同城里应指向邮寄')
+  toExpress.calls.length = 0
+  u2.goSwitchChannel.call(u2)
+  await tick()
+  assert.deepEqual(toExpress.calls, ['setChannel:EXPRESS', 'switchTab:/pages/index/index'],
+    '回邮寄不需要位置许可')
+})
+
 test('购物车跨渠道入口按当前渠道分流', async function () {
   const toLocal = makeCtx()
   const p1 = loadPage('../../apps/miniapp/pages/cart/index.js', toLocal)

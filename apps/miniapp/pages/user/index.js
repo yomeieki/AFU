@@ -11,6 +11,9 @@ Page({
     // 点进会员页会自己重拉并显示自己的失败态，这里不该拦人。
     pointsText: '—',
     couponText: '—',
+    // 渠道切换入口的文案。指向**另一个**渠道，不是当前渠道——
+    // 写死成「同城配送」的话，顾客已经在同城里时点它等于原地不动。
+    otherChannelLabel: '同城配送',
   },
 
   onLoad() {
@@ -18,6 +21,9 @@ Page({
   },
 
   onShow() {
+    this.setData({
+      otherChannelLabel: getApp().getShoppingChannel() === 'LOCAL' ? '全国邮寄' : '同城配送',
+    })
     this._syncLoginState()
     if (this.data.isLoggedIn) {
       this._loadMemberSummary()
@@ -132,10 +138,19 @@ Page({
     wx.navigateTo({ url: url })
   },
 
-  goLocal() {
-    // 六个同城入口的唯一出口（app.js）：位置许可 → 定渠道 LOCAL → switchTab 进共享主页。
-    // 许可被拒与跳转失败的反馈都由它给，这里不再各写一遍。
-    getApp().enterLocalChannel()
+  // 渠道切换。**去的是另一边**：在邮寄里点它进同城，在同城里点它回邮寄。
+  // 原来这里写死成「进同城」，顾客已经在同城时点了等于原地不动——
+  // 与购物车页跨渠道提示同一类毛病（那条在 Task 6 已改成双向，这条漏了）。
+  //
+  // 去同城要过位置许可，走 app 的统一出口；回邮寄不需要，定渠道后 switchTab 即可。
+  goSwitchChannel() {
+    var app = getApp()
+    if (app.getShoppingChannel() === 'LOCAL') {
+      app.setShoppingChannel('EXPRESS')
+      wx.switchTab({ url: '/pages/index/index' })
+      return
+    }
+    app.enterLocalChannel()
   },
 
   goToAddresses() {
