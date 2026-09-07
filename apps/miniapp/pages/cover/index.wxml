@@ -1,4 +1,4 @@
-<!-- 封面分流页：pages[0]，非 tabBar。方案 C 青瓦简约版。
+<!-- 封面分流页：pages[0]，非 tabBar。方案 C 青瓦版 v3。
      三层结构：背景层 + Logo 图片层 + 原生交互层。刻意不做成「一张大图 + 透明热区」——
      旧亭子版是那样，换背景就得重切热区；现在换背景只动 assets，热区与路由不受影响。
      热区坐标见 config/cover-entries.js，出自设计交付包的 SVG 真实矩形，不是目测。 -->
@@ -19,9 +19,16 @@
     <image class="cover-logo" src="/assets/cover/logo-anniversary.png" mode="aspectFit"
            binderror="onImgError" aria-role="img" aria-label="丹桂阿福凉菜 30TH 老店" />
 
-    <!-- 会员导航的两条竖线：装饰，落在热区之间的 12rpx 间隙里，不接收点击 -->
-    <view class="cover-divider" style="left: 297rpx;" aria-hidden="true"></view>
-    <view class="cover-divider" style="left: 454rpx;" aria-hidden="true"></view>
+    <!-- 会员浅纸托盘：横跨三个热区之下的整块装饰，不接收点击。
+         内框与分隔线都与托盘平级——嵌进去会被托盘的小数边框取整带偏 0.25rpx。 -->
+    <view class="tray" aria-hidden="true"></view>
+    <view class="tray-inner" aria-hidden="true"></view>
+    <view class="tray-rule" style="left: 297rpx; top: 746rpx; height: 15rpx;" aria-hidden="true"></view>
+    <view class="tray-rule" style="left: 297rpx; top: 773rpx; height: 16rpx;" aria-hidden="true"></view>
+    <view class="tray-diamond" style="left: 297rpx; top: 767rpx;" aria-hidden="true"></view>
+    <view class="tray-rule" style="left: 454rpx; top: 746rpx; height: 15rpx;" aria-hidden="true"></view>
+    <view class="tray-rule" style="left: 454rpx; top: 773rpx; height: 16rpx;" aria-hidden="true"></view>
+    <view class="tray-diamond" style="left: 454rpx; top: 767rpx;" aria-hidden="true"></view>
 
     <view wx:for="{{entries}}" wx:key="id"
           class="hot"
@@ -30,27 +37,46 @@
           aria-role="button" aria-label="{{item.label}}"
           data-id="{{item.id}}" bindtap="onTapEntry">
 
-      <view wx:if="{{item.variant === 'delivery'}}" class="card card-delivery">
+      <!-- 同城配送 / 全国邮寄：阶梯转角金框走 SVG 背景，文字是原生节点 -->
+      <block wx:if="{{item.variant === 'delivery'}}">
+        <view class="df" aria-hidden="true"></view>
         <text class="delivery-cn">{{item.label}}</text>
-        <text class="delivery-en">{{item.en}}</text>
-      </view>
+        <text class="delivery-en"
+              style="letter-spacing: {{item.enTracking}}rpx; padding-left: {{item.enTracking}}rpx;">{{item.en}}</text>
+      </block>
 
+      <!-- 会员中心 / 优惠券 / 积分商城：托盘在装饰层，这里只有文字 -->
       <view wx:elif="{{item.variant === 'text'}}" class="nav-text">{{item.label}}</view>
 
-      <view wx:else class="card card-cold">
+      <!-- 全国冷链配送：纸层 / 主框 / 内框 / 高光 / 竖线 / 朱红查看小签 -->
+      <block wx:else>
+        <view class="cc-under" aria-hidden="true"></view>
+        <view class="cc-main" aria-hidden="true"></view>
+        <view class="cc-inner" aria-hidden="true"></view>
+        <view class="cc-highlight" aria-hidden="true"></view>
         <text class="cold-cn">{{item.label}}</text>
         <text class="cold-en">{{item.en}}</text>
-        <view class="cold-divider" aria-hidden="true"></view>
-        <view class="cold-action">
-          <view class="l1">点击</view>
-          <view class="l2">查看</view>
-        </view>
-      </view>
+        <view class="cc-rule" aria-hidden="true"></view>
+        <view class="cc-tag" aria-hidden="true"></view>
+        <view class="cc-tag-inner" aria-hidden="true"></view>
+        <text class="cc-tag-cha">查</text>
+        <text class="cc-tag-kan">看</text>
+      </block>
 
     </view>
   </view>
 </view>
 
+<!-- 「我的订单」常驻入口。必须是 .cover-root 的兄弟、不能放进 .cover-stage：
+     舞台带 translate/scale，放进去会被一起拖歪。
+
+     为什么留着：同城页不在 tabBar 里，靠 navigateTo 打开，底部天然没有导航栏。
+     顾客下完单再开小程序，要走 封面→全国邮寄(switchTab)→底部「我的」→我的订单
+     才看得到自己的单。设计稿里没有这个入口，但它是 1c9de11 为解决真实问题加的。
+     用 navigateTo 而不是 switchTab：switchTab 会销毁本页页栈。 -->
+<view class="cover-orders" hover-class="cover-orders-hover" hover-stay-time="60" bindtap="goOrders">
+  <text class="cover-orders-text">我的订单 ›</text>
+</view>
 
 <!-- 必须存在且必须是 .cover-root 的兄弟：app.js 的 onNeedPrivacyAuthorization 是按当前页
      找 #privacy-popup 的，找不到就静默 resolve(disagree)，同城入口会永远失败且不报错。 -->
