@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bike, CircleAlert, Copy, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
+import { Bell, Bike, CircleAlert, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
   Channel, CourierLive, DeliveryEventInfo, DeliveryInfo, LocalDeliverySettings, Order, OrderItem,
@@ -34,6 +34,33 @@ const COLUMNS: { key: ColKey; title: string }[] = [
   { key: 'waitingCourier', title: '等待配送员' }, { key: 'delivering', title: '配送中' },
   { key: 'done', title: '已完成' },
 ]
+
+/**
+ * ⚠ 必须与 Workbench.css 的 `@media (max-width:700px)` 逐字一致。
+ * 两边对不上会出现「手机 DOM 套桌面样式」，比两端都不改更糟。
+ * 700 这条线是为了把 iPad 排除在外（iPad mini 竖屏 744、iPad 竖屏 768/810/834）。
+ */
+const PHONE_QUERY = '(max-width: 700px)'
+
+function useIsPhone() {
+  const [phone, setPhone] = useState(() => window.matchMedia(PHONE_QUERY).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(PHONE_QUERY)
+    const onChange = (e: MediaQueryListEvent) => setPhone(e.matches)
+    mq.addEventListener('change', onChange)
+    setPhone(mq.matches)   // 挂载与首帧之间可能已经转过屏
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return phone
+}
+
+/** 顶栏营业状态：桌面顶栏与手机顶栏共用，措辞只此一处 */
+function openStateOf(snap: WorkbenchSnapshot | null): { text: string; cls: string } {
+  if (!snap) return { text: '加载中', cls: '' }
+  if (snap.paused) return { text: `已暂停：${snap.paused.reason || '手动暂停'}`, cls: 'wb__dot--danger' }
+  if (!snap.localEnabled) return { text: '同城已关闭', cls: '' }
+  return snap.localOpenNow ? { text: '营业中', cls: 'wb__dot--ok' } : { text: '非营业时间', cls: 'wb__dot--warn' }
+}
 
 /** 配送单已结束（不再是「在途」）的三个终态 */
 const TERMINAL_DELIVERY = ['DELIVERED', 'CANCELLED', 'FAILED']
@@ -755,6 +782,104 @@ function RejectModal({ order, channel, onClose, onDone }: {
 // ─────────────────────────────────────────────────────────
 // 卡片（§3/§4）：三重编码 = 4px 色条 + 徽章（图标+文字）+ 渠道各自的字段
 // ─────────────────────────────────────────────────────────
+/** 图例内容。桌面常驻在看板上方，手机收进「?」说明层——两处共用，避免文案漂移 */
+function LegendContent() {
+  return (
+    <>
+      <span className="wb__legend-g">
+        <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
+        <span>骑手送，恒排在邮寄单上面</span>
+        <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
+        <span>可以稍后处理</span>
+      </span>
+      <span className="wb__legend-sep" />
+      <span className="wb__legend-g">
+        <span className="wb__chip">正常</span>
+        <span className="wb__chip wb__chip--warn">该催了</span>
+        <span className="wb__chip wb__chip--late">要延误</span>
+        <span>整圈发光 = 急，左边那条竖色条只说渠道、不会变色</span>
+      </span>
+    </>
+  )
+}
+
+/** 唯一写明「多久算久」的地方。桌面在看板下方，手机收进「?」说明层 */
+function HintContent({ prepMin }: { prepMin: number }) {
+  return (
+    <>
+      等待时长从进入本列时算起，每列的「正常」不一样：待接单 2/5 分钟，备餐中 {prepMin}/{prepMin + 8} 分钟，
+      等待配送员 6/12 分钟；配送中不看等待时长，只看离预计送达还剩多久（≤15 分转琥珀、≤5 分或已过点转红）。
+      邮寄单可以稍后处理，60/240 分钟才变色。红框最急 = 顾客申请退菜或配送异常，先处理它。
+    </>
+  )
+}
+
+/**
+ * 手机顶栏（规格 §9.1）：桌面那条 169px 高的顶栏在 375px 上会折成三行，
+ * 加上图例一共吃掉首屏 39%。这里只留「一眼要看的四样」——店名、营业、打印机、告警，
+ * 统计与三个按钮进「⋯」。全屏在小程序 web-view 里本来就调不起来，更不该占一级位置。
+ */
+function PhoneTopBar({ snap, shopName, onExplain, onMenu }: {
+  snap: WorkbenchSnapshot | null; shopName: string; onExplain: () => void; onMenu: () => void
+}) {
+  const openState = openStateOf(snap)
+  const alerts = snap?.pendingAlerts ?? 0
+  return (
+    <div className="wb__ptop">
+      <div className="wb__ptop-l">
+        <span className="wb__shop">{shopName}</span>
+        <span className="wb__meta"><i className={`wb__dot ${openState.cls}`} />{openState.text}</span>
+        {snap && (
+          <span className="wb__meta" title={`打印机 ${PRINTER_STATUS_TEXT[snap.printer.status]}`}>
+            <Printer className="w-3.5 h-3.5" />
+            <i className={`wb__dot ${PRINTER_DOT_CLS[snap.printer.status]}`} />
+          </span>
+        )}
+        <span className={`wb__alerts ${alerts > 0 ? 'wb__alerts--on' : ''}`}>
+          <Bell className="w-3.5 h-3.5" />{alerts}
+        </span>
+      </div>
+      <div className="wb__ptop-r">
+        <button className="wb__iconbtn" onClick={onExplain} aria-label="颜色和时间怎么看">
+          <CircleQuestionMark className="w-4 h-4" />
+        </button>
+        <button className="wb__iconbtn" onClick={onMenu} aria-label="更多">
+          <Ellipsis className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 列切换条（规格 §9.1）：手机上换列的**主**方式。
+ * 横滑找列在这里用不了——待接单一列 120 张卡时页面高 18,000px，
+ * 想横滑得先纵向滚回顶部。
+ */
+function ColumnTabs({ snap, active, onPick }: {
+  snap: WorkbenchSnapshot | null; active: ColKey; onPick: (k: ColKey) => void
+}) {
+  return (
+    <div className="wb__tabs" role="tablist" aria-label="订单列">
+      {COLUMNS.map((col) => {
+        const n = snap ? snap.columns[col.key].length : 0
+        const on = col.key === active
+        return (
+          <button
+            key={col.key}
+            role="tab"
+            aria-selected={on}
+            className={`wb__tab${on ? ' wb__tab--on' : ''}`}
+            onClick={() => onPick(col.key)}
+          >
+            {col.title}<span className="wb__tab-n">{n}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: {
   card: WorkbenchCard; colKey: ColKey; now: number
   /** 顾客可申请取消 / 店员可处理的窗口（分钟，接单起算），用来算「还剩多久自动回绝」 */
@@ -870,10 +995,7 @@ function TopBar({
   staleMinutes: number | null
 }) {
   const today = new Date()
-  const openState = !snap ? { text: '加载中', cls: '' }
-    : snap.paused ? { text: `已暂停：${snap.paused.reason || '手动暂停'}`, cls: 'wb__dot--danger' }
-      : !snap.localEnabled ? { text: '同城已关闭', cls: '' }
-        : snap.localOpenNow ? { text: '营业中', cls: 'wb__dot--ok' } : { text: '非营业时间', cls: 'wb__dot--warn' }
+  const openState = openStateOf(snap)
   const alerts = snap?.pendingAlerts ?? 0
   return (
     <>
@@ -998,6 +1120,12 @@ export default function Workbench() {
   const [courier, setCourier] = useState<CourierLive | null>(null)
   // 已完成列默认收起（见下面渲染处的注释）。刻意不持久化：每天开工都是干净的四列。
   const [doneOpen, setDoneOpen] = useState(false)
+  // ── 手机模式（规格 §9.1）。isPhone 只在 ≤700px 为真，iPad 与电脑走原来那套。
+  const isPhone = useIsPhone()
+  /** 手机上当前显示哪一列。默认「待接单」——规格 §9 本来就是这么定的 */
+  const [phoneCol, setPhoneCol] = useState<ColKey>('pending')
+  /** 手机顶栏的两个浮层：'explain' = 图例+阈值说明，'menu' = 统计与三个按钮 */
+  const [sheet, setSheet] = useState<null | 'explain' | 'menu'>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
   const [modal, setModal] = useState<ModalState>(null)
@@ -1766,40 +1894,40 @@ export default function Workbench() {
 
   return (
     <div className={`wb ${focus ? 'wb--focus' : ''}`} data-theme={theme ?? undefined} ref={rootRef}>
-      <TopBar
-        snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
-        focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={exitWorkbench}
-        onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy} staleMinutes={staleMinutes}
-      />
+      {isPhone ? (
+        <>
+          <PhoneTopBar
+            snap={snap} shopName={settings?.store.name || '接单工作台'}
+            onExplain={() => setSheet('explain')} onMenu={() => setSheet('menu')}
+          />
+          <ColumnTabs snap={snap} active={phoneCol} onPick={setPhoneCol} />
+        </>
+      ) : (
+        <>
+          <TopBar
+            snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
+            focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={exitWorkbench}
+            onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy} staleMinutes={staleMinutes}
+          />
 
-      {/* 图例常驻（§3）；专注模式下让位给看板 */}
-      {/* 两组颜色分工写在屏幕上：左边一组是「这是什么单」（永不变），右边一组是「急不急」（会变）。
-          不写的话，新店员看到一张烧红的邮寄单，第一反应会是「这是同城吧？」 */}
-      <div className="wb__legend">
-        <span className="wb__legend-g">
-          <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
-          <span>骑手送，恒排在邮寄单上面</span>
-          <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
-          <span>可以稍后处理</span>
-        </span>
-        <span className="wb__legend-sep" />
-        <span className="wb__legend-g">
-          <span className="wb__chip">正常</span>
-          <span className="wb__chip wb__chip--warn">该催了</span>
-          <span className="wb__chip wb__chip--late">要延误</span>
-          <span>整圈发光 = 急，左边那条竖色条只说渠道、不会变色</span>
-        </span>
-      </div>
+          {/* 图例常驻（§3）；专注模式下让位给看板 */}
+          {/* 两组颜色分工写在屏幕上：左边一组是「这是什么单」（永不变），右边一组是「急不急」（会变）。
+              不写的话，新店员看到一张烧红的邮寄单，第一反应会是「这是同城吧？」 */}
+          <div className="wb__legend"><LegendContent /></div>
+        </>
+      )}
 
       <div className={`wb__board${doneOpen ? ' wb__board--done-open' : ''}`} ref={boardRef}>
-        {COLUMNS.map((col) => {
+        {(isPhone ? COLUMNS.filter((c) => c.key === phoneCol) : COLUMNS).map((col) => {
           // 顺序由服务端排定（同城恒上），前端只按数组顺序渲染，不再排一次
           const list = snap ? snap.columns[col.key] : []
           // 「已完成」默认折叠成一条窄边栏（PO 2026-09-07 定）：这一列里没有任何待办，
           // 却常年占着和前四列一样的宽度。收起来之后干活的四列各自变宽约 25%，
           // 卡片上的地址、备注、骑手电话少折一行。默认每次进页面都是收起的——
           // 不记忆展开状态：每天开工看到的应该是干净的四列，想看完成情况点开即可。
-          const collapsed = col.key === 'done' && !doneOpen
+          // 折叠成竖条是桌面的做法；手机上「已完成」就是切换条里的最后一格，
+          // 不折叠也不占位——否则 grid-auto-columns 会把它撑成整屏宽的空白（改造前的 bug）
+          const collapsed = !isPhone && col.key === 'done' && !doneOpen
           if (collapsed) {
             return (
               <section className="wb__col wb__col--collapsed" key={col.key}
@@ -1842,12 +1970,45 @@ export default function Workbench() {
       </div>
 
       {/* 底部这行是唯一写明「多久算久」的地方。原来写死 3/6 分钟，改成按列给预算之后
-          必须跟着改——不然店员照着这行读，看到备餐中 10 分钟还没变色会以为页面坏了。 */}
-      <div className="wb__hint">
-        等待时长从进入本列时算起，每列的「正常」不一样：待接单 2/5 分钟，备餐中 {prepMin}/{prepMin + 8} 分钟，
-        等待配送员 6/12 分钟；配送中不看等待时长，只看离预计送达还剩多久（≤15 分转琥珀、≤5 分或已过点转红）。
-        邮寄单可以稍后处理，60/240 分钟才变色。红框最急 = 顾客申请退菜或配送异常，先处理它。
-      </div>
+          必须跟着改——不然店员照着这行读，看到备餐中 10 分钟还没变色会以为页面坏了。
+          手机上它和图例一起收进顶栏的「?」。 */}
+      {!isPhone && <div className="wb__hint"><HintContent prepMin={prepMin} /></div>}
+
+      {sheet === 'explain' && (
+        <WbModal title="颜色和时间怎么看" onClose={() => setSheet(null)}
+          footer={<button className="wb__btn wb__btn--ghost" onClick={() => setSheet(null)}>知道了</button>}>
+          <div className="wb__sheet-legend"><LegendContent /></div>
+          <div className="wb__hint" style={{ display: 'block', padding: '12px 0 0' }}>
+            <HintContent prepMin={prepMin} />
+          </div>
+        </WbModal>
+      )}
+
+      {sheet === 'menu' && (
+        <WbModal title="工作台" onClose={() => setSheet(null)}
+          footer={<button className="wb__btn wb__btn--ghost" onClick={() => setSheet(null)}>关闭</button>}>
+          <div className="wb__sheet-row"><span>今日单数</span><b>{snap?.stats.todayOrders ?? '--'}</b></div>
+          <div className="wb__sheet-row"><span>营业额</span><b>¥{snap ? yuan(snap.stats.todayRevenueFen) : '--'}</b></div>
+          <div className="wb__sheet-row">
+            <span>平均送达</span>
+            <b>{snap?.stats.avgDeliverMinutes != null ? `${snap.stats.avgDeliverMinutes} 分` : '--'}</b>
+          </div>
+          <div className="wb__actions" style={{ paddingTop: 12 }}>
+            {/* 文案说的是「点了会变成什么」，与桌面顶栏同一套口径（§8） */}
+            <button className="wb__btn wb__btn--ghost" onClick={toggleTheme}>
+              {nextTheme(theme) === 'dark' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+              {nextTheme(theme) === 'dark' ? '深色' : '浅色'}
+            </button>
+            <button className="wb__btn wb__btn--ghost" onClick={toggleFullscreen}>
+              <Maximize className="w-4 h-4" />{isFullscreen ? '退出全屏' : focus ? '退出专注' : '全屏'}
+            </button>
+            {/* 先收起本层再走退出确认，避免弹层叠弹层 */}
+            <button className="wb__btn wb__btn--ghost" onClick={() => { setSheet(null); exitWorkbench() }}>
+              <LogOut className="w-4 h-4" />退出工作台
+            </button>
+          </div>
+        </WbModal>
+      )}
 
       {renderDrawer()}
       {renderModal()}
