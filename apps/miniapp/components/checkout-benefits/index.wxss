@@ -77,7 +77,15 @@
 .benefits .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 28rpx 24rpx; border-bottom: 1rpx solid var(--divider); }
 .benefits .sheet-title { font-size: 30rpx; font-weight: 600; color: var(--text-1); }
 .benefits .sheet-close { font-size: 32rpx; color: var(--text-3); padding: 0 12rpx; }
-.benefits .sheet-body { flex: 1; padding: 16rpx 24rpx 40rpx; }
+/* min-height:0 是必须的：flex 子项的默认 min-height 是 auto，内容比 70vh 高时
+   它会把 .sheet 撑破而不是自己滚，弹层顶到屏幕外、关闭按钮点不到。
+   底部再让出安全区，否则最后一张券会被 iPhone 的横条压住。 */
+.benefits .sheet-body {
+  flex: 1;
+  min-height: 0;
+  padding: 16rpx 24rpx;
+  padding-bottom: calc(40rpx + env(safe-area-inset-bottom));
+}
 
 .benefits .cp { display: flex; align-items: center; padding: 24rpx 20rpx; margin-bottom: 16rpx; background: var(--brand-bg); border: 2rpx solid transparent; border-radius: var(--radius-md); }
 .benefits .cp-on { border-color: var(--brand); }

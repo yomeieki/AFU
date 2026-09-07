@@ -12,6 +12,9 @@ var createOrder = orderApi.createOrder
 var getOrderMeta = orderApi.getOrderMeta
 var requestSubscribe = require('../../utils/subscribe').requestSubscribe
 var formatPrice = require('../../utils/format').formatPrice
+var checkoutState = require('../../utils/local-checkout-state')
+var checkoutAction = checkoutState.checkoutAction
+var newClientRequestId = checkoutState.newClientRequestId
 var app = getApp()
 
 function getHeadNotice(quote) {
@@ -68,7 +71,10 @@ Page({
     quoting: false,
     quote: null,
     quoteToken: null,
-    quotedAt: 0,
+    // 报价凭证的过期时刻（毫秒），**由服务端随报价下发**。
+    // 客户端不再自己写死 TTL——原来页面判 10 分钟而服务端签 15 分钟，
+    // 中间那 5 分钟里页面以为还新鲜、服务端已经准备拒了。
+    quoteExpiresAtMs: 0,
     quoteError: '',
     blockReason: '',
     needTableware: false,
@@ -80,6 +86,10 @@ Page({
     discount: 0,
     pointsUsed: 0,
     submitting: false,
+    // 优惠券/赠品重算中：此刻合计不确定，锁住提交但金额继续显示
+    benefitsLoading: false,
+    // 底部按钮的唯一判定，来自 utils/local-checkout-state.checkoutAction
+    action: { disabled: true, text: '请选择地址', amountState: 'pending', action: 'none' },
     feeFlash: false,
     subscribeTemplateIds: [],
     payTimeoutMin: 15,
@@ -87,6 +97,9 @@ Page({
 
   onLoad: function(options) {
     var ids = (options.cartItemIds || '').split(',').filter(Boolean).map(Number)
+    // 幂等键随页面而生，**整页只有这一个**：重试时沿用同一个才叫幂等。
+    // 只在「确认下单成功」之后换新的（见 doSubmit）。
+    this._clientRequestId = newClientRequestId()
     this.setData({ cartItemIds: ids })
     this.loadData()
     this.loadMeta()
@@ -101,6 +114,8 @@ Page({
 
   onShow: function() {
     if (app.globalData.selectedAddress) {
+      // 先作废再写地址：旧报价属于旧地址，这一刻起就不该再能提交
+      this.invalidateCheckout('address')
       this.setData({ address: app.globalData.selectedAddress })
       app.globalData.selectedAddress = null
       // 同下面那条分支：换地址回来若报价因缺坐标早退，头条提示要靠最新的 meta 兜底
@@ -179,7 +194,11 @@ Page({
         self.refreshQuote('load')
       })
       .catch(function() {
-        self.setData({ blockReason: '商品信息加载失败，请返回同城菜单重试', quoteToken: null })
+        self.setData({
+          blockReason: '商品信息加载失败，请返回同城菜单重试',
+          quoteToken: null, quoteExpiresAtMs: 0, payAmount: null, quoting: false,
+        })
+        self.syncAction()
       })
   },
 
@@ -195,30 +214,19 @@ Page({
     // 通知的那一步——头条只能靠 loadMeta 记下的结论（self._metaNotice）兜底，且只在
     // 它判定为阻塞（暂停/未开通/打烊）时才显示，不阻塞就不覆盖，留空。
     if (!address) {
-      this.setData({
-        quoting: false, quoteToken: null, quoteError: '', blockReason: '请选择收货地址',
-        headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
-        headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
-      })
+      this.haltQuote('请选择收货地址')
       return
     }
     if (address.latE6 == null || address.lngE6 == null) {
-      this.setData({
-        quoting: false, quoteToken: null, quoteError: '', blockReason: '该地址缺少定位，请补充后再下单',
-        headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
-        headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
-      })
+      this.haltQuote('该地址缺少定位，请补充后再下单')
       return
     }
     if (!this.data.items.length) {
-      this.setData({
-        quoting: false, quoteToken: null, quoteError: '', blockReason: '请先选择同城商品',
-        headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
-        headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
-      })
+      this.haltQuote('请先选择同城商品')
       return
     }
-    this.setData({ quoting: true, quoteToken: null, quoteError: '' })
+    this.setData({ quoting: true, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '' })
+    this.syncAction()
     quoteLocal(address.id, this.data.subtotal)
       .then(function(rawQuote) {
         if (seq !== self._quoteSeq) return
@@ -234,7 +242,9 @@ Page({
         var patch = {
           quoting: false,
           quote: quote,
-          quotedAt: Date.now(),
+          // 过期时刻由服务端随报价下发；解析不出来就按 0（不判过期），
+          // 免得接口回滚到没有这个字段的版本时整页都提交不了。
+          quoteExpiresAtMs: Date.parse(rawQuote.quoteExpiresAt) || 0,
           headNotice: notice.text,
           headBlocking: notice.blocking,
           quoteError: '',
@@ -272,15 +282,18 @@ Page({
         // m1: 报价成功后复位，后续 42901 仍可自动重试一次
         self._retriedRateLimit = false
         self.setData(patch)
+        self.syncAction()
       })
       .catch(function(err) {
         if (seq !== self._quoteSeq) return
         if (err.code === 42223) {
-          self.setData({ quoting: false, quoteToken: null, quoteError: '', blockReason: err.message || '该地址缺少定位，请补充后再下单' })
+          self.setData({ quoting: false, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', blockReason: err.message || '该地址缺少定位，请补充后再下单' })
+          self.syncAction()
           return
         }
         if (err.code === 42226) {
-          self.setData({ quoting: false, quoteToken: null, quoteError: '', headNotice: err.message, headBlocking: true, blockReason: err.message })
+          self.setData({ quoting: false, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', headNotice: err.message, headBlocking: true, blockReason: err.message })
+          self.syncAction()
           return
         }
         var rateLimited = err.code === 42901 || err.code === 429
@@ -288,9 +301,11 @@ Page({
         self.setData({
           quoting: false,
           quoteToken: null,
+          quoteExpiresAtMs: 0,
           payAmount: null,
           quoteError: rateLimited ? '操作太频繁，请稍后再试' : '运费获取失败',
         })
+        self.syncAction()
         if (rateLimited && !self._retriedRateLimit) {
           self._retriedRateLimit = true
           setTimeout(function() { self.refreshQuote('retry') }, 3000)
@@ -298,19 +313,63 @@ Page({
       })
   },
 
-  invalidateQuote: function() {
-    // 购物车一开始改就作废旧票：写入与 reloadCart 的两趟往返里，按钮不能还写着旧金额。
+  /**
+   * 作废本次结算的一切「可提交」凭据。地址一换、数量一改、优惠一变都要先调它，
+   * **而且要在发请求之前调**——等网络回来再作废的话，那一两秒里按钮上还写着旧金额，
+   * 顾客完全来得及按下去，然后被服务端拿着过期的 quoteToken 报 42239。
+   *
+   * 递增 _quoteSeq 让在途的旧响应作废；清 timer 让 debounce 中的旧计划不再触发。
+   */
+  invalidateCheckout: function(reason) {
     this._quoteSeq = (this._quoteSeq || 0) + 1
-    this.setData({ quoting: true, quoteToken: null })
+    if (this._quoteTimer) {
+      clearTimeout(this._quoteTimer)
+      this._quoteTimer = null
+    }
+    this.setData({ quoting: true, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null })
+    this.syncAction()
+  },
+
+  // 三条早退分支（缺地址 / 缺坐标 / 购物车为空）共用：它们在发请求前就 return，
+  // 走不到用报价结果算头条那一步，只能靠 loadMeta 记下的结论兜底，
+  // 且只在它判定为阻塞（暂停/未开通/打烊）时才显示，不阻塞就留空。
+  haltQuote: function(reason) {
+    this.setData({
+      quoting: false, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null,
+      quoteError: '', blockReason: reason,
+      headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
+      headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
+    })
+    this.syncAction()
   },
 
   scheduleQuote: function() {
     var self = this
-    if (this._quoteTimer) clearTimeout(this._quoteTimer)
-    // 小计一变，旧凭证与旧金额立刻作废：debounce 的 500ms 里不能提交旧报价。
-    this._quoteSeq = (this._quoteSeq || 0) + 1
-    this.setData({ quoting: true, quoteToken: null })
+    this.invalidateCheckout('subtotal')
     this._quoteTimer = setTimeout(function() { self.refreshQuote('subtotal') }, 500)
+  },
+
+  /**
+   * 底部按钮的状态只由 checkoutAction 决定，页面不再各处拼三元表达式。
+   * 每一处改变 quoting / quoteToken / blockReason / payAmount / submitting 的地方
+   * 都要跟着调一次——漏调的表现是「文案变了按钮还能点」这种半吊子状态。
+   */
+  syncAction: function() {
+    var d = this.data
+    this.setData({
+      action: checkoutAction({
+        hasAddress: !!d.address,
+        hasLocation: !(d.address && (d.address.latE6 == null || d.address.lngE6 == null)),
+        quoting: d.quoting,
+        quoteError: !!d.quoteError,
+        blockReason: d.blockReason,
+        submitting: d.submitting,
+        benefitsLoading: d.benefitsLoading,
+        quoteToken: d.quoteToken,
+        quoteExpiresAt: d.quoteExpiresAtMs,
+        payAmount: d.payAmount,
+      }),
+    })
   },
 
   reloadCart: function() {
@@ -340,7 +399,7 @@ Page({
   updateQuantity: function(id, quantity) {
     var self = this
     this._cartMutating = true
-    this.invalidateQuote()
+    this.invalidateCheckout('quantity')
     updateCartItem(id, { quantity: quantity })
       .then(function() { return self.reloadCart() })
       .then(function() { self._cartMutating = false })
@@ -361,7 +420,7 @@ Page({
       success: function(result) {
         if (!result.confirm) return
         self._cartMutating = true
-        self.invalidateQuote()
+        self.invalidateCheckout('delete')
         deleteCartItem(id)
           .then(function() {
             self.setData({ cartItemIds: self.data.cartItemIds.filter(function(itemId) { return itemId !== id }) })
@@ -435,6 +494,9 @@ Page({
       gifts: d.gifts || [],
       discount: d.discount || 0,
       pointsUsed: d.pointsUsed || 0,
+      // 组件在重算优惠时报 loading=true：这段时间合计是不确定的，锁住提交。
+      // 不锁的话顾客会按着一个旧的应付金额提交，服务端按新的券状态算出另一个数。
+      benefitsLoading: !!d.loading,
     }
     if (this.data.quoteToken && !this.data.blockReason && !this.data.quoteError) {
       var fee = (this.data.quote && this.data.quote.fee) || 0
@@ -442,17 +504,29 @@ Page({
       patch.payAmount = pay < 0 ? 0 : pay
     }
     this.setData(patch)
+    this.syncAction()
   },
 
+  /**
+   * 底部主按钮。**按 action 分派，绝不以「按钮没禁用」推断该提交**——
+   * 报价失败时按钮是可点的（店主 2026-09-07 选的方案 B），那一刻没有有效的
+   * quoteToken，照着提交会被服务端 42239 拒掉，顾客只会看到一句看不懂的报错。
+   */
   onSubmit: function() {
-    if (this.data.quoteError) {
+    var act = this.data.action || {}
+    if (act.action === 'retry') {
+      // 同 onRetryQuote：重新报价前先刷一次 meta，免得头条还停在旧结论上
+      this.loadMeta()
       this.refreshQuote('retry')
       return
     }
-    if (this.data.submitting || this.data.quoting || !this.data.quoteToken) return
-    if (Date.now() - this.data.quotedAt > 10 * 60 * 1000) {
-      this.refreshQuote('stale')
-      wx.showToast({ title: '运费已重新计算，请确认后提交', icon: 'none' })
+    if (act.disabled || act.action !== 'submit') {
+      // 过期那一格会走到这里（action=none 且文案是「正在计算运费」）：顺手触发重算，
+      // 顾客不必自己找哪里能重试。
+      if (this.data.quoteExpiresAtMs && Date.now() > this.data.quoteExpiresAtMs) {
+        this.refreshQuote('stale')
+        wx.showToast({ title: '运费已重新计算，请确认后提交', icon: 'none' })
+      }
       return
     }
     var self = this
@@ -462,6 +536,7 @@ Page({
   doSubmit: function() {
     if (this.data.submitting || !this.data.quoteToken || !this.data.address) return
     this.setData({ submitting: true })
+    this.syncAction()
     var self = this
     var remark = (this.data.needTableware ? '[需要餐具] ' : '') + (this.data.remark || '')
     createOrder({
@@ -473,8 +548,15 @@ Page({
       // 没选券/没加赠品时是 undefined，不会被序列化——请求体与改前一致
       couponId: this.data.couponId || undefined,
       gifts: this.data.gifts && this.data.gifts.length ? this.data.gifts : undefined,
+      // 幂等键。**失败时故意不换**：网络超时这一类失败，服务端很可能已经把单建好了，
+      // 只是响应没回来。顾客再按一次时带着同一个 id，服务端把那张单原样还回来，
+      // 而不是再建一张。换新 id 等于没有幂等。
+      clientRequestId: this._clientRequestId,
     }, true)
       .then(function(res) {
+        // 确认建单成功，这个 id 用完了：留着的话，顾客若返回本页再下一单，
+        // 会命中幂等直接跳回上一张单，看起来像是「怎么点都下不了新单」。
+        self._clientRequestId = newClientRequestId()
         wx.showToast({ title: '下单成功，请在 ' + self.data.payTimeoutMin + ' 分钟内完成支付', icon: 'none', duration: 1500 })
         setTimeout(function() {
           wx.redirectTo({ url: '/pages/order/detail?id=' + res.orderId + '&autopay=1' })
@@ -482,6 +564,7 @@ Page({
       })
       .catch(function(err) {
         self.setData({ submitting: false })
+        self.syncAction()
         self.handleSubmitError(err)
       })
   },
@@ -489,11 +572,19 @@ Page({
   handleSubmitError: function(err) {
     var self = this
     var code = err.code
-    // 42250 积分不足 / 42251 券不可用 / 42252 赠品不可用：优惠项在别处变了，选择过期。
-    // 只刷组件，**不清 quoteToken、不改 blockReason**——报价本身没问题，
-    // 清掉会逼顾客重新走一遍报价（还可能因为限流被挡），而问题只出在优惠那一格。
-    // createOrder 这里传的是 silent:true，request.js 不会替我们弹 toast，所以自己弹。
-    if (code === 42250 || code === 42251 || code === 42252) {
+    // createOrder 传的是 silent:true，request.js 不会替我们弹 toast，所以自己弹。
+    // 42201 库存不足 / 42202 已下架 / 42224 渠道不符：问题出在**商品**上，
+    // 刷购物车让顾客看到真实的库存与在售状态，比一句「无法下单」有用。
+    // 刷完会走 scheduleQuote 重新报价（小计可能变了）。
+    if (code === 42201 || code === 42202 || code === 42224) {
+      wx.showToast({ title: err.message || '商品信息已变化，请确认后重试', icon: 'none', duration: 2500 })
+      this.reloadCart().catch(function() {})
+      return
+    }
+    // 42250 积分不足 / 42251 券不可用 / 42252 赠品不可用 / 42253 / 42254：
+    // 优惠项在别处变了。只刷组件，**不清 quoteToken、不改 blockReason**——
+    // 报价本身没问题，清掉会逼顾客重新走一遍报价（还可能因为限流被挡）。
+    if (code === 42250 || code === 42251 || code === 42252 || code === 42253 || code === 42254) {
       wx.showToast({ title: err.message || '优惠已变化，请重新选择', icon: 'none', duration: 2500 })
       var benefits = this.selectComponent('#benefits')
       if (benefits) benefits.refresh()
@@ -519,7 +610,8 @@ Page({
       return
     }
     if (code === 42220 || code === 42222 || code === 42226) {
-      this.setData({ blockReason: err.message, quoteToken: null, headNotice: err.message, headBlocking: true })
+      this.setData({ blockReason: err.message, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null, headNotice: err.message, headBlocking: true })
+      this.syncAction()
       wx.showToast({ title: err.message, icon: 'none', duration: 3000 })
       return
     }
@@ -532,13 +624,11 @@ Page({
       })
       return
     }
-    if (code === 42210 || code === 42224) {
-      wx.showModal({
-        title: '无法下单',
-        content: err.message,
-        confirmText: '返回同城菜单',
-        success: function(result) { if (result.confirm) self.goLocalMenu() },
-      })
+    // 42210 未达起送：重新报价即可，服务端会在 belowMin 分支写出「还差 ¥X 起送」，
+    // 顾客据此知道要加多少，比一句「无法下单 → 返回菜单」明确。
+    if (code === 42210) {
+      wx.showToast({ title: err.message || '未达起送金额', icon: 'none', duration: 2500 })
+      this.refreshQuote('retry')
       return
     }
     wx.showToast({ title: err.message || '下单失败，请重试', icon: 'none', duration: 2500 })

@@ -63,17 +63,6 @@
     </view>
   </view>
 
-  <view class="section card remark-section">
-    <view class="tableware-row">
-      <text class="row-label">需要餐具</text>
-      <switch checked="{{needTableware}}" color="#e5441e" bindchange="onTablewareChange" />
-    </view>
-    <view class="remark-row">
-      <text class="row-label">备注</text>
-      <textarea class="remark-input" value="{{remark}}" maxlength="20" auto-height placeholder="20 字以内，如放门口、不要辣" placeholder-class="remark-placeholder" bindinput="onRemarkInput" />
-    </view>
-  </view>
-
   <!-- 会员优惠（M4）。放在备注之后、底部合计之前。
        subtotal 传**券前**小计，与传给 /local/quote 的那个是同一个值——
        服务端的起送线与「报价是否被篡改」两道判定都按券前小计。
@@ -89,13 +78,64 @@
     bind:change="onBenefitsChange"
   />
 
+  <view class="section card remark-section">
+    <view class="tableware-row">
+      <text class="row-label">需要餐具</text>
+      <switch checked="{{needTableware}}" color="#e5441e" bindchange="onTablewareChange" />
+    </view>
+    <view class="remark-row">
+      <text class="row-label">备注</text>
+      <textarea class="remark-input" value="{{remark}}" maxlength="20" auto-height placeholder="20 字以内，如放门口、不要辣" placeholder-class="remark-placeholder" bindinput="onRemarkInput" />
+    </view>
+  </view>
+
+  <!-- 金额明细（Spec §5.5）。固定五行口径，顺序不变：
+       商品金额 / 优惠券 / 配送费 / 积分赠品 / 应付金额。
+       任何 pending / error / blocked 状态下都不显示旧的应付金额——
+       底部那一条也一样，两处必须同时变，否则会出现「上面写着待计算、下面还有个数」。 -->
+  <view class="section card amount-section">
+    <view class="section-title">金额明细</view>
+    <view class="sum-row">
+      <text class="sum-k">商品金额</text>
+      <text class="sum-v">¥{{pricefmt.fen(subtotal)}}</text>
+    </view>
+    <view wx:if="{{discount > 0}}" class="sum-row">
+      <text class="sum-k">优惠券</text>
+      <text class="sum-v sum-cut">−¥{{pricefmt.fen(discount)}}</text>
+    </view>
+    <view class="sum-row">
+      <text class="sum-k">配送费</text>
+      <text wx:if="{{quoting}}" class="sum-v sum-wait">计算中</text>
+      <text wx:elif="{{quoteError}}" class="sum-v sum-wait">待重新计算</text>
+      <text wx:elif="{{quote && !blockReason}}" class="sum-v">{{quote.fee > 0 ? '¥' + pricefmt.fen(quote.fee) : '免运费'}}</text>
+      <text wx:else class="sum-v sum-wait">待计算</text>
+    </view>
+    <view wx:if="{{pointsUsed > 0}}" class="sum-row">
+      <text class="sum-k">积分赠品</text>
+      <text class="sum-v">{{pointsUsed}} 积分</text>
+    </view>
+    <view class="sum-row sum-total">
+      <text class="sum-k">应付金额</text>
+      <block wx:if="{{action.amountState === 'ready'}}">
+        <text class="sum-v sum-pay">¥{{pricefmt.fen(payAmount)}}</text>
+      </block>
+      <text wx:elif="{{action.amountState === 'error'}}" class="sum-v sum-wait">待重新计算</text>
+      <text wx:else class="sum-v sum-wait">待计算</text>
+    </view>
+  </view>
+
   <view class="spacer"></view>
 </view>
 
 <view class="bottom-bar">
-  <view wx:if="{{headBlocking || (quote && !quote.inRange)}}" class="escape-actions">
-    <view class="escape-btn" bindtap="onSelectAddress">换个地址</view>
-    <view class="escape-btn" bindtap="goExpress">改用全国邮寄</view>
+  <!-- 不能提交时，把**具体原因**放在按钮正上方。按钮只说「暂不可配送」，
+       原因和出口在这里——顾客需要知道的是「为什么」和「那我该干嘛」。 -->
+  <view wx:if="{{blockReason && action.amountState === 'blocked'}}" class="block-strip">
+    <text class="block-strip-text">{{blockReason}}</text>
+    <view class="block-strip-acts">
+      <view wx:if="{{quote && !quote.inRange}}" class="escape-btn" bindtap="onSelectAddress">换个地址</view>
+      <view class="escape-btn" bindtap="goExpress">改用全国邮寄</view>
+    </view>
   </view>
   <view class="agree-row">
     <text>提交订单即表示同意</text>
@@ -103,29 +143,23 @@
     <text>和</text>
     <text class="agree-link" bindtap="goLegal" data-type="privacy">《隐私政策》</text>
   </view>
+  <!-- 合计与按钮的状态是同一个来源（action，见 utils/local-checkout-state），
+       不再各拼一串三元表达式——那样迟早会出现「按钮变灰了但上面还写着一个金额」。 -->
   <view class="bottom-main">
     <view class="bottom-total-wrap">
       <text class="bottom-total-label">合计</text>
-      <block wx:if="{{quoteError}}">
-        <text class="bottom-calculating">待重新计算</text>
-      </block>
-      <block wx:elif="{{quote && !quoting && payAmount != null && !blockReason}}">
+      <block wx:if="{{action.amountState === 'ready'}}">
         <text class="price-symbol">¥</text>
         <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(payAmount))}}</text>
         <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
       </block>
-      <block wx:elif="{{quote && !quoting && blockReason}}">
-        <text class="bottom-calculating">待重新计算</text>
-      </block>
-      <text wx:else class="bottom-calculating">运费计算中</text>
+      <text wx:elif="{{action.amountState === 'error'}}" class="bottom-calculating">待重新计算</text>
+      <text wx:else class="bottom-calculating">待计算</text>
     </view>
-    <view class="submit-btn btn-primary {{submitting || quoting || blockReason || (!quoteError && !quoteToken) ? 'btn-disabled' : ''}}" bindtap="onSubmit">
-      <text wx:if="{{submitting}}">提交中…</text>
-      <text wx:elif="{{quoting}}">计算运费中…</text>
-      <text wx:elif="{{quoteError}}">重新获取运费</text>
-      <text wx:elif="{{blockReason}}">{{blockReason}}</text>
-      <text wx:elif="{{quoteToken}}">提交订单 ¥{{pricefmt.fen(payAmount)}}</text>
-      <text wx:else>暂不可提交</text>
+    <!-- 文案只有七种、且都很短。长原因（「超出配送范围（约 12.4 km）」之类）
+         走上面的提示条，塞进按钮在 320 宽的机器上必然溢出。 -->
+    <view class="submit-btn btn-primary {{action.disabled ? 'btn-disabled' : ''}}" bindtap="onSubmit">
+      <text>{{action.text}}</text>
     </view>
   </view>
 </view>

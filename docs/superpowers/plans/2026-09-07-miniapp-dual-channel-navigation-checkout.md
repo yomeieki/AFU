@@ -579,7 +579,7 @@ git commit -m "feat(miniapp): isolate cart tab by shopping channel"
 - Consumes: `checkoutAction`, `/local/quote.quoteExpiresAt`, checkout benefits change event。
 - Produces: `checkout-benefits` change detail `{ couponId, gifts, discount, pointsUsed, loading }`。
 
-- [ ] **Step 1: 扩充失败测试覆盖状态矩阵**
+- [x] **Step 1: 扩充失败测试覆盖状态矩阵**
 
 用表驱动字面量覆盖：无地址、缺定位、报价中、报价失败、报价过期、暂停、打烊、超范围、未达起送、优惠加载中、可提交、提交中。每行断言 `disabled/text/amountState`。
 
@@ -587,35 +587,35 @@ Run: `node --test tests/miniapp/local-checkout-state.test.cjs`
 
 Expected: 新增“报价过期”和“优惠加载中”用例 FAIL。
 
-- [ ] **Step 2: 把过期判断改为服务端时间**
+- [x] **Step 2: 把过期判断改为服务端时间**
 
 保存 `quoteExpiresAtMs = Date.parse(rawQuote.quoteExpiresAt)`；无法解析时按不可提交处理并重新报价。删除 `Date.now() - quotedAt > 10 * 60 * 1000`。
 
-- [ ] **Step 3: 地址/数量变化立即作废全部旧提交数据**
+- [x] **Step 3: 地址/数量变化立即作废全部旧提交数据**
 
 统一 `invalidateCheckout(reason)`：递增请求序号、清 timer、置 `quoteToken:null`、`quoteExpiresAtMs:0`、`payAmount:null`、`quoting:true`。数量 API 发出前调用，地址切换后调用，不能等待网络返回。
 
-- [ ] **Step 4: 按设计顺序重排 WXML**
+- [x] **Step 4: 按设计顺序重排 WXML**
 
 地址 → 配送 → 商品 → 优惠 → 餐具备注 → 金额明细 → 协议。新增金额卡显示商品金额、优惠券、配送费、积分赠品和应付金额；任何 pending/error/block 状态都不得显示旧应付金额。
 
-- [ ] **Step 5: 缩短固定按钮文案**
+- [x] **Step 5: 缩短固定按钮文案**
 
 页面从 `checkoutAction` 取短文案；完整 `blockReason` 放在按钮上方提示条。移除把“超出配送范围（约…）”直接塞进主按钮的行为。
 
-- [ ] **Step 6: 给优惠组件增加 loading 契约**
+- [x] **Step 6: 给优惠组件增加 loading 契约**
 
 组件进入/离开 loading 时向父页 emit；父页在优惠重新计算期间禁用提交。保留当前规则：优惠加载失败清空旧券并允许原价下单。
 
-- [ ] **Step 7: 调整优惠券弹层空间**
+- [x] **Step 7: 调整优惠券弹层空间**
 
 `.sheet` 使用 `max-height:70vh`，body 计算可滚动高度并增加 `padding-bottom:calc(40rpx + env(safe-area-inset-bottom))`。长名称单行省略，不可用原因允许两行。
 
-- [ ] **Step 8: 生成并保持 client request id**
+- [x] **Step 8: 生成并保持 client request id**
 
 进入结算页生成 UUID；提交失败时保留，成功或确认服务端未创建且顾客修改地址/商品后生成新 ID。请求体显式传 `clientRequestId`。
 
-- [ ] **Step 9: 错误码逐类刷新正确区域**
+- [x] **Step 9: 错误码逐类刷新正确区域**
 
 ```text
 42227/42239 → 作废金额并重新报价
@@ -625,7 +625,7 @@ Expected: 新增“报价过期”和“优惠加载中”用例 FAIL。
 网络超时 → 用相同 clientRequestId 重试，不能创建第二单
 ```
 
-- [ ] **Step 10: 验证**
+- [x] **Step 10: 验证**
 
 Run: `node --test tests/miniapp/local-checkout-state.test.cjs`
 
@@ -637,7 +637,7 @@ Expected: PASS。
 
 开发者工具逐个切换 Task 1 的九种状态，确认固定栏不遮内容、金额不残留、按钮不溢出。
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add apps/miniapp/pages/local/confirm.* apps/miniapp/api/local.js apps/miniapp/components/checkout-benefits tests/miniapp/local-checkout-state.test.cjs

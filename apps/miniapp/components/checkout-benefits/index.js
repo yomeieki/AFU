@@ -107,6 +107,9 @@ Component({
       var seq = (this._seq || 0) + 1
       this._seq = seq
       this.setData({ state: 'loading' })
+      // 告诉父页「优惠正在重算」。这段时间里合计是不确定的，结算页据此锁住提交——
+      // 不锁的话顾客会按着一个旧的应付金额提交，服务端按新的券状态算出另一个数。
+      this._emitLoading(true)
       member
         .getCheckoutOptions(this.properties.channel, subtotal, true)
         .then(function (d) {
@@ -274,6 +277,27 @@ Component({
         gifts: gifts,
         discount: discount,
         pointsUsed: pointsUsed,
+        // loading 与其余四个值同批发出：分两次发的话，父页可能先收到「不 loading」
+        // 再收到新金额，中间那一帧按钮是可点的、金额还是旧的。
+        loading: this.data.state === 'loading',
+      })
+    },
+
+    // 只翻转 loading，其余四个值保持上一次的结论。
+    // 重算期间把 discount 清零的话，页面上的合计会先跳一下再跳回来。
+    _emitLoading: function (loading) {
+      var lines = []
+      for (var i = 0; i < this.data.gifts.length; i++) {
+        var g = this.data.gifts[i]
+        var q = this.data.giftQty[g.id] || 0
+        if (q > 0) lines.push({ pointsGoodId: g.id, quantity: q })
+      }
+      this.triggerEvent('change', {
+        couponId: this.data.selectedCouponId,
+        gifts: lines,
+        discount: this.data.discount,
+        pointsUsed: this.data.pointsUsed,
+        loading: !!loading,
       })
     },
 

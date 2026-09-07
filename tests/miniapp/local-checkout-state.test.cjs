@@ -86,7 +86,43 @@ test('文案只允许这七种', function () {
   })
 })
 
+// 报价凭证的有效期由服务端随报价下发（quoteExpiresAt），客户端不再自己写死 TTL。
+// 到点未重算就提交，会被服务端 42239 拒掉，顾客看到的是一句看不懂的报错。
+test('报价过期：按「还在算」处理并等待重新报价，绝不放行', function () {
+  assert.deepEqual(
+    checkoutAction(on({ quoteExpiresAt: 1893455000000, now: 1893456000000 })),
+    { disabled: true, text: '正在计算运费', amountState: 'pending', action: 'none' }
+  )
+  // 边界与服务端一致（verifyQuote 判 `e < now`）：过期时刻当毫秒仍然有效
+  assert.equal(checkoutAction(on({ quoteExpiresAt: 1893456000000, now: 1893456000000 })).disabled, false)
+  // 没给 quoteExpiresAt 的旧响应不当成过期——否则接口回滚时整页都提交不了
+  assert.equal(checkoutAction(on({ quoteExpiresAt: null })).disabled, false)
+})
+
+// 优惠券/赠品重算期间合计是不确定的。此刻放行会让顾客按着一个旧的应付金额提交，
+// 服务端按新的券状态算出另一个数，两边对不上。
+test('优惠重算中：锁住提交，但金额继续显示（不闪成「待计算」）', function () {
+  assert.deepEqual(
+    checkoutAction(on({ benefitsLoading: true })),
+    { disabled: true, text: '提交订单', amountState: 'ready', action: 'submit' }
+  )
+})
+
 test('传 undefined / 空对象不抛，按「没选地址」处理', function () {
   assert.equal(checkoutAction().text, '请选择地址')
   assert.equal(checkoutAction({}).text, '请选择地址')
+})
+
+// 幂等键的形状必须过服务端的 zod .uuid()——不合法会被 400 拒掉，
+// 而那看起来像是「下单坏了」，没人会想到是 id 的格式问题。
+test('newClientRequestId 生成合法 UUID v4，且每次都不同', function () {
+  const { newClientRequestId } = require('../../apps/miniapp/utils/local-checkout-state')
+  const re = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  const ids = new Set()
+  for (let i = 0; i < 200; i++) {
+    const id = newClientRequestId()
+    assert.match(id, re, '不是合法 UUID v4：' + id)
+    ids.add(id)
+  }
+  assert.equal(ids.size, 200, '200 次生成不应有重复')
 })

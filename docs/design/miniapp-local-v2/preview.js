@@ -79,6 +79,13 @@
     if (s.quoting) return { disabled: true, text: '正在计算运费', amountState: 'pending', action: 'none' }
     if (s.quoteError) return { disabled: false, text: '重新获取运费', amountState: 'error', action: 'retry' }
     if (s.blockReason) return { disabled: true, text: '暂不可配送', amountState: 'blocked', action: 'none' }
+    // 下面两格是 Task 7 补的过渡态，预览面板不单列（报价过期会自动重算、优惠重算只闪一下）：
+    //   报价过期   → 与「报价中」同一格
+    //   优惠重算中 → 文案仍是「提交订单」但不可点，金额继续显示
+    if (s.quoteExpiresAt && (s.now || Date.now()) > s.quoteExpiresAt) {
+      return { disabled: true, text: '正在计算运费', amountState: 'pending', action: 'none' }
+    }
+    if (s.benefitsLoading) return { disabled: true, text: '提交订单', amountState: 'ready', action: 'submit' }
     if (s.submitting) return { disabled: true, text: '提交中', amountState: 'ready', action: 'submit' }
     return { disabled: false, text: '提交订单', amountState: 'ready', action: 'submit' }
   }

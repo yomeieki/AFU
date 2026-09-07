@@ -53,8 +53,19 @@
 .remark-placeholder { color: var(--text-disabled); }
 .spacer { height: 8rpx; }
 .bottom-bar { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; padding: 10rpx 24rpx calc(14rpx + env(safe-area-inset-bottom)); background: var(--card); border-top: 1rpx solid var(--divider); box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, .03); }
-.escape-actions { display: flex; gap: 16rpx; margin-bottom: 10rpx; }
-.escape-btn { flex: 1; padding: 12rpx; border: 1rpx solid var(--brand-light); border-radius: 999rpx; color: var(--brand); font-size: 24rpx; text-align: center; }
+/* 出口按钮。原来在一条独占整行的 .escape-actions 里（flex:1 平分整宽），
+   现在挪进阻塞提示条、与原因文字同一行，所以不能再平分——按内容宽、不换行、不收缩，
+   该被压缩的是左边的原因文字。 */
+.escape-btn {
+  flex-shrink: 0;
+  padding: 5rpx 12rpx;
+  border: 1rpx solid currentColor;
+  border-radius: 999rpx;
+  color: #b42318;
+  font-size: 21rpx;
+  white-space: nowrap;
+  text-align: center;
+}
 .agree-row { color: var(--text-3); font-size: 22rpx; line-height: 1.4; text-align: center; }
 .agree-link { color: var(--brand); }
 .bottom-main { display: flex; align-items: center; gap: 18rpx; margin-top: 8rpx; }
@@ -63,3 +74,43 @@
 .bottom-total-int { font-size: 42rpx; }
 .bottom-calculating { color: var(--text-3); font-size: 24rpx; }
 .submit-btn { max-width: 360rpx; padding: 0 28rpx; overflow: hidden; font-size: 26rpx; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 金额明细卡（Spec §5.5）───────────────────────────── */
+.sum-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 9rpx 0;
+}
+.sum-k { font-size: 25rpx; color: var(--text-2); flex-shrink: 0; }
+.sum-v { font-size: 25rpx; color: var(--text-1); text-align: right; min-width: 0; }
+.sum-cut { color: var(--brand); }
+.sum-wait { color: var(--text-3); }
+.sum-total {
+  border-top: 1rpx solid var(--divider);
+  margin-top: 8rpx;
+  padding-top: 16rpx;
+}
+.sum-total .sum-k { font-size: 27rpx; color: var(--text-1); font-weight: 600; }
+.sum-pay { color: var(--brand); font-size: 30rpx; font-weight: 600; }
+
+/* ── 阻塞提示条 ──────────────────────────────────────────
+   放在固定栏内、按钮正上方。原因可以两行，两个出口不换行、不被压缩。 */
+.block-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+  margin-bottom: 10rpx;
+  padding: 12rpx 16rpx;
+  border-radius: 10rpx;
+  background: var(--danger-bg, #fef2f2);
+}
+.block-strip-text {
+  font-size: 22rpx;
+  color: #b42318;
+  line-height: 1.4;
+  min-width: 0;
+}
+.block-strip-acts { display: flex; gap: 10rpx; flex-shrink: 0; }

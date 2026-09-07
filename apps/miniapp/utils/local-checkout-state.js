@@ -40,6 +40,12 @@ function result(disabled, text, amountState, action) {
  *   blockReason   业务阻塞原因（暂停/打烊/超范围/未达起送），非空即阻塞
  *   submitting    正在提交订单
  *   quoteToken    服务端签发的报价凭证
+ *   quoteExpiresAt 该凭证的过期时刻（毫秒）。**由服务端随报价下发**，客户端不再自己写死 TTL——
+ *                 原来页面写「超过 10 分钟算陈旧」而服务端签 15 分钟，中间 5 分钟里
+ *                 页面以为还新鲜、服务端已经准备拒了。为 0/null 时不判过期
+ *                 （老版本接口没有这个字段，判过期会让整页都提交不了）
+ *   now           当前时刻（毫秒），仅为可测试性而暴露，页面不传
+ *   benefitsLoading 优惠券/赠品正在重算
  *   payAmount     应付金额（分）
  * @returns {{disabled:boolean, text:string, amountState:'ready'|'pending'|'error'|'blocked', action:'submit'|'retry'|'none'}}
  */
@@ -54,12 +60,41 @@ function checkoutAction(s) {
   // 旧 token 已作废、新报价还在路上」那一瞬间——页面调 invalidateCheckout 把
   // quoteToken 置空之后，这里立刻变成不可提交，不依赖网络返回的时序。
   if (!st.quoteToken || st.payAmount == null) return result(true, TEXT.QUOTING, 'pending', 'none')
+  // 凭证过期：按「还在算」处理，页面据此立刻重新报价。
+  // 边界与服务端一致——verifyQuote 判的是 `e < now`（local-settings.ts:606），
+  // 所以过期时刻那一毫秒本身仍然有效，两边不要各留各的余量。
+  if (st.quoteExpiresAt && (st.now || Date.now()) > st.quoteExpiresAt) {
+    return result(true, TEXT.QUOTING, 'pending', 'none')
+  }
+  // 优惠重算中：合计此刻是不确定的，放行会让顾客按着旧的应付金额提交，
+  // 而服务端按新的券状态算出另一个数。金额继续显示（不闪成「待计算」）——
+  // 券的抵扣额通常只差几块，把整个合计抹掉反而像是出了故障。
+  if (st.benefitsLoading) return result(true, TEXT.SUBMIT, 'ready', 'submit')
   // 提交中：按钮锁死，但金额继续显示——顾客要看得见自己正在付多少钱。
   if (st.submitting) return result(true, TEXT.SUBMITTING, 'ready', 'submit')
   return result(false, TEXT.SUBMIT, 'ready', 'submit')
 }
 
+/**
+ * 下单幂等键（UUID v4）。
+ *
+ * 治的是「服务端已经建单、客户端超时没收到响应」这一类重复下单：顾客点一次、
+ * 网络卡住、他再点一次，库里就是两张单、库存扣两次、券核销两次。
+ * 每进一次结算页生成一个，**重试时必须沿用同一个**——每次调用都新生成等于没有幂等。
+ *
+ * 不用 crypto.randomUUID：小程序没有。Math.random 的碰撞概率在「同一个用户、
+ * 同一次结算」的尺度上完全无关紧要，而服务端的唯一键还带着 userId。
+ */
+function newClientRequestId() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = (Math.random() * 16) | 0
+    var v = c === 'x' ? r : ((r & 0x3) | 0x8)
+    return v.toString(16)
+  })
+}
+
 module.exports = {
   TEXT: TEXT,
   checkoutAction: checkoutAction,
+  newClientRequestId: newClientRequestId,
 }
