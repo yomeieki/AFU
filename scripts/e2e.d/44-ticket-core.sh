@@ -189,7 +189,9 @@ sleep 0.3
 D44_H6_JOBS=$(PJOBS "$D44_H6_OID")
 # 修复前：两次申请都是固定 seq=0 的 CANCEL，第二次会被 dedupe 吞掉，这里应为 1（漏出一张）
 assert_eq "H6：两次申请各出一张 CANCEL_REQUEST（不被 dedupe 吞掉）" "$(jq -r '[.data.list[] | select(.kind=="CANCEL_REQUEST")] | length' <<<"$D44_H6_JOBS")" "2"
-assert_eq "H6：驳回出一张 RESUME" "$(jq -r '[.data.list[] | select(.kind=="RESUME")] | length' <<<"$D44_H6_JOBS")" "1"
+# 驳回**不再出票**（PO 2026-09-07：取消流程只留一张票，厨房不用管、店员会通知）。
+# 「继续做」改为显示在工作台卡片上，见 admin/workbench.ts 的 cancelRejected。
+assert_eq "H6：驳回不出票（RESUME 已撤除）" "$(jq -r '[.data.list[] | select(.kind=="RESUME")] | length' <<<"$D44_H6_JOBS")" "0"
 assert_eq "H6：全程还没有真正的 CANCEL（没同意退款）" "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$D44_H6_JOBS")" "0"
 
 # 复位：不让本段状态影响下一轮重跑时其它段（尤其是 §35 自己）的前置假设
