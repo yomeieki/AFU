@@ -342,10 +342,4 @@ Page({
   goExpress: function() {
     wx.switchTab({ url: '/pages/index/index' })
   },
-
-  // 顶部「我的订单 ›」。navigateTo：订单列表不是 tabBar 页，而且 switchTab 会销毁本页页栈
-  // （顾客从订单页返回时应当回到这份菜单，而不是回到封面）。
-  goOrders: function() {
-    wx.navigateTo({ url: '/pages/order/list' })
-  },
 })

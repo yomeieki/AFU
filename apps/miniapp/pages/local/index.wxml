@@ -24,10 +24,6 @@
         <text class="status-pill {{headBlocking ? 'status-pill-warning' : 'status-pill-open'}}">
           {{meta.paused ? '暂停接单' : (!meta.isOpen ? '已打烊' : '营业中')}}
         </text>
-        <!-- 同城页不在 tabBar 里（靠 navigateTo 打开），底部天然没有导航栏，
-             顾客下单前后都没有别的路径去看自己的单。navigateTo 不用 switchTab：
-             订单列表不是 tabBar 页，且 switchTab 会销毁本页页栈。 -->
-        <text class="head-orders-link" bindtap="goOrders">我的订单 ›</text>
       </view>
       <text class="delivery-rules">配送范围 {{meta.radiusKm}} km · 满 ¥{{pricefmt.fen(meta.fee.minOrderAmount)}} 起送 · 基础运费 ¥{{pricefmt.fen(meta.fee.baseFee)}} 起</text>
       <view wx:if="{{headNotice}}" class="head-notice">

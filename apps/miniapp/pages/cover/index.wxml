@@ -51,17 +51,6 @@
   </view>
 </view>
 
-<!-- 「我的订单」常驻入口。必须是 .cover-root 的兄弟、不能放进 .cover-stage：
-     舞台带 translate/scale，放进去会被一起拖歪。
-
-     为什么留着：同城页不在 tabBar 里，靠 navigateTo 打开，底部天然没有导航栏。
-     顾客下完单再开小程序，要走 封面→全国邮寄(switchTab)→底部「我的」→我的订单
-     才看得到自己的单。订单列表本身不按渠道过滤，同城单一直都在里面，只是路径太绕。
-     方案 C 的设计稿里没有这个入口，但它是 1c9de11 为了解决真实问题加的，不能跟着改版丢掉。
-     用 navigateTo 而不是 switchTab：switchTab 会销毁本页页栈（同 goExpress 那个坑）。 -->
-<view class="cover-orders" hover-class="cover-orders-hover" hover-stay-time="60" bindtap="goOrders">
-  <text class="cover-orders-text">我的订单 ›</text>
-</view>
 
 <!-- 必须存在且必须是 .cover-root 的兄弟：app.js 的 onNeedPrivacyAuthorization 是按当前页
      找 #privacy-popup 的，找不到就静默 resolve(disagree)，同城入口会永远失败且不报错。 -->

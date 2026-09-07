@@ -201,31 +201,3 @@ page {
 }
 .cold-action .l1 { position: absolute; left: 0; right: 0; top: 21.5rpx; height: 24rpx; line-height: 24rpx; }
 .cold-action .l2 { position: absolute; left: 0; right: 0; top: 51.5rpx; height: 24rpx; line-height: 24rpx; }
-
-/* ── 「我的订单」常驻入口 ─────────────────────────────────
-   固定在底部安全区之上，压在最上层。设计稿里没有这个入口，是 1c9de11 为解决
-   「同城下单后找不到订单」加的，改版不能丢。
-   青瓦版下缘是浅色院墙，所以底色比亭子版浅一档、文字改深色，否则白字糊在灰瓦上。
-   44pt 可点下限：min-height 88rpx。 */
-.cover-orders {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(env(safe-area-inset-bottom) + 32rpx);
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 88rpx;
-  padding: 0 44rpx;
-  border-radius: 44rpx;
-  background: rgba(251, 245, 231, .88);
-  border: 1rpx solid #B58B51;
-}
-.cover-orders-hover { background: rgba(233, 220, 194, .95); }
-.cover-orders-text {
-  color: #1E1914;
-  font-size: 28rpx;
-  letter-spacing: 1rpx;
-  font-family: STKaiti, "Kaiti SC", KaiTi, "Songti SC", serif;
-}

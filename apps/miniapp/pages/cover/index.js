@@ -124,13 +124,6 @@ Page({
     wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
   },
 
-  // 「我的订单」：navigateTo 而不是 switchTab —— 订单列表不是 tabBar 页，
-  // 而且 switchTab 会把封面页栈销毁掉。
-  // 同样不做登录判断，理由见 onTapEntry。
-  goOrders: function () {
-    wx.navigateTo({ url: '/pages/order/list' })
-  },
-
   // 埋点出口。本仓库目前没有统一埋点层，先收敛成这一个函数：
   // 平台定了（wx.reportEvent 或自建后端）只改这里，不用回头翻页面代码。
   // 事件名沿用设计交付包的约定，见 config/cover-entries.js。
