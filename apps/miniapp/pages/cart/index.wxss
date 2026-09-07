@@ -161,3 +161,22 @@
 .checkout-btn {
   padding: 0 44rpx;
 }
+
+/* 同城营业状态通知。放在列表之上、跟着页面滚——它是「现在下不了单」的说明，
+   不是操作按钮，没必要常驻遮挡商品。 */
+.cart-notice {
+  margin: 20rpx 24rpx 0;
+  padding: 16rpx 20rpx;
+  border-radius: 10rpx;
+  background: var(--warning-bg, #fff7e8);
+  color: #a15c00;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+/* 「去逛逛」原来是 <navigator>，改成 view + bindtap（要按当前渠道决定去哪，
+   navigator 的 url 是写死的）。补回 navigator 自带的块级与居中。 */
+.go-shop-btn {
+  display: inline-block;
+  text-align: center;
+}

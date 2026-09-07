@@ -6,16 +6,19 @@
   </view>
 
   <view wx:elif="{{items.length === 0}}" class="empty-wrap">
-    <empty-state type="cart" text="购物车还是空的" />
-    <view wx:if="{{localPendingCount > 0}}" class="cross-channel-tip" bindtap="goLocal">
-      你在同城配送还有 {{localPendingCount}} 件未结算 <text class="icon icon-arrow"></text>
+    <empty-state type="cart" text="{{channelLabel}}购物车还是空的" />
+    <!-- 两个车是分开的，顾客很容易在一边看到空车、忘了另一边还挂着东西。 -->
+    <view wx:if="{{otherChannelCount > 0}}" class="cross-channel-tip" bindtap="goOtherChannel">
+      你在{{otherChannelLabel}}还有 {{otherChannelCount}} 件未结算 <text class="icon icon-arrow"></text>
     </view>
-    <navigator url="/pages/index/index" open-type="switchTab" class="go-shop-btn btn-primary">
-      去逛逛
-    </navigator>
+    <!-- 进**当前渠道**的分类页。固定进邮寄主页的话，同城模式下的空车顾客会被甩去看邮寄的货。 -->
+    <view class="go-shop-btn btn-primary" bindtap="goShopping">去逛逛</view>
   </view>
 
   <view wx:else>
+    <!-- 同城独有：营业状态阻塞时的通知。邮寄没有这一条。 -->
+    <view wx:if="{{channel === 'LOCAL' && headNotice}}" class="cart-notice">{{headNotice}}</view>
+
     <!-- Cart items -->
     <view class="cart-list">
       <view wx:for="{{items}}" wx:key="id" class="cart-item card">
@@ -72,16 +75,18 @@
     <!-- Bottom bar -->
     <view class="bottom-bar">
       <view class="total-wrap">
-        <text class="total-label">合计</text>
+        <!-- 同城的这个数**不含配送费**：运费要按收货地址的道路距离算，购物车页没有地址，
+             也不该为此外呼查价。说「券前小计」而不是「合计」，免得顾客到结算页发现变多了。 -->
+        <text class="total-label">{{channel === 'LOCAL' ? '券前小计' : '合计'}}</text>
         <text class="price-symbol">¥</text>
         <text class="price-int total-price-int">{{pricefmt.int(pricefmt.fen(totalAmount))}}</text>
         <text class="price-dec">{{pricefmt.dec(pricefmt.fen(totalAmount))}}</text>
       </view>
       <view
-        class="checkout-btn btn-primary {{selectedCount === 0 ? 'btn-disabled' : ''}}"
+        class="checkout-btn btn-primary {{checkoutDisabled ? 'btn-disabled' : ''}}"
         bindtap="onCheckout"
       >
-        <text>结算（{{selectedCount}}）</text>
+        <text>{{checkoutText}}</text>
       </view>
     </view>
     <view class="bottom-spacer"></view>

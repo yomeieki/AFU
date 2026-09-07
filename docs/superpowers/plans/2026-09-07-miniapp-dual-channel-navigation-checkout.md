@@ -520,12 +520,13 @@ git commit -m "feat(miniapp): add channel-aware home and category tabs"
 - Modify: `apps/miniapp/pages/cart/index.wxss`
 - Modify: `apps/miniapp/api/cart.js`
 - Create: `tests/miniapp/cart-channel.test.cjs`
+- Modify: `tests/miniapp/navigation.test.cjs`（购物车的跨渠道入口改成双向，旧断言随之更新）
 
 **Interfaces:**
 - Consumes: 当前渠道、`getCart(channel)`、`updateCartItem`、`deleteCartItem`、`getLocalMeta`。
 - Produces: EXPRESS → `/pages/order/confirm`；LOCAL → `/pages/local/confirm`。
 
-- [ ] **Step 1: 写路由与角标失败测试**
+- [x] **Step 1: 写路由与角标失败测试**
 
 测试 LOCAL 购物车结算 URL 必须是 `/pages/local/confirm?cartItemIds=1,2`；EXPRESS 必须是 `/pages/order/confirm?cartItemIds=1,2`；空态“去逛逛”切到当前渠道分类。
 
@@ -533,19 +534,19 @@ Run: `node --test tests/miniapp/cart-channel.test.cjs`
 
 Expected: FAIL because current cart always loads EXPRESS and enters postal checkout。
 
-- [ ] **Step 2: `onShow` 检测渠道变化并重载**
+- [x] **Step 2: `onShow` 检测渠道变化并重载**
 
 记录 `_loadedChannel`；与 app 当前渠道不同时清空旧 items、金额和选择，避免 LOCAL 页面先闪出 EXPRESS 购物车。
 
-- [ ] **Step 3: LOCAL 购物车展示业务差异**
+- [x] **Step 3: LOCAL 购物车展示业务差异**
 
 LOCAL 显示“同城购物车”、券前小计、当前起送差额和营业提示；不在购物车页计算道路距离与配送费。EXPRESS 现有金额与选择行为不变。
 
-- [ ] **Step 4: 结算路由按渠道分流**
+- [x] **Step 4: 结算路由按渠道分流**
 
 LOCAL 传选中 cart ids 到同城结算；EXPRESS 进入原确认页。更新数量或删除后只刷新当前渠道角标。
 
-- [ ] **Step 5: 验证**
+- [x] **Step 5: 验证**
 
 Run: `node --test tests/miniapp/cart-channel.test.cjs tests/miniapp/channel.test.cjs`
 
@@ -553,7 +554,7 @@ Expected: PASS。
 
 （本任务只改既有非 ES5 文件，无新增 js，跳过 ES5 闸门。）
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/miniapp/pages/cart apps/miniapp/api/cart.js tests/miniapp/cart-channel.test.cjs

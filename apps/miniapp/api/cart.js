@@ -1,8 +1,11 @@
 const { request } = require('../utils/request')
+const { normalizeChannel } = require('../utils/channel')
 
-// channel 省略或非 LOCAL 时显式带 EXPRESS，避免依赖服务端默认渠道契约
+// 渠道永远显式带上，不依赖服务端默认值。归一化走 utils/channel 那一份，
+// 与 api/catalog 用同一个来源——两处各写一套「非 LOCAL 就当 EXPRESS」的话，
+// 将来加第三个渠道时必然漏改一处。
 function getCart(channel) {
-  return request({ url: '/cart?channel=' + (channel === 'LOCAL' ? 'LOCAL' : 'EXPRESS') })
+  return request({ url: '/cart?channel=' + normalizeChannel(channel) })
 }
 
 function addToCart(productId, quantity, skuId) {
