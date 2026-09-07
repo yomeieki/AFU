@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { getCategories, createCategory, updateCategory, deleteCategory } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
+import { CenterAction } from '../components/BusinessCenter'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
@@ -98,12 +99,12 @@ export default function Categories() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <CenterAction>
         <Button onClick={openCreate}>
           <Plus className="w-4 h-4" />
           新增分类
         </Button>
-      </div>
+      </CenterAction>
 
       <ChannelTabs value={channel} onChange={setChannel} />
 

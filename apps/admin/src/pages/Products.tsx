@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Plus, Search, Download, QrCode } from 'lucide-react'
 import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
+import { CenterAction } from '../components/BusinessCenter'
 import SpecEditor, { type SkuRow } from '../components/SpecEditor'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
@@ -359,12 +360,12 @@ export default function Products() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <CenterAction>
         <Button onClick={openCreate}>
           <Plus className="w-4 h-4" />
           新增商品
         </Button>
-      </div>
+      </CenterAction>
 
       <ChannelTabs value={channel} onChange={setChannel} />
 

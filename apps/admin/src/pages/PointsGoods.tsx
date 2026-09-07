@@ -16,6 +16,7 @@ import {
   getProducts,
 } from '../api/admin'
 import Button from '../components/ui/Button'
+import { CenterAction } from '../components/BusinessCenter'
 import Modal from '../components/ui/Modal'
 import Pagination from '../components/ui/Pagination'
 import Table from '../components/ui/Table'
@@ -369,18 +370,16 @@ export default function PointsGoods() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-gray-700">随单赠品</p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            顾客在结算页用积分加购、跟着付费订单一起送出；不是单独的 0 元兑换单。
-          </p>
-        </div>
-        <Button onClick={openCreate} className="shrink-0">
+      <CenterAction>
+        <Button onClick={openCreate}>
           <Plus className="w-4 h-4" />
           新增赠品
         </Button>
-      </div>
+      </CenterAction>
+
+      <p className="text-xs text-gray-500">
+        随单赠品：顾客在结算页用积分加购、跟着付费订单一起送出；不是单独的 0 元兑换单。
+      </p>
 
       <div className="bg-white rounded-lg shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <div>

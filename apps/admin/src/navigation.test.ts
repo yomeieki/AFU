@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { activeNavLabel, centerTabs, isChannel, legacyTarget, readChannel, topNavigation } from './navigation.ts'
+import { activeNavLabel, centerTabs, isChannel, legacyTarget, mainNavigation, readChannel, topNavigation, workbenchNav } from './navigation.ts'
 
 test('maps the legacy express orders URL without losing its status', () => {
   assert.deepEqual(legacyTarget('/orders', '?status=PAID'), {
@@ -59,4 +59,20 @@ test('names the active entry from any of its child routes', () => {
   assert.equal(activeNavLabel('/system/status'), '系统维护')
   assert.equal(activeNavLabel('/orders/express'), '订单管理')
   assert.equal(activeNavLabel('/unknown'), '经营概览')
+})
+
+test('keeps the workbench out of the main run of entries', () => {
+  assert.equal(workbenchNav.to, '/workbench')
+  assert.equal(mainNavigation.length, 8)
+  assert.equal(mainNavigation.some((item) => item.to === '/workbench'), false)
+  // 顶栏左侧顺序不能被 workbench 拆出后打乱
+  assert.deepEqual(mainNavigation.map((item) => item.label), [
+    '经营概览', '商品管理', '订单管理', '会员营销',
+    '店铺设置', '用户管理', '推广运营', '系统维护',
+  ])
+})
+
+test('still exposes all nine entries for the narrow-screen grid', () => {
+  assert.equal(topNavigation.length, 9)
+  assert.equal(topNavigation[0], workbenchNav)
 })

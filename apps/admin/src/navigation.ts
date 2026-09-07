@@ -14,11 +14,13 @@ export interface NavItem {
 }
 
 /**
- * 顶栏一级导航，数组顺序即渲染顺序。
- * 第 0 项 /workbench 是唯一实色强调项，由 Layout 按 to 单独取样式，不靠位置隐式约定。
+ * 接单工作台不排在顶栏左侧那一串里：宽屏时它单独贴在右侧、与其余入口之间留空，
+ * 让「今天要干的活」和「去哪儿改配置」在视觉上是两件事。
  */
-export const topNavigation: NavItem[] = [
-  { to: '/workbench', prefix: '/workbench', label: '接单工作台' },
+export const workbenchNav: NavItem = { to: '/workbench', prefix: '/workbench', label: '接单工作台' }
+
+/** 顶栏左侧那一串（不含工作台）。窄屏九宫格用的是下面的 topNavigation。 */
+export const mainNavigation: NavItem[] = [
   { to: '/dashboard', prefix: '/dashboard', label: '经营概览' },
   { to: '/catalog/products', prefix: '/catalog', label: '商品管理' },
   { to: '/orders/local', prefix: '/orders', label: '订单管理' },
@@ -28,6 +30,9 @@ export const topNavigation: NavItem[] = [
   { to: '/promotion/banners', prefix: '/promotion', label: '推广运营' },
   { to: '/system/printer', prefix: '/system', label: '系统维护' },
 ]
+
+/** 九个入口的完整顺序，窄屏 3×3 九宫格按它渲染；工作台仍排第一格。 */
+export const topNavigation: NavItem[] = [workbenchNav, ...mainNavigation]
 
 /** 窄屏顶栏要显示当前所在的一级入口名；认不出时退回「经营概览」，与根路由的落点一致 */
 export const activeNavLabel = (pathname: string) =>

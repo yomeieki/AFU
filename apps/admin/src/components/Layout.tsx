@@ -7,7 +7,7 @@ import {
 import { useAuthStore } from '../store/auth'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useUnsavedSettings } from './UnsavedSettings'
-import { activeNavLabel, topNavigation } from '../navigation'
+import { activeNavLabel, mainNavigation, topNavigation, workbenchNav } from '../navigation'
 
 /**
  * 图标按 to 取，不写进 navigation.ts —— 那个模块要能被 node --test 直接加载，
@@ -108,12 +108,12 @@ export default function Layout() {
           />
         </NavLink>
 
-        {/* ≥960px：单行 9 项。<nav(1200px) 去掉图标与「退出登录」文字，保证不换行也不横滚 */}
+        {/* ≥1000px：左侧一串 8 项（工作台不在其中，见下方右侧）。
+            <nav(1240px) 去掉图标与「退出登录」文字，保证不换行也不横滚 */}
         <nav aria-label="主导航" className="hidden min-w-0 flex-1 items-center gap-0.5 navrow:flex">
-          {topNavigation.map((item) => {
+          {mainNavigation.map((item) => {
             const Icon = navIcons[item.to]
             const active = location.pathname.startsWith(item.prefix)
-            const workbench = item.to === '/workbench'
             const count = badgeOf(item.to)
             return (
               <NavLink
@@ -121,13 +121,9 @@ export default function Layout() {
                 to={item.to}
                 onClick={(event) => handleNavigation(event, item.to)}
                 className={`relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2 text-sm transition-colors ${
-                  workbench
-                    ? active
-                      ? 'bg-brand-600 font-semibold text-white'
-                      : 'bg-brand-50 font-semibold text-brand-700 hover:bg-brand-100'
-                    : active
-                      ? 'bg-brand-50 font-medium text-brand-600'
-                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                  active
+                    ? 'bg-brand-50 font-medium text-brand-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`}
               >
                 <Icon className="hidden h-4 w-4 shrink-0 nav:block" strokeWidth={1.9} />
@@ -135,9 +131,7 @@ export default function Layout() {
                 {count > 0 && (
                   <span
                     title={badgeTitle[item.to]}
-                    className={`ml-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] leading-none ${
-                      workbench && active ? 'bg-white text-brand-600' : 'bg-red-500 text-white'
-                    }`}
+                    className="ml-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] leading-none text-white"
                   >
                     {count > 99 ? '99+' : count}
                   </span>
@@ -147,7 +141,7 @@ export default function Layout() {
           })}
         </nav>
 
-        {/* <960px：顶栏只留当前页名 + 箭头，点开九宫格（规格 §4.3） */}
+        {/* <1000px：顶栏只留当前页名 + 箭头，点开九宫格（规格 §4.3） */}
         <button
           onClick={() => setPanelOpen((v) => !v)}
           aria-expanded={panelOpen}
@@ -161,6 +155,34 @@ export default function Layout() {
         </button>
 
         <div className="ml-auto flex shrink-0 items-center gap-3 md:gap-4">
+          {/* 接单工作台单独贴右：左侧那一串是「去哪儿改配置」，这里是「今天要干的活」，
+              中间靠 nav 的 flex-1 撑开空白分开，再用一道竖线收边 */}
+          <NavLink
+            to={workbenchNav.to}
+            onClick={(event) => handleNavigation(event, workbenchNav.to)}
+            className={`relative hidden h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors navrow:inline-flex ${
+              location.pathname.startsWith(workbenchNav.prefix)
+                ? 'bg-brand-600 text-white'
+                : 'bg-brand-50 text-brand-700 hover:bg-brand-100'
+            }`}
+          >
+            <LayoutGrid className="h-4 w-4 shrink-0" strokeWidth={1.9} />
+            {workbenchNav.label}
+            {badgeOf(workbenchNav.to) > 0 && (
+              <span
+                title={badgeTitle[workbenchNav.to]}
+                className={`ml-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] leading-none ${
+                  location.pathname.startsWith(workbenchNav.prefix)
+                    ? 'bg-white text-brand-600'
+                    : 'bg-red-500 text-white'
+                }`}
+              >
+                {badgeOf(workbenchNav.to) > 99 ? '99+' : badgeOf(workbenchNav.to)}
+              </span>
+            )}
+          </NavLink>
+          <span className="hidden h-6 w-px shrink-0 bg-gray-200 navrow:block" />
+
           <button
             onClick={handleBellClick}
             className="relative text-gray-500 transition-colors hover:text-brand-500"
@@ -179,7 +201,7 @@ export default function Layout() {
             className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-red-500"
           >
             <LogOut className="h-4 w-4" />
-            {/* 960–1199 档要把宽度让给 9 个导航项：这里只留图标，文字到 ≥1200 才回来 */}
+            {/* 1000–1239 档要把宽度让给导航项：这里只留图标，文字到 ≥1240 才回来 */}
             <span className="hidden nav:inline">退出登录</span>
           </button>
         </div>

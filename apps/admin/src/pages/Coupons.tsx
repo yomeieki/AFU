@@ -7,6 +7,7 @@ import {
   getCouponTemplateIssued,
 } from '../api/admin'
 import Button from '../components/ui/Button'
+import { CenterAction } from '../components/BusinessCenter'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
@@ -333,12 +334,12 @@ export default function Coupons() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <CenterAction>
         <Button onClick={openCreate}>
           <Plus className="w-4 h-4" />
           新建模板
         </Button>
-      </div>
+      </CenterAction>
 
       <div className="bg-white rounded-lg shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <div>
