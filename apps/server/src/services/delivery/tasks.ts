@@ -5,7 +5,6 @@
 import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { config } from '../../config'
-import { AppError } from '../../middlewares/error'
 import { getLocalSettings, isOpenNow } from '../local-settings'
 import { getExpressSettings } from '../express-settings'
 import { rejectCancelRequest } from '../cancel-request'
@@ -175,14 +174,12 @@ export async function autoRejectStaleCancelRequests(min?: number): Promise<numbe
   })
   let n = 0
   for (const o of rows) {
-    // 与人工驳回同一套写法：rejectCancelRequest 内部的条件写带 cancelRequestedAt 非空，
-    // 店员在这一瞬间抢先处理了就会撞上 42204（count=0），这里接住跳过，不算失败。
-    try {
-      await rejectCancelRequest(o.id, 'AUTO')
-    } catch (e) {
-      if (e instanceof AppError && e.code === 42204) continue
-      throw e
-    }
+    // requireStatus:'PREPARING' 走 main 上旧版内联实现的严格口径——单条 updateMany 精确匹配
+    // status，而不是「非终态都算」（那是手动驳回的口径，见 cancel-request.ts 顶注）：这里的
+    // rows 是几十毫秒前的快照，店员这瞬间把单子挪到了 SHIPPED/REFUNDING 之类，旧口径会让
+    // updateMany 天然匹配不上（count=0），返回 null 静默跳过；不需要订单详情所以 returnOrder:false。
+    const moved = await rejectCancelRequest(o.id, 'AUTO', { requireStatus: 'PREPARING', returnOrder: false })
+    if (!moved) continue
     n++
     const threshold = o.deliveryType === 'LOCAL' ? localThreshold : expressThreshold
     // 告知而不是告警：这是预期内的规则生效，不是异常。但店员该知道「有个顾客想取消、

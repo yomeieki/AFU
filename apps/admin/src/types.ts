@@ -498,6 +498,8 @@ export interface ExpressBookingQuotes {
   quotedAt: string | null
   suggestedSlot: { dayType: '今天' | '明天' | '后天'; pickupStart: string | null; pickupEnd: string | null }
   couriers: { code: string; label: string }[]
+  /** 邮寄设置 pickup.defaultRemark，弹窗备注首帧预填用（spec §5.2） */
+  defaultRemark: string
 }
 
 /** 工作台看板卡片。与服务端 GET /admin/workbench/snapshot 的 toCard() 同构 */

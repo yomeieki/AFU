@@ -99,11 +99,13 @@ export async function getBookingQuotes(
   const w = weightKg ?? (await orderWeightKg(o))
   const snap = (o.expressQuoteSnapshot ?? null) as { quotes?: CourierQuote[]; weightKg?: number } | null
   const fresh = Date.now() - o.createdAt.getTime() < BOOKING_QUOTE_STALE_MS
+  // defaultRemark 带给预约弹窗当备注预填（spec §5.2）：跟着这次已经查好的 settings 一起返回，
+  // 不用再让前端/路由单独多打一次 GET /api/admin/settings/express。
   if (snap?.quotes?.length && snap.weightKg === w && fresh) {
-    return { quotes: snap.quotes, weightKg: w, customerFeeFen: o.shippingFee, fromSnapshot: true, quotedAt: o.createdAt.toISOString() }
+    return { quotes: snap.quotes, weightKg: w, customerFeeFen: o.shippingFee, fromSnapshot: true, quotedAt: o.createdAt.toISOString(), defaultRemark: s.pickup.defaultRemark }
   }
   const live = (await fetchCourierQuotes(s, 0, o.receiverFullAddress, w, { ignoreMode: true })) ?? []
-  return { quotes: live, weightKg: w, customerFeeFen: o.shippingFee, fromSnapshot: false, quotedAt: new Date().toISOString() }
+  return { quotes: live, weightKg: w, customerFeeFen: o.shippingFee, fromSnapshot: false, quotedAt: new Date().toISOString(), defaultRemark: s.pickup.defaultRemark }
 }
 
 export async function createBooking(i: { orderId: number; kuaidicom: string; serviceType?: string | null; weightKg?: number; slot: SlotInput; remark?: string | null; operator: string }) {
@@ -268,10 +270,11 @@ export async function reconcileUnknownBooking(bookingId: number): Promise<'CLAIM
   const b = await prisma.expressBooking.findUnique({ where: { id: bookingId } })
   if (!b || b.status !== 'UNKNOWN') return 'STILL_UNKNOWN'
   let d
-  try { d = await getExpressProvider().detail({ taskId: b.taskId, thirdOrderId: b.bookingNo }) } catch { return 'STILL_UNKNOWN' }
+  try { d = await getExpressProvider().detail({ taskId: b.taskId, thirdOrderId: b.bookingNo }) }
+  catch { await prisma.expressBooking.update({ where: { id: b.id }, data: { reconcileTries: { increment: 1 } } }); return 'STILL_UNKNOWN' }
   if (!d.found) { await prisma.expressBooking.update({ where: { id: b.id }, data: { reconcileTries: { increment: 1 } } }); return 'STILL_UNKNOWN' }
   await prisma.$transaction(async (tx) => {
-    const moved = await tx.expressBooking.updateMany({ where: { id: b.id, status: 'UNKNOWN' }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, taskId: d.taskId ?? b.taskId, kdOrderId: d.kdOrderId ?? b.kdOrderId, kuaidinum: d.kuaidinum ?? b.kuaidinum, courierName: d.courierName ?? undefined, courierMobile: d.courierMobile ?? undefined } })
+    const moved = await tx.expressBooking.updateMany({ where: { id: b.id, status: 'UNKNOWN' }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, taskId: d.taskId ?? b.taskId, kdOrderId: d.kdOrderId ?? b.kdOrderId, kuaidinum: d.kuaidinum ?? b.kuaidinum, courierName: d.courierName ?? undefined, courierMobile: d.courierMobile ?? undefined, errorCode: null, failReason: null } })
     if (moved.count === 0) return
     await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', statusDesc: `对账认领：快递100 有单（status=${d.status ?? '?'}）` })
     if (d.kuaidinum) await tx.shipment.upsert({ where: { orderId: b.orderId }, update: { expressCompany: COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom, expressNo: d.kuaidinum }, create: { orderId: b.orderId, orderNo: b.orderNo, deliveryType: 'EXPRESS', expressCompany: COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom, expressNo: d.kuaidinum } })

@@ -1081,7 +1081,9 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
         <div className="wb__strip wb__strip--warn">
           <span>顾客要退菜{autoRejectLeft(cancelState.acceptedAt, graceMin, now) ?? ''}</span>
           <span style={{ display: 'flex', gap: 4 }}>
-            <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onReject() }}>驳回</button>
+            {/* 同城 LOCAL 在 main 上从来没有手动驳回按钮，只有超时自动驳回——批次二「同城零行为变化」
+                的硬约束，这里只加邮寄，不动同城。产品后续想给同城也开这个口子，去掉这个 channel 判断即可。 */}
+            {card.channel === 'EXPRESS' && <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onReject() }}>驳回</button>}
             <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>同意退款</button>
           </span>
         </div>
@@ -2116,7 +2118,7 @@ export default function Workbench() {
       case 'reject':
         return <RejectModal order={o} channel={ch} onClose={close} onDone={async (m) => { await afterAction(m); closeDrawer() }} />
       case 'book':
-        return <ExpressBookingModal orderId={o.id} defaultRemark="食品请勿重压" onClose={close} onDone={afterAction} />
+        return <ExpressBookingModal orderId={o.id} onClose={close} onDone={afterAction} />
       case 'modifySlot':
         return <ModifySlotModal orderId={o.id} booking={card.express?.booking ?? null} onClose={close} onDone={afterAction} />
       case 'cancelRefund':

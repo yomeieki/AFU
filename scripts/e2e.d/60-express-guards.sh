@@ -14,6 +14,16 @@ R=$(req POST "/api/admin/orders/$X60_O/refund" "$AT" '{"amount":1,"reason":"e2e 
 req POST "/api/admin/express/orders/$X60_O/booking/cancel" "$AT" '{}' >/dev/null
 R=$(req POST "/api/admin/orders/$X60_O/ship" "$AT" '{"expressCompany":"顺丰","expressNo":"X60"}'); assert_eq "取消预约后可手填发货" "$(code "$R")" "0"
 
+echo "-- ①b 取件后（PICKED）：42263 不再拦全额退款 --"
+X60_O7=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X60_O7/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}' >/dev/null
+X60_BN7=$(req GET "/api/admin/express/orders/$X60_O7/booking" "$AT" | jq -r .data.booking.bookingNo)
+x59_cb "$X60_BN7" 10 '{"kuaidinum":"JD-PICKED-60"}' >/dev/null
+assert_eq "已取件：预约 PICKED" "$(req GET "/api/admin/express/orders/$X60_O7/booking" "$AT" | jq -r .data.booking.status)" "PICKED"
+assert_eq "已取件：订单 SHIPPED" "$(order_status $X60_O7)" "SHIPPED"
+X60_AMT7=$(req GET "/api/admin/orders/$X60_O7" "$AT" | jq -r .data.actualAmount)
+R=$(req POST "/api/admin/orders/$X60_O7/refund" "$AT" "{\"amount\":$X60_AMT7,\"reason\":\"e2e 取件后全额退款\"}"); assert_eq "取件后全额退款不再被 42263 拦：code 0" "$(code "$R")" "0"
+
 echo "-- ② 顾客取消窗口（EXPRESS）：接单前秒退不变；接单后 10 分钟内可申请；窗口 0 关闭 --"
 X60_O2=$(make_paid_order)
 R=$(req POST "/api/orders/$X60_O2/cancel-request" "$UT" '{"note":"不要了"}'); assert_eq "未接单不能申请 42229" "$(code "$R")" "42229"

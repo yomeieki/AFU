@@ -18,7 +18,7 @@ import { notifyRefundResult } from './order-notify'
 import { notifySystemAlert } from './notify'
 import { sendRefundSubscribeMessage } from './subscribe-message'
 import { DELIVERY_STATUS_LABEL } from './delivery/state'
-import { BOOKING_STATUS_LABEL } from './delivery/express-booking-state'
+import { BOOKING_STATUS_LABEL, BOOKING_ACTIVE } from './delivery/express-booking-state'
 import { deductPointsOnRefund } from './member/points'
 import { enqueueOrderTicket } from './ticket'
 
@@ -113,8 +113,15 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   }
   // 42263：邮寄单有活跃取件预约（快递员可能已在路上）先取消预约再退款——同 42221 的理由。
   // 只拦全额：部分退款不碰货、不动订单状态，放行。
+  // status 必须限定活跃态（PENDING/BOOKED/ACCEPTED/UNKNOWN）——activeOrderId 在 PICKED 之后仍不清空
+  // （只作双单防御用），不限定会把「已取件」的订单也拦住，导致 cancelBooking 救不回来
+  // （cancelBooking 只接受 BOOKED/ACCEPTED，见 42267）。取件后走 §4.3「只走现有申请售后」。
+  // PENDING 也要拦：bOrder 正在路上，此刻退款可能与一张即将成立的预约撞车；超 2 分钟可由店员作废后再退。
   if (isFull && order.deliveryType === 'EXPRESS' && !['COMPLETED', 'REFUNDED'].includes(order.status)) {
-    const active = await prisma.expressBooking.findFirst({ where: { activeOrderId: orderId }, select: { status: true } })
+    const active = await prisma.expressBooking.findFirst({
+      where: { activeOrderId: orderId, status: { in: [...BOOKING_ACTIVE, 'PENDING'] } },
+      select: { status: true },
+    })
     if (active) throw new AppError(42263, `该订单有取件预约（${BOOKING_STATUS_LABEL[active.status] ?? active.status}），请先取消预约再退款`)
   }
   if (!order.payment || order.payment.status !== 'SUCCESS') {

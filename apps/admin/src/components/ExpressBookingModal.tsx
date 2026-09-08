@@ -22,8 +22,11 @@ export function slotError(day: Day, start: string, end: string, kuaidicom: strin
   return ''
 }
 const shanghaiNowMin = () => { const d = new Date(Date.now() + 8 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes() }
+// 服务端从批次二起在 quotes 响应里带 defaultRemark（邮寄设置 pickup.defaultRemark，spec §5.2）；
+// 这个字面量只是首帧还没拿到响应、或者老版本服务端没给这个字段时的兜底，不再是唯一真相来源。
+const FALLBACK_REMARK = '食品请勿重压'
 
-export default function ExpressBookingModal({ orderId, defaultRemark, onClose, onDone }: { orderId: number; defaultRemark: string; onClose: () => void; onDone: (msg: string) => void }) {
+export default function ExpressBookingModal({ orderId, onClose, onDone }: { orderId: number; onClose: () => void; onDone: (msg: string) => void }) {
   const [q, setQ] = useState<ExpressBookingQuotes | null>(null)
   const [loading, setLoading] = useState(true)
   const [weight, setWeight] = useState('')
@@ -31,7 +34,7 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
   const [day, setDay] = useState<Day>('今天')
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
-  const [remark, setRemark] = useState(defaultRemark)
+  const [remark, setRemark] = useState(FALLBACK_REMARK)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // 首次加载才预填快递默认选中项与建议时段；kuaidicom 会在重量变化重新查价时被清空
@@ -51,6 +54,7 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
         setKuaidicom(cheapest?.kuaidicom ?? '')
         setDay(r.suggestedSlot.dayType)
         setStart(clampToHours(r.suggestedSlot.pickupStart, '09:00')); setEnd(clampToHours(r.suggestedSlot.pickupEnd, '11:00'))
+        setRemark(r.defaultRemark || FALLBACK_REMARK)
       } else {
         // 重量改了会重新查价，报价可能跟着变——已选中的那家如果这次查出来是「无价」，
         // 必须把选择清空，逼店员重新挑一家，而不是让「无价不可提交」的按钮悄悄卡死在原地不给出理由
