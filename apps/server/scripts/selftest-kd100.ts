@@ -5,6 +5,7 @@
 import assert from 'assert'
 import crypto from 'crypto'
 import { _sign, _mapReturnCode, _buildOrderParam, kd100Provider } from '../src/services/delivery/kd100'
+import { signKd100 } from '../src/services/delivery/kd100-client'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -59,6 +60,9 @@ t('回调字段截断（statusDesc 500 字 → 255）', () => {
   const param = JSON.stringify({ orderId:'K', status:'510', statusDesc: '异'.repeat(500), updateTime: null })
   const r = kd100Provider.verifyAndParseCallback({ taskId:'T', param, sign: md5U(param + salt) }, salt)
   assert.ok(r.ok && (r.payload.statusDesc ?? '').length === 255)
+})
+t('_sign 与 kd100-client.signKd100 逐字节一致', () => {
+  assert.strictEqual(_sign('{"x":"中文"}', '1725400000000', 'K', 'S'), signKd100('{"x":"中文"}', '1725400000000', 'K', 'S'))
 })
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)
 
