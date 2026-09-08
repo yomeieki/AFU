@@ -80,15 +80,15 @@
     <text class="courier-route-distance" wx:if="{{courierDistanceText}}">骑手距您约 {{courierDistanceText}} km</text>
   </view>
 
-  <view class="card local-cancel-card" wx:if="{{order.isLocal && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelRejected || order.showLocalCancelUnavailable)}}">
+  <view class="card local-cancel-card" wx:if="{{(order.isLocal || order.isExpress) && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelRejected || order.showLocalCancelUnavailable)}}">
     <view class="local-cancel-submitted" wx:if="{{order.cancelRequestedAt}}">取消申请已提交，商家会尽快处理</view>
     <!-- 申请被驳回（店员点的或超时自动）。不写明是哪一种：对顾客而言结论一样，
          而「系统自动回绝」听起来比「商家考虑后未同意」更冷。 -->
     <view class="local-cancel-unavailable" wx:elif="{{order.showLocalCancelRejected}}">商家未同意取消，订单继续制作中。如有问题请联系商家</view>
     <view wx:elif="{{order.canRequestCancel}}">
       <text class="local-cancel-title">可申请取消</text>
-      <text class="local-cancel-copy" wx:if="{{graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.localCancelDeadlineText}}）</text>
-      <text class="local-cancel-copy" wx:elif="{{order.localCancelDeadlineText}}">可申请取消截止 {{order.localCancelDeadlineText}}</text>
+      <text class="local-cancel-copy" wx:if="{{graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.cancelDeadlineText}}）</text>
+      <text class="local-cancel-copy" wx:elif="{{order.cancelDeadlineText}}">可申请取消截止 {{order.cancelDeadlineText}}</text>
     </view>
     <view class="local-cancel-unavailable" wx:else>订单已开始制作，如有问题请联系商家</view>
   </view>
@@ -240,8 +240,18 @@
     </view>
   </view>
 
+  <!-- 邮寄单预约/接单/取件阶段：发货前用这张卡承载单号，避免与下方发货后物流卡重复 -->
+  <view class="card" wx:if="{{order.showExpressStage}}">
+    <view class="card-title">物流信息</view>
+    <view class="express-stage">{{order.expressStageText}}</view>
+    <view class="info-row" wx:if="{{order.expressBooking && order.expressBooking.kuaidinum && order.status !== 'SHIPPED' && order.status !== 'COMPLETED'}}">
+      <text class="info-label">快递单号</text>
+      <text class="info-value">{{order.expressBooking.kuaidinum}}</text>
+    </view>
+  </view>
+
   <!-- Shipment -->
-  <view class="card" wx:if="{{!order.isLocal && order.shipment}}">
+  <view class="card" wx:if="{{!order.isLocal && order.shipment && (order.status === 'SHIPPED' || order.status === 'COMPLETED')}}">
     <view class="card-title">物流信息</view>
     <view class="info-row">
       <text class="info-label">快递公司</text>
@@ -272,7 +282,7 @@
   <view class="cancel-btn" wx:if="{{order.canSelfCancel}}" bindtap="onCancelOrder">
     <text>{{order.status === 'PENDING_PAYMENT' ? '取消订单' : '申请退款'}}</text>
   </view>
-  <view class="cancel-btn" wx:if="{{order.isLocal && order.canRequestCancel}}" bindtap="onRequestCancel">
+  <view class="cancel-btn" wx:if="{{(order.isLocal || order.isExpress) && order.canRequestCancel}}" bindtap="onRequestCancel">
     <text>申请取消</text>
   </view>
   <view class="cancel-btn" wx:if="{{order.canApplyAfterSale}}" bindtap="onApplyAfterSale">

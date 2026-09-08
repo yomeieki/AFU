@@ -255,12 +255,24 @@ function decorateOrder(order) {
       })
     : null
   var isLocal = order.deliveryType === 'LOCAL'
+  var isExpress = order.deliveryType === 'EXPRESS'
+  var eb = order.expressBooking
+  var expressStageText = ''
+  if (isExpress && ['PAID', 'PREPARING', 'SHIPPED'].indexOf(order.status) !== -1) {
+    if (!eb || eb.status === 'CANCELLED') expressStageText = order.status === 'SHIPPED' ? '' : '商家备货中'
+    else if (eb.status === 'BOOKED' || eb.status === 'UNKNOWN') expressStageText = '已预约快递员上门取件' + (eb.slotText ? ' · ' + eb.slotText : '')
+    else if (eb.status === 'ACCEPTED') expressStageText = '快递员已接单' + (eb.courierName ? ' · ' + eb.courierName : '') + (eb.slotText ? ' · ' + eb.slotText : '')
+    else if (eb.status === 'PICKED' || eb.status === 'DELIVERED') expressStageText = '已取件 · ' + (eb.courierLabel || '') + (eb.kuaidinum ? ' ' + eb.kuaidinum : '')
+  }
   var delivery = order.delivery
   var deliveryStatus = delivery && delivery.status
   var isDeliveryNeutral = !!deliveryStatus && DELIVERY_NEUTRAL.indexOf(deliveryStatus) !== -1
   return Object.assign({}, order, {
     statusLabel: STATUS_LABEL[order.status] || order.status,
     isLocal: isLocal,
+    isExpress: isExpress,
+    expressStageText: expressStageText,
+    showExpressStage: !!expressStageText,
     deliveryStatusLabel: deliveryStatus ? (DELIVERY_CUSTOMER_LABEL[deliveryStatus] || deliveryStatus) : '',
     deliveryNeutralHint: isDeliveryNeutral ? '如超过预计时间请联系商家' : '',
     showCourierCard: !!delivery && COURIER_LIVE_STATUSES.indexOf(deliveryStatus) !== -1,
@@ -275,12 +287,12 @@ function decorateOrder(order) {
       !order.acceptedAt ? '商家接单后显示'
         : (delivery && delivery.pickedUpAt ? '' : '骑手取货后更准')
     ),
-    localCancelDeadlineText: isLocal ? deadlineText(order.cancelRequestDeadline) : '',
+    cancelDeadlineText: deadlineText(order.cancelRequestDeadline),
     // 申请被驳回过（人工或超时自动）。顾客上一次看到的是「已提交，商家会尽快处理」，
     // 不给个结论他会一直等——而驳回把 cancelRequestedAt 清空了，只能靠这条痕迹。
-    showLocalCancelRejected: isLocal && !order.cancelRequestedAt && !!order.cancelRequestRejectedAt
+    showLocalCancelRejected: (isLocal || isExpress) && !order.cancelRequestedAt && !!order.cancelRequestRejectedAt
       && ['PAID', 'PREPARING'].indexOf(order.status) !== -1,
-    showLocalCancelUnavailable: isLocal && order.status === 'PREPARING' && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true,
+    showLocalCancelUnavailable: (isLocal || isExpress) && order.status === 'PREPARING' && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true,
     // 自助取消/退款：待付款，或已付款且商家未接单
     canSelfCancel: order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt),
     totalAmountText: formatPrice(order.totalAmount),
@@ -388,6 +400,7 @@ Page({
           courierLoc: null,
           courierDistanceText: '',
           liveEtaText: '',
+          graceMin: order.cancelGraceMin || 0,
         })
         if (order.deliveryType === 'LOCAL') self.loadStoreLoc()
         if (self._pageShown) self.startCourierPoll()
@@ -437,7 +450,7 @@ Page({
     getLocalMeta()
       .then(function(meta) {
         self._storeLoc = meta && meta.store ? meta.store : null
-        self.setData({ storeLoc: self._storeLoc, graceMin: meta && meta.acceptGraceMin != null ? meta.acceptGraceMin : '' })
+        self.setData({ storeLoc: self._storeLoc })
       })
       .catch(function() {})
       .then(function() {
