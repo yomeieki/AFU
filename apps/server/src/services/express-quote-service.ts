@@ -34,8 +34,9 @@ function senderAddress(): Promise<string> {
  * key 里带地址内容指纹：`PUT /api/addresses/:id` 是原地改（同 id 换省市区/详细地址），
  * 光用 addressId 会在地址改动后 15 分钟内继续吐改动前那份地址的缓存报价。
  */
-export async function fetchCourierQuotes(s: ExpressSettings, addressId: number, receiverFullAddress: string, weightKg: number): Promise<CourierQuote[] | null> {
-  if (s.fee.mode !== 'QUOTE') return null
+/** opts.ignoreMode：店员端预约弹窗要看各家价，与顾客运费口径（QUOTE/TABLE）无关，TABLE 模式下也查 */
+export async function fetchCourierQuotes(s: ExpressSettings, addressId: number, receiverFullAddress: string, weightKg: number, opts: { ignoreMode?: boolean } = {}): Promise<CourierQuote[] | null> {
+  if (s.fee.mode !== 'QUOTE' && !opts.ignoreMode) return null
   const key = `${addressId}:${addressHash(receiverFullAddress)}:${weightKg}`
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < EXPRESS_QUOTE_TTL_MS) return hit.quotes

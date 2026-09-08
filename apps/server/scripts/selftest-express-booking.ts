@@ -9,6 +9,7 @@ import { _buildBookParam, _parseBook, _parseDetail, _parseCallbackParam, kd100Ex
 import { expressMockProvider, queueExpressDirective, resetExpressMock, getExpressCalls } from '../src/services/delivery/express-mock'
 import crypto from 'crypto'
 import { ProviderError } from '../src/services/delivery/types'
+import { validateSlot, suggestSlot, pickupDateOf } from '../src/services/delivery/express-booking'
 
 let pass = 0
 function t(name: string, fn: () => void | Promise<void>) {
@@ -115,6 +116,26 @@ await t('mock：book 默认成功返 taskId/kdOrderId/单号（韵达单号为�
   queueExpressDirective({ kind: 'ok', found: true, status: 1, kuaidinum: 'N9', taskId: 'T9', kdOrderId: 'O9' }, 'detail')
   const d1 = await expressMockProvider.detail({ taskId: null, thirdOrderId: 'E9-9' })
   assert.ok(d1.found && d1.status === 1 && d1.kuaidinum === 'N9')
+})
+
+// 2026-09-09 10:00 上海 = 02:00Z
+const T10 = new Date('2026-09-09T02:00:00Z')
+const T19 = new Date('2026-09-09T11:00:00Z')   // 19:00 上海
+await t('时段校验：格式/间隔/截单/顺丰必填', () => {
+  assert.strictEqual(validateSlot({ dayType: '今天', pickupStart: '14:00', pickupEnd: '16:00' }, 'jd', T10), null)
+  assert.match(validateSlot({ dayType: '今天', pickupStart: '14:00', pickupEnd: '14:30' }, 'jd', T10)!, /1 小时/)
+  assert.match(validateSlot({ dayType: '今天', pickupStart: '09:00', pickupEnd: '11:00' }, 'jd', T10)!, /2 小时/)   // 11:00 结束，现在 10:00 → 不足 2h
+  assert.strictEqual(validateSlot({ dayType: '明天', pickupStart: '09:00', pickupEnd: '11:00' }, 'jd', T19), null)
+  assert.match(validateSlot({ dayType: '今天', pickupStart: '9:00', pickupEnd: '11:00' }, 'jd', T10)!, /HH:mm/)
+  assert.match(validateSlot({ dayType: '今天', pickupStart: null, pickupEnd: null }, 'shunfeng', T10)!, /顺丰/)
+  assert.strictEqual(validateSlot({ dayType: '明天', pickupStart: null, pickupEnd: null }, 'jd', T10), null)
+  assert.match(validateSlot({ dayType: '大后天' as never, pickupStart: null, pickupEnd: null }, 'jd', T10)!, /今天/)
+})
+await t('预填：现在+2h 向上取整点起两小时；晚于 20:00 翻到明天 09:00–11:00', () => {
+  assert.deepStrictEqual(suggestSlot(T10), { dayType: '今天', pickupStart: '12:00', pickupEnd: '14:00' })
+  assert.deepStrictEqual(suggestSlot(new Date('2026-09-09T02:10:00Z')), { dayType: '今天', pickupStart: '13:00', pickupEnd: '15:00' })
+  assert.deepStrictEqual(suggestSlot(T19), { dayType: '明天', pickupStart: '09:00', pickupEnd: '11:00' })
+  assert.strictEqual(pickupDateOf('今天', T10), '2026-09-09'); assert.strictEqual(pickupDateOf('后天', T19), '2026-09-11')
 })
 
 console.log(`\n通过 ${pass} 条${process.exitCode ? '，有失败' : ''}`)

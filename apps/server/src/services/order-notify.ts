@@ -134,6 +134,22 @@ export function notifyLocalDeliveryAlert(title: string, lines: string[], opts: {
   if (pushplusToken) sendPushPlus(pushplusToken, title, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }
 
+/** 邮寄取件预约告警（揽货失败/快递100 取消/下单失败/余额不足/超时未接单/时段过未取件/待核对） */
+export function notifyExpressAlert(title: string, lines: string[], opts: { key?: string } = {}): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  let suppressedLine = ''
+  if (opts.key) {
+    const { send, suppressed } = shouldSendAlert(opts.key)
+    if (!send) return
+    if (suppressed > 0) suppressedLine = `\n> （期间抑制 ${suppressed} 次同类告警）`
+  }
+  const content = [`**📦 ${title}**`, ...lines.map((l) => `> ${l}`)].join('\n') + suppressedLine
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, title, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
 /** 退款结果通知（微信回调或同步返回）。status: SUCCESS / ABNORMAL / CLOSED */
 export function notifyRefundResult(
   order: { orderNo: string; receiverName: string; receiverPhone: string },
