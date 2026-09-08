@@ -14,8 +14,10 @@ import { payLimiter } from '../middlewares/rate-limit'
 import { AFTER_SALE_REASONS, AFTER_SALE_REASON_LABEL, AfterSaleReason, payExpireAtOf } from '../utils/constants'
 import { initiateRefund, remainingRefundable } from '../services/refund'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/subscribe-message'
-import { getShippingSettings, calcShippingFee } from '../services/settings'
 import { loadOrderLines, assertLinesSellable } from '../services/order-lines'
+import { getExpressSettings, findRegionGroup, legacyShippingView } from '../services/express-settings'
+import { calcPackageWeightKg, calcExpressFee, itemsHash, verifyExpressQuote, FeeCalc } from '../services/express-quote'
+import { fetchCourierQuotes, MAX_ADDRESS_BYTES } from '../services/express-quote-service'
 import { channelOfDeliveryType } from '../utils/channel'
 import {
   getLocalSettings, isOpenNow, isPaused, nextOpenText, calcLocalFee, verifyQuote, haversineM,
@@ -98,7 +100,7 @@ const createOrderSchema = z
     directItem: directItemSchema.optional(),
     addressId: z.number().int().positive('请选择收货地址'),
     deliveryType: z.enum(['EXPRESS', 'LOCAL']).default('EXPRESS'),
-    quoteToken: z.string().max(512).optional(),
+    quoteToken: z.string().max(1024).optional(),
     // 备注上限 20 字（PO 2026-09-06 定）。不是字节预算问题——255 字也只让同城双联从 54 件降到
     // 34 件，远超实际量。真正的原因是**票面可读性**：备注用 <CB> 渲染（居中放大加粗，一个字占
     // 两列），255 字在 58mm 纸上要占约 17 行放大字，把订单信息全挤没，而且配送联厨房联各印一遍。
@@ -236,6 +238,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       receiverLatE6?: number; receiverLngE6?: number; receiverPoiName?: string | null
       distanceM?: number; distanceSource?: string; estimatedDeliveryAt?: Date
     } = {}
+    let expressSnapshot: { expressQuoteSnapshot?: Prisma.InputJsonValue; expressRegionGroup?: string; expressWeightG?: number } = {}
     if (deliveryType === 'LOCAL') {
       const s = await getLocalSettings()
       if (!s.enabled) throw new AppError(42226, '同城配送暂未开通')
@@ -327,18 +330,51 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         // 这里**不给这个字段**（列本身可空），接单时才落值。
       }
     } else {
-      // 运费与起送门槛都按**商品小计**判断（不含运费，见 services/settings.ts）
-      const shipping = await getShippingSettings()
-      if (shipping.minOrderAmount > 0 && totalAmount < shipping.minOrderAmount) {
-        throw new AppError(
-          42210,
-          `订单满 ¥${(shipping.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`
-        )
+      /**
+       * 邮寄运费（批次一，spec §3/§4.1）。口径与同城一致：包邮/起送/不寄送按**下单时**的设置与**真实**小计判；
+       * 报价数字只在两种来源里二选一——
+       *   有凭证：验签 + 地址 + 清单指纹三项全对才信，QUOTE 口径锁凭证里的 quotedFeeFen（15 分钟），
+       *           TABLE 口径现算（表就在设置里）；任一不符 → 42261 让客户端重报价。
+       *   无凭证：老版本小程序。服务端自己走一遍同样的查价（带缓存）与计算——不能拒，小程序发版有滞后。
+       * 两条路都不信客户端的任何金额。
+       */
+      const s = await getExpressSettings()
+      const group = findRegionGroup(s, address.province)
+      if (group.blocked) throw new AppError(42260, '该地区暂不支持邮寄')
+      if (Buffer.byteLength(address.fullAddress, 'utf8') > MAX_ADDRESS_BYTES) throw new AppError(42262, '收货地址过长，请精简后再试')
+      if (s.minOrderAmountFen > 0 && totalAmount < s.minOrderAmountFen) {
+        throw new AppError(42210, `订单满 ¥${(s.minOrderAmountFen / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`)
       }
-      shippingFee = calcShippingFee(totalAmount, shipping)
+      const hash = itemsHash(lines, gifts ?? [])
+      const weightKg = calcPackageWeightKg(
+        [...lines.map((l) => ({ netWeightG: l.product.netWeightG, quantity: l.quantity })), ...giftLines.map((g) => ({ netWeightG: g.netWeightG, quantity: g.quantity }))],
+        s.weight,
+      )
+      const quoted = quoteToken ? verifyExpressQuote(quoteToken) : null
+      if (quoteToken && (!quoted || quoted.addressId !== address.id || quoted.itemsHash !== hash)) {
+        throw new AppError(42261, '运费已更新，请重新确认')
+      }
+      let fee: FeeCalc, snapshotQuotes: { kuaidicom: string; serviceType: string | null; priceFen: number | null }[]
+      if (quoted) {
+        fee = calcExpressFee(s, group, quoted.weightKg, null, totalAmount, quoted.feeSource === 'QUOTE' ? { quotedFeeFen: quoted.quotedFeeFen } : null)
+        snapshotQuotes = quoted.quotes
+      } else {
+        const live = await fetchCourierQuotes(s, address.id, address.fullAddress, weightKg)
+        fee = calcExpressFee(s, group, weightKg, live, totalAmount)
+        snapshotQuotes = (live ?? []).map((q) => ({ kuaidicom: q.kuaidicom, serviceType: q.serviceType, priceFen: q.priceFen }))
+      }
+      shippingFee = fee.feeFen
+      expressSnapshot = {
+        expressQuoteSnapshot: {
+          feeFen: fee.feeFen, quotedFeeFen: fee.quotedFeeFen, feeSource: fee.feeSource, groupName: group.name,
+          weightKg: quoted?.weightKg ?? weightKg, itemsHash: hash, fromToken: !!quoted, quotes: snapshotQuotes,
+        },
+        expressRegionGroup: group.name,
+        expressWeightG: Math.round((quoted?.weightKg ?? weightKg) * 1000),
+      }
     }
     // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 券 → 运费（**按券前小计**判包邮/起送）→ 实付。
-    // 上面两条渠道分支里的 calcLocalFee / calcShippingFee / belowMin / minOrderAmount
+    // 上面两条渠道分支里的 calcLocalFee / calcExpressFee / belowMin / minOrderAmount
     // 收到的都是券前 totalAmount，**一个字都没动**——顾客不因为用券失去包邮或跌破起送线。
     const discount = coupon?.discount ?? 0
     const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee })
@@ -382,6 +418,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           shippingFee,
           actualAmount,
           deliveryType,
+          ...expressSnapshot,
           remark,
           receiverName: address.receiverName,
           receiverPhone: address.receiverPhone,
@@ -528,7 +565,7 @@ router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => 
     success(res, {
       subscribeTemplateIds: getSubscribeTemplateIds(),
       payTimeoutMin: config.order.payTimeoutMin,
-      shipping: await getShippingSettings(),
+      shipping: legacyShippingView(await getExpressSettings()),
     })
   } catch (e) {
     next(e)

@@ -310,6 +310,12 @@ model Order {
   // 所以 (user_id, NULL) 可以有任意多行。
   // 带上 userId 是安全边界而不只是去重粒度：只用 clientRequestId 做唯一键的话，
   // A 用户猜到 B 的 id 就能拿到 B 的订单号与金额。
+  // ── 邮寄报价快照（deliveryType=EXPRESS 时写入；批次一）──
+  // 下单那一刻的凭证载荷（各家成本价、feeSource、分组、指纹），店员端预约弹窗与成本核对直接读它
+  expressQuoteSnapshot        Json?     @map("express_quote_snapshot")
+  expressRegionGroup          String?   @map("express_region_group") @db.VarChar(32)
+  // 报价重量（克）。用克不用 Decimal：Prisma 的 Decimal 在应用层是对象，比较/序列化都要转，Int 最省事
+  expressWeightG              Int?      @map("express_weight_g")
   clientRequestId             String?   @map("client_request_id") @db.VarChar(36)
   createdAt                   DateTime  @default(now()) @map("created_at")
   updatedAt                   DateTime  @updatedAt @map("updated_at")

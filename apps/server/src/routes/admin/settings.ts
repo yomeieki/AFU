@@ -6,7 +6,6 @@
 
 import { Router } from 'express'
 import { z } from 'zod'
-import { getShippingSettings, setShippingSettings } from '../../services/settings'
 import { getMemberSettings, setMemberSettings } from '../../services/member/settings'
 import { AppError } from '../../middlewares/error'
 import {
@@ -14,7 +13,10 @@ import {
   validateLocalSettings, validateForEnable, validateRawLocalSettings,
 } from '../../services/local-settings'
 import { getDeliveryProvider } from '../../services/delivery/provider'
-import { getExpressSettings, setExpressSettings, sanitizeExpressSettings, validateExpressSettings } from '../../services/express-settings'
+import {
+  getExpressSettings, setExpressSettings, sanitizeExpressSettings, validateExpressSettings,
+  legacyShippingView, applyLegacyShipping,
+} from '../../services/express-settings'
 
 const router = Router()
 
@@ -26,9 +28,11 @@ const shippingSchema = z.object({
   minOrderAmount: z.number().int().min(0).max(10_000_000),
 })
 
+// 老接口，过渡期兼容：读写都落在新的 express_delivery 设置上（services/express-settings.ts
+// 的 legacyShippingView / applyLegacyShipping），不再有独立的 shipping key。
 router.get('/shipping', async (_req, res, next) => {
   try {
-    res.json({ code: 0, message: 'ok', data: await getShippingSettings() })
+    res.json({ code: 0, message: 'ok', data: legacyShippingView(await getExpressSettings()) })
   } catch (e) {
     next(e)
   }
@@ -37,7 +41,8 @@ router.get('/shipping', async (_req, res, next) => {
 router.put('/shipping', async (req, res, next) => {
   try {
     const body = shippingSchema.parse(req.body)
-    res.json({ code: 0, message: 'ok', data: await setShippingSettings(body) })
+    const merged = applyLegacyShipping(await getExpressSettings(), body)
+    res.json({ code: 0, message: 'ok', data: legacyShippingView(await setExpressSettings(merged)) })
   } catch (e) {
     next(e)
   }
