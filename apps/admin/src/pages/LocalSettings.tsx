@@ -252,6 +252,12 @@ export default function LocalSettings() {
           <div className="grid grid-cols-2 gap-3">
             <Field label="备餐时长（分）" hint="从点「接单」开始算，不含顾客下单到接单那一段"><input className={inputCls} type="number" min={0} value={s.prepMinutes} onChange={(e) => patch({ prepMinutes: Number(e.target.value) })} /></Field>
             <Field label="骑行均速（km/h）"><input className={inputCls} type="number" min={5} value={s.riderSpeedKmh} onChange={(e) => patch({ riderSpeedKmh: Number(e.target.value) })} /></Field>
+            <Field label="呼叫到骑手取货（分钟）"
+              hint={s.autoCallDelayMin > 0
+                ? `自动呼叫已开：骑手在接单后第 ${s.autoCallDelayMin} 分钟被呼，赶来与备餐并行，预计送达取两者较晚的那个。`
+                : '当前是手动呼叫：什么时候呼取决于店员，预计送达按「备餐 + 这个数」保守串行计算。想把预计时间压下来，把下面的「自动呼叫延迟」打开更有效。'}>
+              <input className={inputCls} type="number" min={0} max={60} value={s.callToPickupMin}
+                onChange={(e) => patch({ callToPickupMin: Number(e.target.value) })} /></Field>
             <Field label="接单后可取消（分）" hint="顾客申请取消的窗口"><input className={inputCls} type="number" min={0} max={30} value={s.acceptGraceMin} onChange={(e) => patch({ acceptGraceMin: Number(e.target.value) })} /></Field>
             <Field label="接单后自动呼叫（分）" hint="0 = 手动呼叫；须 ≥ 可取消窗口"><input className={inputCls} type="number" min={0} max={15} value={s.autoCallDelayMin} onChange={(e) => patch({ autoCallDelayMin: Number(e.target.value) })} /></Field>
             <Field label="单次最多件数"><input className={inputCls} type="number" min={1} value={s.limits.maxItems} onChange={(e) => patch({ limits: { ...s.limits, maxItems: Number(e.target.value) } })} /></Field>

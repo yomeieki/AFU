@@ -359,6 +359,8 @@ export interface LocalDeliverySettings {
   /** 高峰时段：备餐排队。prepMin/prepMax 是范围——结算页如实给顾客看区间，算预计送达取上界 */
   peak: { windows: { start: string; end: string }[]; prepMinMinutes: number; prepMaxMinutes: number }
   riderSpeedKmh: number
+  /** 呼叫骑手 → 骑手到店取走要多久（分）。自动呼叫开着时与备餐并行，手动呼叫时保守按串行算 */
+  callToPickupMin: number
   acceptGraceMin: number
   autoCallDelayMin: number
   defaultProvider: 'KD100' | 'SELF'

@@ -82,6 +82,14 @@ export interface LocalDeliverySettings {
     prepMaxMinutes: number
   }
   riderSpeedKmh: number
+  /**
+   * **呼叫骑手 → 骑手到店把餐拿走**要多久（分钟）。首单实测 10.4 分（晚 8 点、闪送）。
+   *
+   * 2026-09-08 之前这一段**根本不在预计送达里**：公式是「备餐 + 路上」，等于默认
+   * 「骑手在备餐期间就已经站在店里等着了」。店主实测 3 km 报 27 分钟（备餐 15 + 路上 12），
+   * 一眼就看出不可能——叫单、骑手赶过来这两段凭空消失了。
+   */
+  callToPickupMin: number
   acceptGraceMin: number
   autoCallDelayMin: number
   defaultProvider: 'KD100' | 'SELF'
@@ -188,6 +196,9 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     prepMaxMinutes: 30,
   },
   riderSpeedKmh: 15,
+  // 12 而不是实测的 10.4：那一单是晚 8 点的闪送（一对一专送，来得快），
+  // 而第一级呼的是达达这类顺路带单，赶到店里只会更慢。宁可报晚。
+  callToPickupMin: 12,
   acceptGraceMin: 5,
   autoCallDelayMin: 0,
   // 日常主力是第三方骑手；店内自送是常规备选（高峰无人接单、近距离单自己走两步就到、
@@ -287,6 +298,7 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       ),
     },
     riderSpeedKmh: num(o.riderSpeedKmh, D.riderSpeedKmh, 5, 60),
+    callToPickupMin: int(o.callToPickupMin, D.callToPickupMin, 0, 60),
     acceptGraceMin: int(o.acceptGraceMin, D.acceptGraceMin, 0, 30),
     autoCallDelayMin: int(o.autoCallDelayMin, D.autoCallDelayMin, 0, 60),
     defaultProvider: o.defaultProvider === 'SELF' ? 'SELF' : D.defaultProvider,
@@ -565,6 +577,28 @@ export function rideMinutes(s: LocalDeliverySettings, distanceM: number): number
  * 高峰返回真区间（如 25–30 + 路上），平时 min===max。调用方要一个单值时**一律取 max**：
  * 报晚了顾客早收到是惊喜，报早了是投诉。
  */
+/**
+ * 「接单 → 骑手把餐拿走」要多久。**这一段原来整个漏掉了**（2026-09-08 修）。
+ *
+ * 分两种情况，差别在于「骑手赶来」和「后厨备餐」是不是并行：
+ *
+ *   自动呼叫（`autoCallDelayMin > 0`）—— 接单后第 N 分钟自动发单，骑手一边赶来后厨一边做，
+ *     两件事并行，取更晚的那个：`max(备餐, N + 呼叫到取货)`。
+ *
+ *   手动呼叫（`autoCallDelayMin === 0`，当前生产的设置）—— 什么时候呼取决于店员。
+ *     **保守按串行算**：`备餐 + 呼叫到取货`。因为工作台上「呼叫骑手」是备餐中那一列的按钮，
+ *     忙起来最可能的行为就是「菜装好了才想起来点」。按并行算等于替店员假设了一个
+ *     他并没有承诺的习惯，而报早的代价是投诉。
+ *
+ * 想把这个数真正压下去，正确的做法不是改公式，是**把自动呼叫打开**——
+ * 让骑手在备餐期间就在路上。
+ */
+export function pickupMinutes(s: LocalDeliverySettings, prep: number): number {
+  return s.autoCallDelayMin > 0
+    ? Math.max(prep, s.autoCallDelayMin + s.callToPickupMin)
+    : prep + s.callToPickupMin
+}
+
 export function estimateMinutesRange(
   s: LocalDeliverySettings, distanceM: number, now: Date = new Date()
 ): { min: number; max: number; isPeak: boolean } {
@@ -572,7 +606,11 @@ export function estimateMinutesRange(
   const peak = isPeakNow(s, now)
   const prepMin = peak ? s.peak.prepMinMinutes : s.prepMinutes
   const prepMax = peak ? s.peak.prepMaxMinutes : s.prepMinutes
-  return { min: prepMin + ride, max: prepMax + ride, isPeak: peak }
+  return {
+    min: pickupMinutes(s, prepMin) + ride,
+    max: pickupMinutes(s, prepMax) + ride,
+    isPeak: peak,
+  }
 }
 
 /**

@@ -38,6 +38,26 @@ assert_eq "高峰下界比平时多 5 分钟（25−20）" "$((D52_PEAK_MIN - D5
 d52_put '.peak.windows = []'
 assert_eq "清空高峰时段即恢复平时口径" "$(req POST /api/local/quote "" "$D52_Q" | jq -r '.data.estimatedMaxRange')" "$D52_FLAT"
 
+echo "-- ②b 预计送达要含「呼叫 → 骑手到店取货」那一段 --"
+# 2026-09-08 店主实测报的问题：3 km 报 27 分钟（备餐 15 + 路上 12），叫单和骑手赶过来
+# 这两段凭空消失了。修法是补一个 callToPickupMin，并区分自动/手动呼叫：
+#   手动（生产当前设置）——保守按串行：备餐 + 呼叫到取货 + 路上
+#   自动——骑手赶来与备餐并行：max(备餐, 延迟 + 呼叫到取货) + 路上
+d52_put '.prepMinutes = 20 | .callToPickupMin = 12 | .autoCallDelayMin = 0'
+D52_MANUAL=$(req POST /api/local/quote "" "$D52_Q" | jq -r '.data.estimatedMaxRange')
+d52_put '.callToPickupMin = 0'
+D52_NOPICK=$(req POST /api/local/quote "" "$D52_Q" | jq -r '.data.estimatedMaxRange')
+assert_eq "手动呼叫时预计时间正好多出「呼叫到取货」那 12 分钟" "$((D52_MANUAL - D52_NOPICK))" "12"
+# 打开自动呼叫：骑手赶来与备餐并行，总时长应当**变短**（这正是打开它的理由）
+d52_put '.callToPickupMin = 12 | .autoCallDelayMin = 5'
+D52_AUTO=$(req POST /api/local/quote "" "$D52_Q" | jq -r '.data.estimatedMaxRange')
+[[ "$D52_AUTO" -lt "$D52_MANUAL" ]] \
+  && ok "开自动呼叫后预计送达变短（$D52_MANUAL → $D52_AUTO 分，骑手赶来与备餐并行）" \
+  || fail "开自动呼叫没让预计送达变短" "手动 $D52_MANUAL / 自动 $D52_AUTO"
+# 并行 = max(备餐 20, 延迟 5 + 取货 12 = 17) = 20，与「取货 0 分」时同值
+assert_eq "自动呼叫且取货窗口被备餐盖住时 = 只算备餐" "$D52_AUTO" "$D52_NOPICK"
+d52_put '.autoCallDelayMin = 0'
+
 echo "-- ③ 顾客申请退菜：出票带菜品与理由，且挡住呼叫骑手 --"
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"D52-P","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
