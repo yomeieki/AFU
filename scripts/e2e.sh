@@ -408,7 +408,7 @@ qmode_put() {  # $1 = 作用在 .fee 上的 jq 表达式
   local cur; cur=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
   req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c "$1" <<<"$cur")" >/dev/null
 }
-qmode_put '.fee.mode="QUOTE" | .fee.quoteMarkupFen=250 | .fee.quoteNearKm=2 | .fee.quoteNearMarkupFen=150 | .fee.roundToFen=50 | .fee.freeThreshold=0'
+qmode_put '.fee.mode="QUOTE" | .fee.quoteMarkupFen=250 | .fee.quoteNearKm=2 | .fee.quoteNearMarkupFen=150 | .fee.roundToFen=50 | .fee.freeShipTiers=[]'
 assert_eq "设置里落下 QUOTE 口径" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.mode)" "QUOTE"
 # 1.11 km 那组：达达 583 / 蜂鸟 605 / 顺丰 1078 / 闪送 1122 → 最低 583 + 250 = 833 → 取整 850
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
@@ -464,10 +464,49 @@ assert_eq "改了加价后旧凭证仍可下单（QUOTE 锁价）" "$(code "$R")
 assert_eq "成交价仍是报价那一刻的 750（不是改后的 5583）" \
   "$(req GET "/api/orders/$(jq -r .data.orderId <<<"$R")" "$UT" | jq -r .data.shippingFee)" "750"
 
+# ── 阶梯满额免运费（PO 2026-09-08）─────────────────────────────────────────
+# 旧规则「满 X 免运费、不看距离」在 9.5 km 上等于白送 ¥21.50（生产实测）。
+# 新规则：满 X 且距离 ≤ Y km 才免。这一段守三件事：够近才免、不够近照收、以及
+# **老配置的升级路径**（生产那行设置里没有 freeShipTiers，只有 freeThreshold）。
+qmode_put '.fee.mode="TABLE" | .fee.freeShipTiers=[{"minAmountFen":8000,"maxKm":2},{"minAmountFen":12000,"maxKm":5}]'
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1500}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":9000}')
+assert_eq "满 90（≥80）且 1.5km（≤2km）→ 免运费" "$(jq -r .data.fee <<<"$R")" "0"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":3500}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":9000}')
+[[ "$(jq -r .data.fee <<<"$R")" -gt 0 ]] \
+  && ok "满 90 但 3.5km 超出该档的 2km → 照收运费（¥$(jq -r '.data.fee/100' <<<"$R")）" \
+  || fail "距离超档仍免运费" "$R"
+# 同一距离、把金额抬到第二档 → 又免了。这条证明判定真的看金额，不是只看距离
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":3500}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":13000}')
+assert_eq "同一距离满 130（≥120，该档免到 5km）→ 免运费" "$(jq -r .data.fee <<<"$R")" "0"
+# 档位写乱序也要取「达标档里公里数最大的那一档」，不是最后一档
+qmode_put '.fee.freeShipTiers=[{"minAmountFen":12000,"maxKm":5},{"minAmountFen":8000,"maxKm":2}]'
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":3500}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":13000}')
+assert_eq "档位乱序不影响结果（仍取公里数最大的达标档）" "$(jq -r .data.fee <<<"$R")" "0"
+# 空数组 = 真的关掉，不许好心回落到默认档
+qmode_put '.fee.freeShipTiers=[]'
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1500}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":99900}')
+[[ "$(jq -r .data.fee <<<"$R")" -gt 0 ]] \
+  && ok "清空阶梯 = 关掉满额免运费（小计 ¥999 也照收）" \
+  || fail "清空后仍免运费" "$R"
+# **升级路径**：老格式（只有 freeThreshold、整个 freeShipTiers 字段缺失）要自动翻译成
+# 等价的一档「满 X 免到配送半径」。生产那行设置就是这个形状，翻错了就是上线当天出事。
+L_OLD=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c '.data | .fee |= (del(.freeShipTiers) | .freeThreshold=8000)')
+req PUT /api/admin/settings/local-delivery "$AT" "$L_OLD" >/dev/null
+R=$(req GET /api/admin/settings/local-delivery "$AT")
+assert_eq "老配置自动翻译成一档" "$(jq -r '.data.fee.freeShipTiers | length' <<<"$R")" "1"
+assert_eq "翻译后的门槛 = 原 freeThreshold" "$(jq -r '.data.fee.freeShipTiers[0].minAmountFen' <<<"$R")" "8000"
+assert_eq "翻译后的公里数 = 配送半径（等价于「不看距离」）" "$(jq -r '.data.fee.freeShipTiers[0].maxKm' <<<"$R")" "$(jq -r '.data.radiusKm' <<<"$R")"
+
 # 还原成 TABLE：后面几十条断言仍按固定表算期望值。同样只动 fee.*，别整包覆盖。
-qmode_put '.fee.mode="TABLE" | .fee.quoteMarkupFen=250 | .fee.quoteNearKm=2 | .fee.quoteNearMarkupFen=150 | .fee.roundToFen=50 | .fee.freeThreshold=8000'
+qmode_put '.fee.mode="TABLE" | .fee.quoteMarkupFen=250 | .fee.quoteNearKm=2 | .fee.quoteNearMarkupFen=150 | .fee.roundToFen=50 | .fee.freeShipTiers=[{"minAmountFen":8000,"maxKm":5}]'
 assert_eq "口径已还原为 TABLE" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.mode)" "TABLE"
-assert_eq "满额免运费也还原了（后面的断言按 8000 算）" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.freeThreshold)" "8000"
+assert_eq "满额免运费也还原了（后面的断言按 8000 算）" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r '.data.fee.freeShipTiers[0].minAmountFen')" "8000"
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 R=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR}"); assert_eq "旧地址无坐标 42223" "$(code "$R")" "42223"
 R=$(req POST /api/admin/settings/local-delivery/pause "$AT" '{"reason":"暴雨暂停"}'); assert_eq "暂停 code 0" "$(code "$R")" "0"

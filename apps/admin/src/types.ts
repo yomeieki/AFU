@@ -345,7 +345,9 @@ export interface LocalDeliverySettings {
   radiusKm: number
   detourFactor: number
   fee: {
-    baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number
+    baseFee: number; baseKm: number; perKmFee: number; minOrderAmount: number
+    /** 阶梯满额免运费：满 minAmountFen 且距离 ≤ maxKm 就免。空数组 = 关闭。按**券前**商品小计判 */
+    freeShipTiers: { minAmountFen: number; maxKm: number }[]
     /** QUOTE = 按实时最低报价 + 加价定价（默认）；TABLE = 起步价 + 每公里的固定表（也是查价失败时的兜底） */
     mode: 'TABLE' | 'QUOTE'
     /** QUOTE 口径下在最低报价之上加多少（分）——第一级接得掉时，这就是每单毛利。远单档 */

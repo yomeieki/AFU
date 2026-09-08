@@ -52,7 +52,21 @@ export interface LocalDeliverySettings {
    * 旧表是「近单几乎不赚、远单过度收费」；改成最低价 +¥2.5 后两端都稳定在 +¥2.50。
    */
   fee: {
-    baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number
+    baseFee: number; baseKm: number; perKmFee: number; minOrderAmount: number
+    /**
+     * **阶梯满额免运费**（PO 2026-09-08）。空数组 = 关闭。
+     *
+     * 旧规则是「满 ¥99 免运费，不看距离」——生产实测 9.5 km 的运费已经 ¥21.50，
+     * 一张 ¥99 的单跑那么远，我们白送掉订单金额的 21.7%。改成「跑得越远，要求点得越多」。
+     *
+     * 判定：在所有**已达标**的档里取 `maxKm` **最大**的那一档（不是最后一档，也不是第一档），
+     * 这样店主把行的顺序写乱了结果也不会变。距离在那一档以内 → 运费归零。
+     *
+     * ⚠️ 用**券前**的商品小计判（PO 2026-09-08 定）。含义是「你点了多少菜」，不是「你付了多少钱」。
+     * 好处是选券不会让运费跳动，结算页不必在换券时重新查价；代价是 ¥100 的单用 ¥30 券、
+     * 实付 ¥70 也照样免运费——这个敞口是知情选择。
+     */
+    freeShipTiers: { minAmountFen: number; maxKm: number }[]
     mode: 'TABLE' | 'QUOTE'
     /**
      * QUOTE 口径下，在最低报价之上加多少（分）。第一级接得掉时，这就是这一单的毛利。
@@ -192,7 +206,10 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   // 每单补贴占订单 6-9%，毛利扛得住。免运门槛特意设在 ¥99——5 km 成本 ¥14.5，
   // 只有把客单价推上去才摊得平。先跑一个月看单量与距离分布再调。
   fee: {
-    baseFee: 600, baseKm: 3, perKmFee: 250, freeThreshold: 9900, minOrderAmount: 4000,
+    baseFee: 600, baseKm: 3, perKmFee: 250, minOrderAmount: 4000,
+    // 默认值与升级前的「满 ¥99 免运费、不看距离」等价（radiusKm 默认 5）。
+    // 真正的阶梯由店主在后台按自家毛利算完再配——见 run-log「运费经济性」那一节。
+    freeShipTiers: [{ minAmountFen: 9900, maxKm: 5 }],
     mode: 'QUOTE', quoteMarkupFen: 250, quoteNearKm: 2, quoteNearMarkupFen: 150, roundToFen: 50,
   },
   businessHours: [{ start: '09:00', end: '20:00' }],
@@ -254,6 +271,8 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
   const D = DEFAULT_LOCAL_SETTINGS
   const store = asObj(o.store), fee = asObj(o.fee), kd = asObj(o.kd100), lim = asObj(o.limits), tip = asObj(o.tip)
   const cs = asObj(o.callStrategy), peak = asObj(o.peak)
+  // 阶梯免运费的老配置翻译要用到半径，先算出来
+  const radius = num(o.radiusKm, D.radiusKm, 0.5, 50)
   const paused = o.paused && typeof o.paused === 'object'
     ? { until: str(asObj(o.paused).until, '', 40) || null, reason: str(asObj(o.paused).reason, '', 60) }
     : null
@@ -275,12 +294,27 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       district: str(store.district, D.store.district, 32), address: str(store.address, D.store.address, 255),
       latE6: intOrNull(store.latE6, -90_000_000, 90_000_000), lngE6: intOrNull(store.lngE6, -180_000_000, 180_000_000),
     },
-    radiusKm: num(o.radiusKm, D.radiusKm, 0.5, 50),
+    radiusKm: radius,
     detourFactor: num(o.detourFactor, D.detourFactor, 1, 3),
     fee: {
       baseFee: int(fee.baseFee, D.fee.baseFee, 0, 100_000), baseKm: num(fee.baseKm, D.fee.baseKm, 0, 50),
       perKmFee: int(fee.perKmFee, D.fee.perKmFee, 0, 100_000),
-      freeThreshold: int(fee.freeThreshold, D.fee.freeThreshold, 0, 10_000_000),
+      // 阶梯免运费。**只有整个字段缺失时**才回落到老的 freeThreshold——
+      // 传了空数组必须当成「店主真的关掉了」，不能好心帮他恢复成默认档。
+      freeShipTiers: Array.isArray(fee.freeShipTiers)
+        ? (fee.freeShipTiers as unknown[])
+            .map((t) => asObj(t))
+            .map((t) => ({
+              minAmountFen: int(t.minAmountFen, -1, 0, 10_000_000),
+              maxKm: num(t.maxKm, -1, 0, 50),
+            }))
+            .filter((t) => t.minAmountFen >= 0 && t.maxKm > 0)
+            .sort((a, b) => a.maxKm - b.maxKm)
+            .slice(0, 10)
+        : int(fee.freeThreshold, 0, 0, 10_000_000) > 0
+          // 老配置一次性翻译成等价的一档：「满 X 免运费、不看距离」= 「满 X 免到配送半径」
+          ? [{ minAmountFen: int(fee.freeThreshold, 0, 0, 10_000_000), maxKm: radius }]
+          : [],
       minOrderAmount: int(fee.minOrderAmount, D.fee.minOrderAmount, 0, 10_000_000),
       // 只认这两个字面量：脏值回默认（QUOTE），不要静默退回旧口径——
       // 静默退回意味着「以为在按报价收钱，其实在按老表收钱」，而两者近单差 ¥2.5。
@@ -435,7 +469,7 @@ export async function setLocalSettings(next: LocalDeliverySettings): Promise<Loc
 // 这里的「patch」只对顶层字段生效：patch.fee/kd100/limits/tip 等嵌套对象一旦传入就会整体替换当前值，
 // 不会跟 current 做字段级合并。这不是漏洞——Partial<LocalDeliverySettings> 只把顶层字段变成可选，
 // 嵌套对象本身仍是完整类型，`npx tsc --noEmit` 会在编译期拒绝任何只传嵌套对象部分字段的调用
-// （例如 patchLocalSettings({ fee: { minOrderAmount: 3000 } }) 会报 TS2739 缺 baseFee/baseKm/perKmFee/freeThreshold）。
+// （例如 patchLocalSettings({ fee: { minOrderAmount: 3000 } }) 会报 TS2739 缺 baseFee/baseKm/perKmFee/freeShipTiers）。
 // 所以调用方要改嵌套对象里的某一个字段时，正确写法是先 getLocalSettings() 取当前值、展开后再覆盖那个字段
 // （Task 5 的门店坐标接口就是这么写的）。下面 store 这一处的展开合并是冗余的防御代码——类型系统已经保证
 // 不会有调用方能绕过完整嵌套对象的要求触发它——保留不动只是为了不改动已通过复查的运行时行为。
@@ -574,7 +608,13 @@ export function calcLocalFee(
   let fee = baseOverride != null && Number.isFinite(baseOverride) && baseOverride >= 0
     ? baseOverride
     : tableBaseFee(s, distanceM)
-  if (s.fee.freeThreshold > 0 && subtotal >= s.fee.freeThreshold) fee = 0
+  // 阶梯满额免运费：在所有达标档里取公里数最大的那一档，再看这一单的距离够不够近。
+  // 用 reduce 取最大而不是 find/last——店主在后台把行写乱序时结果必须一样。
+  const tier = s.fee.freeShipTiers.reduce<{ minAmountFen: number; maxKm: number } | null>(
+    (best, t) => (subtotal >= t.minAmountFen && (best === null || t.maxKm > best.maxKm) ? t : best),
+    null,
+  )
+  if (tier && distanceM <= Math.round(tier.maxKm * 1000)) fee = 0
   return { fee, inRange, belowMin }
 }
 

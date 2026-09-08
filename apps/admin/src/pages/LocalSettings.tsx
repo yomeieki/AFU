@@ -29,8 +29,9 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
 export default function LocalSettings() {
   const { setDirty } = useUnsavedSettings()
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
-  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', freeThreshold: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '' })
+  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
+  const [tiersText, setTiersText] = useState('')
   // 门店坐标另有一条写入路径（小程序商家端一键定位 → PATCH store-location），而本页的保存是整包
   // 覆盖式 PUT、服务端没有乐观锁。店主按本页指引去店门口定完位、回到这个还开着的标签页改别的参数
   // 再保存，若把页面加载时缓存的旧坐标一起写回，新坐标就被静默改掉了。
@@ -41,11 +42,12 @@ export default function LocalSettings() {
   const hydrate = (v: LocalDeliverySettings) => {
     setS(v)
     setMoney({
-      baseFee: toYuan(v.fee.baseFee), perKmFee: toYuan(v.fee.perKmFee), freeThreshold: toYuan(v.fee.freeThreshold),
+      baseFee: toYuan(v.fee.baseFee), perKmFee: toYuan(v.fee.perKmFee),
       quoteMarkup: toYuan(v.fee.quoteMarkupFen), roundTo: toYuan(v.fee.roundToFen),
       quoteNearMarkup: toYuan(v.fee.quoteNearMarkupFen),
       minOrderAmount: toYuan(v.fee.minOrderAmount), maxPerCall: toYuan(v.tip.maxPerCall), maxPerOrder: toYuan(v.tip.maxPerOrder),
     })
+    setTiersText((v.fee.freeShipTiers ?? []).map((t) => `${toYuan(t.minAmountFen)}-${t.maxKm}`).join('\n'))
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
     setCoordDirty(false)
     setDirty(false)
@@ -69,6 +71,7 @@ export default function LocalSettings() {
   const handleSave = async (enabledOverride?: boolean) => {
     const fen = Object.fromEntries(Object.entries(money).map(([k, v]) => [k, toFen(v)])) as Record<keyof typeof money, number | null>
     if (Object.values(fen).some((v) => v === null)) { toast.error('金额格式不正确（最多两位小数）'); return }
+    if (tiersBad) { toast.error('阶梯免运费格式不对，每行应为「满额-公里」，例如 100-3'); return }
     // 手填坐标只在店主动过输入框时才算数；没动过就在下面用服务端最新值
     let typedLatE6: number | null = null, typedLngE6: number | null = null
     if (coordDirty && (coord.lat.trim() || coord.lng.trim())) {
@@ -100,7 +103,7 @@ export default function LocalSettings() {
         paused: fresh.paused,
         enabled: enabledOverride ?? s.enabled,
         store: { ...s.store, latE6, lngE6 },
-        fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, freeThreshold: fen.freeThreshold!, minOrderAmount: fen.minOrderAmount!,
+        fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, minOrderAmount: fen.minOrderAmount!, freeShipTiers: parsedTiers,
           quoteMarkupFen: fen.quoteMarkup ?? s.fee.quoteMarkupFen, roundToFen: fen.roundTo ?? s.fee.roundToFen,
           quoteNearMarkupFen: fen.quoteNearMarkup ?? s.fee.quoteNearMarkupFen },
         tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
@@ -166,6 +169,20 @@ export default function LocalSettings() {
     if (km > s.radiusKm) return '超出配送范围'
     return `¥${toYuan(baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * perKm)}`
   }
+  /**
+   * 阶梯免运费用受控 textarea（`tiersText`），不像营业时段那样用 defaultValue：
+   * 保存时要把它解析成结构体，而 defaultValue 的值只活在 DOM 里、读不回来。
+   * 每行「满额-公里」，空行忽略；整栏留空 = 关闭满额免运费。
+   */
+  const parsedTiers = tiersText.split('\n').map((l) => l.trim()).filter(Boolean)
+    .map((l) => {
+      const [amt, km] = l.split('-')
+      return { minAmountFen: toFen(amt ?? '') ?? -1, maxKm: Number(km) }
+    })
+    .filter((t) => t.minAmountFen >= 0 && Number.isFinite(t.maxKm) && t.maxKm > 0)
+  /** 有非空行却一行都解析不出来 → 格式写错了，保存前拦住，别让他以为已经生效 */
+  const tiersBad = tiersText.split('\n').some((l) => l.trim()) && parsedTiers.length === 0
+
   const hoursText = s.businessHours.map((h) => `${h.start}-${h.end}`).join('\n')
   const peakText = s.peak.windows.map((h) => `${h.start}-${h.end}`).join('\n')
   // 与营业时段同一套解析：每行 HH:mm-HH:mm，空行忽略。**允许清空**（= 全天不分高峰），
@@ -255,7 +272,10 @@ export default function LocalSettings() {
           <Field label="基础公里数" hint="不超过此距离只收基础运费">
             <input className={inputCls} type="number" step="0.5" min={0} value={s.fee.baseKm} onChange={(e) => patch({ fee: { ...s.fee, baseKm: Number(e.target.value) } })} /></Field>
           <Field label="超出每公里加价（元）"><input className={inputCls} inputMode="decimal" value={money.perKmFee} onChange={(e) => setMoney({ ...money, perKmFee: e.target.value })} /></Field>
-          <Field label="满额免运费（元）" hint="0 = 不设"><input className={inputCls} inputMode="decimal" value={money.freeThreshold} onChange={(e) => setMoney({ ...money, freeThreshold: e.target.value })} /></Field>
+          <Field label="阶梯满额免运费"
+            hint="每行一档：「满多少元-免到几公里」。跑得越远要求点得越多——9.5 km 的运费实测已经 ¥21.50，旧的「满 99 免运费不看距离」等于白送订单金额的两成。留空 = 关闭。按**券前**商品小计判（选券不会让运费跳动）。">
+            <textarea className={`${inputCls} font-mono`} rows={4} value={tiersText}
+              onChange={(e) => setTiersText(e.target.value)} placeholder={'80-2\n100-3\n130-5\n190-10'} /></Field>
           <Field label="起送金额（元）" hint="0 = 无门槛"><input className={inputCls} inputMode="decimal" value={money.minOrderAmount} onChange={(e) => setMoney({ ...money, minOrderAmount: e.target.value })} /></Field>
         </div>
         <div className="rounded-md bg-gray-50 border border-gray-200 p-3">

@@ -14,17 +14,17 @@ echo "== 49. 同城单用券（同城开通后才验得了的那一项）=="
 L9_TAG=$RANDOM
 L9_ORIG_LS=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
 
-# 钉死本段依赖的每个参数，跑完恢复。freeThreshold 显式设 0（关掉满额免运费）：
+# 钉死本段依赖的每个参数，跑完恢复。freeShipTiers 显式设空（关掉满额免运费）：
 # 开着的话商品小计一超线运费就归零，「运费与券无关」这条断言会变成拿 0 比 0 的空断言。
 L9_LS=$(jq -c '
   .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .detourFactor=1.7
-  | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:0,minOrderAmount:2000}
+  | .fee={baseFee:300,baseKm:3,perKmFee:100,freeShipTiers:[],minOrderAmount:2000,mode:"TABLE"}
   | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true | .paused=null | .autoCallDelayMin=0
 ' <<<"$L9_ORIG_LS")
 R=$(req PUT /api/admin/settings/local-delivery "$AT" "$L9_LS")
 assert_eq "49 前置：同城设置已钉死并开启" "$(jq -r '.data.enabled' <<<"$R")" "true"
 assert_eq "49 前置：起送线 ¥20" "$(jq -r '.data.fee.minOrderAmount' <<<"$R")" "2000"
-assert_eq "49 前置：关掉满额免运费" "$(jq -r '.data.fee.freeThreshold' <<<"$R")" "0"
+assert_eq "49 前置：关掉满额免运费" "$(jq -r '.data.fee.freeShipTiers | length' <<<"$R")" "0"
 
 # 自建同城商品：不复用 $LPID——它在 §5 被搬去过邮寄分类再搬回来，
 # 依赖它当时的渠道状态会让本段的红绿取决于上游段落的执行顺序。
