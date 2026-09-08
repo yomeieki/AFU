@@ -264,25 +264,6 @@ export interface UserOrder {
   items: { productName: string; quantity: number }[]
 }
 
-export interface Stats {
-  today: {
-    orderCount: number
-    salesAmount: number
-  }
-  total: {
-    orderCount: number
-    productCount: number
-    categoryCount: number
-  }
-  hotProducts: {
-    id: number
-    name: string
-    coverImage: string | null
-    salesCount: number
-    price: number
-  }[]
-}
-
 // 扫码统计
 export interface ScanSummary {
   totalScans: number
@@ -305,12 +286,6 @@ export interface ScanProductRow {
   scans: number
   orders: number
   conversionRate: number | null
-}
-
-export interface SalesTrendPoint {
-  date: string
-  orderCount: number
-  salesAmount: number
 }
 
 // Banner

@@ -1,124 +1,50 @@
-import { useEffect, useState } from 'react'
-import {
-  ClipboardList,
-  Wallet,
-  Package,
-  FolderTree,
-  TrendingUp,
-  LucideIcon,
-} from 'lucide-react'
-import { getStats, getSalesTrend } from '../api/admin'
-import type { Stats, SalesTrendPoint } from '../types'
-import Spinner from '../components/ui/Spinner'
-import TrendChart from '../components/ui/TrendChart'
+import { useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import RangePicker, { QUICK, rangeError, type DateRange } from '../components/dashboard/RangePicker'
+import OverviewTab from '../components/dashboard/OverviewTab'
+import LocalTab from '../components/dashboard/LocalTab'
+import ExpressTab from '../components/dashboard/ExpressTab'
 
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  tone,
-}: {
-  label: string
-  value: string | number
-  icon: LucideIcon
-  tone: 'brand' | 'blue' | 'green' | 'purple'
-}) {
-  const TONE = {
-    brand: 'bg-brand-50 text-brand-500',
-    blue: 'bg-blue-50 text-blue-500',
-    green: 'bg-green-50 text-green-600',
-    purple: 'bg-purple-50 text-purple-500',
-  }
-  return (
-    <div className="bg-white rounded-lg shadow-card p-6 flex items-center gap-4">
-      <span className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${TONE[tone]}`}>
-        <Icon className="w-6 h-6" strokeWidth={1.8} />
-      </span>
-      <div className="min-w-0">
-        <p className="text-sm text-gray-500">{label}</p>
-        <p className="text-2xl font-bold text-gray-800 mt-0.5 truncate">{value}</p>
-      </div>
-    </div>
-  )
-}
+type Tab = 'overview' | 'local' | 'express'
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'overview', label: '总览' },
+  { key: 'local', label: '同城配送' },
+  { key: 'express', label: '全国邮寄' },
+]
 
+/**
+ * 经营概览：统一时间范围 + 三个 tab。tab 与范围都写进 URL（?tab=&start=&end=），刷新不丢。
+ * 三个 tab 各拉各的接口（components/dashboard/*Tab.tsx），切换只重拉当前这个。
+ */
 export default function Dashboard() {
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [trend, setTrend] = useState<SalesTrendPoint[]>([])
-  const [loading, setLoading] = useState(true)
+  const [sp, setSp] = useSearchParams()
+  const tab: Tab = (TABS.find((t) => t.key === sp.get('tab'))?.key ?? 'overview') as Tab
+  const range: DateRange = useMemo(() => {
+    const s = sp.get('start'), e = sp.get('end')
+    return s && e ? { startDate: s, endDate: e } : QUICK[2].range()   // 默认近 7 天
+  }, [sp])
 
-  useEffect(() => {
-    Promise.all([getStats(), getSalesTrend(7)])
-      .then(([res, t]) => {
-        setStats(res.data.data)
-        setTrend(t.data.data.list)
-      })
-      .finally(() => setLoading(false))
-  }, [])
-
-  if (loading)
-    return (
-      <div className="flex items-center gap-2 text-gray-500 text-sm">
-        <Spinner /> 加载中...
-      </div>
-    )
-  if (!stats) return <div className="text-red-500 text-sm">数据加载失败</div>
+  const setTab = (t: Tab) => setSp((p) => { p.set('tab', t); return p }, { replace: true })
+  const setRange = (r: DateRange) => setSp((p) => { p.set('start', r.startDate); p.set('end', r.endDate); return p }, { replace: true })
+  const err = rangeError(range)
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-gray-800">今日概览</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <StatCard label="今日订单数" value={stats.today.orderCount} icon={ClipboardList} tone="brand" />
-        <StatCard
-          label="今日销售额"
-          value={`¥${(stats.today.salesAmount / 100).toFixed(2)}`}
-          icon={Wallet}
-          tone="green"
-        />
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold text-gray-800">经营概览</h2>
+      <RangePicker value={range} onChange={setRange} />
+      <div className="flex gap-2 border-b border-gray-200" role="tablist">
+        {TABS.map((t) => (
+          <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
+            className={`px-4 py-2 text-sm -mb-px border-b-2 ${tab === t.key ? 'border-brand-500 text-brand-600 font-medium' : 'border-transparent text-gray-500'}`}>
+            {t.label}
+          </button>
+        ))}
       </div>
-
-      <h2 className="text-xl font-semibold text-gray-800">累计数据</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard label="总订单数" value={stats.total.orderCount} icon={ClipboardList} tone="blue" />
-        <StatCard label="在售商品数" value={stats.total.productCount} icon={Package} tone="brand" />
-        <StatCard label="分类数" value={stats.total.categoryCount} icon={FolderTree} tone="purple" />
-      </div>
-
-      <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-800">
-        <TrendingUp className="w-5 h-5 text-brand-500" />
-        近 7 天销售趋势
-      </h2>
-      <div className="bg-white rounded-lg shadow-card p-5">
-        <TrendChart
-          data={trend.map((t) => ({ label: t.date, value: t.salesAmount }))}
-          type="bar"
-          valueFormatter={(v) => `¥${(v / 100).toFixed(0)}`}
-        />
-      </div>
-
-      <h2 className="text-xl font-semibold text-gray-800">热销商品 Top 5</h2>
-      <div className="bg-white rounded-lg shadow-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-gray-600">
-            <tr>
-              <th className="text-left px-4 py-3">商品名称</th>
-              <th className="text-right px-4 py-3">价格</th>
-              <th className="text-right px-4 py-3">销量</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {stats.hotProducts.map((p) => (
-              <tr key={p.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 text-gray-800">{p.name}</td>
-                <td className="px-4 py-3 text-right font-semibold text-brand-600">
-                  ¥{(p.price / 100).toFixed(2)}
-                </td>
-                <td className="px-4 py-3 text-right text-gray-600">{p.salesCount}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {err ? (
+        <div className="text-sm text-gray-500">请先把上面的时间范围改正确。</div>
+      ) : tab === 'overview' ? <OverviewTab range={range} />
+        : tab === 'local' ? <LocalTab range={range} />
+        : <ExpressTab range={range} />}
     </div>
   )
 }

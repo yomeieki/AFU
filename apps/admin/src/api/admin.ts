@@ -5,7 +5,6 @@ import type {
   Category,
   Product,
   Order,
-  Stats,
   QrCodeResult,
   Shipment,
   AdminUser,
@@ -13,7 +12,6 @@ import type {
   ScanSummary,
   ScanTrendPoint,
   ScanProductRow,
-  SalesTrendPoint,
   Banner,
   RefundSummary,
   AfterSale,
@@ -50,9 +48,6 @@ export const login = (username: string, password: string) =>
       adminInfo: { id: number; username: string; name: string | null; role: string }
     }>
   >('/admin/login', { username, password })
-
-// Stats
-export const getStats = () => client.get<ApiResponse<Stats>>('/admin/stats')
 
 // Categories
 export const getCategories = (channel?: Channel) =>
@@ -193,10 +188,6 @@ export const getScanProducts = (params?: ScanRangeParams & { page?: number; page
     '/admin/scan-stats/products',
     { params }
   )
-
-// 销售趋势
-export const getSalesTrend = (days: 7 | 30 = 7) =>
-  client.get<ApiResponse<{ list: SalesTrendPoint[] }>>('/admin/stats/trend', { params: { days } })
 
 // Banner 管理
 export const getBanners = () => client.get<ApiResponse<Banner[]>>('/admin/banners')
