@@ -16,7 +16,7 @@ import { initiateRefund, remainingRefundable } from '../services/refund'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/subscribe-message'
 import { loadOrderLines, assertLinesSellable } from '../services/order-lines'
 import { getExpressSettings, findRegionGroup, legacyShippingView } from '../services/express-settings'
-import { calcPackageWeightKg, calcExpressFee, itemsHash, verifyExpressQuote, FeeCalc } from '../services/express-quote'
+import { calcPackageWeightKg, calcExpressFee, itemsHash, addressHash, verifyExpressQuote, FeeCalc } from '../services/express-quote'
 import { fetchCourierQuotes, MAX_ADDRESS_BYTES } from '../services/express-quote-service'
 import { channelOfDeliveryType } from '../utils/channel'
 import {
@@ -351,7 +351,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         s.weight,
       )
       const quoted = quoteToken ? verifyExpressQuote(quoteToken) : null
-      if (quoteToken && (!quoted || quoted.addressId !== address.id || quoted.itemsHash !== hash)) {
+      // 地址是原地改的（PUT /api/addresses/:id 同 id 换省市区/详细地址），光比 addressId
+      // 拦不住「报价成都、改地址到北京、拿着旧凭证下单」——凭证里的地址内容指纹也得对上。
+      if (quoteToken && (!quoted || quoted.addressId !== address.id || quoted.addressHash !== addressHash(address.fullAddress) || quoted.itemsHash !== hash)) {
         throw new AppError(42261, '运费已更新，请重新确认')
       }
       let fee: FeeCalc, snapshotQuotes: { kuaidicom: string; serviceType: string | null; priceFen: number | null }[]

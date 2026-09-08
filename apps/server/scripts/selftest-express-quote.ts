@@ -5,7 +5,7 @@
 import assert from 'assert'
 import { DEFAULT_EXPRESS_SETTINGS, findRegionGroup, ExpressSettings } from '../src/services/express-settings'
 import {
-  calcPackageWeightKg, medianFen, roundUpTo, tableFee, calcExpressFee, itemsHash,
+  calcPackageWeightKg, medianFen, roundUpTo, tableFee, calcExpressFee, itemsHash, addressHash,
   signExpressQuote, verifyExpressQuote, expressQuoteExpiresAt, CourierQuote,
 } from '../src/services/express-quote'
 
@@ -115,8 +115,18 @@ t('指纹：与顺序无关、数量/规格/赠品任一变都不同', () => {
   assert.notStrictEqual(a, itemsHash([{ productId: 1, skuId: 9, quantity: 2 }, { productId: 2, skuId: 5, quantity: 1 }], []))
   assert.notStrictEqual(a, itemsHash([{ productId: 1, skuId: null, quantity: 2 }, { productId: 2, skuId: 5, quantity: 1 }], [{ pointsGoodId: 3, quantity: 1 }]))
 })
+t('地址内容指纹：16 位十六进制，不同地址不同（地址原地改后凭证要能失效）', () => {
+  const h1 = addressHash('四川省成都市武侯区天府大道北段1700号')
+  const h2 = addressHash('北京市朝阳区建国路93号')
+  assert.match(h1, /^[0-9a-f]{16}$/)
+  assert.match(h2, /^[0-9a-f]{16}$/)
+  assert.notStrictEqual(h1, h2)
+})
 t('凭证：签验往返、过期、篡改、旧格式缺字段都判无效', () => {
-  const p = { addressId: 7, itemsHash: 'abcdef0123456789', weightKg: 1.5, feeFen: 750, quotedFeeFen: 750, feeSource: 'QUOTE' as const, groupName: '四川', quotes: Q.map((q) => ({ kuaidicom: q.kuaidicom, serviceType: q.serviceType, priceFen: q.priceFen })) }
+  const p = {
+    addressId: 7, addressHash: addressHash('四川省成都市武侯区天府大道北段1700号'), itemsHash: 'abcdef0123456789',
+    weightKg: 1.5, feeFen: 750, quotedFeeFen: 750, feeSource: 'QUOTE' as const, groupName: '四川', quotes: Q.map((q) => ({ kuaidicom: q.kuaidicom, serviceType: q.serviceType, priceFen: q.priceFen })),
+  }
   const now = new Date('2026-09-08T04:00:00Z')
   const tok = signExpressQuote(p, now)
   // 9 家快照实测 533 字符；卡到 < 700 让 payload 增长（比如加了新字段）尽早报警——

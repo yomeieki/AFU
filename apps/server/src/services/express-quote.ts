@@ -94,8 +94,18 @@ export function itemsHash(lines: { productId: number; skuId: number | null; quan
   return crypto.createHash('sha256').update(parts.join('|'), 'utf8').digest('hex').slice(0, 16)
 }
 
+/**
+ * 收货地址内容指纹：`PUT /api/addresses/:id` 是原地改（同 id，省市区/详细地址可以整个换掉），
+ * 光凭 addressId 锁不住「报价时的那份地址」——查价缓存键与凭证都得再绑一层地址内容，
+ * 地址原地改掉之后旧缓存/旧凭证才会失效，而不是继续按改前的省份报改后的价。
+ */
+export function addressHash(fullAddress: string): string {
+  return crypto.createHash('sha256').update(fullAddress, 'utf8').digest('hex').slice(0, 16)
+}
+
 export interface ExpressQuotePayload {
   addressId: number
+  addressHash: string
   itemsHash: string
   weightKg: number
   feeFen: number
@@ -113,7 +123,7 @@ const hmac = (s: string) => crypto.createHmac('sha256', `express-quote:${config.
 
 export function signExpressQuote(p: ExpressQuotePayload, now: Date = new Date()): string {
   const body = b64u(JSON.stringify({
-    a: p.addressId, h: p.itemsHash, w: Math.round(p.weightKg * 10), f: p.feeFen, qf: p.quotedFeeFen, fs: p.feeSource, g: p.groupName,
+    a: p.addressId, ah: p.addressHash, h: p.itemsHash, w: Math.round(p.weightKg * 10), f: p.feeFen, qf: p.quotedFeeFen, fs: p.feeSource, g: p.groupName,
     q: p.quotes.map((q) => [q.kuaidicom, q.serviceType, q.priceFen]),
     e: expressQuoteExpiresAt(now).getTime(),
   }))
@@ -133,6 +143,7 @@ export function verifyExpressQuote(token: unknown, now: Date = new Date()): Expr
     if (typeof o.e !== 'number' || o.e < now.getTime()) return null
     if ([o.a, o.w, o.f, o.qf].some((n) => typeof n !== 'number' || !Number.isFinite(n))) return null
     if (typeof o.h !== 'string' || !/^[0-9a-f]{16}$/.test(o.h)) return null
+    if (typeof o.ah !== 'string' || !/^[0-9a-f]{16}$/.test(o.ah)) return null
     if (o.fs !== 'QUOTE' && o.fs !== 'TABLE') return null
     if (typeof o.g !== 'string' || !Array.isArray(o.q)) return null
     const quotes: ExpressQuotePayload['quotes'] = []
@@ -142,7 +153,7 @@ export function verifyExpressQuote(token: unknown, now: Date = new Date()): Expr
       if (row[2] !== null && (typeof row[2] !== 'number' || !Number.isFinite(row[2]))) return null
       quotes.push({ kuaidicom: row[0], serviceType: row[1], priceFen: row[2] })
     }
-    return { addressId: o.a, itemsHash: o.h, weightKg: o.w / 10, feeFen: o.f, quotedFeeFen: o.qf, feeSource: o.fs, groupName: o.g, quotes }
+    return { addressId: o.a, addressHash: o.ah, itemsHash: o.h, weightKg: o.w / 10, feeFen: o.f, quotedFeeFen: o.qf, feeSource: o.fs, groupName: o.g, quotes }
   } catch {
     return null
   }

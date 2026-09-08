@@ -6,7 +6,7 @@ import prisma from '../utils/prisma'
 import { AppError } from '../middlewares/error'
 import { getExpressSettings, findRegionGroup, ExpressSettings, EXPRESS_COURIERS } from './express-settings'
 import {
-  CourierQuote, calcPackageWeightKg, calcExpressFee, itemsHash, signExpressQuote, expressQuoteExpiresAt, EXPRESS_QUOTE_TTL_MS,
+  CourierQuote, calcPackageWeightKg, calcExpressFee, itemsHash, addressHash, signExpressQuote, expressQuoteExpiresAt, EXPRESS_QUOTE_TTL_MS,
 } from './express-quote'
 import { getExpressProvider } from './delivery/kd100-express'
 import { loadOrderLines, assertLinesSellable, DirectItemInput } from './order-lines'
@@ -29,16 +29,21 @@ function senderAddress(): Promise<string> {
 
 /**
  * 向快递100 查 9 家报价（全部家，不只定价名单——快照给店员端看）。
- * 同一 (addressId, weightKg) 15 分钟内复用；查价失败返回 null（调用方退兜底表），**失败不写缓存**。
+ * 同一 (addressId, 地址内容, weightKg) 15 分钟内复用；查价失败返回 null（调用方退兜底表），**失败不写缓存**。
+ * key 里带地址内容指纹：`PUT /api/addresses/:id` 是原地改（同 id 换省市区/详细地址），
+ * 光用 addressId 会在地址改动后 15 分钟内继续吐改动前那份地址的缓存报价。
  */
 export async function fetchCourierQuotes(s: ExpressSettings, addressId: number, receiverFullAddress: string, weightKg: number): Promise<CourierQuote[] | null> {
   if (s.fee.mode !== 'QUOTE') return null
-  const key = `${addressId}:${weightKg}`
+  const key = `${addressId}:${addressHash(receiverFullAddress)}:${weightKg}`
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < EXPRESS_QUOTE_TTL_MS) return hit.quotes
+  // 读设置（发件地址）挪到 try 外面：settings 读失败是配置问题，不该跟「查价失败」共用
+  // 同一条兜底表降级路径而被悄悄吞掉。
+  const senderAddr = await senderAddress()
   try {
     const quotes = await getExpressProvider().batchPrice({
-      couriers: [...EXPRESS_COURIERS], senderAddr: await senderAddress(), receiverAddr: receiverFullAddress, weightKg, timeoutMs: CUSTOMER_QUOTE_TIMEOUT_MS,
+      couriers: [...EXPRESS_COURIERS], senderAddr, receiverAddr: receiverFullAddress, weightKg, timeoutMs: CUSTOMER_QUOTE_TIMEOUT_MS,
     })
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value as string)
     cache.set(key, { quotes, at: Date.now() })
@@ -84,7 +89,7 @@ export async function quoteExpress(req: QuoteRequest, now: Date = new Date()): P
   const fee = calcExpressFee(s, group, weightKg, quotes, subtotalFen)
   const snapshot = (quotes ?? []).map((q) => ({ kuaidicom: q.kuaidicom, serviceType: q.serviceType, priceFen: q.priceFen }))
   const quoteToken = signExpressQuote({
-    addressId: address.id, itemsHash: itemsHash(lines, gifts), weightKg,
+    addressId: address.id, addressHash: addressHash(address.fullAddress), itemsHash: itemsHash(lines, gifts), weightKg,
     feeFen: fee.feeFen, quotedFeeFen: fee.quotedFeeFen, feeSource: fee.feeSource, groupName: group.name, quotes: snapshot,
   }, now)
   return {

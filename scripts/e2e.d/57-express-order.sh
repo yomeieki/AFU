@@ -30,6 +30,16 @@ echo "-- ④ 凭证被篡改 42261 --"
 R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR,\"quoteToken\":\"${X55_TOK}x\"}")
 assert_eq "篡改 42261" "$(code "$R")" "42261"
 
+echo "-- ④b 地址原地改动（PUT 同 id 换详细地址，省市区不变）后旧凭证失效 42261 --"
+R=$(req POST /api/express/quote "$UT" "{\"addressId\":$ADDR,\"directItem\":{\"productId\":$PID,\"quantity\":1}}")
+X55_TOK_AH=$(jq -r .data.quoteToken <<<"$R")
+R=$(req PUT "/api/addresses/$ADDR" "$UT" '{"receiverName":"E2E测试","receiverPhone":"13800000000","province":"四川省","city":"成都市","district":"武侯区","detail":"测试路2号","isDefault":1}')
+assert_eq "原地改地址 code 0" "$(code "$R")" "0"
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR,\"quoteToken\":\"$X55_TOK_AH\"}")
+assert_eq "地址内容变了但 id 没变 → 旧凭证失效 42261" "$(code "$R")" "42261"
+R=$(req PUT "/api/addresses/$ADDR" "$UT" '{"receiverName":"E2E测试","receiverPhone":"13800000000","province":"四川省","city":"成都市","district":"武侯区","detail":"测试路1号","isDefault":1}')
+assert_eq "改回地址 code 0" "$(code "$R")" "0"
+
 echo "-- ⑤ 老客户端不带凭证：服务端现算，运费同样 $X54_KEEP_FEE --"
 R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$PID,\"quantity\":1},\"addressId\":$ADDR}")
 assert_eq "不带凭证下单 code 0" "$(code "$R")" "0"

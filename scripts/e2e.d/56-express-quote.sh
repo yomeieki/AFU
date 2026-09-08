@@ -1,9 +1,12 @@
 echo "== 56. 邮寄报价：分组/中位数/包邮/不寄送/兜底/凭证 =="
 # 复用 e2e.sh 主体的 req/code/ok/fail/assert_eq 与 $AT/$UT/$PID/$ADDR（四川省成都市）。变量一律 X54_ 前缀。
 X54_ORIG=$(req GET /api/admin/settings/express "$AT" | jq -c .data)
-# 明确切到 QUOTE 口径 + 默认分组（e2e 开头把它复位成了 TABLE/0 元，见 e2e.sh §1）
+# 明确切到 QUOTE 口径 + 默认分组（e2e 开头把它复位成了 TABLE/0 元——那是 e2e.sh §1 写的是
+# 兼容 shim `PUT /api/admin/settings/shipping`（老的一口价键），不是直接写邮寄设置的新存储；
+# shim 落到同一份底层设置上，效果上等于把邮寄设置也复位了）
 X54_S=$(jq -c '.fee.mode="QUOTE" | .fee.markupFen=0 | .fee.roundToFen=50 | .fee.minQuoteCount=2 | .minOrderAmountFen=0
   | .weight.packagingG=800 | .weight.defaultItemG=300
+  | .pricingPool=["jtexpress","yuantong","shentong","yunda","zhongtong","jd"]
   | .regionGroups=[
       {name:"四川",provinces:["四川省"],freeShipMinFen:9900,tableFirstFen:800,tableOverPerKgFen:150,blocked:false},
       {name:"其他",provinces:[],freeShipMinFen:19900,tableFirstFen:1200,tableOverPerKgFen:300,blocked:false},
