@@ -119,6 +119,8 @@ D50_SSFEE=$(d50_dlv "$D50_O1" | jq -r '.data.delivery.orderFees[] | select(.prov
 assert_eq "回调 100 http 200" "$(kd_cb "$D50_DALL" "$D50_T2" 100 '骑手已接单' '2026-09-08 12:00:00')" "200"
 R=$(d50_dlv "$D50_O1")
 assert_eq "中标运力落库" "$(jq -r '.data.delivery.courierCompany' <<<"$R")" "shansongtongcheng"
+# 顾客端看到的必须是汉字（PO 2026-09-08）：库里存编码，顾客视图翻成 providerLabel
+assert_eq "顾客端骑手公司显示汉字" "$(req GET "/api/orders/$D50_O1" "$UT" | jq -r '.data.delivery.courierCompany')" "闪送"
 assert_eq "actualFee = 中标运力那一笔预扣" "$(jq -r '.data.delivery.actualFee' <<<"$R")" "$D50_SSFEE"
 # 写一次为准：后续 230/310 再来也不许改（快递100 按预扣实扣，重写只会让对账口径漂移）
 assert_eq "回调 230 http 200" "$(kd_cb "$D50_DALL" "$D50_T2" 230 '骑手已到店' '2026-09-08 12:03:00')" "200"

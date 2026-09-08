@@ -19,7 +19,7 @@ import { channelOfDeliveryType } from '../utils/channel'
 import {
   getLocalSettings, isOpenNow, isPaused, nextOpenText, calcLocalFee, verifyQuote, haversineM,
 } from '../services/local-settings'
-import { DELIVERY_STATUS_LABEL } from '../services/delivery/state'
+import { DELIVERY_STATUS_LABEL, providerLabel } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getCourierLocationByOrder } from '../services/delivery/courier-location'
 import { settlePoints } from '../services/member/points'
@@ -588,7 +588,8 @@ function customerDeliveryView(d: { status: string; courierName: string | null; c
     statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status,
     courierName: d.courierName,
     courierMobile: d.courierMobile,
-    courierCompany: d.courierCompany,
+    // 回调里是运力编码（fengniaotongcheng），顾客看到拼音串会以为出了错；翻成汉字再给
+    courierCompany: providerLabel(d.courierCompany) || null,
     pickedUpAt: d.pickedUpAt,
     deliveredAt: d.deliveredAt,
   }

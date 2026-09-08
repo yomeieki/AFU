@@ -285,7 +285,11 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     // PO 2026-09-06 定：顶部只放**加大的后 4 位**。完整单号 20 字符在 32 列纸上占大半行，
     // 而店里认单靠这 4 位，没人逐位核对前缀。完整单号挪到 footer 小字——客服对单、查退款仍需要。
     // 同日一并去掉了「今日第 N 单」（PO：不显示今日订单数），连带省掉每张票一次 dailyOrderSeq 查询。
-    `<CB>#${o.orderNo.slice(-4)}</CB>`,
+    // 单号旁边放**手机尾号**（PO 2026-09-08）：快递100 的下单接口没有商户单号字段，
+    // 骑手 app 上是运力方自己的单号，跟 #5203 对不上；但它一定显示收件人手机，
+    // 尾号是全行业通用的取货核对键。放大到和单号同一行，骑手在柜台一眼对上袋子。
+    // 厨房联不放：后厨不该看到顾客联系方式（见 buildKitchen）。
+    `<CB>#${o.orderNo.slice(-4)} 尾号${o.receiverPhone.slice(-4)}</CB>`,
     `下单：${fmtDateTime(o.createdAt)}`,
     `付款：${fmtDateTime(o.paidAt)}`,
   ]

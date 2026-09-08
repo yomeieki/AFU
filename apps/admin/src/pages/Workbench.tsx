@@ -954,7 +954,11 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: 
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
-      <div className="wb__no"><span className="wb__shortno">{shortNo(card.orderNo)}</span><b>¥{yuan(card.amountFen)}</b></div>
+      {/* 尾号与单号同行：骑手在柜台报的是手机尾号，店员对袋子时不用翻抽屉 */}
+      <div className="wb__no">
+        <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{local && card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
+        <b>¥{yuan(card.amountFen)}</b>
+      </div>
       <div className="wb__items">{itemsSummary(card.items, card.channel)}</div>
 
       {/* 无备注必须明写，留空则「没看见」与「没有」无法区分（§4） */}
@@ -1642,7 +1646,7 @@ export default function Workbench() {
               {local ? <Bike className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
               {local ? '同城配送' : '全国邮寄'}
             </span>
-            <span className="wb__shortno">{shortNo(card.orderNo)}</span>
+            <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{local && card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
 
