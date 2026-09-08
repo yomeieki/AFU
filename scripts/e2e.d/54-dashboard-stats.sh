@@ -71,3 +71,23 @@ assert_eq "C⑦ 承运商 闪送 +1" "$(jq -r '[.data.providers[]|select(.provid
 assert_eq "C⑧ 呼叫阶梯三项之和 +1" "$(jq -r '.data.ladder | (.first + .cheapestN + .all)' <<<"$C1")" "$((C_LAD+1))"
 assert_eq "C⑨ 距离分布之和 = 同城单数" "$(jq -r '[.data.distance[].count] | add' <<<"$C1")" "$((C_CNT+1))"
 
+# ── D. express：B 段那张邮寄单还没发货 → 待发货积压里有它 ──
+D1=$(d54 express)
+assert_eq "D① 邮寄单数含 B 段那单" "$(jq -r '.data.kpi.orderCount >= 1' <<<"$D1")" "true"
+[[ "$(jq -r .data.backlog.count <<<"$D1")" -ge 1 ]] && ok "D② 待发货积压 ≥1" || fail "D② 积压" "$D1"
+assert_eq "D③ 积压最久单有单号" "$(jq -r '.data.backlog.oldestOrderNo | type' <<<"$D1")" "string"
+assert_eq "D④ 运费收入 = Σ shippingFee（非负整数）" "$(jq -r '.data.kpi.shippingFeeFen >= 0' <<<"$D1")" "true"
+assert_eq "D⑤ 快递公司分布是数组" "$(jq -r '.data.companies | type' <<<"$D1")" "array"
+assert_eq "D⑥ 收件地 Top ≤5" "$(jq -r '.data.regions | length <= 5' <<<"$D1")" "true"
+
+# ── E. 测试单隔离：三接口都必须真的变小（§33 同款） ──
+E_O=$(d54 overview | jq -r .data.kpi.orderCount); E_L=$(d54 local | jq -r .data.kpi.orderCount); E_E=$(d54 express | jq -r .data.kpi.orderCount)
+req PATCH "/api/admin/orders/$BO/test-flag" "$AT" '{"isTest":true}' >/dev/null
+req PATCH "/api/admin/orders/$CO/test-flag" "$AT" '{"isTest":true}' >/dev/null
+assert_eq "E① overview −2" "$(d54 overview | jq -r .data.kpi.orderCount)" "$((E_O-2))"
+assert_eq "E② local −1" "$(d54 local | jq -r .data.kpi.orderCount)" "$((E_L-1))"
+assert_eq "E③ express −1" "$(d54 express | jq -r .data.kpi.orderCount)" "$((E_E-1))"
+assert_eq "E④ 热销榜不含测试单（回到 B 段前）" "$(d54 overview | jq -r --argjson p "$PID" '[.data.hotProducts[]|select(.productId==$p)][0].qty // 0')" "$B_HOT"
+req PATCH "/api/admin/orders/$BO/test-flag" "$AT" '{"isTest":false}' >/dev/null
+req PATCH "/api/admin/orders/$CO/test-flag" "$AT" '{"isTest":false}' >/dev/null
+assert_eq "E⑤ 取消标记后 overview 回来" "$(d54 overview | jq -r .data.kpi.orderCount)" "$E_O"
