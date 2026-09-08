@@ -5,6 +5,8 @@
  */
 import prisma from '../utils/prisma'
 import { getShippingSettings, ShippingSettings } from './settings'
+import { notifySystemAlert } from './notify'
+import { AppError } from '../middlewares/error'
 
 export const EXPRESS_SETTINGS_KEY = 'express_delivery'
 const CACHE_TTL_MS = 60 * 1000
@@ -73,8 +75,19 @@ export const DEFAULT_EXPRESS_SETTINGS: ExpressSettings = {
 
 // ── sanitize 小工具（与 local-settings 同款语义：非法一律回落到 fallback）──
 const asObj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {})
-const int = (v: unknown, fb: number, min = 0, max = Number.MAX_SAFE_INTEGER) => { const n = Number(v); return Number.isInteger(n) && n >= min && n <= max ? n : fb }
-const num = (v: unknown, fb: number, min: number, max: number) => { const n = Number(v); return Number.isFinite(n) && n >= min && n <= max ? n : fb }
+// Number('') === 0、Number(null) === 0、Number(false) === 0、Number([]) === 0——
+// 清空的表单字段/勾选框不能悄悄变成合法的 0，所以先把这些非数字、非数字字符串的输入挡在外面。
+const isNumericInput = (v: unknown): v is number | string => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== ''))
+const int = (v: unknown, fb: number, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+  if (!isNumericInput(v)) return fb
+  const n = Number(v)
+  return Number.isInteger(n) && n >= min && n <= max ? n : fb
+}
+const num = (v: unknown, fb: number, min: number, max: number) => {
+  if (!isNumericInput(v)) return fb
+  const n = Number(v)
+  return Number.isFinite(n) && n >= min && n <= max ? n : fb
+}
 const str = (v: unknown, fb: string, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : fb)
 const bool = (v: unknown, fb: boolean) => (typeof v === 'boolean' ? v : fb)
 const PROVINCE_SET = new Set<string>(PROVINCE_NAMES)
@@ -143,6 +156,7 @@ export function validateExpressSettings(s: ExpressSettings): string[] {
     seen.set(p, g.name)
   }
   if (s.pricingPool.length < 2) errs.push('参与定价的快递至少勾选 2 家')
+  if (s.fee.minQuoteCount > s.pricingPool.length) errs.push(`至少几家回价才用中位数（${s.fee.minQuoteCount}）不能超过参与定价的家数（${s.pricingPool.length}）`)
   return errs
 }
 
@@ -150,12 +164,21 @@ export function validateExpressSettings(s: ExpressSettings): string[] {
 export function findRegionGroup(s: ExpressSettings, province: string): RegionGroup {
   const hit = s.regionGroups.find((g) => g.provinces.includes(province))
   if (hit) return hit
-  return s.regionGroups.find((g) => g.name === OTHER_GROUP) ?? DEFAULT_EXPRESS_SETTINGS.regionGroups[2]
+  const fallback = s.regionGroups.find((g) => g.name === OTHER_GROUP)
+  if (fallback) return fallback
+  // 畸形数据（「其他」组被误删）兜底到默认定义；拷贝一份，不能把模块级常量的引用递出去被调用方改。
+  const def = DEFAULT_EXPRESS_SETTINGS.regionGroups.find((g) => g.name === OTHER_GROUP)!
+  return { ...def, provinces: [...def.provinces] }
 }
 
-/** 老接口 /orders/meta 与 GET /admin/settings/shipping 的兼容视图：取「其他」组 */
+/**
+ * 老接口 /orders/meta 与 GET /admin/settings/shipping 的兼容视图：取「其他」组。
+ * 只是兼容视图（仅供过渡期只读展示用）——QUOTE 模式下 tableFirstFen 是报价失败时的兜底价，
+ * 不是顾客实际会付的运费，不能拿这个数字去做计费或展示成「运费」。
+ */
 export function legacyShippingView(s: ExpressSettings): ShippingSettings {
-  const other = findRegionGroup(s, '')
+  const def = DEFAULT_EXPRESS_SETTINGS.regionGroups.find((g) => g.name === OTHER_GROUP)!
+  const other = s.regionGroups.find((g) => g.name === OTHER_GROUP) ?? { ...def, provinces: [...def.provinces] }
   return { fee: other.tableFirstFen, freeThreshold: other.freeShipMinFen, minOrderAmount: s.minOrderAmountFen }
 }
 
@@ -168,7 +191,9 @@ export function applyLegacyShipping(s: ExpressSettings, legacy: ShippingSettings
     ...s,
     fee: { ...s.fee, mode: 'TABLE' },
     minOrderAmountFen: legacy.minOrderAmount,
-    regionGroups: s.regionGroups.map((g) => ({ ...g, tableFirstFen: legacy.fee, tableOverPerKgFen: 0, freeShipMinFen: legacy.freeThreshold })),
+    // blocked（不寄送）组不发货，包邮线对它没有意义，即便迁移一口价也不给它凭空加一条门槛——
+    // 与 getExpressSettings 无行分支的迁移语义保持一致。
+    regionGroups: s.regionGroups.map((g) => ({ ...g, tableFirstFen: legacy.fee, tableOverPerKgFen: 0, freeShipMinFen: g.blocked ? 0 : legacy.freeThreshold })),
   }
 }
 
@@ -189,16 +214,32 @@ export async function getExpressSettings(): Promise<ExpressSettings> {
     } else {
       const legacy = await getShippingSettings()
       const base = sanitizeExpressSettings(DEFAULT_EXPRESS_SETTINGS)
+      /*
+       * 迁移语义（与 applyLegacyShipping 保持一致，0 的含义不能出现两套解读）：
+       * - minOrderAmountFen：老起送金额直接搬过来，0 也照搬（= 无门槛）。
+       * - freeShipMinFen：老包邮门槛是「一口价」时代唯一的门槛，搬到每个未 blocked 的组，
+       *   0 也照搬——老设置没有包邮线，迁移后自然也不该凭空多出一条。
+       *   blocked 的组本来就不寄送，不用管包邮门槛，留 0。
+       * - 「其他」组的 tableFirstFen：老 fee 是「兜底价」，但 0 在老口径里表示免运费，
+       *   不能拿来当新的兜底价（兜底价用于快递100报价失败时兜底收费，不能是 0）。
+       *   所以只在 legacy.fee > 0 时覆盖，否则保留默认的 ¥12。
+       */
       value = {
         ...base,
         minOrderAmountFen: legacy.minOrderAmount,
-        regionGroups: base.regionGroups.map((g) => g.name === OTHER_GROUP
-          ? { ...g, tableFirstFen: legacy.fee > 0 ? legacy.fee : g.tableFirstFen, freeShipMinFen: legacy.freeThreshold > 0 ? legacy.freeThreshold : g.freeShipMinFen }
-          : g),
+        regionGroups: base.regionGroups.map((g) => ({
+          ...g,
+          freeShipMinFen: g.blocked ? 0 : legacy.freeThreshold,
+          tableFirstFen: g.name === OTHER_GROUP && legacy.fee > 0 ? legacy.fee : g.tableFirstFen,
+        })),
       }
     }
   } catch (e) {
-    console.warn('[express-settings] 读取失败，回退默认值:', (e as Error).message)
+    const message = (e as Error).message
+    console.warn('[express-settings] 读取失败，回退默认值:', message)
+    notifySystemAlert('邮寄设置读取失败', ['本单按默认邮寄设置计费（未写缓存，下一单重读）', message], {
+      key: 'settings:express-fallback',
+    })
     return sanitizeExpressSettings(DEFAULT_EXPRESS_SETTINGS)
   }
   cached = { value, at: Date.now() }
@@ -208,6 +249,8 @@ export async function getExpressSettings(): Promise<ExpressSettings> {
 export async function setExpressSettings(next: ExpressSettings): Promise<ExpressSettings> {
   const current = await getExpressSettings()
   const value = sanitizeExpressSettings({ ...next, version: current.version + 1 })
+  const errs = validateExpressSettings(value)
+  if (errs.length) throw new AppError(40001, errs.join('；'))
   const json = JSON.stringify(value)
   await prisma.setting.upsert({ where: { key: EXPRESS_SETTINGS_KEY }, create: { key: EXPRESS_SETTINGS_KEY, value: json }, update: { value: json } })
   cached = { value, at: Date.now() }
