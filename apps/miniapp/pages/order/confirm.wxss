@@ -136,6 +136,16 @@
 .free {
   color: var(--success);
 }
+.row-wait {
+  color: var(--text-3);
+}
+.row-hint {
+  padding-top: 0;
+}
+.row-hint-text {
+  font-size: 24rpx;
+  color: var(--brand);
+}
 .total-row {
   padding-top: 20rpx;
 }

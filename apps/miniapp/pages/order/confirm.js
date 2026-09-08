@@ -1,6 +1,7 @@
 const { getCart } = require('../../api/cart')
 const { getAddresses } = require('../../api/address')
 const { createOrder, getOrderMeta } = require('../../api/order')
+const { quoteExpress } = require('../../api/express')
 const { requestSubscribe } = require('../../utils/subscribe')
 const { request } = require('../../utils/request')
 const { formatPrice } = require('../../utils/format')
@@ -16,12 +17,16 @@ Page({
     address: null,
     remark: '',
     totalAmount: 0,
-    // 运费规则来自 /orders/meta；这里算出来只为展示，实际收费以服务端下单时重算为准
-    shipping: { fee: 0, freeThreshold: 0, minOrderAmount: 0 },
     shippingFee: 0,
     payAmount: 0,
-    belowMinOrder: false,
-    minOrderTip: '',
+    // 服务端报价（/express/quote）。小程序不再自己算运费——两端各写一遍的口径迟早漂
+    quote: null,
+    quoteToken: null,
+    quoteExpiresAtMs: 0,
+    quoting: false,
+    quoteError: '',
+    // 阻塞下单的原因（不寄送 / 未达起送 / 缺地址）；空串 = 可提交
+    blockReason: '',
     // 会员优惠（M4）。四个值全部来自 checkout-benefits 组件的 change 事件，
     // 本页**不自己算 discount**——封顶与门槛判定在服务端，前端复制一份就是两套口径。
     couponId: null,
@@ -31,9 +36,6 @@ Page({
     submitting: false,
     // 商品/地址（loadData）加载失败
     loadFailed: false,
-    // 运费规则（/orders/meta）加载失败 —— 与 loadFailed 是两回事，别合并：
-    // 商品能列出来但运费未知时，页面显示的合计就是错的，同样不能让顾客提交。
-    metaFailed: false,
     subscribeTemplateIds: [],
     payTimeoutMin: 15,
   },
@@ -56,32 +58,16 @@ Page({
     this.loadMeta()
   },
 
-  // 运费规则拉取。失败必须留痕：以前这里是个空 catch，shipping 就停在初始的
-  // {fee:0,...} 上，页面照样渲染「免运费」和一个不含运费的合计，提交按钮也照样能点——
-  // 服务端下单时按真实运费收款，顾客看到的合计和微信扣款对不上，是实打实的价格欺诈观感。
-  // 现在失败就置 metaFailed，由 applyShipping 把提交拦住（request 已经 toast 过一次网络错误）。
   loadMeta() {
     var self = this
     return getOrderMeta()
       .then(function(meta) {
         self.setData({
-          metaFailed: false,
           subscribeTemplateIds: (meta && meta.subscribeTemplateIds) || [],
           payTimeoutMin: (meta && meta.payTimeoutMin) || 15,
-          shipping: (meta && meta.shipping) || { fee: 0, freeThreshold: 0, minOrderAmount: 0 },
         })
-        self.applyShipping()
       })
-      .catch(function() {
-        self.setData({ metaFailed: true })
-        self.applyShipping()
-      })
-  },
-
-  // 失败提示行上的「重新加载」按钮绑这个，直接复用 loadMeta——不需要额外的加载态字段，
-  // metaFailed 本身在 loadMeta 里会被清掉或再次置位。
-  onRetryMeta() {
-    this.loadMeta()
+      .catch(function() {})
   },
 
   onShow() {
@@ -89,59 +75,92 @@ Page({
     if (app.globalData.selectedAddress) {
       this.setData({ address: app.globalData.selectedAddress })
       app.globalData.selectedAddress = null
+      this.refreshQuote('address')
     }
   },
 
-  // 运费与起送门槛都按**商品小计**判断，与服务端 services/settings.ts 口径一致。
-  // 两边算法必须一样，否则顾客看到的合计和实际扣款对不上。
-  applyShipping() {
-    var s = this.data.shipping || {}
-    var subtotal = this.data.totalAmount
+  // 组装与下单同形的清单参数（cartItemIds 或 directItem + gifts）——凭证按这份清单签，
+  // 下单时服务端会比对指纹，所以两处必须传同一份
+  quotePayload() {
+    var p = { addressId: this.data.address.id }
+    if (this.data.mode === 'direct') p.directItem = this.data.directItem
+    else p.cartItemIds = this.data.cartItemIds
+    if (this.data.gifts && this.data.gifts.length) p.gifts = this.data.gifts
+    return p
+  },
 
-    // 运费规则没拉到就别装作「免运费」。metaFailed 有自己的一套绑定（confirm.wxml 的
-    // meta-failed 提示行 + 「重新加载」按钮，走 onRetryMeta），不再借用 belowMinOrder/
-    // minOrderTip——那两个字段只表示「未达起送门槛」，两个完全不同的失败状态不能混用同一套绑定。
-    if (this.data.metaFailed) {
-      this.setData({
-        shippingFee: 0,
-        payAmount: subtotal - this.data.discount,
-        belowMinOrder: false,
-        minOrderTip: '',
-      })
+  /**
+   * 向服务端报价。地址、清单、赠品任一变都要重来；换券**不**重来（包邮按券前小计判，运费不随券动），
+   * 只在本地重算合计。序号 _quoteSeq 让在途的旧响应作废。
+   */
+  refreshQuote(reason) {
+    var self = this
+    var seq = (this._quoteSeq = (this._quoteSeq || 0) + 1)
+    if (!this.data.address) {
+      this.setData({ quote: null, quoteToken: null, quoteExpiresAtMs: 0, quoting: false, quoteError: '', shippingFee: 0, blockReason: '请选择收货地址' })
+      this.recalcPay()
       return
     }
-
-    var fee = Number(s.fee) || 0
-    var threshold = Number(s.freeThreshold) || 0
-    var min = Number(s.minOrderAmount) || 0
-
-    // ⚠️ 包邮线与起送线**都按券前小计 `subtotal` 判**，不减 discount。
-    // 与服务端一致（M2 e2e 券①专门锁了这条）：顾客不该因为用了券而失去包邮、
-    // 或者跌到起送线以下。判错了每一单都错。
-    var shippingFee = 0
-    if (fee > 0 && !(threshold > 0 && subtotal >= threshold)) shippingFee = fee
-
-    var below = min > 0 && subtotal > 0 && subtotal < min
-    // 券只抵扣商品金额，不抵扣运费（docs/member-terms-copy.md 明写）
-    var pay = subtotal - this.data.discount + shippingFee
-    this.setData({
-      shippingFee: shippingFee,
-      payAmount: pay < 0 ? 0 : pay,
-      belowMinOrder: below,
-      minOrderTip: below ? '还差 ¥' + formatPrice(min - subtotal) + ' 起送' : '',
-    })
+    if (!this.data.items.length) {
+      this.setData({ quote: null, quoteToken: null, quoteExpiresAtMs: 0, quoting: false, quoteError: '', shippingFee: 0, blockReason: '' })
+      this.recalcPay()
+      return
+    }
+    this.setData({ quoting: true, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', blockReason: '' })
+    quoteExpress(this.quotePayload())
+      .then(function(q) {
+        if (seq !== self._quoteSeq) return
+        var block = ''
+        if (q.belowMin) block = '还差 ¥' + formatPrice(q.minOrderAmountFen - q.subtotalFen) + ' 起送'
+        self.setData({
+          quoting: false,
+          quote: q,
+          quoteToken: block ? null : q.quoteToken,
+          quoteExpiresAtMs: Date.parse(q.quoteExpiresAt) || 0,
+          shippingFee: q.feeFen,
+          blockReason: block,
+          quoteError: '',
+        })
+        self.recalcPay()
+      })
+      .catch(function(err) {
+        if (seq !== self._quoteSeq) return
+        var code = err && err.code
+        if (code === 42260) {
+          // 不寄送：页面内提示 + 禁付款，不 toast
+          self.setData({ quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, quoteError: '', blockReason: err.message || '该地区暂不支持邮寄' })
+        } else if (code === 42262 || code === 42224 || code === 42202 || code === 42201) {
+          self.setData({ quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, quoteError: '', blockReason: err.message })
+        } else {
+          var rateLimited = code === 42901 || code === 429
+          self.setData({ quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, blockReason: '', quoteError: rateLimited ? '操作太频繁，请稍后再试' : '运费获取失败' })
+          if (rateLimited && !self._retriedRateLimit) { self._retriedRateLimit = true; setTimeout(function() { self.refreshQuote('retry') }, 3000) }
+        }
+        self.recalcPay()
+      })
   },
 
-  // 组件只抛四个值，本页不看它内部状态
+  onRetryQuote() { this.refreshQuote('retry') },
+
+  // 合计 = 小计 − 券 + 运费（券只抵商品，不抵运费）
+  recalcPay() {
+    var pay = this.data.totalAmount - this.data.discount + (this.data.shippingFee || 0)
+    this.setData({ payAmount: pay < 0 ? 0 : pay })
+  },
+
+  // 组件只抛四个值，本页不看它内部状态。换券不打接口——包邮/运费按券前小计判，
+  // 与服务端一致；赠品变了要重报价（重量变、清单指纹变）。
   onBenefitsChange(e) {
     var d = e.detail || {}
+    var giftsChanged = JSON.stringify(d.gifts || []) !== JSON.stringify(this.data.gifts || [])
     this.setData({
       couponId: d.couponId === undefined ? null : d.couponId,
       gifts: d.gifts || [],
       discount: d.discount || 0,
       pointsUsed: d.pointsUsed || 0,
     })
-    this.applyShipping()
+    if (giftsChanged) this.refreshQuote('gifts')
+    else this.recalcPay()
   },
 
   loadData() {
@@ -155,7 +174,7 @@ Page({
         var totalAmount = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
         var address = addresses.find(function(a) { return a.isDefault }) || addresses[0] || null
         self.setData({ items: items, totalAmount: totalAmount, address: address })
-        self.applyShipping()
+        self.refreshQuote('load')
       })
       .catch(function() {
         // request 已 toast；标记失败禁止提交，避免空单/¥0 也能点提交
@@ -213,21 +232,6 @@ Page({
       wx.showToast({ title: '商品信息加载失败，请返回重试', icon: 'none' })
       return
     }
-    // 运费未知：不放行，同时给一个能当场解决问题的出口（重新拉 /orders/meta），
-    // 不让顾客卡在一个只会置灰的按钮上。
-    if (this.data.metaFailed) {
-      var page = this
-      wx.showModal({
-        title: '运费信息加载失败',
-        content: '暂时算不出准确的合计金额，重新加载后再提交。',
-        confirmText: '重新加载',
-        cancelText: '取消',
-        success: function(res) {
-          if (res.confirm) page.loadMeta()
-        },
-      })
-      return
-    }
     if (!this.data.address) {
       wx.showToast({ title: '请选择收货地址', icon: 'none' })
       return
@@ -236,8 +240,13 @@ Page({
       wx.showToast({ title: '请先选择商品', icon: 'none' })
       return
     }
-    if (this.data.belowMinOrder) {
-      wx.showToast({ title: this.data.minOrderTip, icon: 'none' })
+    if (this.data.quoting) { wx.showToast({ title: '运费计算中，请稍候', icon: 'none' }); return }
+    if (this.data.quoteError) { wx.showToast({ title: '运费获取失败，请重试', icon: 'none' }); this.refreshQuote('submit'); return }
+    if (this.data.blockReason) { wx.showToast({ title: this.data.blockReason, icon: 'none' }); return }
+    // 凭证过期就先重报价再让顾客点一次——服务端会拒 42261，但那句报错顾客看不懂
+    if (this.data.quoteExpiresAtMs && Date.now() > this.data.quoteExpiresAtMs) {
+      wx.showToast({ title: '运费已刷新，请再次确认', icon: 'none' })
+      this.refreshQuote('expired')
       return
     }
     if (this.data.submitting) return
@@ -257,6 +266,7 @@ Page({
       addressId: this.data.address.id,
       deliveryType: 'EXPRESS',
       remark: this.data.remark || undefined,
+      quoteToken: this.data.quoteToken || undefined,
     }
     if (this.data.mode === 'direct') {
       payload.directItem = this.data.directItem
@@ -281,10 +291,15 @@ Page({
       })
       .catch(function(err) {
         self.setData({ submitting: false })
+        var code = err && err.code
+        if (code === 42261 || code === 42260 || code === 42210 || code === 42262) {
+          // 运费/地区/起送在服务端变了：重报价，页面会显示新的运费或阻塞原因
+          self.refreshQuote('rejected')
+          return
+        }
         // 42250 积分不足 / 42251 券不可用 / 42252 赠品不可用：这三种都是「优惠项在别处
         // 变了」，选择已经过期。request.js 已经把 message 弹过 toast 了，这里只负责
         // 让组件重新拉一次，顾客看到的就是刷新后的真实可选项，而不是一个反复失败的按钮。
-        var code = err && err.code
         if (code === 42250 || code === 42251 || code === 42252) {
           var c = self.selectComponent('#benefits')
           if (c) c.refresh()

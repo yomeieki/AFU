@@ -86,8 +86,14 @@
     </view>
     <view class="row">
       <text class="row-label">运费</text>
-      <text wx:if="{{shippingFee > 0}}" class="row-value">¥{{pricefmt.fen(shippingFee)}}</text>
-      <text wx:else class="row-value free">免运费</text>
+      <text wx:if="{{quoting}}" class="row-value row-wait">计算中…</text>
+      <text wx:elif="{{quoteError}}" class="row-value row-wait">待重新计算</text>
+      <text wx:elif="{{blockReason}}" class="row-value row-wait">—</text>
+      <text wx:elif="{{shippingFee > 0}}" class="row-value">¥{{pricefmt.fen(shippingFee)}}</text>
+      <text wx:else class="row-value free">{{quote && quote.freeShip ? '已包邮' : '免运费'}}</text>
+    </view>
+    <view wx:if="{{quote && !quoting && !quoteError && !blockReason && !quote.freeShip && quote.freeShipMinFen > 0 && quote.subtotalFen < quote.freeShipMinFen}}" class="row row-hint">
+      <text class="row-hint-text">再买 ¥{{pricefmt.fen(quote.freeShipMinFen - quote.subtotalFen)}} 包邮（{{quote.groupName}}满 ¥{{pricefmt.fen(quote.freeShipMinFen)}}）</text>
     </view>
     <view class="row total-row">
       <text class="row-label">合计</text>
@@ -110,11 +116,11 @@
     <text>和</text>
     <text class="agree-link" bindtap="goLegal" data-type="privacy">《隐私政策》</text>
   </view>
-  <view wx:if="{{metaFailed}}" class="min-order-tip">
-    <text>运费信息加载失败，无法计算合计　</text>
-    <text class="agree-link" bindtap="onRetryMeta">重新加载</text>
+  <view wx:if="{{quoteError}}" class="min-order-tip">
+    <text>{{quoteError}}　</text>
+    <text class="agree-link" bindtap="onRetryQuote">重新获取运费</text>
   </view>
-  <view wx:elif="{{belowMinOrder}}" class="min-order-tip">{{minOrderTip}}</view>
+  <view wx:elif="{{blockReason}}" class="min-order-tip">{{blockReason}}</view>
   <view class="bottom-main">
     <view class="bottom-total-wrap">
       <text class="bottom-total-label">合计</text>
@@ -123,7 +129,7 @@
       <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
     </view>
     <view
-      class="submit-btn btn-primary {{submitting || belowMinOrder || metaFailed ? 'btn-disabled' : ''}}"
+      class="submit-btn btn-primary {{submitting || quoting || blockReason || quoteError ? 'btn-disabled' : ''}}"
       bindtap="onSubmit"
     >
       <text>{{submitting ? '提交中...' : '提交订单'}}</text>
