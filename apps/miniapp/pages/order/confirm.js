@@ -23,7 +23,8 @@ Page({
     quote: null,
     quoteToken: null,
     quoteExpiresAtMs: 0,
-    quoting: false,
+    // 初值 true：商品与地址解析完成前运费行显示「计算中…」，不闪一下「免运费」
+    quoting: true,
     quoteError: '',
     // 阻塞下单的原因（不寄送 / 未达起送 / 缺地址）；空串 = 可提交
     blockReason: '',
@@ -106,7 +107,9 @@ Page({
       this.recalcPay()
       return
     }
-    this.setData({ quoting: true, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', blockReason: '' })
+    this.setData({ quoting: true, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', blockReason: '', shippingFee: 0 })
+    // 报价在途时合计不能还含着上一个地址的运费：先按 0 重算，拿到新报价再算一次
+    this.recalcPay()
     quoteExpress(this.quotePayload())
       .then(function(q) {
         if (seq !== self._quoteSeq) return
