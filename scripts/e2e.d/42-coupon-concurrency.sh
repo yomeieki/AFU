@@ -8,10 +8,13 @@ echo "== 42. 领券并发（C 组：B4、M7、M6）=="
 # 只在 totalLimit != null 时才有数量条件，perUserLimit 又是快照 count()，两条防线对
 # 「同一用户 + 不限总量」这个组合都不构成保护，5 个并发请求会 5 个都成功。
 
-C4_TAG=$RANDOM
-IFS=$'\t' read -r C4_D C4_D_UID < <(m1_login "c${C4_TAG}D_couponD")
-IFS=$'\t' read -r C4_E C4_E_UID < <(m1_login "c${C4_TAG}E_couponE")
-IFS=$'\t' read -r C4_F C4_F_UID < <(m1_login "c${C4_TAG}F_couponF")
+# mock 登录的 openid = code 前 8 位。原来 c${RANDOM}E_… 只有 32768 个取值，多轮共用一库时
+# 撞上上一轮同名用户就会带着旧积分（2026-09-08 实测 +80 分）。区分字母放最前、随机位
+# 用 7 位十六进制（2^28），8 位内不再撞。
+C4_TAG=$(printf '%07x' $(( (RANDOM << 15) | RANDOM )))
+IFS=$'\t' read -r C4_D C4_D_UID < <(m1_login "D${C4_TAG}_couponD")
+IFS=$'\t' read -r C4_E C4_E_UID < <(m1_login "E${C4_TAG}_couponE")
+IFS=$'\t' read -r C4_F C4_F_UID < <(m1_login "F${C4_TAG}_couponF")
 [[ -n "$C4_D" && -n "$C4_E" && -n "$C4_F" ]] && ok "C 组测试用户 D/E/F 登录" || fail "C 组测试用户登录失败"
 
 echo "-- 准备积分：走正常下单结算，不手工造账本行（手工 INSERT 容易漏列，见报告）--"

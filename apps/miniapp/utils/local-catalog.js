@@ -14,6 +14,8 @@ var formatPrice = require('./format').formatPrice
 function storeStatusOf(meta) {
   if (!meta) return { tone: 'closed', label: '暂未营业' }
   if (meta.paused) return { tone: 'paused', label: '暂停接单' }
+  // 两段营业时间中间那段是「午间休息」，不是打烊（PO 2026-09-08）
+  if (meta.enabled && !meta.isOpen && meta.closedKind === 'BREAK') return { tone: 'closed', label: '午间休息' }
   if (!meta.enabled || !meta.isOpen) return { tone: 'closed', label: '已打烊' }
   return { tone: 'open', label: '营业中' }
 }

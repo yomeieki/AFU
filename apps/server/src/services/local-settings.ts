@@ -531,12 +531,24 @@ export function isShopOpenNow(s: LocalDeliverySettings, now: Date = new Date()):
   return !isPaused(s, now) && inHours(s, now)
 }
 
+/**
+ * 现在不营业时，是「午间休息」还是「今天打烊了」（PO 2026-09-08）：
+ * 一天配了两段营业时间（如 09:00–14:00、17:00–20:00），中间那段顾客看到「已打烊」会以为
+ * 今天不做了。今天还有下一段就是 BREAK，否则 CLOSED；营业中 OPEN。
+ */
+export function closedKind(s: LocalDeliverySettings, now: Date = new Date()): 'OPEN' | 'BREAK' | 'CLOSED' {
+  if (inHours(s, now)) return 'OPEN'
+  const cur = shanghaiMinutes(now)
+  return s.businessHours.some((h) => toMin(h.start) > cur) ? 'BREAK' : 'CLOSED'
+}
+
 export function nextOpenText(s: LocalDeliverySettings, now: Date = new Date()): string {
   if (s.businessHours.length === 0) return '暂未设置营业时间'
   const cur = shanghaiMinutes(now)
   const sorted = [...s.businessHours].sort((a, b) => toMin(a.start) - toMin(b.start))
   const today = sorted.find((h) => toMin(h.start) > cur)
-  return today ? `今天 ${today.start} 营业` : `明天 ${sorted[0].start} 营业`
+  // 中间休息时说「继续营业」而不是「营业」——「今天 17:00 营业」读起来像今天才开门
+  return today ? `午间休息，${today.start} 继续营业` : `明天 ${sorted[0].start} 营业`
 }
 
 // ── 距离与运费 ───────────────────────────────────────────────
@@ -815,6 +827,7 @@ export function publicLocalMeta(s: LocalDeliverySettings, now: Date = new Date()
     isOpen: isOpenNow(s, now),
     paused: isPaused(s, now) ? { reason: s.paused?.reason ?? '', until: s.paused?.until ?? null } : null,
     nextOpenText: nextOpenText(s, now),
+    closedKind: closedKind(s, now),
     businessHours: s.businessHours,
     store: {
       name: s.store.name, phone: s.store.phone, province: s.store.province, city: s.store.city,

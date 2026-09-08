@@ -144,5 +144,20 @@ D52_SORTED=$(sort -n <<<"$D52_TAILS")
 assert_eq "日期段按 Asia/Shanghai 取（不是进程时区）" \
   "${D52_N1:3:8}" "$(TZ=Asia/Shanghai date +%Y%m%d)"
 
+echo "-- ⑧ 午间休息 vs 打烊 --"
+# 用当前上海时间造两段营业时间，把「现在」夹在中间：应当是 BREAK，文案说「继续营业」
+D52_HM=$(TZ=Asia/Shanghai date +%H:%M); D52_H=${D52_HM%:*}
+if [[ "10#$D52_H" -ge 1 && "10#$D52_H" -le 22 ]]; then
+  D52_A=$(printf '%02d:00' $((10#$D52_H - 1))); D52_B=$(printf '%02d:00' $((10#$D52_H + 1)))
+  d52_put ".businessHours = [{\"start\":\"00:00\",\"end\":\"$D52_A\"},{\"start\":\"$D52_B\",\"end\":\"23:59\"}]"
+  R=$(req GET /api/local/meta "")
+  assert_eq "两段之间：closedKind=BREAK" "$(jq -r .data.closedKind <<<"$R")" "BREAK"
+  [[ "$(jq -r .data.nextOpenText <<<"$R")" == *"继续营业"* ]] && ok "文案是「午间休息，$D52_B 继续营业」" || fail "文案不对" "$(jq -r .data.nextOpenText <<<"$R")"
+  d52_put ".businessHours = [{\"start\":\"00:00\",\"end\":\"$D52_A\"}]"
+  assert_eq "今天没有下一段：closedKind=CLOSED" "$(req GET /api/local/meta "" | jq -r .data.closedKind)" "CLOSED"
+else
+  ok "（跳过：当前时刻 $D52_HM 不便造两段时间）"
+fi
+
 req PUT /api/admin/settings/local-delivery "$AT" "$D52_ORIG" >/dev/null
 req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null

@@ -5,6 +5,18 @@ echo "== 45. 离线语义（D2：H5/H5b/M11，取代原 H5 修法）=="
 # 变量全部加 D45_ 前缀，避免跟 e2e.sh 主体或其它分片的全局变量撞车（前面有组在这里踩过 R1/R2
 # 撞车导致收尾 rm -f 报 "File name too long" 的坑）。
 
+# ⚠️ 时红时绿的根因（2026-09-08 查实）：恢复补发按 printerSn 捞「30 分钟内的 PENDING/SENT」，
+# 而本段每轮都用同一批 SN（D45-A…E），printer-mock/reset 只清 mock 不清 print_jobs 表——
+# 上几轮留下的 SENT 行会被这一轮的恢复一并补发，「物理收到 N 次」就多出前几轮的张数
+# （实测正好 +3 = 前三轮各 1 张）。半小时内连跑就红、隔半小时就绿。
+# 与 §50 的 d50_only 同一思路：把别人的行挪出扫描范围，本段只面对自己造的。
+# 第一次试的是「标成 FAILED」——没用：恢复检测另有一条「FAILED 作业补打」路径，会把它们
+# 原样再打一遍、再改回 SENT，物理次数照样多。只有**挪出时间窗**才真正脱离所有扫描
+# （与 B 段验证的 STALE:DROPPED 分支同一条路：太旧的行不补打、不告警）。
+# 往前挪 2 天：created_at 是 UTC 墙钟、NOW() 是 CST，8 小时的偏差远小于 2 天，两边都算「旧」。
+sql "UPDATE print_jobs SET created_at = DATE_SUB(created_at, INTERVAL 2 DAY), status = IF(status IN ('PENDING','SENT'),'FAILED',status), last_error = IF(status IN ('PENDING','SENT'),'STALE:DROPPED',last_error) WHERE printer_sn LIKE 'D45-%' AND created_at > DATE_SUB(NOW(3), INTERVAL 1 DAY);"
+# 隔离本身要可观测：残留没清干净的话，下面每一条「物理收到 N 次」都会带偏，先在这里红
+assert_eq "45 前置：往轮残留的 D45-* 作业已挪出补发窗口" "$(sql "SELECT COUNT(*) FROM print_jobs WHERE printer_sn LIKE 'D45-%' AND created_at > DATE_SUB(NOW(3), INTERVAL 1 DAY);")" "0"
 echo "-- A：离线期间下单不推 FAILED，票进 mock 云端队列；恢复且 waiting>0 → clearQueue + 从本地表补发 --"
 # 第二轮复核点名：「物理只收到 1 次 print」这条断言原来能过，纯粹因为 mock 自己永远不会凭空
 # 制造第二次 print()——哪怕 recoverFromOfflineQueue 少了 R5/R7 的 queryJob-before-resend 检查，

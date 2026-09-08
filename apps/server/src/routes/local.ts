@@ -10,7 +10,7 @@ import { AppError } from '../middlewares/error'
 import { optionalUserAuth } from '../middlewares/auth'
 import { localQuoteLimiter } from '../middlewares/rate-limit'
 import {
-  getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText,
+  getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText, closedKind,
   billableDistanceM, haversineM, calcLocalFee, tableBaseFee, quoteBaseFee, estimateMinutesRange, signQuote, quoteExpiresAt,
 } from '../services/local-settings'
 import { measureRoadQuote } from '../services/delivery/quote'
@@ -80,6 +80,7 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
       isOpen: isOpenNow(s),
       paused: isPaused(s) ? { reason: s.paused?.reason ?? '' } : null,
       nextOpenText: nextOpenText(s),
+      closedKind: closedKind(s),
       inRange: q.inRange,
       distanceM,
       distanceSource,

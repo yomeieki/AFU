@@ -1,4 +1,11 @@
 echo "== 47. 出票 · 复核第二轮（组三：R5/R8/R9/UNKNOWN；R4/R7/M4/M10 见报告的独立脚本验证）=="
+# 往轮残留隔离（2026-09-08 查实的「时红时绿」根因，与 §45 同一处理）：
+# 恢复补发按 printerSn 捞时间窗内的作业，而本段每轮复用同一批 SN（G3-*），
+# printer-mock/reset 只清 mock 不清 print_jobs——上几轮的行会被这一轮的恢复再打一遍，
+# 「物理收到 N 次」就多出前几轮的张数（实测 +5 = 上一轮 R5 的 5 单）。
+# 挪出时间窗（而不是只改状态：另有「FAILED 补打」路径会把 FAILED 再打回 SENT）。
+sql "UPDATE print_jobs SET created_at = DATE_SUB(created_at, INTERVAL 2 DAY), status = IF(status IN ('PENDING','SENT'),'FAILED',status), last_error = IF(status IN ('PENDING','SENT'),'STALE:DROPPED',last_error) WHERE printer_sn LIKE 'G3-%' AND created_at > DATE_SUB(NOW(3), INTERVAL 1 DAY);"
+assert_eq "47 前置：往轮残留的 G3-* 作业已挪出补发窗口" "$(sql "SELECT COUNT(*) FROM print_jobs WHERE printer_sn LIKE 'G3-%' AND created_at > DATE_SUB(NOW(3), INTERVAL 1 DAY);")" "0"
 # 变量全部加 G3_ 前缀，避免跟主脚本/其它分片的全局变量撞车（45 的教训：R1/R2 裸用会撞车）。
 #
 # R4（SENDING 孤儿回收窗口 15s→60s + 状态机回写落空即告警）、R7（mock 的「恢复即吐出」开关 +
