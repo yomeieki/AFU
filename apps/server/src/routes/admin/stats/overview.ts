@@ -107,6 +107,8 @@ router.get('/overview', async (req: Request, res: Response, next: NextFunction) 
       ? await prisma.orderItem.findMany({
           where: { productId: { in: hotIds } },
           orderBy: { id: 'desc' },
+          // MySQL 上 Prisma 的 distinct 是取回来在内存里去重，不加 take 会把这 5 个商品的全部历史明细拉回来
+          take: 200,
           distinct: ['productId'],
           select: { productId: true, productName: true },
         })

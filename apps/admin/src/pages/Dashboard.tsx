@@ -24,7 +24,8 @@ export default function Dashboard() {
     return s && e ? { startDate: s, endDate: e } : QUICK[2].range()   // 默认近 7 天
   }, [sp])
 
-  const setTab = (t: Tab) => setSp((p) => { p.set('tab', t); return p }, { replace: true })
+  // 切 tab 时把当前范围一并写进 URL：刚打开页面时 URL 里没有 start/end，只写 tab 的话刷新后范围会回到默认
+  const setTab = (t: Tab) => setSp((p) => { p.set('tab', t); p.set('start', range.startDate); p.set('end', range.endDate); return p }, { replace: true })
   const setRange = (r: DateRange) => setSp((p) => { p.set('start', r.startDate); p.set('end', r.endDate); return p }, { replace: true })
   const err = rangeError(range)
 

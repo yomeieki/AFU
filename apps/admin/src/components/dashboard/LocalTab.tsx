@@ -36,6 +36,7 @@ function Body({ d }: { d: LocalStats }) {
             <dt className="text-gray-800 font-medium">运费差额</dt>
             <dd className={`font-bold ${netGood ? 'text-green-600' : 'text-red-500'}`}>{netGood ? '盈余 ' : '补贴 '}{fen(Math.abs(f.netFen))}</dd>
           </div>
+          {f.unpricedCount > 0 && <div className="text-xs text-amber-600">另有 {f.unpricedCount} 张送达单没有记到配送费（未计入上面的数）</div>}
           <div className="text-xs text-gray-400">上期差额 {f.prev.netFen >= 0 ? '盈余' : '补贴'} {fen(Math.abs(f.prev.netFen))}</div>
         </dl>
       </Card>

@@ -40,8 +40,9 @@ function Body({ d, hotChannel, setHotChannel }: { d: OverviewStats; hotChannel: 
       <div className="bg-white rounded-lg shadow-card p-4">
         <p className="text-sm text-gray-500 mb-2">渠道占比（按实收）</p>
         <div className="h-3 rounded-full overflow-hidden bg-gray-100 flex">
-          <div style={{ width: `${localShare * 100}%`, background: LOCAL_COLOR }} />
-          <div style={{ flex: 1, background: EXPRESS_COLOR }} />
+          {/* 没有实收时留灰底：不然 flex:1 那段会把整条涂成邮寄色，看着像「全是邮寄」 */}
+          {total > 0 && <div style={{ width: `${localShare * 100}%`, background: LOCAL_COLOR }} />}
+          {total > 0 && <div style={{ flex: 1, background: EXPRESS_COLOR }} />}
         </div>
         <div className="mt-2 flex flex-wrap justify-between text-sm text-gray-700">
           <span><i className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: LOCAL_COLOR }} />同城 {d.channels.LOCAL.orderCount} 单 · {fen(d.channels.LOCAL.revenueFen)}</span>

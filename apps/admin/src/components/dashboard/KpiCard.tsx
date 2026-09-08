@@ -13,15 +13,16 @@ interface Props {
 }
 
 export default function KpiCard({ label, value, sub, cur, prev, deltaTone = 'up-good' }: Props) {
-  let delta: { text: string; up: boolean } | null = null
+  // up 为 null = 上期为 0，算不出方向，只写「—」不画箭头
+  let delta: { text: string; up: boolean | null } | null = null
   if (cur != null && prev != null) {
-    if (prev === 0) delta = cur === 0 ? null : { text: '较上期 —', up: cur > 0 }
+    if (prev === 0) delta = cur === 0 ? null : { text: '较上期 —', up: null }
     else {
       const r = (cur - prev) / prev
       delta = { text: `较上期 ${r >= 0 ? '+' : ''}${(r * 100).toFixed(0)}%`, up: r >= 0 }
     }
   }
-  const good = delta ? (deltaTone === 'up-good' ? delta.up : !delta.up) : true
+  const good = delta && delta.up != null ? (deltaTone === 'up-good' ? delta.up : !delta.up) : null
   return (
     <div className="bg-white rounded-lg shadow-card p-4 min-w-0">
       <p className="text-sm text-gray-500">{label}</p>
@@ -29,8 +30,8 @@ export default function KpiCard({ label, value, sub, cur, prev, deltaTone = 'up-
       <div className="mt-1 flex items-center gap-2 text-xs min-h-[1rem]">
         {sub && <span className="text-gray-500 truncate">{sub}</span>}
         {delta && (
-          <span className={`inline-flex items-center gap-0.5 ${good ? 'text-green-600' : 'text-red-500'}`}>
-            {delta.up ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+          <span className={`inline-flex items-center gap-0.5 ${good == null ? 'text-gray-400' : good ? 'text-green-600' : 'text-red-500'}`}>
+            {delta.up == null ? null : delta.up ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
             {delta.text}
           </span>
         )}

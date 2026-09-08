@@ -52,7 +52,8 @@ export function parseRange(query: unknown): { cur: Range; prev: Range } {
   prevEndDay.setDate(prevEndDay.getDate() - 1)
   return {
     cur: { start, endExclusive, startDate: dayKey(start), endDate: dayKey(end), days },
-    prev: { start: prevStart, endExclusive: start, startDate: dayKey(prevStart), endDate: dayKey(prevEndDay), days },
+    // 上期的 endExclusive 单独 new 一份：与 cur.start 共用同一个 Date 对象的话，哪天有人对它 setDate 就把本期也挪了
+    prev: { start: prevStart, endExclusive: new Date(start), startDate: dayKey(prevStart), endDate: dayKey(prevEndDay), days },
   }
 }
 

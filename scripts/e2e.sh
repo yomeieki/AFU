@@ -2001,6 +2001,8 @@ req PUT /api/admin/settings/member "$AT" "$ORIG_MEMBER_SETTINGS" >/dev/null
 req DELETE "/api/addresses/$M1A_ADDR" "$M1A" >/dev/null
 req DELETE "/api/addresses/$M1B_ADDR" "$M1B" >/dev/null
 
+# 数字闸（放在 source e2e.d 之前，分段脚本也要用）：字段缺失时 jq -r 会吐字符串 "null"，进 [[ -ge ]] 被当算术求值，set -u 下整跑当场炸。
+num() { [[ "${1:-}" =~ ^-?[0-9]+$ ]] && echo "$1" || echo "-1"; }
 for f in "$(dirname "$0")"/e2e.d/*.sh; do [[ -f "$f" ]] && source "$f"; done
 
 echo "== 38. 扫码统计（独立访客口径 + 本地自然日分桶）=="
@@ -2008,8 +2010,6 @@ echo "== 38. 扫码统计（独立访客口径 + 本地自然日分桶）=="
 # 就在读一个从没写过的列（COUNT(DISTINCT openid)，140/140 全 NULL），恒返回 0。
 # 0 看着完全合理（新店本来就可能没人扫），所以没人质疑过。这类「合理的错值」比报错难发现得多。
 #
-# 数字闸：字段缺失时 jq -r 会吐字符串 "null"，进 [[ -ge ]] 被当算术求值，set -u 下整跑当场炸。
-num() { [[ "${1:-}" =~ ^-?[0-9]+$ ]] && echo "$1" || echo "-1"; }
 s38_sum()  { req GET /api/admin/scan-stats/summary "$AT" | jq -r ".data.$1 // \"null\""; }
 s38_today() { req GET /api/admin/scan-stats/trend "$AT" | jq -r --arg d "$(date +%F)" '[.data.list[]|select(.date==$d)][0].scans // "null"'; }
 

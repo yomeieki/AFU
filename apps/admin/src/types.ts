@@ -758,9 +758,9 @@ export interface LocalStatsKpi { orderCount: number; revenueFen: number; avgDist
 export interface LocalStats {
   range: StatsRangeOut
   kpi: LocalStatsKpi & { prev: LocalStatsKpi }
-  freight: { customerPaidFen: number; deliveryFen: number; tipFen: number; cancelFen: number; riderTotalFen: number; netFen: number; prev: { customerPaidFen: number; riderTotalFen: number; netFen: number } }
+  freight: { customerPaidFen: number; deliveryFen: number; tipFen: number; cancelFen: number; riderTotalFen: number; netFen: number; unpricedCount: number; prev: { customerPaidFen: number; riderTotalFen: number; netFen: number } }
   timing: { stages: { key: string; label: string; medianMin: number | null; p90Min: number | null; n: number }[] }
-  providers: { provider: string; count: number; avgFeeFen: number; avgPickupMin: number | null }[]
+  providers: { provider: string; count: number; avgFeeFen: number | null; avgPickupMin: number | null }[]
   ladder: { first: number; cheapestN: number; all: number }
   distance: { label: string; count: number }[]
   cancels: { requested: number; deliveryCancelled: number }

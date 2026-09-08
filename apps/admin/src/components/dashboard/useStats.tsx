@@ -1,13 +1,20 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 
 /** 三个 tab 共用：拉一次、失败可重试。deps 变了就重拉。 */
 export function useStats<T>(fetcher: () => Promise<{ data: { data: T } }>, deps: unknown[]) {
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
+  // 连点两次范围时后发先至：只认最后一次请求，晚到的旧响应一律丢掉，
+  // 否则「今日」的数字会顶着「近 30 天」的标签显示出来，页面上看不出任何异常。
+  const seq = useRef(0)
   const load = useCallback(() => {
+    const mine = ++seq.current
     setLoading(true); setFailed(false)
-    fetcher().then((r) => setData(r.data.data)).catch(() => setFailed(true)).finally(() => setLoading(false))
+    fetcher()
+      .then((r) => { if (mine === seq.current) setData(r.data.data) })
+      .catch(() => { if (mine === seq.current) setFailed(true) })
+      .finally(() => { if (mine === seq.current) setLoading(false) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps)
   useEffect(() => { load() }, [load])
