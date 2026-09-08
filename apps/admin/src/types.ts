@@ -518,6 +518,9 @@ export interface WorkbenchCard {
     booking: {
       status: string; statusLabel: string; courierLabel: string; courierName: string | null; courierMobile: string | null
       slotText: string; kuaidinum: string | null; failReason: string | null; bookedAt: string | null
+      /** 原始快递公司编码（如 'shunfeng'）与改约用得到的原始时段字段——courierLabel/slotText 都是格式化后的展示文案，
+       *  ModifySlotModal 改约预填 / 识别顺丰必填时段要用这几个原始值，不能从展示文案里反查 */
+      kuaidicom: string; dayType: string | null; pickupStart: string | null; pickupEnd: string | null
     } | null
     cancelRequested: boolean
     /** 取消申请被驳回过：AUTO=接单满 expressAcceptGraceMin 分钟系统自动驳回，MANUAL=店员点的。null=没被驳回过 */

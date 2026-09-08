@@ -146,6 +146,8 @@ await t('预填：现在+2h 向上取整点起两小时；晚于 20:00 翻到明
   assert.deepStrictEqual(suggestSlot(T10), { dayType: '今天', pickupStart: '12:00', pickupEnd: '14:00' })
   assert.deepStrictEqual(suggestSlot(new Date('2026-09-09T02:10:00Z')), { dayType: '今天', pickupStart: '13:00', pickupEnd: '15:00' })
   assert.deepStrictEqual(suggestSlot(T19), { dayType: '明天', pickupStart: '09:00', pickupEnd: '11:00' })
+  // 凌晨（03:00 上海）算出的开始点早于营业窗口下限 09:00，须钳到 09:00 起，不能预填出一个下拉里选不到的时段
+  assert.deepStrictEqual(suggestSlot(new Date('2026-09-08T19:00:00Z')), { dayType: '今天', pickupStart: '09:00', pickupEnd: '11:00' })
   assert.strictEqual(pickupDateOf('今天', T10), '2026-09-09'); assert.strictEqual(pickupDateOf('后天', T19), '2026-09-11')
 })
 await t('unpickedCutoff：午夜边界——00:30（m=60）→ 昨天 23:30，不撕裂成「今天+23:30」', () => {

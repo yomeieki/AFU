@@ -640,22 +640,23 @@ function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
 type Day = (typeof DAYS)[number]
 /** 邮寄「改约时间」：只改时段，快递家不能换（服务端 modifyBookingSlot 本就不收 kuaidicom）。
  *  校验规则与 ExpressBookingModal 用同一个 slotError——两处必须字字一致，所以从那边 export 复用。
- *  booking 只有 WorkbenchCard.express.booking 那份精简字段（没有原始 kuaidicom 编码），
- *  顺丰必填时段的判断用 courierLabel 反查回 'shunfeng' 这一个值即可，slotError 只关心它是不是这一家。 */
+ *  booking 现在带了原始 kuaidicom/dayType/pickupStart/pickupEnd（不再只有格式化后的展示字段），
+ *  顺丰必填时段直接判 kuaidicom === 'shunfeng'，不用再从 courierLabel 反查；同时用它们预填
+ *  当前时段，不然店员改约时看到的永远是空白下拉，得自己把「当前」那行字翻译回三个选择器。 */
 function ModifySlotModal({ orderId, booking, onClose, onDone }: {
   orderId: number
-  booking: { courierLabel: string; slotText: string } | null
+  booking: { kuaidicom: string; courierLabel: string; slotText: string; dayType: string | null; pickupStart: string | null; pickupEnd: string | null } | null
   onClose: () => void
   onDone: (msg: string) => void
 }) {
-  const [day, setDay] = useState<Day>('今天')
-  const [start, setStart] = useState('')
-  const [end, setEnd] = useState('')
+  const [day, setDay] = useState<Day>(() => (booking?.dayType && (DAYS as readonly string[]).includes(booking.dayType) ? (booking.dayType as Day) : '今天'))
+  const [start, setStart] = useState(() => booking?.pickupStart ?? '')
+  const [end, setEnd] = useState(() => booking?.pickupEnd ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const pseudoKuaidicom = booking?.courierLabel === '顺丰速运' ? 'shunfeng' : ''
+  const kuaidicom = booking?.kuaidicom ?? ''
   const nowMin = (() => { const d = new Date(Date.now() + 8 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes() })()
-  const err = slotError(day, start, end, pseudoKuaidicom, nowMin)
+  const err = slotError(day, start, end, kuaidicom, nowMin)
   const submit = async () => {
     if (err) return
     setBusy(true); setError('')
@@ -685,7 +686,7 @@ function ModifySlotModal({ orderId, booking, onClose, onDone }: {
         <span>–</span>
         <select className="wb__select" value={end} onChange={(e) => setEnd(e.target.value)}><option value="">不限</option>{HOURS.map((h) => <option key={h} value={h}>{h}</option>)}</select>
       </div>
-      {err && <div className="wb__error">{err}</div>}
+      {err && <div className="wb__redbar">{err}</div>}
     </WbModal>
   )
 }
@@ -963,7 +964,7 @@ function ColumnTabs({ snap, active, onPick }: {
   )
 }
 
-function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, onReject, rejecting }: {
+function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, onReject }: {
   card: WorkbenchCard; colKey: ColKey; now: number
   /** 顾客可申请取消 / 店员可处理的窗口（分钟，接单起算），用来算「还剩多久自动回绝」——
    *  按渠道传进来的那一个值（同城传 acceptGraceMin，邮寄传 expressAcceptGraceMin） */
@@ -971,9 +972,8 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
   /** 当下的备餐时长（分，高峰取上界）——「备餐中」那一列的正常停留时长就是它 */
   prepMin: number
   onOpen: () => void; onHandleCancel: () => void
-  /** 驳回取消申请（同城/邮寄两渠道都有，调用方按 card.channel 分派具体接口） */
+  /** 驳回取消申请：打开确认弹窗（同城/邮寄两渠道都有，调用方按 card.channel 分派具体接口） */
   onReject: () => void
-  rejecting?: boolean
 }) {
   const local = card.channel === 'LOCAL'
   const d = card.local?.delivery ?? null
@@ -1070,9 +1070,7 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
         <div className="wb__strip wb__strip--warn">
           <span>顾客要退菜{autoRejectLeft(cancelState.acceptedAt, graceMin, now) ?? ''}</span>
           <span style={{ display: 'flex', gap: 4 }}>
-            <button className="wb__iconbtn" disabled={rejecting} onClick={(e) => { e.stopPropagation(); onReject() }}>
-              {rejecting ? '处理中…' : '驳回'}
-            </button>
+            <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onReject() }}>驳回</button>
             <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>同意退款</button>
           </span>
         </div>
@@ -1269,8 +1267,6 @@ export default function Workbench() {
   const [lastOkAt, setLastOkAt] = useState<number | null>(null)
   const [pollFailCount, setPollFailCount] = useState(0)
   const [reprinting, setReprinting] = useState(false)
-  /** 卡片上直接点「驳回」时正在处理的那张卡的 orderId——按钮据此置灰，防止重复提交 */
-  const [rejectingId, setRejectingId] = useState<number | null>(null)
 
   const load = useCallback(async (fresh = false) => {
     const seq = ++loadSeqRef.current
@@ -1527,20 +1523,15 @@ export default function Workbench() {
     finally { setCircuitBusy(false) }
   }
 
-  /** 卡片上的「驳回」：不弹确认框，因为它只是把「不处理」这个必然结果提前——同城/邮寄按渠道分派各自接口 */
-  const rejectCancelForCard = async (card: WorkbenchCard) => {
-    setRejectingId(card.orderId)
-    try {
-      await (card.channel === 'EXPRESS' ? rejectExpressCancelRequest(card.orderId) : rejectCancelRequest(card.orderId))
-      toast.success('已驳回')
-      await load(true)
-      if (drawer?.card.orderId === card.orderId) await loadDetail(card.orderId, card.channel)
-    } catch (e) {
-      toast.error(apiMessage(e, '驳回失败，请重试'))
-    } finally {
-      setRejectingId(null)
-    }
-  }
+  /** 卡片上的「驳回」：终态操作，走跟其它操作同一套 confirm({...}) 弹窗（§6）——不能一点就发生，
+   *  否则手滑碰到这颗按钮，顾客的取消申请就在店员没看清文案之前被回绝了。同城/邮寄按渠道分派各自接口。 */
+  const rejectCancelSpec = (card: WorkbenchCard): ConfirmSpec => ({
+    title: '驳回取消申请', channel: card.channel, confirmText: '确认驳回', okMsg: '已驳回',
+    what: '顾客的取消申请被驳回，订单继续制作/备货；顾客端显示「商家未同意取消」。',
+    customer: '顾客看到「商家未同意取消」。',
+    cost: '不产生费用。',
+    run: () => (card.channel === 'EXPRESS' ? rejectExpressCancelRequest(card.orderId) : rejectCancelRequest(card.orderId)),
+  })
 
   // ── 操作区（§6 分级确认：改状态或花钱的全弹；打给骑手/看进度/查物流不弹）──
   const renderActions = (): ReactNode => {
@@ -2006,7 +1997,9 @@ export default function Workbench() {
                   <div className="wb__line">
                     <span>邮寄成本</span>
                     <span className="wb__amt">
-                      顾客付 ¥{yuan(b.customerFeeFen)} · 预扣 {b.prepaidFeeFen != null ? `¥${yuan(b.prepaidFeeFen)}` : '—'}
+                      {/* 预扣回调没到之前 prepaidFeeFen 是 null——不能直接显示「—」，那会让店员以为这单没冻钱。
+                          有 quotedFeeFen（下单/预约时查的价）就先标成「报价」顶上，等回调落地会自动换成真实预扣。 */}
+                      顾客付 ¥{yuan(b.customerFeeFen)} · 预扣 {b.prepaidFeeFen != null ? `¥${yuan(b.prepaidFeeFen)}` : b.quotedFeeFen != null ? `¥${yuan(b.quotedFeeFen)}（报价）` : '—'}
                       {' · '}实扣 {b.settledFeeFen != null ? `¥${yuan(b.settledFeeFen)}` : '—'}
                       {' · '}计费 {b.billedWeightG != null ? `${(b.billedWeightG / 1000).toFixed(1)} kg` : '—'}
                     </span>
@@ -2212,8 +2205,7 @@ export default function Workbench() {
                       graceMin={c.channel === 'EXPRESS' ? (snap?.expressAcceptGraceMin ?? 0) : (snap?.acceptGraceMin ?? 0)}
                       prepMin={prepMin}
                       onHandleCancel={() => openCard(c, col.key, true)}
-                      onReject={() => void rejectCancelForCard(c)}
-                      rejecting={rejectingId === c.orderId}
+                      onReject={() => setModal({ kind: 'confirm', spec: rejectCancelSpec(c) })}
                     />
                   ))}
               </div>

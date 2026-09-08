@@ -45,11 +45,9 @@
 .wb__dot--danger { background:var(--danger); }
 .wb__stats { display:flex; gap:14px; font-size:12px; color:var(--text-2); }
 .wb__stats b { display:block; font-size:15px; color:var(--text-1); font-variant-numeric:tabular-nums; }
-/* .wb__icon-btn 是 .wb__iconbtn 的别名（ExpressBookingModal 用了带连字符的写法），两个类名共用一套样式，
-   不改调用处是为了让弹窗那段与规格/brief 给的代码逐字一致 */
-.wb__iconbtn, .wb__icon-btn { display:inline-flex; align-items:center; gap:5px; padding:6px 10px; border-radius:8px;
+.wb__iconbtn { display:inline-flex; align-items:center; gap:5px; padding:6px 10px; border-radius:8px;
   border:1px solid var(--line); background:var(--surface); color:var(--text-1); font-size:13px; cursor:pointer; }
-.wb__iconbtn:hover, .wb__icon-btn:hover { background:var(--bg); }
+.wb__iconbtn:hover { background:var(--bg); }
 .wb__alerts { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-2); }
 .wb__alerts--on { color:var(--danger); font-weight:600; }
 /* flex:none —— .wb 是纵向 flex 且整屏定高，不写死的话这条横幅会被看板挤扁到看不见 */
@@ -243,8 +241,7 @@
 .wb__quote-tick { display:inline-block; width:14px; color:var(--local); font-weight:700; }
 .wb__quote-note { margin-top:6px; font-size:12px; color:var(--text-2); line-height:1.5; }
 .wb__quote-note--warn { color:var(--warn); font-weight:600; }
-/* .wb__error 是 .wb__redbar 的别名（ExpressBookingModal 用了这个类名），同一套样式 */
-.wb__redbar, .wb__error { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
+.wb__redbar { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }
 
 /* ── 邮寄预约弹窗（ExpressBookingModal）专用 ──

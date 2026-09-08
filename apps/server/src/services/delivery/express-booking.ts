@@ -36,9 +36,11 @@ export function validateSlot(slot: SlotInput, kuaidicom: string, now: Date = new
   if (slot.dayType === '今天' && shanghaiMinutes(now) >= toMin(e) - 120) return '今天的时段须在结束前 2 小时预约，请改晚一点或约明天'
   return null
 }
-/** 预填：现在 + 2h 向上取整点为开始，结束 = 开始 + 2h；超过 20:00 就明天 09:00–11:00 */
+/** 预填：现在 + 2h 向上取整点为开始，结束 = 开始 + 2h；超过 20:00 就明天 09:00–11:00；
+ *  凌晨时段算出的开始点会早于 09:00（营业窗口下限），钳到 09:00 起 */
 export function suggestSlot(now: Date = new Date()): SlotInput {
-  const start = Math.ceil((shanghaiMinutes(now) + 120) / 60) * 60
+  let start = Math.ceil((shanghaiMinutes(now) + 120) / 60) * 60
+  if (start < 9 * 60) start = 9 * 60
   if (start + 120 > 20 * 60) return { dayType: '明天', pickupStart: '09:00', pickupEnd: '11:00' }
   return { dayType: '今天', pickupStart: fromMin(start), pickupEnd: fromMin(start + 120) }
 }

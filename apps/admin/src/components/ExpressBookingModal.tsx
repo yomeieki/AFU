@@ -9,6 +9,9 @@ const apiMessage = (e: unknown, fallback: string) => (e as { response?: { data?:
 export const DAYS = ['今天', '明天', '后天'] as const
 type Day = (typeof DAYS)[number]
 export const HOURS = Array.from({ length: 12 }, (_, i) => `${String(9 + i).padStart(2, '0')}:00`)   // 09:00–20:00
+/** 服务端 suggestSlot 给的预填值理论上总落在 09:00–20:00 内，但这里仍兜底一次——
+ *  万一哪天服务端算出一个不在下拉里的值，select 会显示空白而不是报错，店员看不出发生了什么 */
+const clampToHours = (h: string | null, fallback: string) => (h && (HOURS as readonly string[]).includes(h) ? h : (h ? fallback : ''))
 const toMin = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
 /** 与服务端 validateSlot 同规则（服务端仍会再校验一次） */
 export function slotError(day: Day, start: string, end: string, kuaidicom: string, nowMin: number): string {
@@ -41,7 +44,13 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
       if (!kuaidicom) {
         const cheapest = [...r.quotes].filter((x) => x.priceFen !== null).sort((a, b) => a.priceFen! - b.priceFen!)[0]
         setKuaidicom(cheapest?.kuaidicom ?? '')
-        setDay(r.suggestedSlot.dayType); setStart(r.suggestedSlot.pickupStart ?? ''); setEnd(r.suggestedSlot.pickupEnd ?? '')
+        setDay(r.suggestedSlot.dayType)
+        setStart(clampToHours(r.suggestedSlot.pickupStart, '09:00')); setEnd(clampToHours(r.suggestedSlot.pickupEnd, '11:00'))
+      } else {
+        // 重量改了会重新查价，报价可能跟着变——已选中的那家如果这次查出来是「无价」，
+        // 必须把选择清空，逼店员重新挑一家，而不是让「无价不可提交」的按钮悄悄卡死在原地不给出理由
+        const still = r.quotes.find((x) => x.kuaidicom === kuaidicom)
+        if (!still || still.priceFen === null) setKuaidicom('')
       }
     } catch (e) { setError(apiMessage(e, '报价加载失败')) } finally { setLoading(false) }
   }, [orderId, kuaidicom])
@@ -55,7 +64,9 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
   const cheapest = rows.find((r) => r.priceFen !== null)?.kuaidicom
   const chosen = rows.find((r) => r.kuaidicom === kuaidicom)
   const err = slotError(day, start, end, kuaidicom, shanghaiNowMin())
-  const canSubmit = !!q && !!kuaidicom && !err && !busy && !loading
+  const weightNum = Number(weight)
+  const weightValid = weight.trim() !== '' && Number.isFinite(weightNum) && weightNum >= 0.1 && weightNum <= 50
+  const canSubmit = !!q && !!kuaidicom && !err && !busy && !loading && weightValid && chosen?.priceFen != null
 
   const onWeightBlur = () => { const w = Number(weight); if (Number.isFinite(w) && w >= 0.1 && w <= 50 && q && w !== q.weightKg) void load(Math.round(w * 10) / 10) }
   const submit = async () => {
@@ -70,10 +81,11 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
   return (
     <div className="wb__modal-mask" onClick={onClose}>
       <div className="wb__modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wb__modal-head"><span>预约快递员上门取件</span><button className="wb__icon-btn" onClick={onClose} aria-label="关闭">×</button></div>
+        <div className="wb__modal-head"><span>预约快递员上门取件</span><button className="wb__iconbtn" onClick={onClose} aria-label="关闭">×</button></div>
         <div className="wb__modal-body">
           {q && <div className="wb__line"><span>顾客付</span><strong>¥{yuan(q.customerFeeFen)}</strong><span className="wb__muted">{q.fromSnapshot ? '报价来自下单快照' : '刚查的价'}</span></div>}
           <label className="wb__field"><span>重量（kg）</span><input className="wb__input" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} onBlur={onWeightBlur} /></label>
+          {!loading && !weightValid && <div className="wb__redbar">重量需在 0.1–50 kg</div>}
           <div className="wb__quote-list" role="radiogroup" aria-label="选择快递">
             {loading && <div className="wb__muted">查价中…</div>}
             {!loading && rows.map((r) => {
@@ -94,10 +106,10 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
             <span>–</span>
             <select className="wb__select" value={end} onChange={(e) => setEnd(e.target.value)}><option value="">不限</option>{HOURS.map((h) => <option key={h} value={h}>{h}</option>)}</select>
           </div>
-          {err && <div className="wb__error">{err}</div>}
+          {err && <div className="wb__redbar">{err}</div>}
           <label className="wb__field"><span>备注</span><input className="wb__input" maxLength={50} value={remark} onChange={(e) => setRemark(e.target.value)} /></label>
           <p className="wb__muted">向快递100 下单，预扣{chosen?.priceFen != null ? ` ¥${yuan(chosen.priceFen)}` : '所选家报价'}，快递员上门后按实际重量多退少补。快递员上门前取消不收费；取件后取消要联系快递公司。货物名固定「食品」。</p>
-          {error && <div className="wb__error">{error}</div>}
+          {error && <div className="wb__redbar">{error}</div>}
         </div>
         <div className="wb__modal-foot">
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>

@@ -3,7 +3,7 @@
  * 放服务端保证小程序端未来复用同一口径。3 秒缓存挡 10s×N 店员的轮询洪峰；?fresh=1 供操作后强刷。
  */
 import { Router, Request, Response, NextFunction } from 'express'
-import { ExpressBooking } from '@prisma/client'
+import { ExpressBooking, Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { DELIVERY_STATUS_LABEL } from '../../services/delivery/state'
@@ -17,6 +17,22 @@ import { getWorkbenchPrinterHealth, PrinterHealthEntry } from '../../services/ti
 const router = Router()
 const WAITING_STATUSES = ['CALLING', 'ACCEPTED', 'ARRIVING', 'ARRIVED', 'REASSIGNING', 'ABNORMAL', 'UNKNOWN']
 let cache: { at: number; data: unknown } | null = null
+
+/**
+ * 邮寄预约查询只取 bookingView()/toCard() 真正会读的列——不是 `include`/全量 `findMany`。
+ * 这张表还有 callbackSalt（回调验签用的密钥）、pollToken、taskId、feeDetails、trackJson 等
+ * 字段，工作台快照这种「取一屏所有在办订单」的高频查询没有理由把它们也搬一遍。
+ * bookingView() 的参数类型是完整的 Prisma `ExpressBooking`，这里选出来的是它的子集，
+ * 调用处需要 cast 一下（该函数确实只读了下面这些列，cast 是安全的）。
+ */
+const bookingSelect = {
+  id: true, orderId: true, activeOrderId: true, bookingNo: true, status: true, kuaidicom: true, serviceType: true,
+  kuaidinum: true, dayType: true, pickupDate: true, pickupStart: true, pickupEnd: true, weightG: true,
+  customerFeeFen: true, quotedFeeFen: true, prepaidFeeFen: true, settledFeeFen: true, billedWeightG: true,
+  courierName: true, courierMobile: true, failReason: true, cancelledBy: true,
+  bookedAt: true, acceptedAt: true, pickedAt: true, deliveredAt: true, cancelledAt: true, createdAt: true,
+} satisfies Prisma.ExpressBookingSelect
+type BookingRow = Prisma.ExpressBookingGetPayload<{ select: typeof bookingSelect }>
 
 /**
  * 多台打印机时取「最差」状态作为工作台顶栏那一个状态灯的口径：任何一台离线/查询出错就算 OFFLINE，
@@ -52,7 +68,7 @@ async function loadOrders() {
   })
 }
 
-function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: ExpressBooking | null): Record<string, unknown> {
+function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: BookingRow | null): Record<string, unknown> {
   const units = o.items.reduce((n, it) => n + it.quantity, 0)
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
@@ -64,7 +80,9 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
     express: o.deliveryType === 'EXPRESS'
       ? {
           province: o.receiverProvince, city: o.receiverCity, expressCompany: o.shipment?.expressCompany ?? null, expressNo: o.shipment?.expressNo ?? null,
-          booking: b ? (() => { const v = bookingView(b); return { status: v.status, statusLabel: v.statusLabel, courierLabel: v.courierLabel, courierName: v.courierName, courierMobile: v.courierMobile, slotText: v.slotText, kuaidinum: v.kuaidinum, failReason: v.failReason, bookedAt: v.bookedAt } })() : null,
+          // bookingView() 按完整 ExpressBooking 类型声明形参，但实际只读 bookingSelect 里选出的这些列——
+          // cast 是安全的，见 bookingSelect 上方注释。
+          booking: b ? (() => { const v = bookingView(b as unknown as ExpressBooking); return { status: v.status, statusLabel: v.statusLabel, courierLabel: v.courierLabel, courierName: v.courierName, courierMobile: v.courierMobile, slotText: v.slotText, kuaidinum: v.kuaidinum, failReason: v.failReason, bookedAt: v.bookedAt, kuaidicom: v.kuaidicom, dayType: v.dayType, pickupStart: v.pickupStart, pickupEnd: v.pickupEnd } })() : null,
           cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
           cancelRejected: !!o.cancelRequestRejectedAt && ['PAID', 'PREPARING'].includes(o.status) ? (o.cancelRequestRejectedBy === 'AUTO' ? 'AUTO' : 'MANUAL') : null,
           acceptedAt: o.acceptedAt?.toISOString() ?? null,
@@ -127,7 +145,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     // 升序遍历后 Map 里留下的就是最后一条。
     const expressIds = orders.filter((o) => o.deliveryType === 'EXPRESS').map((o) => o.id)
     const bookings = expressIds.length
-      ? await prisma.expressBooking.findMany({ where: { orderId: { in: expressIds } }, orderBy: { id: 'asc' } })
+      ? await prisma.expressBooking.findMany({ where: { orderId: { in: expressIds } }, orderBy: { id: 'asc' }, select: bookingSelect })
       : []
     const bookingByOrder = new Map(bookings.map((b) => [b.orderId, b]))
 
