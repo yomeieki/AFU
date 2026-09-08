@@ -1,9 +1,11 @@
 /**
- * 店铺设置：settings 表的读写 + 进程内缓存。
+ * 店铺设置：settings 表里 `shipping` 这个 legacy key 的读取 + 进程内缓存。
  *
- * 下单是热路径，每单都查一次配置不值当；配置又极少改动，
- * 所以读一次缓存 60 秒，后台保存时立即失效。多实例部署下最坏
- * 情况是别的实例晚 60 秒生效——运费改动不需要秒级一致。
+ * 这是邮寄批次一（spec §3/§4.1）上线前的老运费口径，一口价 + 满免 + 起送，
+ * 不分地区。批次一之后新写路径已经全部切到 `express-settings.ts` 的分组设置，
+ * 这个 key 只在**迁移**时还有用——`express-settings.ts` 在没有新设置行时读它一次、
+ * 把老配置搬进新结构（`legacyShippingView`/`applyLegacyShipping`），之后就不再碰。
+ * 只保留读取（`getShippingSettings`），不再提供写入：新设置一律走 `express-settings.ts`。
  */
 
 import prisma from '../utils/prisma'
@@ -60,18 +62,6 @@ export async function getShippingSettings(): Promise<ShippingSettings> {
     })
     return value
   }
-  cached = { value, at: Date.now() }
-  return value
-}
-
-export async function setShippingSettings(next: ShippingSettings): Promise<ShippingSettings> {
-  const value = sanitize(next)
-  const json = JSON.stringify(value)
-  await prisma.setting.upsert({
-    where: { key: SHIPPING_KEY },
-    create: { key: SHIPPING_KEY, value: json },
-    update: { value: json },
-  })
   cached = { value, at: Date.now() }
   return value
 }

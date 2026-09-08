@@ -356,11 +356,14 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       if (quoteToken && (!quoted || quoted.addressId !== address.id || quoted.addressHash !== addressHash(address.fullAddress) || quoted.itemsHash !== hash)) {
         throw new AppError(42261, '运费已更新，请重新确认')
       }
-      let fee: FeeCalc, snapshotQuotes: { kuaidicom: string; serviceType: string | null; priceFen: number | null }[]
+      let fee: FeeCalc, snapshotQuotes: { kuaidicom: string; serviceType: string | null; priceFen: number | null }[], pricedWeightKg: number
       if (quoted) {
-        fee = calcExpressFee(s, group, quoted.weightKg, null, totalAmount, quoted.feeSource === 'QUOTE' ? { quotedFeeFen: quoted.quotedFeeFen } : null)
+        // QUOTE 锁价：重量随凭证；TABLE 现算：重量与表都用当前值
+        pricedWeightKg = quoted.feeSource === 'QUOTE' ? quoted.weightKg : weightKg
+        fee = calcExpressFee(s, group, pricedWeightKg, null, totalAmount, quoted.feeSource === 'QUOTE' ? { quotedFeeFen: quoted.quotedFeeFen } : null)
         snapshotQuotes = quoted.quotes
       } else {
+        pricedWeightKg = weightKg
         const live = await fetchCourierQuotes(s, address.id, address.fullAddress, weightKg)
         fee = calcExpressFee(s, group, weightKg, live, totalAmount)
         snapshotQuotes = (live ?? []).map((q) => ({ kuaidicom: q.kuaidicom, serviceType: q.serviceType, priceFen: q.priceFen }))
@@ -369,10 +372,10 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       expressSnapshot = {
         expressQuoteSnapshot: {
           feeFen: fee.feeFen, quotedFeeFen: fee.quotedFeeFen, feeSource: fee.feeSource, groupName: group.name,
-          weightKg: quoted?.weightKg ?? weightKg, itemsHash: hash, fromToken: !!quoted, quotes: snapshotQuotes,
+          weightKg: pricedWeightKg, itemsHash: hash, fromToken: !!quoted, quotes: snapshotQuotes,
         },
         expressRegionGroup: group.name,
-        expressWeightG: Math.round((quoted?.weightKg ?? weightKg) * 1000),
+        expressWeightG: Math.round(pricedWeightKg * 1000),
       }
     }
     // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 券 → 运费（**按券前小计**判包邮/起送）→ 实付。

@@ -301,6 +301,12 @@ model Order {
   // pointsEarned × 退款额 / pointsBase 摊，与 earnRatePerYuan 无关。
   // null = 该单在本列上线前结算（退化用 actualAmount）
   pointsBase                  Int?      @map("points_base")
+  // ── 邮寄报价快照（deliveryType=EXPRESS 时写入；批次一）──
+  // 下单那一刻的凭证载荷（各家成本价、feeSource、分组、指纹），店员端预约弹窗与成本核对直接读它
+  expressQuoteSnapshot        Json?     @map("express_quote_snapshot")
+  expressRegionGroup          String?   @map("express_region_group") @db.VarChar(32)
+  // 报价重量（克）。用克不用 Decimal：Prisma 的 Decimal 在应用层是对象，比较/序列化都要转，Int 最省事
+  expressWeightG              Int?      @map("express_weight_g")
   // 客户端下单幂等键（UUID）。治的是「服务端已创建、客户端超时没收到响应」这一类重复下单：
   // 顾客点一次、网络卡住、他再点一次，库里就是两张单、库存扣两次、券核销两次。
   // 客户端每进一次结算页生成一个，重试沿用同一个；服务端见到重复的就把原单原样返回。
@@ -310,12 +316,6 @@ model Order {
   // 所以 (user_id, NULL) 可以有任意多行。
   // 带上 userId 是安全边界而不只是去重粒度：只用 clientRequestId 做唯一键的话，
   // A 用户猜到 B 的 id 就能拿到 B 的订单号与金额。
-  // ── 邮寄报价快照（deliveryType=EXPRESS 时写入；批次一）──
-  // 下单那一刻的凭证载荷（各家成本价、feeSource、分组、指纹），店员端预约弹窗与成本核对直接读它
-  expressQuoteSnapshot        Json?     @map("express_quote_snapshot")
-  expressRegionGroup          String?   @map("express_region_group") @db.VarChar(32)
-  // 报价重量（克）。用克不用 Decimal：Prisma 的 Decimal 在应用层是对象，比较/序列化都要转，Int 最省事
-  expressWeightG              Int?      @map("express_weight_g")
   clientRequestId             String?   @map("client_request_id") @db.VarChar(36)
   createdAt                   DateTime  @default(now()) @map("created_at")
   updatedAt                   DateTime  @updatedAt @map("updated_at")
