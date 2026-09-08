@@ -6,7 +6,7 @@
  *  - 不支持商户自有单号 → deliveryNo 拼进 callbackUrl（回调按 URL 直取）
  *  - 回调 sign = MD5(param + salt)
  * ⚠️ 全仓其它 fetch 都没有超时；这里必须 AbortSignal.timeout(...)——超时时下单可能已成功，
- *    调用方按 UNKNOWN 处理等回调认领，绝不能重试（会双呼骑手）。
+ *    调用方按 UNKNOWN 处理等回调认领，绝不能重试（会双呼骑手）。（实现见 kd100-client.ts）
  */
 import crypto from 'crypto'
 import { config, validateKd100Config } from '../../config'

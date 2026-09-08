@@ -55,6 +55,11 @@ export async function postKd100(o: PostKd100Options): Promise<Kd100Response> {
     if (name === 'TimeoutError' || name === 'AbortError') {
       throw new ProviderError('TIMEOUT', 'TIMEOUT', `快递100 请求超时: ${err.message}`, e)
     }
+    // fetch 本身 reject 且不是超时：区分「能证明请求根本没发出去」与「判断不了」。
+    // Node fetch 把底层错误包在 cause.code 里——ECONNREFUSED/DNS 解析失败（ENOTFOUND/EAI_AGAIN）
+    // 说明连接从未建立，本地包都没发出去，按硬失败处理最省心（明确失败，可直接重试，不占 UNKNOWN）。
+    // 其它一律保守当超时：连接中途断开、EPIPE、ECONNRESET 这类无法证明请求没送达对方，
+    // 下单可能已经发出去了，绝不能让调用方当作「肯定没成」去重试（会双呼骑手）。
     const causeCode = err.cause && typeof err.cause === 'object' && 'code' in err.cause
       ? String((err.cause as { code?: unknown }).code ?? '') : ''
     const CONFIRMED_NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'])
@@ -64,6 +69,10 @@ export async function postKd100(o: PostKd100Options): Promise<Kd100Response> {
     throw new ProviderError('TIMEOUT', causeCode || 'NETWORK', `快递100 请求网络失败: ${err.message}`, e)
   }
   if (res.status >= 500) {
+    // 网关级 5xx：不能证明请求没有在对方那头产生真实下单（可能背后已经建单，只是响应炸了）。
+    // 必须按超时语义处理——停 UNKNOWN 等回调认领或人工核对，绝不能当「明确失败」直接放行重试
+    // （createOrder 若在此 fail-open，会导致两个骑手上门、两笔配送费；cancelOrder/addTip 同类错误下
+    // 本就 fail-closed，不受影响）。在尝试解析响应体之前先判断，5xx 时无论 body 是不是合法 JSON 都一视同仁。
     throw new ProviderError('TIMEOUT', 'HTTP_5XX', `快递100 网关异常 HTTP ${res.status}`, res)
   }
   let data: Kd100Response

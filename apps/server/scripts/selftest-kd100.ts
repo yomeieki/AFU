@@ -61,8 +61,10 @@ t('回调字段截断（statusDesc 500 字 → 255）', () => {
   const r = kd100Provider.verifyAndParseCallback({ taskId:'T', param, sign: md5U(param + salt) }, salt)
   assert.ok(r.ok && (r.payload.statusDesc ?? '').length === 255)
 })
-t('_sign 与 kd100-client.signKd100 逐字节一致', () => {
-  assert.strictEqual(_sign('{"x":"中文"}', '1725400000000', 'K', 'S'), signKd100('{"x":"中文"}', '1725400000000', 'K', 'S'))
+t('signKd100 = MD5(param+t+key+secret)，含多字节 utf8；_sign 与之一致', () => {
+  const s = signKd100('{"x":"中文"}', '1725400000000', 'K', 'S')
+  assert.strictEqual(s, md5U('{"x":"中文"}' + '1725400000000' + 'K' + 'S'))
+  assert.strictEqual(_sign('{"x":"中文"}', '1725400000000', 'K', 'S'), s)
 })
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)
 
