@@ -11,9 +11,9 @@ import { optionalUserAuth } from '../middlewares/auth'
 import { localQuoteLimiter } from '../middlewares/rate-limit'
 import {
   getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText,
-  billableDistanceM, haversineM, calcLocalFee, estimateMinutesRange, signQuote, quoteExpiresAt,
+  billableDistanceM, haversineM, calcLocalFee, tableBaseFee, quoteBaseFee, estimateMinutesRange, signQuote, quoteExpiresAt,
 } from '../services/local-settings'
-import { measureRoadDistanceM } from '../services/delivery/quote'
+import { measureRoadQuote } from '../services/delivery/quote'
 
 const router = Router()
 
@@ -58,10 +58,18 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
     // **不报错**：顾客只是在看运费，让他看到一个偏保守的数字远好过弹一个「暂时查不到」。
     // distanceSource 让调用方分得清这次是实测还是估算（小程序据此决定文案）。
     const estimatedM = billableDistanceM(s, latE6, lngE6)!
-    const measuredM = await measureRoadDistanceM(s, { latE6, lngE6 })
-    const distanceM = measuredM ?? estimatedM
-    const distanceSource: 'MEASURED' | 'ESTIMATED' = measuredM === null ? 'ESTIMATED' : 'MEASURED'
-    const q = calcLocalFee(s, distanceM, body.subtotal)
+    const measured = await measureRoadQuote(s, { latE6, lngE6 })
+    const distanceM = measured?.distanceM ?? estimatedM
+    const distanceSource: 'MEASURED' | 'ESTIMATED' = measured === null ? 'ESTIMATED' : 'MEASURED'
+    // 定价口径（PO 2026-09-08）：QUOTE = 最低报价 + 加价（取整），查不到报价就退回固定表。
+    // 退回是**必须有**的一条路：查价 5 秒超时或运力方报错时没有价可依，
+    // 而顾客只是在看运费——给他一个偏保守的表价，远好过让运费这一栏空着。
+    const baseFee = s.fee.mode === 'QUOTE' && measured?.lowestFen != null
+      ? quoteBaseFee(s, measured.lowestFen)
+      : tableBaseFee(s, distanceM)
+    const feeSource: 'QUOTE' | 'TABLE' =
+      s.fee.mode === 'QUOTE' && measured?.lowestFen != null ? 'QUOTE' : 'TABLE'
+    const q = calcLocalFee(s, distanceM, body.subtotal, baseFee)
     const est = estimateMinutesRange(s, distanceM)
     // token 与 quoteExpiresAt 必须出自**同一个 issuedAt**：分别取 new Date() 的话，
     // 两次调用之间的毫秒差会让客户端算出的过期时刻比 token 里的 e 早或晚，
@@ -77,6 +85,9 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
       distanceSource,
       straightDistanceM: haversineM(s.store.latE6, s.store.lngE6, latE6, lngE6),
       fee: q.fee,
+      // 这一单的运费是按实时报价定的还是退回了固定表。**只给口径，不给金额**——
+      // 各家报价是店家付给骑手的成本，不能顺着顾客侧接口漏出去。
+      feeSource,
       minOrderAmount: s.fee.minOrderAmount,
       belowMin: q.belowMin,
       // 结算页只给**大概**，不给钟点（PO 2026-09-07）：备餐是从店员接单才开始的，
@@ -95,7 +106,7 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
       // 于是这里的不变量可以直说：**签出来的凭证，在签发那一刻一定是可兑付的**。
       quoteToken: q.inRange && addressId > 0
         ? signQuote({
-            fee: q.fee, distanceM, addressId, latE6, lngE6,
+            fee: q.fee, baseFee, feeSource, distanceM, addressId, latE6, lngE6,
             storeLatE6: s.store.latE6, storeLngE6: s.store.lngE6,
             distanceSource,
           }, issuedAt)

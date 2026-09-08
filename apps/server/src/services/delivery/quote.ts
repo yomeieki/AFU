@@ -54,13 +54,16 @@ export const CUSTOMER_QUOTE_TIMEOUT_MS = 5000
  *  ② 外层再 race 一个稍宽的计时器兜底，保证**无论 provider 怎么实现**顾客都不会等超过这个预算。
  *     ② 单独存在不够（socket 会泄漏到 8 秒），① 单独存在也不够（provider 可以忽略这个参数）。
  *
- * 只取 distanceM，**不取 feeFen/quotes**：那是店家付给骑手的成本，不能顺着顾客侧接口漏出去。
+ * 返回距离**与最低报价**。最低报价不是原样透出去给顾客看的——顾客看到的是
+ * `quoteBaseFee()` 算出来的「最低价 + 加价（取整）」，成本本身仍然不出现在任何顾客侧字段里
+ * （见 routes/local.ts 的响应体：只有 fee，没有 quotes/feeFen）。
+ * 取**最低**而不是各家平均：最低那家正是三级阶梯第一级会呼的那家，也就是我们真正要付的钱。
  */
-export async function measureRoadDistanceM(
+export async function measureRoadQuote(
   s: LocalDeliverySettings,
   receiver: { latE6: number; lngE6: number },
   timeoutMs: number = CUSTOMER_QUOTE_TIMEOUT_MS
-): Promise<number | null> {
+): Promise<{ distanceM: number; lowestFen: number | null } | null> {
   if (s.store.latE6 === null || s.store.lngE6 === null) return null
   let timer: NodeJS.Timeout | undefined
   try {
@@ -84,7 +87,15 @@ export async function measureRoadDistanceM(
     ])
     const d = priced.distanceM
     // 0 与负数不是「很近」，是运力方没算出路来。当成没查到，别拿它去判范围和算钱。
-    return typeof d === 'number' && Number.isFinite(d) && d > 0 ? Math.round(d) : null
+    if (typeof d !== 'number' || !Number.isFinite(d) || d <= 0) return null
+    // 最低价要**按设置里的运力表过滤后**再取：三级阶梯第一级挑的就是这个集合里最便宜那家
+    // （见 orchestrator.resolveCallProviders 的 `usable`）。不过滤的话，店主刚把达达摘掉时
+    // 会出现「按达达的价收钱、实际呼蜂鸟」——收的和付的不是同一家。
+    const usable = (priced.quotes ?? [])
+      .filter((q) => s.kd100.providers.includes(q.provider))
+      .map((q) => q.feeFen)
+      .filter((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)
+    return { distanceM: Math.round(d), lowestFen: usable.length ? Math.min(...usable) : null }
   } catch (e) {
     console.warn('[quote] 顾客侧查价失败，退回直线估算:', (e as Error)?.message ?? e)
     return null

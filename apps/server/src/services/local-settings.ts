@@ -31,7 +31,34 @@ export interface LocalDeliverySettings {
   }
   radiusKm: number
   detourFactor: number
-  fee: { baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number }
+  /**
+   * 运费。**两套定价口径**（PO 2026-09-08 定）：
+   *
+   *   QUOTE（默认）—— 顾客输完地址那一刻本来就在向运力方查一次道路距离，那一次
+   *     `batchPrice` 同时带回了各家报价。取**最低那家**（也正是三级阶梯第一级会呼的那家）
+   *     加 `quoteMarkupFen`，就是收顾客的钱。好处是运费跟着真实行情走，而且和成本严丝合缝：
+   *     第一级接得掉，每单利润恒等于加价。
+   *   TABLE —— 起步价 + 每公里的固定表（旧口径）。**没有被废弃**：查价超时/运力方报错时
+   *     QUOTE 无价可依，必须退回它，否则顾客就看不到运费了。
+   *
+   * 为什么不用「各家平均价」（PO 最初的想法）：平均和我们实付的钱没有绑定关系——
+   * 我们付的是最低价，平均是另外几家共同决定的；而且**报价家数会变**（配了 7 家，
+   * 2026-09-06 两次实测都只有 4 家回价），少一家平均就跳一次，顾客付多少变成
+   * 「今天哪几家报了价」的函数，既解释不了也控制不住。最低价 + 固定加价没有这个问题。
+   *
+   * 实测依据（2026-09-06，两组真实报价）：
+   *   1.11 km 达达 ¥5.83 / 蜂鸟 ¥6.05 / 顺丰 ¥10.78 / 闪送 ¥11.22 —— 旧表收 ¥6.00，利润 +¥0.17
+   *   8.94 km 达达 ¥16.23 / 顺丰 ¥17.38 / 蜂鸟 ¥18.15 / 闪送 ¥23.32 —— 旧表收 ¥21.00，利润 +¥4.77
+   * 旧表是「近单几乎不赚、远单过度收费」；改成最低价 +¥2.5 后两端都稳定在 +¥2.50。
+   */
+  fee: {
+    baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number
+    mode: 'TABLE' | 'QUOTE'
+    /** QUOTE 口径下，在最低报价之上加多少（分）。这就是每单的毛利（第一级接得掉时） */
+    quoteMarkupFen: number
+    /** 向上取整到这个粒度（分）。50 = 五毛；0 = 不取整（¥8.33 这种零头会原样出现在结算页） */
+    roundToFen: number
+  }
   businessHours: BusinessHour[]
   /**
    * 平时的备餐时长（分钟）。**这段时间是从店员点「接单」开始算的**，不是从顾客下单开始——
@@ -144,7 +171,10 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   //   5km ¥99 单 → 免运费 / ¥14.5 / 担 ¥14.5
   // 每单补贴占订单 6-9%，毛利扛得住。免运门槛特意设在 ¥99——5 km 成本 ¥14.5，
   // 只有把客单价推上去才摊得平。先跑一个月看单量与距离分布再调。
-  fee: { baseFee: 600, baseKm: 3, perKmFee: 250, freeThreshold: 9900, minOrderAmount: 4000 },
+  fee: {
+    baseFee: 600, baseKm: 3, perKmFee: 250, freeThreshold: 9900, minOrderAmount: 4000,
+    mode: 'QUOTE', quoteMarkupFen: 250, roundToFen: 50,
+  },
   businessHours: [{ start: '09:00', end: '20:00' }],
   // 15 → 20（PO 2026-09-07）：15 是拍脑袋的初值。首单实测接单→取货 10.4 分钟，看着够，
   // 但那是晚上 8 点的单；而且原来的预计送达从**下单**起算，把「下单→付款→接单」那一段
@@ -229,6 +259,13 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       perKmFee: int(fee.perKmFee, D.fee.perKmFee, 0, 100_000),
       freeThreshold: int(fee.freeThreshold, D.fee.freeThreshold, 0, 10_000_000),
       minOrderAmount: int(fee.minOrderAmount, D.fee.minOrderAmount, 0, 10_000_000),
+      // 只认这两个字面量：脏值回默认（QUOTE），不要静默退回旧口径——
+      // 静默退回意味着「以为在按报价收钱，其实在按老表收钱」，而两者近单差 ¥2.5。
+      mode: fee.mode === 'TABLE' || fee.mode === 'QUOTE' ? fee.mode : D.fee.mode,
+      // 上限 5000 分（¥50）：加价比这还高的话，问题多半出在别处，不该靠运费找补。
+      quoteMarkupFen: int(fee.quoteMarkupFen, D.fee.quoteMarkupFen, 0, 5_000),
+      // 0 = 不取整；上限 500 分（¥5），再粗顾客会觉得在乱收
+      roundToFen: int(fee.roundToFen, D.fee.roundToFen, 0, 500),
     },
     businessHours: hours,
     prepMinutes: int(o.prepMinutes, D.prepMinutes, 0, 180),
@@ -465,15 +502,42 @@ export function billableDistanceM(s: LocalDeliverySettings, latE6: number, lngE6
   return Math.round(haversineM(s.store.latE6, s.store.lngE6, latE6, lngE6) * s.detourFactor)
 }
 
+/** 固定表口径的基础运费：起步价 + ⌈超出起步的公里数⌉ × 每公里价。与订单金额无关 */
+export function tableBaseFee(s: LocalDeliverySettings, distanceM: number): number {
+  const km = distanceM / 1000
+  return s.fee.baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * s.fee.perKmFee
+}
+
+/**
+ * QUOTE 口径的基础运费：**最低报价 + 加价**，再向上取整到 `roundToFen`。
+ *
+ * 取最低而不是平均，理由见 `LocalDeliverySettings.fee` 的注释。向上取整而不是四舍五入：
+ * 取整这一步只该往我们有利的方向走，`¥8.33 → ¥8.50` 而不是 `→ ¥8.00`。
+ */
+export function quoteBaseFee(s: LocalDeliverySettings, lowestFen: number): number {
+  const raw = lowestFen + s.fee.quoteMarkupFen
+  return s.fee.roundToFen > 0 ? Math.ceil(raw / s.fee.roundToFen) * s.fee.roundToFen : raw
+}
+
+/**
+ * 最终运费 = 基础运费 叠加「与订单金额相关」的规则（目前只有满免）。
+ *
+ * `baseOverride` 是**报价那一刻**算出来的基础运费（QUOTE 口径下来自实时报价，签在 token 里）。
+ * 下单端点必须走这条路：它按设计**不做第二次外呼**，重新算不出实时报价，
+ * 而满免要用**下单时**的真实金额判（顾客报完价还会加菜），所以两件事必须分开——
+ * 基础运费信 token，满免/起送在这里现算。不传 baseOverride 就退回固定表（老行为）。
+ */
 export function calcLocalFee(
   s: LocalDeliverySettings,
   distanceM: number,
-  subtotal: number
+  subtotal: number,
+  baseOverride?: number | null
 ): { fee: number; inRange: boolean; belowMin: boolean } {
   const inRange = distanceM <= Math.round(s.radiusKm * 1000)
   const belowMin = s.fee.minOrderAmount > 0 && subtotal < s.fee.minOrderAmount
-  const km = distanceM / 1000
-  let fee = s.fee.baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * s.fee.perKmFee
+  let fee = baseOverride != null && Number.isFinite(baseOverride) && baseOverride >= 0
+    ? baseOverride
+    : tableBaseFee(s, distanceM)
   if (s.fee.freeThreshold > 0 && subtotal >= s.fee.freeThreshold) fee = 0
   return { fee, inRange, belowMin }
 }
@@ -542,7 +606,21 @@ export function estimateMinutes(s: LocalDeliverySettings, distanceM: number, now
  * `distanceSource` 是这条规则唯一的例外，见它自己的注释。
  */
 interface QuotePayload {
-  fee: number; distanceM: number; addressId: number
+  fee: number
+  /**
+   * 报价那一刻算出的**基础运费**（未叠加满免）。与 `fee` 分开签，是因为满免要用
+   * **下单时**的金额判（顾客报完价还会加菜），而基础运费必须锁在报价那一刻。
+   */
+  baseFee: number
+  /**
+   * 这个基础运费是怎么来的，决定下单时**要不要重算**：
+   *   QUOTE —— 来自报价那一刻的实时运力报价。下单端点按设计不做第二次外呼，
+   *            重算不出来，只能信这一份签过名的 → 等于给顾客**锁价 15 分钟**。
+   *   TABLE —— 来自固定表。表就在设置里，下单时重算得出来，所以**不信 token、现算**，
+   *            店主中途调价能立刻生效（原有的 42227「配送费已更新」那条防线靠的就是这个）。
+   */
+  feeSource: 'QUOTE' | 'TABLE'
+  distanceM: number; addressId: number
   latE6: number; lngE6: number
   storeLatE6: number; storeLngE6: number
   /**
@@ -579,7 +657,7 @@ export function quoteExpiresAt(now: Date = new Date()): Date {
 
 export function signQuote(p: QuotePayload, now: Date = new Date()): string {
   const body = b64u(JSON.stringify({
-    f: p.fee, d: p.distanceM, a: p.addressId,
+    f: p.fee, b: p.baseFee, fs: p.feeSource, d: p.distanceM, a: p.addressId,
     la: p.latE6, ln: p.lngE6, sla: p.storeLatE6, sln: p.storeLngE6,
     ds: p.distanceSource,
     e: quoteExpiresAt(now).getTime(),
@@ -607,13 +685,19 @@ export function verifyQuote(token: string, now: Date = new Date()): QuotePayload
     // 坐标四项（la/ln 收货、sla/sln 门店）都是后加的字段：老格式 token 缺其中任何一个一律判无效，
     // 而不是当成 0——0 会与「点在赤道本初子午线」这种理论坐标相等，等于让老 token 永久绕过坐标比对。
     // 缺字段判无效在下单侧就是 42239（没有可信凭证），顾客重报一次价即可，不存在兼容包袱。
-    const fields = [o.f, o.d, o.a, o.la, o.ln, o.sla, o.sln]
+    // `b`（基础运费）与坐标四项同规则：后加字段，缺了一律判无效而不是兜个默认值——
+    // 兜默认会让老 token 按固定表计费，而 QUOTE 口径下两者近单差 ¥2.5，等于静默漏钱。
+    // token 只活 15 分钟，判无效的代价就是顾客重报一次价，没有兼容包袱。
+    const fields = [o.f, o.b, o.d, o.a, o.la, o.ln, o.sla, o.sln]
     if (fields.some((n) => typeof n !== 'number' || !Number.isFinite(n))) return null
     // ds 同样是后加字段：白名单校验（只认这两个值），不是信任比对——它不参与任何计费/作废判断，
     // 见上面 QuotePayload.distanceSource 的注释。老格式 token 缺这一项一律判无效，与坐标四项同规则。
     if (o.ds !== 'MEASURED' && o.ds !== 'ESTIMATED') return null
+    // fs 与 ds 同规则：白名单校验，缺了判无效。它决定下单时信不信 token 里的基础运费，
+    // 兜个默认值就等于替店主做了「锁不锁价」的决定。
+    if (o.fs !== 'QUOTE' && o.fs !== 'TABLE') return null
     return {
-      fee: o.f, distanceM: o.d, addressId: o.a,
+      fee: o.f, baseFee: o.b, feeSource: o.fs, distanceM: o.d, addressId: o.a,
       latE6: o.la, lngE6: o.ln, storeLatE6: o.sla, storeLngE6: o.sln,
       distanceSource: o.ds,
     }

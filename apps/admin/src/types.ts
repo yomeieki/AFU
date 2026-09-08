@@ -344,7 +344,15 @@ export interface LocalDeliverySettings {
   store: { name: string; phone: string; province: string; city: string; district: string; address: string; latE6: number | null; lngE6: number | null }
   radiusKm: number
   detourFactor: number
-  fee: { baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number }
+  fee: {
+    baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number
+    /** QUOTE = 按实时最低报价 + 加价定价（默认）；TABLE = 起步价 + 每公里的固定表（也是查价失败时的兜底） */
+    mode: 'TABLE' | 'QUOTE'
+    /** QUOTE 口径下在最低报价之上加多少（分）——第一级接得掉时，这就是每单毛利 */
+    quoteMarkupFen: number
+    /** 向上取整到这个粒度（分）；0 = 不取整 */
+    roundToFen: number
+  }
   businessHours: { start: string; end: string }[]
   /** 平时备餐时长（分）。**从店员点接单开始算**，不含顾客下单到接单那一段 */
   prepMinutes: number

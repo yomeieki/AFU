@@ -326,7 +326,13 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         throw new AppError(42227, '配送费已更新，请刷新后重新提交')
       }
       const distanceM = quoted.distanceM
-      const q = calcLocalFee(s, distanceM, totalAmount)
+      // 基础运费：**只有 QUOTE 口径才信 token**。
+      //   QUOTE —— 来自实时报价，这里按设计不做第二次外呼、重算不出来，只能信签过名的那一份，
+      //            效果是给顾客锁价 15 分钟（他在结算页看到多少就付多少）。
+      //   TABLE —— 表就在设置里，现算得出来，所以现算：店主中途调价要能立刻生效，
+      //            下面那条 42227「配送费已更新」的防线靠的正是「重算比凭证贵就拒绝」。
+      // 满免/起送一律用**下单时**的真实金额现算——顾客报完价还会加菜。
+      const q = calcLocalFee(s, distanceM, totalAmount, quoted.feeSource === 'QUOTE' ? quoted.baseFee : null)
       if (!q.inRange) throw new AppError(42220, `超出配送范围（约 ${(distanceM / 1000).toFixed(1)} km，最远 ${s.radiusKm} km）`)
       if (q.belowMin) throw new AppError(42210, `同城配送满 ¥${(s.fee.minOrderAmount / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`)
       // 赠品**计入**件数与重量（PO 2026-09-06 定 / 计划 D2）。42230 的意义是「一个骑手拎不动」，

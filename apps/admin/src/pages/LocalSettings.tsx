@@ -29,7 +29,7 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
 export default function LocalSettings() {
   const { setDirty } = useUnsavedSettings()
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
-  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', freeThreshold: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '' })
+  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', freeThreshold: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
   // 门店坐标另有一条写入路径（小程序商家端一键定位 → PATCH store-location），而本页的保存是整包
   // 覆盖式 PUT、服务端没有乐观锁。店主按本页指引去店门口定完位、回到这个还开着的标签页改别的参数
@@ -42,6 +42,7 @@ export default function LocalSettings() {
     setS(v)
     setMoney({
       baseFee: toYuan(v.fee.baseFee), perKmFee: toYuan(v.fee.perKmFee), freeThreshold: toYuan(v.fee.freeThreshold),
+      quoteMarkup: toYuan(v.fee.quoteMarkupFen), roundTo: toYuan(v.fee.roundToFen),
       minOrderAmount: toYuan(v.fee.minOrderAmount), maxPerCall: toYuan(v.tip.maxPerCall), maxPerOrder: toYuan(v.tip.maxPerOrder),
     })
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
@@ -98,7 +99,8 @@ export default function LocalSettings() {
         paused: fresh.paused,
         enabled: enabledOverride ?? s.enabled,
         store: { ...s.store, latE6, lngE6 },
-        fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, freeThreshold: fen.freeThreshold!, minOrderAmount: fen.minOrderAmount! },
+        fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, freeThreshold: fen.freeThreshold!, minOrderAmount: fen.minOrderAmount!,
+          quoteMarkupFen: fen.quoteMarkup ?? s.fee.quoteMarkupFen, roundToFen: fen.roundTo ?? s.fee.roundToFen },
         tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
       }
       // 保存后的提示按「这次是否动了门店坐标」分叉，因为两种情况对顾客的影响完全不同：
@@ -204,7 +206,26 @@ export default function LocalSettings() {
             <input className={inputCls} type="number" step="0.5" min={0.5} value={s.radiusKm} onChange={(e) => patch({ radiusKm: Number(e.target.value) })} /></Field>
           <Field label="绕路系数（兜底用）" hint="正常按运力方返回的真实道路距离计费；只有查价超时/失败时才用「直线 × 系数」估算，默认 1.7">
             <input className={inputCls} type="number" step="0.05" min={1} max={3} value={s.detourFactor} onChange={(e) => patch({ detourFactor: Number(e.target.value) })} /></Field>
-          <Field label="基础运费（元）"><input className={inputCls} inputMode="decimal" value={money.baseFee} onChange={(e) => setMoney({ ...money, baseFee: e.target.value })} /></Field>
+          <Field label="运费怎么算"
+            hint="按实时报价：顾客输完地址时本来就会向运力方查一次道路距离，同一次调用带回各家报价，取最便宜那家（也正是呼叫第一级会呼的那家）加上加价收顾客。查价超时或失败时自动退回下面那张固定表。">
+            <select className={inputCls} value={s.fee.mode}
+              onChange={(e) => patch({ fee: { ...s.fee, mode: e.target.value as 'TABLE' | 'QUOTE' } })}>
+              <option value="QUOTE">按实时报价 + 加价（推荐）</option>
+              <option value="TABLE">只用下面的固定表</option>
+            </select>
+          </Field>
+          {s.fee.mode === 'QUOTE' && (
+            <>
+              <Field label="报价加价（元）"
+                hint="收顾客的钱 = 最低报价 + 这个数。呼叫第一级接得掉时，它就是这一单的毛利。2026-09-06 实测：1.11 km 最低 ¥5.83、8.94 km 最低 ¥16.23">
+                <input className={inputCls} inputMode="decimal" value={money.quoteMarkup}
+                  onChange={(e) => setMoney({ ...money, quoteMarkup: e.target.value })} /></Field>
+              <Field label="运费向上取整到（元）" hint="0 = 不取整。取 0.5 时 ¥8.33 会收 ¥8.50——只往上取，不会少收">
+                <input className={inputCls} inputMode="decimal" value={money.roundTo}
+                  onChange={(e) => setMoney({ ...money, roundTo: e.target.value })} /></Field>
+            </>
+          )}
+          <Field label="基础运费（元）" hint={s.fee.mode === 'QUOTE' ? '仅在查价失败时兜底使用' : undefined}><input className={inputCls} inputMode="decimal" value={money.baseFee} onChange={(e) => setMoney({ ...money, baseFee: e.target.value })} /></Field>
           <Field label="基础公里数" hint="不超过此距离只收基础运费">
             <input className={inputCls} type="number" step="0.5" min={0} value={s.fee.baseKm} onChange={(e) => patch({ fee: { ...s.fee, baseKm: Number(e.target.value) } })} /></Field>
           <Field label="超出每公里加价（元）"><input className={inputCls} inputMode="decimal" value={money.perKmFee} onChange={(e) => setMoney({ ...money, perKmFee: e.target.value })} /></Field>
@@ -212,7 +233,9 @@ export default function LocalSettings() {
           <Field label="起送金额（元）" hint="0 = 无门槛"><input className={inputCls} inputMode="decimal" value={money.minOrderAmount} onChange={(e) => setMoney({ ...money, minOrderAmount: e.target.value })} /></Field>
         </div>
         <div className="rounded-md bg-gray-50 border border-gray-200 p-3">
-          <p className="text-xs font-medium text-gray-600 mb-1.5">按距离试算（不含满额免）</p>
+          <p className="text-xs font-medium text-gray-600 mb-1.5">
+            {s.fee.mode === 'QUOTE' ? '固定表按距离试算（仅查价失败时才会用到，不含满额免）' : '按距离试算（不含满额免）'}
+          </p>
           <ul className="text-xs text-gray-600 space-y-1">
             <li>1 km → {sample(1)}</li><li>3 km → {sample(3)}</li><li>5 km → {sample(5)}</li><li>{s.radiusKm + 1} km → {sample(s.radiusKm + 1)}</li>
           </ul>

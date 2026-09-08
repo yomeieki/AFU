@@ -351,7 +351,10 @@ OLDVER=$(jq -r '.data.version' <<<"$R")
 # 不钉的话会沿用开发库里历史遗留的旧值（1.35），期望值与实际值差一个运费档，断言变成偶发红。
 # autoCallDelayMin 显式钉 0：开发库若被人改成 >0，后台 60s tick 会在接单后偷呼骑手，
 # §32「被拒时不留配送单 / 指定单家运力」就会偶发被 CALLING 占位污染（operator=scheduler）。
-LS=$(jq -c '.data | .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .detourFactor=1.7 | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:8000,minOrderAmount:2000} | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true | .autoCallDelayMin=0' <<<"$R")
+# fee.mode 显式钉 TABLE：本段往下几十条运费断言的期望值全是按固定表算的。
+# 不钉的话 sanitize 会把缺失的 mode 补成默认值 QUOTE，运费改由实时报价决定，那些期望值集体失效。
+# QUOTE 口径单独在下面「运费定价口径」那一段里测，测完就地还原。
+LS=$(jq -c '.data | .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .detourFactor=1.7 | .fee={baseFee:300,baseKm:3,perKmFee:100,freeThreshold:8000,minOrderAmount:2000,mode:"TABLE",quoteMarkupFen:250,roundToFen:50} | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true | .autoCallDelayMin=0' <<<"$R")
 R=$(req PUT /api/admin/settings/local-delivery "$AT" "$LS"); assert_eq "保存并开启 code 0" "$(code "$R")" "0"
 assert_eq "保存并开启后 enabled=true" "$(jq -r '.data.enabled' <<<"$R")" "true"
 assert_eq "version 递增 1" "$(jq -r '.data.version' <<<"$R")" "$((OLDVER + 1))"
@@ -392,6 +395,65 @@ for _ in 1 2 3; do req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"pri
 R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
 assert_eq "查价超时仍 code 0" "$(code "$R")" "0"
 assert_eq "查价超时 → distanceSource=ESTIMATED" "$(jq -r .data.distanceSource <<<"$R")" "ESTIMATED"
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+
+# ── 运费定价口径：QUOTE = 最低报价 + 加价（PO 2026-09-08）────────────────────────
+# 旧的固定表是「近单几乎不赚、远单过度收费」：2026-09-06 两组真实报价下，
+# 1.11 km 收 ¥6.00 而最低价 ¥5.83（利润 ¥0.17），8.94 km 收 ¥21.00 而最低价 ¥16.23（利润 ¥4.77）。
+# 改成「最低报价 + ¥2.5，向上取整到 ¥0.5」之后两端都稳定在 +¥2.50 左右。
+# 这一段直接拿那两组**真实报价数字**当输入，所以期望值是可以手算核对的。
+# ⚠️ 只改 fee.*，读当前值再写回。整包写一个早先的快照会把门店坐标一起打回去
+# （$LS 是 PATCH 坐标之前的），后面那条「全量 PUT 还原门店坐标」就会红。
+qmode_put() {  # $1 = 作用在 .fee 上的 jq 表达式
+  local cur; cur=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
+  req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c "$1" <<<"$cur")" >/dev/null
+}
+qmode_put '.fee.mode="QUOTE" | .fee.quoteMarkupFen=250 | .fee.roundToFen=50 | .fee.freeThreshold=0'
+assert_eq "设置里落下 QUOTE 口径" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.mode)" "QUOTE"
+# 1.11 km 那组：达达 583 / 蜂鸟 605 / 顺丰 1078 / 闪送 1122 → 最低 583 + 250 = 833 → 取整 850
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1422,"quotes":[{"provider":"dadatongcheng","feeFen":583,"distanceM":1422},{"provider":"fengniaotongcheng","feeFen":605,"distanceM":1427},{"provider":"shunfengtongcheng","feeFen":1078,"distanceM":1422},{"provider":"shansongtongcheng","feeFen":1122,"distanceM":1500}]}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "近单按最低价定价（583+250 取整 → 850）" "$(jq -r .data.fee <<<"$R")" "850"
+assert_eq "近单 feeSource=QUOTE" "$(jq -r .data.feeSource <<<"$R")" "QUOTE"
+# 不是平均价（(583+605+1078+1122)/4=847 → 取整 850 也是 850，会撞车）——换一组能区分两者的报价：
+# 最低 583，平均 (583+2000+2000+2000)/4=1146。最低价口径给 850，平均价口径会给 1150。
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1422,"quotes":[{"provider":"dadatongcheng","feeFen":583,"distanceM":1422},{"provider":"fengniaotongcheng","feeFen":2000,"distanceM":1427},{"provider":"shunfengtongcheng","feeFen":2000,"distanceM":1422},{"provider":"shansongtongcheng","feeFen":2000,"distanceM":1500}]}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "取的是最低价不是平均价（850，平均会是 1150）" "$(jq -r .data.fee <<<"$R")" "850"
+# 8.94 km 那组：最低 1623 + 250 = 1873 → 取整 1900
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":8979,"quotes":[{"provider":"dadatongcheng","feeFen":1623,"distanceM":8979},{"provider":"shunfengtongcheng","feeFen":1738,"distanceM":8979},{"provider":"fengniaotongcheng","feeFen":1815,"distanceM":8940},{"provider":"shansongtongcheng","feeFen":2332,"distanceM":8700}]}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "远单按最低价定价（1623+250 取整 → 1900）" "$(jq -r .data.fee <<<"$R")" "1900"
+# 查价失败必须退回固定表——否则顾客那一栏就没有运费可显示了
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+for _ in 1 2 3; do req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"error","code":"50000"}}' >/dev/null; done
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "查价失败退回固定表（2.7km 档 → 300）" "$(jq -r .data.fee <<<"$R")" "300"
+assert_eq "查价失败 feeSource=TABLE" "$(jq -r .data.feeSource <<<"$R")" "TABLE"
+# 顾客侧永远看不到各家报价——那是成本
+assert_eq "响应体不含 quotes" "$(jq -r '.data.quotes // "absent"' <<<"$R")" "absent"
+assert_eq "响应体不含 feeFen" "$(jq -r '.data.feeFen // "absent"' <<<"$R")" "absent"
+# QUOTE 口径 = 给顾客**锁价 15 分钟**：基础运费签在凭证里，下单时不重算（也重算不出来，
+# 下单端点按设计不外呼）。所以店主中途调加价，旧凭证仍按报价那一刻的钱成交。
+# 这是 QUOTE 与 TABLE 的分水岭，也是 42227 那条防线只在 TABLE 下生效的原因——单独钉一条。
+QLOCK_ADDR=$(req POST /api/addresses "$UT" '{"receiverName":"E2E锁价","receiverPhone":"13800000009","province":"四川省","city":"自贡市","district":"自流井区","detail":"锁价测试","latE6":29350000,"lngE6":104790000}' | jq -r '.data.id // empty')
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1422,"quotes":[{"provider":"dadatongcheng","feeFen":583,"distanceM":1422}]}}' >/dev/null
+QLOCK_TOKEN=$(req POST /api/local/quote "$UT" "{\"addressId\":$QLOCK_ADDR,\"subtotal\":3000}" | jq -r '.data.quoteToken')
+qmode_put '.fee.quoteMarkupFen=5000'
+QLOCK_C=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":1}" | jq -r '.data.id // empty')
+R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QLOCK_C],\"addressId\":$QLOCK_ADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QLOCK_TOKEN\"}")
+assert_eq "改了加价后旧凭证仍可下单（QUOTE 锁价）" "$(code "$R")" "0"
+assert_eq "成交价仍是报价那一刻的 850（不是改后的 5583）" \
+  "$(req GET "/api/orders/$(jq -r .data.orderId <<<"$R")" "$UT" | jq -r .data.shippingFee)" "850"
+
+# 还原成 TABLE：后面几十条断言仍按固定表算期望值。同样只动 fee.*，别整包覆盖。
+qmode_put '.fee.mode="TABLE" | .fee.quoteMarkupFen=250 | .fee.roundToFen=50 | .fee.freeThreshold=8000'
+assert_eq "口径已还原为 TABLE" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.mode)" "TABLE"
+assert_eq "满额免运费也还原了（后面的断言按 8000 算）" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.freeThreshold)" "8000"
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 R=$(req POST /api/local/quote "$UT" "{\"addressId\":$ADDR}"); assert_eq "旧地址无坐标 42223" "$(code "$R")" "42223"
 R=$(req POST /api/admin/settings/local-delivery/pause "$AT" '{"reason":"暴雨暂停"}'); assert_eq "暂停 code 0" "$(code "$R")" "0"
