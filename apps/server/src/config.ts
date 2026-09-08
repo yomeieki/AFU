@@ -78,6 +78,13 @@ const envSchema = z.object({
   // 同城运力 mock（生产开启拒绝启动）
   LOCAL_DELIVERY_PROVIDER_MOCK: z.string().optional(),
 
+  // 快递100 上门取件（全国邮寄）。key/secret 缺省复用同城那一对（同一企业账号）；测试环境时三项都填
+  KD100_EXPRESS_API_URL: z.string().optional(),
+  KD100_EXPRESS_KEY: z.string().optional(),
+  KD100_EXPRESS_SECRET: z.string().optional(),
+  // 邮寄查价 mock（生产开启拒绝启动）
+  EXPRESS_PROVIDER_MOCK: z.string().optional(),
+
   // 飞鹅云打印开放平台（懒校验：出票前 validateFeieConfig 再查缺项；硬件是带语音播报的云喇叭款，
   // 软件侧只管出票，播报由固件自动触发，见 services/ticket/feie.ts）
   FEIE_USER: z.string().optional(),
@@ -114,6 +121,7 @@ if (isProduction) {
       ['WECHAT_QRCODE_MOCK', env.WECHAT_QRCODE_MOCK],
       ['LOCAL_DELIVERY_PROVIDER_MOCK', env.LOCAL_DELIVERY_PROVIDER_MOCK],
       ['PRINTER_PROVIDER_MOCK', env.PRINTER_PROVIDER_MOCK],
+      ['EXPRESS_PROVIDER_MOCK', env.EXPRESS_PROVIDER_MOCK],
     ] as const
   ).filter(([, v]) => v === 'true')
   if (enabledMocks.length > 0) {
@@ -163,6 +171,7 @@ export const config = {
     qrcode: env.WECHAT_QRCODE_MOCK === 'true',
     delivery: env.LOCAL_DELIVERY_PROVIDER_MOCK === 'true',
     printer: env.PRINTER_PROVIDER_MOCK === 'true',
+    express: env.EXPRESS_PROVIDER_MOCK === 'true',
   },
   order: {
     payTimeoutMin: env.PAY_TIMEOUT_MIN,
@@ -198,6 +207,11 @@ export const config = {
     ukey: env.FEIE_UKEY ?? '',
     apiBase: (env.FEIE_API_BASE ?? '').replace(/\/+$/, ''),
   },
+  kd100Express: {
+    apiUrl: (env.KD100_EXPRESS_API_URL ?? 'https://poll.kuaidi100.com/order/borderapi.do').trim(),
+    key: env.KD100_EXPRESS_KEY ?? env.KD100_KEY ?? '',
+    secret: env.KD100_EXPRESS_SECRET ?? env.KD100_SECRET ?? '',
+  },
 }
 
 /** 呼叫骑手前的懒校验：mock 模式不需要真密钥 */
@@ -213,5 +227,13 @@ export function validateFeieConfig(): void {
   if (config.mock.printer) return
   if (!config.feie.user || !config.feie.ukey || !config.feie.apiBase) {
     throw new Error('Missing required env var: FEIE_USER / FEIE_UKEY / FEIE_API_BASE')
+  }
+}
+
+/** 邮寄查价/下单前的懒校验：mock 模式不需要真密钥 */
+export function validateKd100ExpressConfig(): void {
+  if (config.mock.express) return
+  if (!config.kd100Express.key || !config.kd100Express.secret) {
+    throw new Error('Missing required env var: KD100_KEY / KD100_SECRET（或 KD100_EXPRESS_KEY / KD100_EXPRESS_SECRET）')
   }
 }
