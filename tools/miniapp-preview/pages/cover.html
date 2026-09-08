@@ -8,7 +8,7 @@
      预览台不跑 JS，所以这里硬编码 375×812（状态栏 44pt）这一种情况的结果：
      rpx=2 → 屏高 1624rpx，胶囊下沿+8 = 176rpx，stageOffset = 176-135 = 41rpx（= 20.5px），无需缩放。
      内联样式里的数值是「设计 rpx × 0.5」；类名里的 rpx 由 generated.css 自己换算。
-     它能验的是「热区是否压在按钮上」与 v3 按钮层次；clamp 与短屏缩放验不了，那要去微信开发者工具。
+     它能验的是「热区是否压在按钮上」与 v4 按钮层次/隶书字形/图标；clamp 与短屏缩放验不了，那要去微信开发者工具。
      .hot-debug 默认开着——这个镜像存在的意义就是看框对不对。 -->
 <style>
   html { --rpx: .5px }
@@ -39,25 +39,24 @@
       <div class="tray-diamond" style="left:227px;top:383.5px"></div>
 
       <div class="hot" style="left:29px;top:279px;width:153px;height:60px">
-        <div class="df"></div><div class="delivery-cn">同城配送</div>
+        <div class="df"></div><div class="glyphs gl-local-delivery"></div>
         <div class="delivery-en" style="letter-spacing:.8px;padding-left:.8px">LOCAL DELIVERY</div>
       </div>
       <div class="hot" style="left:193px;top:279px;width:153px;height:60px">
-        <div class="df"></div><div class="delivery-cn">全国邮寄</div>
+        <div class="df"></div><div class="glyphs gl-nationwide-shipping"></div>
         <div class="delivery-en" style="letter-spacing:.55px;padding-left:.55px">NATIONWIDE SHIPPING</div>
       </div>
 
-      <div class="hot" style="left:73px;top:362px;width:72.5px;height:44px"><div class="nav-text">会员中心</div></div>
-      <div class="hot" style="left:151.5px;top:362px;width:72.5px;height:44px"><div class="nav-text">优惠券</div></div>
-      <div class="hot" style="left:230px;top:362px;width:72px;height:44px"><div class="nav-text">积分商城</div></div>
+      <div class="hot" style="left:73px;top:362px;width:72.5px;height:44px"><div class="glyphs gl-member-center"></div></div>
+      <div class="hot" style="left:151.5px;top:362px;width:72.5px;height:44px"><div class="glyphs gl-coupon"></div></div>
+      <div class="hot" style="left:230px;top:362px;width:72px;height:44px"><div class="glyphs gl-points-mall"></div></div>
 
       <div class="hot" style="left:70px;top:422px;width:235px;height:60px">
         <div class="cc-under"></div><div class="cc-main"></div><div class="cc-inner"></div>
         <div class="cc-highlight"></div>
-        <div class="cold-cn">全国冷链配送</div><div class="cold-en">COLD-CHAIN DELIVERY</div>
+        <div class="glyphs gl-cold-chain"></div><div class="cold-en">COLD-CHAIN DELIVERY</div>
         <div class="cc-rule"></div>
         <div class="cc-tag"></div><div class="cc-tag-inner"></div>
-        <div class="cc-tag-cha">查</div><div class="cc-tag-kan">看</div>
       </div>
 
       <div class="hot hot-debug" style="left:29px;top:279px;width:153px;height:60px"></div>
