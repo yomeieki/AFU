@@ -45,7 +45,7 @@
 - `apps/server/src/routes/admin/express-mock.ts` — mock 控制面
 - `apps/server/prisma/migrations/20260912000000_express_quote_snapshot/migration.sql`
 - `apps/server/scripts/selftest-express-settings.ts`、`selftest-express-quote.ts`、`selftest-kd100-express.ts`
-- `scripts/e2e.d/54-express-quote.sh`、`scripts/e2e.d/55-express-order.sh`
+- `scripts/e2e.d/56-express-quote.sh`、`scripts/e2e.d/57-express-order.sh`
 - `apps/miniapp/api/express.js`
 
 修改：
@@ -1283,7 +1283,7 @@ git commit -m "下单行组装与可售校验抽到 services/order-lines，供�
 - Modify: `apps/server/src/middlewares/rate-limit.ts`（紧接 `localQuoteLimiter` 之后加 `expressQuoteLimiter`）
 - Modify: `apps/server/src/routes/index.ts`（挂载）
 - Modify: `scripts/e2e.sh:57`（管理员登录后复位邮寄设置）
-- Create: `scripts/e2e.d/54-express-quote.sh`
+- Create: `scripts/e2e.d/56-express-quote.sh`
 
 **Interfaces:**
 - Produces:
@@ -1295,10 +1295,10 @@ git commit -m "下单行组装与可售校验抽到 services/order-lines，供�
   - HTTP：`POST /api/express/quote`（需用户 token）Body `{ addressId, cartItemIds? | directItem?, gifts? }` → `QuoteResult`
 - Consumes：Task 2/3/4/5 的导出；`loadGiftLines`（`services/member/checkout`）；`getLocalSettings().store`（寄件地址）。
 
-- [ ] **Step 1: 写 e2e 片段（先失败）** `scripts/e2e.d/54-express-quote.sh`
+- [ ] **Step 1: 写 e2e 片段（先失败）** `scripts/e2e.d/56-express-quote.sh`
 
 ```bash
-echo "== 54. 邮寄报价：分组/中位数/包邮/不寄送/兜底/凭证 =="
+echo "== 56. 邮寄报价：分组/中位数/包邮/不寄送/兜底/凭证 =="
 # 复用 e2e.sh 主体的 req/code/ok/fail/assert_eq 与 $AT/$UT/$PID/$ADDR（四川省成都市）。变量一律 X54_ 前缀。
 X54_ORIG=$(req GET /api/admin/settings/express "$AT" | jq -c .data)
 # 明确切到 QUOTE 口径 + 默认分组（e2e 开头把它复位成了 TABLE/0 元，见 e2e.sh §1）
@@ -1380,7 +1380,7 @@ R=$(req POST /api/express/quote "$UT" "{\"addressId\":$ADDR}"); [[ "$(code "$R")
 R=$(req POST /api/express/quote "$UT" "{\"addressId\":999999,\"directItem\":{\"productId\":$PID,\"quantity\":1}}"); assert_eq "地址不存在 40401" "$(code "$R")" "40401"
 R=$(req POST /api/express/quote "" "{\"addressId\":$ADDR,\"directItem\":{\"productId\":$PID,\"quantity\":1}}"); [[ "$(code "$R")" == "40101" || "$(code "$R")" == "401" ]] && ok "未登录被拒" || fail "未登录未被拒" "$R"
 
-# 收尾：地址留给 55 用；设置恢复原样
+# 收尾：地址留给 57 用；设置恢复原样
 X54_KEEP_BJ=$X54_BJ; X54_KEEP_XJ=$X54_XJ; X54_KEEP_S=$X54_S; X54_KEEP_FEE=$X54_FEE1; X54_KEEP_TFEE=$X54_TFEE1; X54_KEEP_WT=$X54_WT1
 req PUT /api/admin/settings/express "$AT" "$X54_ORIG" >/dev/null
 req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
@@ -1391,10 +1391,10 @@ req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
 在第 57 行 `req PUT /api/admin/settings/printer ...` 之后加：
 ```bash
 # 邮寄设置复位成「TABLE / 全 0 元 / 无包邮线 / 无起送」：与本文件写成时的一口价默认值等价，
-# 让后面几十处 EXPRESS 下单的金额断言不受 QUOTE 中位数报价影响。54/55 两段自己切 QUOTE 再恢复。
+# 让后面几十处 EXPRESS 下单的金额断言不受 QUOTE 中位数报价影响。56/57 两段自己切 QUOTE 再恢复。
 req PUT /api/admin/settings/shipping "$AT" '{"fee":0,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
 ```
-（Task 8 会把 `PUT /shipping` 改成垫片：等价于 `applyLegacyShipping`。本任务先加这一行，跑 54 时若 `/settings/express` 还没有——它在 Task 8——先在本任务里把 `GET/PUT /admin/settings/express` 的**最小版本**加上：见 Step 5。）
+（Task 8 会把 `PUT /shipping` 改成垫片：等价于 `applyLegacyShipping`。本任务先加这一行，跑 56 时若 `/settings/express` 还没有——它在 Task 8——先在本任务里把 `GET/PUT /admin/settings/express` 的**最小版本**加上：见 Step 5。）
 
 - [ ] **Step 3: 写全 `express-quote-service.ts`**
 
@@ -1563,15 +1563,15 @@ router.put('/express', async (req, res, next) => {
 
 后端启动参数在原有基础上加 `EXPRESS_PROVIDER_MOCK=true`（e2e 配方里的启动命令补这一个变量）。然后：
 ```bash
-DB_NAME=food_shop_audit bash scripts/e2e.sh 2>&1 | sed -n '/== 54\./,/== 55\./p' | head -60
+DB_NAME=food_shop_audit bash scripts/e2e.sh 2>&1 | sed -n '/== 56\./,/== 57\./p' | head -60
 ```
-Expected: 54 段全 ✔（约 27 条），最后汇总 `失败 0`。
+Expected: 56 段全 ✔（约 27 条），最后汇总 `失败 0`。
 
 - [ ] **Step 7: 提交**
 
 ```bash
-git add apps/server/src/services/express-quote-service.ts apps/server/src/routes/express.ts apps/server/src/routes/index.ts apps/server/src/middlewares/rate-limit.ts apps/server/src/routes/admin/settings.ts scripts/e2e.sh scripts/e2e.d/54-express-quote.sh
-git commit -m "邮寄报价接口 POST /api/express/quote：分组/重量/查价缓存/中位数/凭证 + e2e 54"
+git add apps/server/src/services/express-quote-service.ts apps/server/src/routes/express.ts apps/server/src/routes/index.ts apps/server/src/middlewares/rate-limit.ts apps/server/src/routes/admin/settings.ts scripts/e2e.sh scripts/e2e.d/56-express-quote.sh
+git commit -m "邮寄报价接口 POST /api/express/quote：分组/重量/查价缓存/中位数/凭证 + e2e 56"
 ```
 
 **复核（opus）要点**：`fetchCourierQuotes` 失败不写缓存；缓存 key 不含 userId 是有意的（报价只依赖地址与重量，地址归属已在 `quoteExpress` 校过）；`loadGiftLines` 抛的会员错误直接透传（结算页组件只给可用赠品，不会走到）；限流器是独立实例；响应体**不含**各家成本价（与同城 `/local/quote` 同一原则），快照只在凭证里、下单时落到订单列供店员端用。
@@ -1584,17 +1584,17 @@ git commit -m "邮寄报价接口 POST /api/express/quote：分组/重量/查价
 - Modify: `apps/server/prisma/schema.prisma`（Order 加三列，放在 `clientRequestId` 之前）
 - Create: `apps/server/prisma/migrations/20260912000000_express_quote_snapshot/migration.sql`
 - Modify: `apps/server/src/routes/orders.ts`（`createOrderSchema.quoteToken` 上限、EXPRESS 分支、`tx.order.create` data、`/meta`）
-- Create: `scripts/e2e.d/55-express-order.sh`
+- Create: `scripts/e2e.d/57-express-order.sh`
 
 **Interfaces:**
 - Produces: `Order.expressQuoteSnapshot Json?`、`Order.expressRegionGroup String?`、`Order.expressWeightG Int?`；`POST /api/orders` 邮寄分支的新错误 42260/42261/42262；`GET /orders/meta.shipping` 改为 `legacyShippingView(expressSettings)`。
 - Consumes: Task 3 `verifyExpressQuote/calcExpressFee/itemsHash/calcPackageWeightKg`、Task 6 `fetchCourierQuotes`、Task 2 `getExpressSettings/findRegionGroup/legacyShippingView`。
 
-- [ ] **Step 1: 写 e2e 片段（先失败）** `scripts/e2e.d/55-express-order.sh`
+- [ ] **Step 1: 写 e2e 片段（先失败）** `scripts/e2e.d/57-express-order.sh`
 
 ```bash
-echo "== 55. 邮寄下单：凭证校验 / 老客户端现算 / 包邮起送 / 不寄送 / 快照落库 =="
-# 依赖 54 留下的 $X54_KEEP_BJ $X54_KEEP_XJ $X54_KEEP_S $X54_KEEP_FEE（中位数价）$X54_KEEP_TFEE（兜底价）$X54_KEEP_WT（重量×10）。变量一律 X55_ 前缀。
+echo "== 57. 邮寄下单：凭证校验 / 老客户端现算 / 包邮起送 / 不寄送 / 快照落库 =="
+# 依赖 56 段留下的 $X54_KEEP_BJ $X54_KEEP_XJ $X54_KEEP_S $X54_KEEP_FEE（中位数价）$X54_KEEP_TFEE（兜底价）$X54_KEEP_WT（重量×10）。变量一律 X55_ 前缀。
 X55_ORIG=$(req GET /api/admin/settings/express "$AT" | jq -c .data)
 req PUT /api/admin/settings/express "$AT" "$X54_KEEP_S" >/dev/null
 req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
@@ -1768,18 +1768,18 @@ import { fetchCourierQuotes, MAX_ADDRESS_BYTES } from '../services/express-quote
 
 (e) `/meta`：`shipping: await getShippingSettings()` → `shipping: legacyShippingView(await getExpressSettings())`。
 
-- [ ] **Step 4: 编译 + 跑 e2e 54/55 + 全量**
+- [ ] **Step 4: 编译 + 跑 e2e 56/57 + 全量**
 
 ```bash
 cd apps/server && npx tsc --noEmit
 DB_NAME=food_shop_audit bash scripts/e2e.sh 2>&1 | tail -3
 ```
-Expected: `失败 0`；通过数 = Task 5 记下的 N + 54 段条数 + 55 段条数（约 +50）。若 §6/§7 等老段落里 EXPRESS 单的 `actualAmount` 断言变红，说明 e2e.sh §1 的复位没生效（垫片 Task 8 才到）——本任务临时让 `PUT /admin/settings/shipping` 直接调用 `applyLegacyShipping` 写入（把 Task 8 Step 2 的垫片提前做掉，Task 8 就不再重复）。
+Expected: `失败 0`；通过数 = Task 5 记下的 N + 56 段条数 + 57 段条数（约 +50）。若 §6/§7 等老段落里 EXPRESS 单的 `actualAmount` 断言变红，说明 e2e.sh §1 的复位没生效（垫片 Task 8 才到）——本任务临时让 `PUT /admin/settings/shipping` 直接调用 `applyLegacyShipping` 写入（把 Task 8 Step 2 的垫片提前做掉，Task 8 就不再重复）。
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add apps/server/prisma/schema.prisma apps/server/prisma/migrations/20260912000000_express_quote_snapshot apps/server/src/routes/orders.ts scripts/e2e.d/55-express-order.sh
+git add apps/server/prisma/schema.prisma apps/server/prisma/migrations/20260912000000_express_quote_snapshot apps/server/src/routes/orders.ts scripts/e2e.d/57-express-order.sh
 git commit -m "邮寄下单走报价凭证（可选，老客户端现算），订单落报价快照三列；/orders/meta 兼容视图"
 ```
 
@@ -2369,7 +2369,7 @@ cd apps/server && npx tsc --noEmit && for f in selftest-kd100 selftest-kd100-exp
 cd ../admin && npx tsc --noEmit && npm test
 cd ../.. && DB_NAME=food_shop_audit bash scripts/e2e.sh 2>&1 | tail -3
 ```
-Expected：全部通过；e2e 通过数 ≥ 803 + 54/55 两段条数，失败 0。
+Expected：全部通过；e2e 通过数 ≥ 803 + 56/57 两段条数，失败 0。
 haiku 核对清单：① 本计划每个任务的「提交」都在 `git log` 里；② `docs/api.md` 附录 F 的字段名与 `express-quote-service.ts` 的 `QuoteResult` 逐一对得上；③ spec 里不再出现 42240/42241/42243 与 `Decimal(6,1)`；④ `grep -rn calcShippingFee apps/server/src` 只剩 `settings.ts` 里的定义。
 
 - [ ] **Step 5: 提交 + 终审（opus）**
