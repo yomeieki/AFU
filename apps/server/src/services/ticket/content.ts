@@ -288,7 +288,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     // 单号旁边放**手机尾号**（PO 2026-09-08）：快递100 的下单接口没有商户单号字段，
     // 骑手 app 上是运力方自己的单号，跟 #5203 对不上；但它一定显示收件人手机，
     // 尾号是全行业通用的取货核对键。放大到和单号同一行，骑手在柜台一眼对上袋子。
-    // 厨房联不放：后厨不该看到顾客联系方式（见 buildKitchen）。
+    // 厨房联同样印尾号，两联靠它联系（见 buildKitchen）。
     // 头部**只放尾号、不放单号**（PO 2026-09-08 再定）：骑手和店员在柜台对的只有尾号，
     // 单号在票头上只是干扰。完整单号仍在票尾「单号：#xxxx」小字与工作台里，退款/客诉查得到。
     `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
@@ -357,7 +357,9 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     const omitted = keep === null ? 0 : o.items.length - keep
     return [
       '<CB>厨房联</CB>',
-      `<CB>#${o.orderNo.slice(-4)}</CB>`,
+      // 厨房联也用尾号（PO 2026-09-08 定）：两联靠同一个数联系，后厨出菜装袋时对得上配送联。
+      // 尾号 4 位不是完整手机号，不算泄漏联系方式。
+      `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
       HR,
       ...items.flatMap((it) => kitchenItemLines(it, level)),
       ...(omitted > 0 ? [`<B>……等 ${omitted} 件</B>`] : []),
