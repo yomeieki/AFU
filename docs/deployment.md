@@ -375,7 +375,7 @@ nginx -t && nginx -s reload
 
 模板要点：
 - `location /api/wechat/pay/` 单独反代且不限流、不缓冲 body——同时覆盖支付回调 `/notify` 与退款回调 `/refund-notify`（**升级到自动退款后必须是这个前缀**，老配置只写了 `/notify`）
-- `location /api/kd/` 单独反代，**不限流 + `gzip off`**——快递100 配送单回调专用，必须存在的独立 `location`（**2026-09-06 补装到生产**，此前一直缺，回调都落在通用 `/api/` 上）。
+- `location /api/kd/` 单独反代，**不限流 + `gzip off`**——快递100 配送单回调专用，必须存在的独立 `location`（**2026-09-06 补装到生产**，此前一直缺，回调都落在通用 `/api/` 上）。`/api/kd-express/` 与 `/api/kd/` 同配置，部署时一起加。
 
   ⚠️ **这一段的理由此前写错了**：原文说「回调请求需要透传原始字节做验签」——那是 `/api/wechat/pay/` 的理由，被照抄了过来。快递100 验签算的是 `MD5(param + 每单独立的 callbackSalt)`，`param` 取自 `express.urlencoded` 解析后的**表单字段值**（`services/delivery/kd100.ts` 的 `verifyAndParseCallback`），nginx 缓不缓冲都不改变它。所以模板里**故意没有** `proxy_request_buffering off`。
 

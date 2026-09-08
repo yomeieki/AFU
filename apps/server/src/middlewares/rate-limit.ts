@@ -160,3 +160,9 @@ export const kdCallbackLimiter = rateLimit({
   statusCode: 200,
   message: { result: true, returnCode: '200', message: '请求过于频繁，请稍后再试' },
 })
+
+/** 邮寄取件回调限流。被限流时回 503 让快递100 重推——同城那条回 200 成功形状会让回调静默丢失（memory 里记过） */
+export const kdExpressCallbackLimiter = rateLimit({
+  windowMs: 60 * 1000, limit: devCeiling(120, 2000), standardHeaders: true, legacyHeaders: false,
+  statusCode: 503, message: { result: false, returnCode: '503', message: '请求过于频繁，请稍后重推' },
+})
