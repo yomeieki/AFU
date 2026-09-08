@@ -43,3 +43,31 @@ assert_eq "B⑧ 顾客数 = 新客 + 老客" "$(jq -r '.data.customers | (.newUs
 [[ "$(jq -r .data.customers.users <<<"$B1")" -ge "$B_USERS" ]] && ok "B⑨ 顾客数不减少" || fail "B⑨ 顾客数" "$B1"
 assert_eq "B⑩ channel=LOCAL 的热销榜不受邮寄单影响" "$(req GET "/api/admin/stats/overview?startDate=$S54&endDate=$S54&channel=LOCAL" "$AT" | jq -r --argjson p "$PID" '[.data.hotProducts[]|select(.productId==$p)][0].qty // 0')" "$B_HOT_L"
 
+# ── C. local：同城单走到送达，运费账 / 时效 / 承运商 / 阶梯都要动 ──
+C0=$(d54 local)
+C_CNT=$(jq -r .data.kpi.orderCount <<<"$C0"); C_PAID=$(jq -r .data.freight.customerPaidFen <<<"$C0")
+C_DEL=$(jq -r .data.freight.deliveryFen <<<"$C0"); C_TOTN=$(jq -r '[.data.timing.stages[]|select(.key=="total")][0].n' <<<"$C0")
+C_LAD=$(jq -r '.data.ladder | (.first + .cheapestN + .all)' <<<"$C0")
+C_SS=$(jq -r '[.data.providers[]|select(.provider=="shansongtongcheng")][0].count // 0' <<<"$C0")
+CO=$(mk_local_paid); [[ -n "$CO" ]] && ok "C 造已付同城单 #$CO" || fail "C 造单"
+req POST "/api/admin/local/orders/$CO/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$CO/call" "$AT"); CD=$(jq -r .data.deliveryNo <<<"$R")
+CT=$(req GET "/api/admin/local/orders/$CO/delivery" "$AT" | jq -r .data.delivery.providerTaskId)
+NOW54=$(date '+%F %H:%M')
+kd_cb "$CD" "$CT" 100 '骑手已接单' "$NOW54:01" >/dev/null
+kd_cb "$CD" "$CT" 310 '骑手已取货' "$NOW54:02" >/dev/null
+kd_cb "$CD" "$CT" 520 '已送达' "$NOW54:03" >/dev/null
+assert_eq "C 前置：订单已 COMPLETED" "$(order_status $CO)" "COMPLETED"
+CO_SHIP=$(req GET "/api/admin/orders/$CO" "$AT" | jq -r .data.shippingFee)
+CO_FEE=$(req GET "/api/admin/local/orders/$CO/delivery" "$AT" | jq -r '.data.delivery | (.actualFee // .quotedFee)')
+C1=$(d54 local)
+assert_eq "C① 同城单数 +1" "$(jq -r .data.kpi.orderCount <<<"$C1")" "$((C_CNT+1))"
+assert_eq "C② 顾客付运费 +本单运费" "$(jq -r .data.freight.customerPaidFen <<<"$C1")" "$((C_PAID+CO_SHIP))"
+assert_eq "C③ 付给骑手·配送费 +本单实扣" "$(jq -r .data.freight.deliveryFen <<<"$C1")" "$((C_DEL+CO_FEE))"
+assert_eq "C④ 运费差额 = 顾客付 − 骑手合计" "$(jq -r '.data.freight | (.customerPaidFen - .riderTotalFen)' <<<"$C1")" "$(jq -r .data.freight.netFen <<<"$C1")"
+assert_eq "C⑤ 时效 total 样本 +1" "$(jq -r '[.data.timing.stages[]|select(.key=="total")][0].n' <<<"$C1")" "$((C_TOTN+1))"
+assert_eq "C⑥ 时效 5 个阶段齐全" "$(jq -r '.data.timing.stages | length' <<<"$C1")" "5"
+assert_eq "C⑦ 承运商 闪送 +1" "$(jq -r '[.data.providers[]|select(.provider=="shansongtongcheng")][0].count // 0' <<<"$C1")" "$((C_SS+1))"
+assert_eq "C⑧ 呼叫阶梯三项之和 +1" "$(jq -r '.data.ladder | (.first + .cheapestN + .all)' <<<"$C1")" "$((C_LAD+1))"
+assert_eq "C⑨ 距离分布之和 = 同城单数" "$(jq -r '[.data.distance[].count] | add' <<<"$C1")" "$((C_CNT+1))"
+
