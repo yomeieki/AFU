@@ -27,7 +27,7 @@ assert_eq "顾客端看到 expressBooking.status BOOKED" "$(jq -r .data.expressB
 assert_eq "顾客端不给手机号字段" "$(jq -r '.data.expressBooking | has("courierMobile")' <<<"$R")" "false"
 R=$(req POST "/api/orders/$X60_O2/cancel-request" "$UT" '{"note":"不要了"}'); assert_eq "接单后窗口内申请 code 0" "$(code "$R")" "0"
 assert_eq "快照预约状态 BOOKED" "$(sql "SELECT cancel_request_delivery_status FROM orders WHERE id=$X60_O2;")" "BOOKED"
-R=$(req POST "/api/admin/express/orders/$X60_O2/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}'); assert_eq "有取消申请时预约被拦（已有预约先 42265）" "$(code "$R")" "42265"
+R=$(req POST "/api/admin/express/orders/$X60_O2/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}'); assert_eq "有取消申请时预约被拦 42266（取消申请检查先于已有预约）" "$(code "$R")" "42266"
 
 echo "-- ③ 驳回：清标记、留驳回痕迹；再申请可以 --"
 R=$(req POST "/api/admin/express/orders/$X60_O2/cancel-request/reject" "$AT"); assert_eq "驳回 code 0" "$(code "$R")" "0"

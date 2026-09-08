@@ -62,7 +62,7 @@ export async function applyProviderStatus(tx: Tx, booking: ExpressBooking & { or
   // booking 是参数，reassign 会被 lint 挡（no-param-reassign），改用局部变量 current 承接后续状态。
   let current = booking
   if (current.status === 'UNKNOWN') {
-    await tx.expressBooking.updateMany({ where: { id: current.id, status: 'UNKNOWN' }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, ...identity } })
+    await tx.expressBooking.updateMany({ where: { id: current.id, status: 'UNKNOWN' }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, bookedAt: new Date(), ...identity } })
     current = { ...current, status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED }
   }
   // FEE/终态/ALERT/IGNORE 这几条分支都只落 identity（不推进状态）；有内容才写一次，避免空 update
@@ -127,14 +127,21 @@ function notifExpressFailed(orderNo: string, label: string, why: string, id: num
   notifyExpressAlert('取件预约失败', [`订单 ${orderNo} · ${label}`, why, '订单已回到备货中：换一家重约，或改填单号发货'], { key: `express-fail:${id}` })
 }
 async function applyFee(tx: Tx, booking: ExpressBooking, p: ExpressCallbackPayload, after: (() => void)[]) {
-  // freight/weight 都没有就没有费用列可写，但 155 的 synPay 推送不受这条影响——见下面单独的 if
+  const isPrepaid = p.status === '0'
+  if (isPrepaid) {
+    // 状态 0 只记预扣（freight 优先，其次 defPrice），且只写第一次；实扣列与成本告警留给 15/155
+    const prepaid = p.freightFen ?? p.defPriceFen
+    if (booking.prepaidFeeFen === null && prepaid !== null) {
+      await tx.expressBooking.updateMany({ where: { id: booking.id, prepaidFeeFen: null }, data: { prepaidFeeFen: prepaid } })
+    }
+    return
+  }
+  // freight/weight 都没有就没有费用列可写，但 15 的 synPay 推送不受这条影响——见下面单独的 if
   if (!(p.freightFen === null && p.weightKg === null)) {
     const data: Prisma.ExpressBookingUpdateInput = {}
     if (p.freightFen !== null) data.settledFeeFen = p.freightFen
     if (p.weightKg !== null) data.billedWeightG = Math.round(p.weightKg * 1000)
     if (p.feeDetails != null) data.feeDetails = p.feeDetails as Prisma.InputJsonValue
-    // 预扣以快递100 回调 0 的 freight（优先）/defPrice 为准；只在第一次（prepaidFeeFen 未写过）写入
-    if (booking.prepaidFeeFen === null && p.status === '0' && (p.freightFen ?? p.defPriceFen) !== null) data.prepaidFeeFen = p.freightFen ?? p.defPriceFen
     await tx.expressBooking.update({ where: { id: booking.id }, data })
   }
   if (p.status === '15' && booking.kdOrderId) {

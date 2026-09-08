@@ -170,7 +170,12 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
       // 这里绝不能把它们回退成 BOOKED——count===0 时只补 identity 字段（taskId 唯一索引要求先占位），不碰 status。
       const moved = await tx.expressBooking.updateMany({ where: { id: row.id, status: 'PENDING' }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, bookedAt: new Date(), taskId: r.taskId, kdOrderId: r.kdOrderId, kuaidinum: r.kuaidinum, pollToken: r.pollToken } })
       if (moved.count === 0) {
-        await tx.expressBooking.updateMany({ where: { id: row.id, taskId: null }, data: { taskId: r.taskId, kdOrderId: r.kdOrderId, pollToken: r.pollToken, ...(r.kuaidinum ? { kuaidinum: r.kuaidinum } : {}) } })
+        // 回调抢先推进了状态：只按列补齐回调没带的 id，每列各自守 null，谁先写谁算
+        if (r.taskId) await tx.expressBooking.updateMany({ where: { id: row.id, taskId: null }, data: { taskId: r.taskId } })
+        if (r.kdOrderId) await tx.expressBooking.updateMany({ where: { id: row.id, kdOrderId: null }, data: { kdOrderId: r.kdOrderId } })
+        if (r.pollToken) await tx.expressBooking.updateMany({ where: { id: row.id, pollToken: null }, data: { pollToken: r.pollToken } })
+        if (r.kuaidinum) await tx.expressBooking.updateMany({ where: { id: row.id, kuaidinum: null }, data: { kuaidinum: r.kuaidinum } })
+        await tx.expressBooking.updateMany({ where: { id: row.id, bookedAt: null }, data: { bookedAt: new Date() } })
       }
       await recordBookingEvent(tx, { bookingId: row.id, dedupeKey: adminBookingEventKey(), source: 'ADMIN', statusDesc: `预约成功 ${COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom}${r.kuaidinum ? ` 单号 ${r.kuaidinum}` : '（单号待回调）'}`, operator: i.operator })
       // 单号一到就写 Shipment（不写 shippedAt、不改订单状态——那是「已取件」回调的事）
