@@ -311,6 +311,20 @@ export interface ShippingSettings {
   minOrderAmount: number
 }
 
+/** 邮寄设置（与服务端 services/express-settings.ts 同构；金额分、重量克） */
+export interface RegionGroup { name: string; provinces: string[]; freeShipMinFen: number; tableFirstFen: number; tableOverPerKgFen: number; blocked: boolean }
+export interface ExpressSettings {
+  version: number
+  weight: { packagingG: number; defaultItemG: number }
+  pricingPool: string[]
+  fee: { mode: 'QUOTE' | 'TABLE'; markupFen: number; roundToFen: number; minQuoteCount: number }
+  minOrderAmountFen: number
+  regionGroups: RegionGroup[]
+  acceptGraceMin: number
+  pickup: { cargoName: string; defaultRemark: string; unacceptedRemindHours: number; unpickedRemindMin: number }
+  costAlertRatio: number
+}
+
 /** 同城配送设置（与服务端 services/local-settings.ts 同构；金额分、坐标微度） */
 export interface LocalDeliverySettings {
   version: number

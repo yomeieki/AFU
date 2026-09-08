@@ -16,6 +16,7 @@ import type {
   RefundSummary,
   AfterSale,
   ShippingSettings,
+  ExpressSettings,
   Channel,
   LocalDeliverySettings,
   WorkbenchSnapshot,
@@ -221,6 +222,12 @@ export const getShippingSettings = () =>
 
 export const updateShippingSettings = (payload: ShippingSettings) =>
   client.put<ApiResponse<ShippingSettings>>('/admin/settings/shipping', payload).then((r) => r.data.data)
+
+// 邮寄设置（批次一）
+export const getExpressSettings = () =>
+  client.get<ApiResponse<ExpressSettings>>('/admin/settings/express').then((r) => r.data.data)
+export const updateExpressSettings = (payload: ExpressSettings) =>
+  client.put<ApiResponse<ExpressSettings>>('/admin/settings/express', payload).then((r) => r.data.data)
 
 // 同城设置
 export const getLocalSettings = () =>
