@@ -54,7 +54,7 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
         setKuaidicom(cheapest?.kuaidicom ?? '')
         setDay(r.suggestedSlot.dayType)
         setStart(clampToHours(r.suggestedSlot.pickupStart, '09:00')); setEnd(clampToHours(r.suggestedSlot.pickupEnd, '11:00'))
-        setRemark(r.defaultRemark || FALLBACK_REMARK)
+        setRemark(r.defaultRemark ?? FALLBACK_REMARK)   // ?? 不是 ||：店主把默认备注清空是有意为之，要尊重空串
       } else {
         // 重量改了会重新查价，报价可能跟着变——已选中的那家如果这次查出来是「无价」，
         // 必须把选择清空，逼店员重新挑一家，而不是让「无价不可提交」的按钮悄悄卡死在原地不给出理由
