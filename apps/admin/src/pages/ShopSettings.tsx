@@ -36,8 +36,10 @@ const PROVINCES = [
 ]
 const OTHER = '其他'
 
-/** 分组行的可编辑副本：金额用元字符串，省份用数组 */
-interface GroupForm { name: string; provinces: string[]; freeShipMin: string; tableFirst: string; tableOverPerKg: string; blocked: boolean }
+/** 分组行的可编辑副本：金额用元字符串，省份用数组
+ *  isOther 按加载时的组名锁定「其他」身份，之后就算店员改了输入框里的文字也不会失去保护——
+ *  用当前 name === OTHER 判断会被「把其他组名改成『其他』」或「把『其他』改名」绕过 */
+interface GroupForm { name: string; provinces: string[]; freeShipMin: string; tableFirst: string; tableOverPerKg: string; blocked: boolean; isOther: boolean }
 interface MoneyForm { markup: string; roundTo: string; minOrder: string }
 
 export default function ShopSettings() {
@@ -47,17 +49,26 @@ export default function ShopSettings() {
   const [money, setMoney] = useState<MoneyForm>({ markup: '0.00', roundTo: '0.50', minOrder: '0.00' })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [loadFailed, setLoadFailed] = useState(false)
   const [error, setError] = useState('')
 
   const fromServer = (v: ExpressSettings) => {
     setS(v)
-    setGroups(v.regionGroups.map((g) => ({ name: g.name, provinces: g.provinces, freeShipMin: toYuan(g.freeShipMinFen), tableFirst: toYuan(g.tableFirstFen), tableOverPerKg: toYuan(g.tableOverPerKgFen), blocked: g.blocked })))
+    setGroups(v.regionGroups.map((g) => ({
+      name: g.name,
+      provinces: g.provinces,
+      // 不寄送组的包邮线服务端不会用；但如果历史数据里 blocked=true 还留着 >0 的值，禁用态的输入框会原样显示它，
+      // 使 buildPayload 的「已设为不寄送，不能再设包邮线」校验卡死店员——加载时就把它清成 0.00
+      freeShipMin: g.blocked && g.freeShipMinFen > 0 ? '0.00' : toYuan(g.freeShipMinFen),
+      tableFirst: toYuan(g.tableFirstFen),
+      tableOverPerKg: toYuan(g.tableOverPerKgFen),
+      blocked: g.blocked,
+      isOther: g.name === OTHER,
+    })))
     setMoney({ markup: toYuan(v.fee.markupFen), roundTo: toYuan(v.fee.roundToFen), minOrder: toYuan(v.minOrderAmountFen) })
     setDirty(false)
   }
   useEffect(() => {
-    getExpressSettings().then(fromServer).catch(() => { setLoadFailed(true); toast.error('邮寄设置加载失败，请刷新') }).finally(() => setLoading(false))
+    getExpressSettings().then(fromServer).catch(() => { toast.error('邮寄设置加载失败，请刷新') }).finally(() => setLoading(false))
   }, [])
 
   const patch = (p: Partial<ExpressSettings>) => setS((prev) => (prev ? { ...prev, ...p } : prev))
@@ -70,9 +81,10 @@ export default function ShopSettings() {
       if (j === owner) return { ...g, provinces: g.provinces.filter((x) => x !== p) } // 一省只能属一组：从原组摘掉
       return g
     }))
+    setDirty(true) // 走的是 button onClick，不会被外层 onChangeCapture 逮到，必须手动标脏
   }
-  const addGroup = () => setGroups((gs) => [...gs, { name: '', provinces: [], freeShipMin: '0.00', tableFirst: '12.00', tableOverPerKg: '3.00', blocked: false }])
-  const removeGroup = (i: number) => { if (groups[i].name === OTHER) { toast.error('「其他」分组不能删除'); return } setGroups((gs) => gs.filter((_, j) => j !== i)) }
+  const addGroup = () => { setGroups((gs) => [...gs, { name: '', provinces: [], freeShipMin: '0.00', tableFirst: '12.00', tableOverPerKg: '3.00', blocked: false, isOther: false }]); setDirty(true) }
+  const removeGroup = (i: number) => { if (groups[i].isOther) { toast.error('「其他」分组不能删除'); return } setGroups((gs) => gs.filter((_, j) => j !== i)); setDirty(true) }
 
   const buildPayload = (): ExpressSettings | null => {
     if (!s) return null
@@ -82,17 +94,21 @@ export default function ShopSettings() {
     for (const g of groups) {
       const a = toFen(g.freeShipMin), b = toFen(g.tableFirst), c = toFen(g.tableOverPerKg)
       if (!g.name.trim()) { setError('分组名不能为空'); return null }
+      // 「其他」是保留名：按加载时锁定的身份（isOther）判断，不是这一行——避免非「其他」组被改名成「其他」后混进去
+      if (!g.isOther && g.name.trim() === OTHER) { setError('分组名「其他」是保留名，请换一个'); return null }
       if (a === null || b === null || c === null) { setError(`分组「${g.name}」的金额请填最多两位小数`); return null }
       if (g.blocked && a > 0) { setError(`分组「${g.name}」已设为不寄送，不能再设包邮线`); return null }
       regionGroups.push({ name: g.name.trim(), provinces: g.provinces, freeShipMinFen: a, tableFirstFen: b, tableOverPerKgFen: c, blocked: g.blocked })
     }
     if (!regionGroups.some((g) => g.name === OTHER)) { setError('必须保留名为「其他」的分组'); return null }
     if (s.pricingPool.length < 2) { setError('参与定价的快递至少勾选 2 家'); return null }
+    // 与服务端 validateExpressSettings 一致：不按 mode 门控——TABLE 下这条也校验，
+    // 店员能靠现在常显的「参与定价的快递」勾选区把家数补够，不会卡在隐藏控件上
+    if (s.fee.minQuoteCount > s.pricingPool.length) { setError(`至少几家回价才用中位数（${s.fee.minQuoteCount}）不能超过参与定价的家数（${s.pricingPool.length}）`); return null }
     setError('')
     return { ...s, fee: { ...s.fee, markupFen: markup, roundToFen: roundTo }, minOrderAmountFen: minOrder, regionGroups }
   }
   const handleSave = async () => {
-    if (loadFailed) { toast.error('加载失败，请刷新后再保存'); return }
     const payload = buildPayload(); if (!payload) return
     setSaving(true)
     try { fromServer(await updateExpressSettings(payload)); toast.success('已保存，新下单立即按新规则计费') }
@@ -125,18 +141,16 @@ export default function ShopSettings() {
             <Field label="至少几家回价才用中位数" hint="不足就退回兜底表"><input className={inputCls} type="number" min={1} max={9} value={s.fee.minQuoteCount} onChange={(e) => patch({ fee: { ...s.fee, minQuoteCount: Number(e.target.value) } })} /></Field>
           </>}
         </div>
-        {isQuote && (
-          <Field label="参与定价的快递" hint="只影响「顾客付多少」；店员发货时仍能看到全部家的价。EMS 折后比标准价还贵、德邦超 2.5 kg 不报价，默认不勾">
-            <div className="flex flex-wrap gap-3">
-              {COURIERS.map((c) => (
-                <label key={c.code} className="inline-flex items-center gap-1 text-sm">
-                  <input type="checkbox" checked={s.pricingPool.includes(c.code)} onChange={(e) => patch({ pricingPool: e.target.checked ? [...s.pricingPool, c.code] : s.pricingPool.filter((x) => x !== c.code) })} />
-                  {c.label}
-                </label>
-              ))}
-            </div>
-          </Field>
-        )}
+        <Field label="参与定价的快递" hint={isQuote ? '只影响「顾客付多少」；店员发货时仍能看到全部家的价。EMS 折后比标准价还贵、德邦超 2.5 kg 不报价，默认不勾' : 'TABLE 口径下暂不使用，但至少保留 2 家'}>
+          <div className="flex flex-wrap gap-3">
+            {COURIERS.map((c) => (
+              <label key={c.code} className="inline-flex items-center gap-1 text-sm">
+                <input type="checkbox" checked={s.pricingPool.includes(c.code)} onChange={(e) => patch({ pricingPool: e.target.checked ? [...s.pricingPool, c.code] : s.pricingPool.filter((x) => x !== c.code) })} />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        </Field>
       </div>
 
       <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
@@ -161,21 +175,23 @@ export default function ShopSettings() {
         {groups.map((g, i) => (
           <div key={i} className="rounded-md border border-gray-200 p-3 space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
-              <Field label="组名"><input className={inputCls} value={g.name} disabled={g.name === OTHER} onChange={(e) => patchGroup(i, { name: e.target.value })} /></Field>
+              <Field label="组名"><input className={inputCls} value={g.name} disabled={g.isOther} onChange={(e) => patchGroup(i, { name: e.target.value })} /></Field>
               <Field label="满额包邮（元）" hint="0 = 不包邮"><input className={inputCls} inputMode="decimal" value={g.freeShipMin} disabled={g.blocked} onChange={(e) => patchGroup(i, { freeShipMin: e.target.value })} /></Field>
               <Field label="兜底首重价（元）"><input className={inputCls} inputMode="decimal" value={g.tableFirst} disabled={g.blocked} onChange={(e) => patchGroup(i, { tableFirst: e.target.value })} /></Field>
               <Field label="兜底续重/公斤（元）"><input className={inputCls} inputMode="decimal" value={g.tableOverPerKg} disabled={g.blocked} onChange={(e) => patchGroup(i, { tableOverPerKg: e.target.value })} /></Field>
               <div className="flex items-center gap-3">
-                <label className="inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={g.blocked} disabled={g.name === OTHER} onChange={(e) => patchGroup(i, { blocked: e.target.checked, freeShipMin: e.target.checked ? '0.00' : g.freeShipMin })} />不寄送</label>
-                {g.name !== OTHER && <button className="text-xs text-red-600" onClick={() => removeGroup(i)}>删除</button>}
+                <label className="inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={g.blocked} disabled={g.isOther} onChange={(e) => patchGroup(i, { blocked: e.target.checked, freeShipMin: e.target.checked ? '0.00' : g.freeShipMin })} />不寄送</label>
+                {!g.isOther && <button className="text-xs text-red-600" onClick={() => removeGroup(i)}>删除</button>}
               </div>
             </div>
-            {g.name !== OTHER && (
+            {!g.isOther && (
               <div className="flex flex-wrap gap-2">
                 {PROVINCES.map((p) => {
                   const mine = g.provinces.includes(p); const owner = provinceOwner(p, i)
                   return (
                     <button key={p} type="button" onClick={() => toggleProvince(i, p)}
+                      aria-pressed={mine}
+                      aria-label={owner >= 0 && !mine ? `${p}（当前在「${groups[owner].name}」，点击移到本组）` : undefined}
                       className={`px-2 py-0.5 rounded text-xs border ${mine ? 'bg-brand-500 text-white border-brand-500' : owner >= 0 ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-gray-700 border-gray-300'}`}
                       title={owner >= 0 && !mine ? `当前在「${groups[owner].name}」` : ''}>{p.replace(/(省|市|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区)$/, '')}</button>
                   )
@@ -192,9 +208,8 @@ export default function ShopSettings() {
       </div>
 
       {error && <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>}
-      {loadFailed && <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">邮寄设置加载失败，上面显示的不是当前生效的值，请刷新页面后再修改。</div>}
       <div className="flex justify-end">
-        <Button loading={saving} disabled={loadFailed} onClick={handleSave}>{saving ? '保存中...' : '保存'}</Button>
+        <Button loading={saving} onClick={handleSave}>{saving ? '保存中...' : '保存'}</Button>
       </div>
     </div>
   )
