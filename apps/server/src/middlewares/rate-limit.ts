@@ -71,6 +71,15 @@ export const localQuoteLimiter = rateLimit({
   message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
 })
 
+/** 邮寄报价限流：与同城报价同参数，单独计数（两个渠道的结算页互不影响） */
+export const expressQuoteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: devCeiling(30, 500),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { code: 42901, message: '请求过于频繁，请稍后再试', data: null },
+})
+
 /**
  * 扫码日志限流：POST /scan-logs 是全仓唯一「匿名可写库且零校验」的接口
  * （optionalUserAuth，只要 scene 对上一个在售商品就 INSERT 一行）。

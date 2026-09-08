@@ -66,6 +66,9 @@ AT=$(jq -r '.data.token // empty' <<<"$R")
 # Setting(key=printer) 会一直留着，后面第 31 段「打印机占位」断言（禁用时应为 NOT_CONNECTED）
 # 会被这份残留状态带偏——不是本次改动引入的 bug，是测试前置状态没兜底，这里在最前面挂一次。
 req PUT /api/admin/settings/printer "$AT" '{"enabled":false,"printers":[]}' >/dev/null
+# 邮寄设置复位成「TABLE / 全 0 元 / 无包邮线 / 无起送」：与本文件写成时的一口价默认值等价，
+# 让后面几十处 EXPRESS 下单的金额断言不受 QUOTE 中位数报价影响。56/57 两段自己切 QUOTE 再恢复。
+req PUT /api/admin/settings/shipping "$AT" '{"fee":0,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
 
 echo "== 2. 图片上传 =="
 PNG=$(mktemp).png

@@ -14,6 +14,7 @@ import {
   validateLocalSettings, validateForEnable, validateRawLocalSettings,
 } from '../../services/local-settings'
 import { getDeliveryProvider } from '../../services/delivery/provider'
+import { getExpressSettings, setExpressSettings, sanitizeExpressSettings, validateExpressSettings } from '../../services/express-settings'
 
 const router = Router()
 
@@ -141,6 +142,18 @@ router.post('/local-delivery/probe', async (req, res, next) => {
       receiver: { name: '探测', mobile: '13800000000', province: s.store.province, city: s.store.city, district: s.store.district, address: '探测点', latE6, lngE6 },
     })
     res.json({ code: 0, message: 'ok', data: { feeFen: r.feeFen, distanceM: r.distanceM } })
+  } catch (e) { next(e) }
+})
+
+router.get('/express', async (_req, res, next) => {
+  try { res.json({ code: 0, message: 'ok', data: await getExpressSettings() }) } catch (e) { next(e) }
+})
+router.put('/express', async (req, res, next) => {
+  try {
+    const next_ = sanitizeExpressSettings(req.body)
+    const errs = validateExpressSettings(next_)
+    if (errs.length) throw new AppError(40001, errs.join('；'))
+    res.json({ code: 0, message: 'ok', data: await setExpressSettings(next_) })
   } catch (e) { next(e) }
 })
 

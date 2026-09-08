@@ -15,6 +15,8 @@ router.post('/queue', async (req: Request, res: Response, next: NextFunction) =>
   try {
     const d = (req.body ?? {}).directive as ExpressMockDirective | undefined
     if (!d || !['ok', 'timeout', 'error'].includes(d.kind)) throw new AppError(40000, '无效指令', 400)
+    if (d.kind === 'error' && (typeof d.code !== 'string' || !d.code)) throw new AppError(40000, '无效指令', 400)
+    if (d.kind === 'ok' && 'quotes' in d && d.quotes !== undefined && !Array.isArray(d.quotes)) throw new AppError(40000, '无效指令', 400)
     queueExpressDirective(d); success(res, {})
   } catch (e) { next(e) }
 })
