@@ -48,6 +48,8 @@ export interface FeeCalc {
   feeSource: 'QUOTE' | 'TABLE'
   freeShip: boolean
   belowMin: boolean
+  /** 该分组是否不寄送；路由层本应在算价前就拒绝，这里透传出来是为了不让这个检查被忘掉 */
+  blocked: boolean
 }
 
 /**
@@ -64,7 +66,14 @@ export function calcExpressFee(
     quotedFeeFen = locked.quotedFeeFen; feeSource = 'QUOTE'
   } else {
     const pool = new Set(s.pricingPool)
-    const valid = (quotes ?? []).filter((q) => pool.has(q.kuaidicom) && q.priceFen !== null).map((q) => q.priceFen as number)
+    // 一家一票：快递100 同一家可能回多个产品档，取最低那条
+    const lowestByKuaidicom = new Map<string, number>()
+    for (const q of quotes ?? []) {
+      if (!pool.has(q.kuaidicom) || q.priceFen === null) continue
+      const prev = lowestByKuaidicom.get(q.kuaidicom)
+      if (prev === undefined || q.priceFen < prev) lowestByKuaidicom.set(q.kuaidicom, q.priceFen)
+    }
+    const valid = [...lowestByKuaidicom.values()]
     if (s.fee.mode === 'QUOTE' && valid.length >= s.fee.minQuoteCount) {
       quotedFeeFen = roundUpTo(medianFen(valid) + s.fee.markupFen, s.fee.roundToFen); feeSource = 'QUOTE'
     } else {
@@ -73,7 +82,7 @@ export function calcExpressFee(
   }
   const freeShip = group.freeShipMinFen > 0 && subtotalFen >= group.freeShipMinFen
   const belowMin = s.minOrderAmountFen > 0 && subtotalFen < s.minOrderAmountFen
-  return { feeFen: freeShip ? 0 : quotedFeeFen, quotedFeeFen, feeSource, freeShip, belowMin }
+  return { feeFen: freeShip ? 0 : quotedFeeFen, quotedFeeFen, feeSource, freeShip, belowMin, blocked: group.blocked }
 }
 
 /** 商品清单指纹：凭证只能用在它报价时的那一份清单上（数量、规格、赠品任一变都作废） */
@@ -111,7 +120,8 @@ export function signExpressQuote(p: ExpressQuotePayload, now: Date = new Date())
   return `${body}.${hmac(body)}`
 }
 
-export function verifyExpressQuote(token: string, now: Date = new Date()): ExpressQuotePayload | null {
+export function verifyExpressQuote(token: unknown, now: Date = new Date()): ExpressQuotePayload | null {
+  if (typeof token !== 'string') return null
   const [body, sig] = token.split('.')
   // 与 local-settings.verifyQuote 同款：先用字符集卡死 sig 形状，timingSafeEqual 才不会因长度不等抛 RangeError
   if (!body || !sig || !/^[0-9a-f]{32}$/.test(sig)) return null

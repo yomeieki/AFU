@@ -61,6 +61,26 @@ t('QUOTE：加价与不取整生效', () => {
   const s2 = { ...S, fee: { ...S.fee, markupFen: 100, roundToFen: 0 } }
   assert.strictEqual(calcExpressFee(s2, SC, 1.5, Q, 5000).quotedFeeFen, 808)
 })
+t('一家一票：快递100 同一家可能回多个产品档，取最低那条参与中位数，重复行不占 minQuoteCount 名额', () => {
+  // Q 里 jd 已经是 1130 那条，再追加一条更低的 999——去重后定价名单 6 家应为
+  // 660,690,705,710,830,999（jd 只算一次、取 999），中位数 (705+710)/2=707.5→708
+  const dup: CourierQuote[] = [...Q, { kuaidicom: 'jd', serviceType: '特惠送', priceFen: 999, defPriceFen: 1500 }]
+  const sExact = { ...S, fee: { ...S.fee, roundToFen: 0 } }  // 不取整，直接看中位数原始值，避免被 roundToFen 抹平差异
+  const r = calcExpressFee(sExact, SC, 1.5, dup, 5000)
+  assert.strictEqual(r.feeSource, 'QUOTE')
+  // 若没去重，jd 会被算两次变成 7 家（660,690,705,710,830,999,1130），中位数会变成 710，不是 708
+  assert.strictEqual(r.quotedFeeFen, 708)
+
+  // minQuoteCount 门槛按“去重后的家数”算：pool 只留两家，其中一家有两条重复报价，仍然只算 2 家有效
+  const s2 = { ...S, pricingPool: ['jtexpress', 'jd'] }
+  const twoRows: CourierQuote[] = [
+    { kuaidicom: 'jtexpress', serviceType: '标准快递', priceFen: 660, defPriceFen: 900 },
+    { kuaidicom: 'jd', serviceType: '特惠送', priceFen: 999, defPriceFen: 1500 },
+    { kuaidicom: 'jd', serviceType: '标准快递', priceFen: 1130, defPriceFen: 1500 },
+  ]
+  assert.strictEqual(calcExpressFee({ ...s2, fee: { ...s2.fee, minQuoteCount: 2 } }, SC, 1.5, twoRows, 5000).feeSource, 'QUOTE')
+  assert.strictEqual(calcExpressFee({ ...s2, fee: { ...s2.fee, minQuoteCount: 3 } }, SC, 1.5, twoRows, 5000).feeSource, 'TABLE')
+})
 t('回价不足 minQuoteCount → TABLE；quotes 为 null → TABLE；mode=TABLE 无视报价', () => {
   const one = Q.filter((q) => q.kuaidicom === 'jd')
   assert.strictEqual(calcExpressFee(S, SC, 1.5, one, 5000).feeSource, 'TABLE')
@@ -75,6 +95,12 @@ t('包邮：达到该组门槛运费归零但 quotedFeeFen 保留；起送：bel
   const s4 = { ...S, minOrderAmountFen: 3000 }
   assert.strictEqual(calcExpressFee(s4, SC, 1.5, Q, 2999).belowMin, true)
   assert.strictEqual(calcExpressFee(s4, SC, 1.5, Q, 3000).belowMin, false)
+})
+t('blocked：不寄送分组透传到 FeeCalc，路由层若忘了拦截也能被看见', () => {
+  const blockedGroup = findRegionGroup(S, '新疆维吾尔自治区')
+  assert.strictEqual(blockedGroup.blocked, true)
+  assert.strictEqual(calcExpressFee(S, blockedGroup, 1.5, Q, 5000).blocked, true)
+  assert.strictEqual(calcExpressFee(S, SC, 1.5, Q, 5000).blocked, false)
 })
 t('锁价：传 locked 时不看 quotes、不重取中位数，但包邮仍按当前设置判', () => {
   const r = calcExpressFee(S, SC, 1.5, null, 5000, { quotedFeeFen: 750 })
@@ -93,7 +119,9 @@ t('凭证：签验往返、过期、篡改、旧格式缺字段都判无效', ()
   const p = { addressId: 7, itemsHash: 'abcdef0123456789', weightKg: 1.5, feeFen: 750, quotedFeeFen: 750, feeSource: 'QUOTE' as const, groupName: '四川', quotes: Q.map((q) => ({ kuaidicom: q.kuaidicom, serviceType: q.serviceType, priceFen: q.priceFen })) }
   const now = new Date('2026-09-08T04:00:00Z')
   const tok = signExpressQuote(p, now)
-  assert.ok(tok.length < 1024, `token 太长 ${tok.length}`)
+  // 9 家快照实测 533 字符；卡到 < 700 让 payload 增长（比如加了新字段）尽早报警——
+  // 下游 zod 的限制是 1024（不是同城报价的 512），< 700 留出余量但不会晚到临界才发现
+  assert.ok(tok.length < 700, `token 太长 ${tok.length}`)
   assert.deepStrictEqual(verifyExpressQuote(tok, now), p)
   assert.strictEqual(verifyExpressQuote(tok, new Date(now.getTime() + 15 * 60 * 1000 + 1)), null)
   const [body, sig] = tok.split('.')
@@ -101,6 +129,12 @@ t('凭证：签验往返、过期、篡改、旧格式缺字段都判无效', ()
   assert.strictEqual(verifyExpressQuote(`${body}.${sig.slice(0, 31)}0`, now), null)
   assert.strictEqual(verifyExpressQuote('中文.中文', now), null)
   assert.strictEqual(expressQuoteExpiresAt(now).getTime(), now.getTime() + 15 * 60 * 1000)
+})
+t('凭证：非字符串 token 一律判无效（调用方不能保证传进来的是字符串）', () => {
+  const now = new Date('2026-09-08T04:00:00Z')
+  assert.strictEqual(verifyExpressQuote(undefined as unknown, now), null)
+  assert.strictEqual(verifyExpressQuote(123 as unknown, now), null)
+  assert.strictEqual(verifyExpressQuote({} as unknown, now), null)
 })
 
 console.log(`\n通过 ${pass} 条${process.exitCode ? '，有失败' : ''}`)
