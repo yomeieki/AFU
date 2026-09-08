@@ -11,6 +11,10 @@ import { postKd100 } from './kd100-client'
 import { ProviderErrorKind } from './types'
 import { CourierQuote } from '../express-quote'
 import { expressMockProvider } from './express-mock'
+import { verifyAndParseExpressCallback, _parseCallbackParam, ExpressCallbackPayload } from './express-callback-sign'
+
+export type { ExpressCallbackPayload }
+export { _parseCallbackParam }
 
 export interface ExpressBatchPriceInput {
   couriers: string[]
@@ -19,9 +23,28 @@ export interface ExpressBatchPriceInput {
   weightKg: number
   timeoutMs?: number
 }
+export interface ExpressParty { name: string; mobile: string; addr: string }
+export interface ExpressBookInput {
+  bookingNo: string; kuaidicom: string; serviceType?: string | null
+  sender: ExpressParty; receiver: ExpressParty
+  cargo: string; weightKg: number; remark?: string | null
+  dayType?: string | null; pickupStart?: string | null; pickupEnd?: string | null
+  callbackUrl: string; salt: string; timeoutMs?: number
+}
+export interface ExpressBookResult { taskId: string | null; kdOrderId: string | null; kuaidinum: string | null; pollToken: string | null }
+export interface ExpressDetailResult {
+  found: boolean; status: number | null; taskId: string | null; kdOrderId: string | null; kuaidinum: string | null
+  courierName: string | null; courierMobile: string | null; freightFen: number | null; raw: unknown
+}
 export interface ExpressPriceProvider {
   name: 'KD100' | 'MOCK'
   batchPrice(input: ExpressBatchPriceInput): Promise<CourierQuote[]>
+  book(input: ExpressBookInput): Promise<ExpressBookResult>
+  cancel(input: { taskId: string | null; kdOrderId: string | null; reason: string; timeoutMs?: number }): Promise<void>
+  modify(input: { taskId: string | null; kdOrderId: string | null; dayType: string; pickupStart: string | null; pickupEnd: string | null }): Promise<void>
+  detail(input: { taskId: string | null; thirdOrderId: string }): Promise<ExpressDetailResult>
+  synPay(input: { kdOrderId: string }): Promise<void>
+  verifyAndParseCallback(body: Record<string, string>, salt: string): { ok: true; payload: ExpressCallbackPayload } | { ok: false; reason: 'BAD_PARAM' | 'SIGN_MISMATCH' }
 }
 
 const DEFAULT_TIMEOUT_MS = 8000
@@ -63,6 +86,42 @@ export function _parseBatchPrice(data: unknown): CourierQuote[] {
   return out
 }
 
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : null)
+const numOrNull = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null }
+
+/** bOrder 参数（docs/research §3.1）。时段/业务类型只在给了才传：顺丰必填，其它家留空表示「随时」 */
+export function _buildBookParam(i: ExpressBookInput): Record<string, unknown> {
+  const p: Record<string, unknown> = {
+    kuaidicom: i.kuaidicom,
+    recManName: i.receiver.name, recManMobile: i.receiver.mobile, recManPrintAddr: i.receiver.addr,
+    sendManName: i.sender.name, sendManMobile: i.sender.mobile, sendManPrintAddr: i.sender.addr,
+    callBackUrl: i.callbackUrl, salt: i.salt, thirdOrderId: i.bookingNo,
+    cargo: i.cargo, weight: i.weightKg.toFixed(1), payment: 'SHIPPER',
+  }
+  if (i.serviceType) p.serviceType = i.serviceType
+  if (i.remark) p.remark = i.remark
+  if (i.dayType) p.dayType = i.dayType
+  if (i.pickupStart) p.pickupStartTime = i.pickupStart
+  if (i.pickupEnd) p.pickupEndTime = i.pickupEnd
+  return p
+}
+export function _parseBook(data: unknown): ExpressBookResult {
+  const d = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
+  return { taskId: str(d.taskId), kdOrderId: str(d.orderId), kuaidinum: str(d.kuaidinum ?? d.kuaidiNum), pollToken: str(d.pollToken) }
+}
+export function _parseDetail(data: unknown): ExpressDetailResult {
+  const d = (data && typeof data === 'object' && !Array.isArray(data) ? data : {}) as Record<string, unknown>
+  const status = numOrNull(d.status)
+  if (status === null && !str(d.taskId) && !str(d.orderId)) return { found: false, status: null, taskId: null, kdOrderId: null, kuaidinum: null, courierName: null, courierMobile: null, freightFen: null, raw: data }
+  const fr = numOrNull(d.freight)
+  return { found: true, status, taskId: str(d.taskId), kdOrderId: str(d.orderId), kuaidinum: str(d.kuaidiNum ?? d.kuaidinum), courierName: str(d.courierName), courierMobile: str(d.courierMobile), freightFen: fr === null ? null : Math.round(fr * 100), raw: data }
+}
+
+async function call(method: string, param: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  validateKd100ExpressConfig()
+  return postKd100({ url: config.kd100Express.apiUrl, method, param, key: config.kd100Express.key, secret: config.kd100Express.secret, timeoutMs, mapReturnCode: (code, message) => _mapExpressReturnCode(code, message) })
+}
+
 export const kd100ExpressProvider: ExpressPriceProvider = {
   name: 'KD100',
   async batchPrice(input) {
@@ -75,6 +134,22 @@ export const kd100ExpressProvider: ExpressPriceProvider = {
     })
     return _parseBatchPrice(data.data)
   },
+  async book(input) { const r = await call('bOrder', _buildBookParam(input), input.timeoutMs ?? 15000); return _parseBook(r.data) },
+  async cancel(input) { await call('cancel', { taskId: input.taskId ?? '', orderId: input.kdOrderId ?? '', cancelMsg: input.reason.slice(0, 30) }, input.timeoutMs ?? DEFAULT_TIMEOUT_MS) },
+  async modify(input) {
+    const p: Record<string, unknown> = { taskId: input.taskId ?? '', orderId: input.kdOrderId ?? '', dayType: input.dayType }
+    if (input.pickupStart) p.pickupStartTime = input.pickupStart
+    if (input.pickupEnd) p.pickupEndTime = input.pickupEnd
+    await call('modifyOrder', p)
+  },
+  async detail(input) {
+    const p: Record<string, unknown> = { thirdOrderId: input.thirdOrderId }
+    if (input.taskId) p.taskId = input.taskId
+    const r = await call('detail', p)
+    return _parseDetail(r.data)
+  },
+  async synPay(input) { await call('synPay', { orderId: input.kdOrderId }) },
+  verifyAndParseCallback(body, salt) { return verifyAndParseExpressCallback(body, salt) },
 }
 
 export function getExpressProvider(): ExpressPriceProvider {
