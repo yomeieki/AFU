@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import '../pages/Workbench.css'
 import type { Channel } from '../types'
-import { precancelDelivery, cancelDelivery, refundOrder } from '../api/admin'
+import { approveExpressCancelRequest, precancelDelivery, cancelDelivery, refundOrder } from '../api/admin'
 
 interface Props {
   orderId: number
@@ -19,10 +19,16 @@ interface Props {
   amountFen: number
   /** 卡片渠道，确认按钮取这个颜色（§6） */
   channel: Channel
-  /** 在途配送单状态文案，用于第一步的说明 */
+  /** 在途配送单/取件预约状态文案，用于第一步的说明 */
   deliveryStatusLabel?: string | null
-  /** 无在途配送单时直接从第二步（退款）起 */
+  /** 无在途配送单/无活跃取件预约时，同城直接从第二步（退款）起；邮寄仍是一步走，但说明文案会不一样 */
   hasActiveDelivery: boolean
+  /**
+   * 仅 EXPRESS 用：预约状态原始值（BOOKED/ACCEPTED/UNKNOWN/…）。UNKNOWN 是「快递100 没确认成不成单」
+   * 的中间态——这时候先取消再退款可能把一张其实已经成立的预约悬空（钱退了、快递员还是会来），
+   * 所以按钮要禁用，引导店员先在「作废预约」或等系统对账把它变成确定的终态。LOCAL 传 null 即可。
+   */
+  expressBookingStatus?: string | null
   onClose: () => void
   onDone: () => void
 }
@@ -34,8 +40,10 @@ const apiMessage = (e: unknown, fallback: string) =>
 const apiCode = (e: unknown) => (e as { response?: { data?: { code?: number } } })?.response?.data?.code
 
 export default function CancelAndRefundModal({
-  orderId, orderNo, amountFen, channel, deliveryStatusLabel, hasActiveDelivery, onClose, onDone,
+  orderId, orderNo, amountFen, channel, deliveryStatusLabel, hasActiveDelivery, expressBookingStatus, onClose, onDone,
 }: Props) {
+  const isExpress = channel === 'EXPRESS'
+  const isUnknown = isExpress && expressBookingStatus === 'UNKNOWN'
   const [step, setStep] = useState<1 | 2>(hasActiveDelivery ? 1 : 2)
   const [cancelFee, setCancelFee] = useState<number | null | undefined>(undefined) // undefined=还没问到
   const [feeError, setFeeError] = useState('')
@@ -53,8 +61,9 @@ export default function CancelAndRefundModal({
   }, [orderId])
 
   useEffect(() => {
-    if (step === 1) void loadFee()
-  }, [step, loadFee])
+    // 邮寄没有 precancel 接口（快递100 不支持提前问取消费），只有同城的两步流程要问
+    if (!isExpress && step === 1) void loadFee()
+  }, [isExpress, step, loadFee])
 
   const doCancel = async () => {
     setBusy(true); setError('')
@@ -81,12 +90,73 @@ export default function CancelAndRefundModal({
     }
   }
 
+  // 邮寄一步走：服务端 approveExpressCancelRequest 自己先取消预约（有的话）再退款，
+  // 这里不用像同城那样分两步点两次——UI 上只是一个确认键，中间的顺序是服务端事务保证的。
+  // 没有活跃预约时同一个端点照样能调，服务端会跳过取消这一步直接退款。
+  const doApproveExpress = async () => {
+    setBusy(true); setError('')
+    try {
+      await approveExpressCancelRequest(orderId)
+      onDone()
+    } catch (e) {
+      setError(apiMessage(e, '处理失败，请重试'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const stepDot = (n: 1 | 2, text: string) => (
     <span className="wb__step" style={step === n ? { color: 'var(--text-1)', fontWeight: 600 } : undefined}>
       <span className="wb__step-dot" style={step === n ? { background: chColor(channel), color: '#fff' } : undefined}>{n}</span>
       {text}
     </span>
   )
+
+  if (isExpress) {
+    return (
+      <div className="wb__modal-mask" role="dialog" aria-modal="true">
+        <div className="wb__modal">
+          <div className="wb__modal-head">
+            <span>处理取消申请</span>
+            <button className="wb__iconbtn" onClick={onClose} disabled={busy} aria-label="关闭"><X className="w-4 h-4" /></button>
+          </div>
+
+          <div className="wb__modal-body">
+            <div className="wb__meta">订单 <b>#{orderNo.slice(-4)}</b></div>
+            <p>
+              {hasActiveDelivery
+                ? `这一步会先向快递100 取消当前取件预约${deliveryStatusLabel ? `（当前：${deliveryStatusLabel}）` : ''}，快递员不再来取件，再把货款原路退回顾客微信，订单转为已退款终态。`
+                : '这单目前没有活跃的取件预约，这一步会直接把货款原路退回顾客微信，订单转为已退款终态。'}
+            </p>
+            <p className="wb__meta">顾客会看到：{hasActiveDelivery ? '取件预约已取消、' : ''}退款通知，1-3 个工作日到账。</p>
+            {isUnknown && (
+              <div className="wb__amber">
+                这条预约「待核对」（快递100 还没确认成不成单）：先在抽屉里点「作废预约」，或等系统自动查单确认之后，再回来处理这条取消申请——现在处理有可能把一张其实已经成立的预约悬空（钱退了、快递员还是会来）。
+              </div>
+            )}
+            <div className="wb__redbar">
+              {amountFen > 0
+                ? `确认后退款 ¥${yuan(amountFen)} 原路退回，此操作不可撤销。`
+                : '本单已无可退余额，无需再退款，可直接关闭。'}
+            </div>
+          </div>
+
+          {error && <div className="wb__redbar wb__modal-error">{error}</div>}
+
+          <div className="wb__modal-foot">
+            <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>暂不处理</button>
+            <button
+              className="wb__btn wb__btn--fill" style={{ background: chColor(channel) }}
+              disabled={busy || isUnknown || amountFen <= 0}
+              onClick={() => void doApproveExpress()}
+            >
+              {busy ? '处理中…' : '取消预约并退款'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="wb__modal-mask" role="dialog" aria-modal="true">

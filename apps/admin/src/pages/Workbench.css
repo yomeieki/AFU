@@ -45,9 +45,11 @@
 .wb__dot--danger { background:var(--danger); }
 .wb__stats { display:flex; gap:14px; font-size:12px; color:var(--text-2); }
 .wb__stats b { display:block; font-size:15px; color:var(--text-1); font-variant-numeric:tabular-nums; }
-.wb__iconbtn { display:inline-flex; align-items:center; gap:5px; padding:6px 10px; border-radius:8px;
+/* .wb__icon-btn 是 .wb__iconbtn 的别名（ExpressBookingModal 用了带连字符的写法），两个类名共用一套样式，
+   不改调用处是为了让弹窗那段与规格/brief 给的代码逐字一致 */
+.wb__iconbtn, .wb__icon-btn { display:inline-flex; align-items:center; gap:5px; padding:6px 10px; border-radius:8px;
   border:1px solid var(--line); background:var(--surface); color:var(--text-1); font-size:13px; cursor:pointer; }
-.wb__iconbtn:hover { background:var(--bg); }
+.wb__iconbtn:hover, .wb__icon-btn:hover { background:var(--bg); }
 .wb__alerts { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-2); }
 .wb__alerts--on { color:var(--danger); font-weight:600; }
 /* flex:none —— .wb 是纵向 flex 且整屏定高，不写死的话这条横幅会被看板挤扁到看不见 */
@@ -241,8 +243,31 @@
 .wb__quote-tick { display:inline-block; width:14px; color:var(--local); font-weight:700; }
 .wb__quote-note { margin-top:6px; font-size:12px; color:var(--text-2); line-height:1.5; }
 .wb__quote-note--warn { color:var(--warn); font-weight:600; }
-.wb__redbar { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
+/* .wb__error 是 .wb__redbar 的别名（ExpressBookingModal 用了这个类名），同一套样式 */
+.wb__redbar, .wb__error { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }
+
+/* ── 邮寄预约弹窗（ExpressBookingModal）专用 ──
+   报价行复用上面 .wb__quote-row 的基础布局/交互（同一套触感），只是选中态用 is-on/is-off
+   两个修饰类（不是 --on），渠道色固定用 --express——这个弹窗只服务邮寄单，不需要按渠道传参。 */
+.wb__field { display:flex; flex-direction:column; gap:4px; }
+.wb__field > span:first-child { font-size:12px; color:var(--text-2); }
+.wb__row { display:flex; align-items:center; gap:8px; }
+.wb__row .wb__select { flex:1; min-width:0; }
+.wb__quote-list { display:flex; flex-direction:column; gap:4px; border:1px solid var(--line);
+  border-radius:8px; padding:6px; max-height:220px; overflow-y:auto; }
+.wb__quote-list .wb__quote-row.is-on { border-color:var(--express); background:var(--express-soft);
+  padding-left:10px; position:relative; }
+.wb__quote-list .wb__quote-row.is-on::before { content:''; position:absolute; left:0; top:2px; bottom:2px;
+  width:4px; border-radius:2px; background:var(--express); }
+.wb__quote-list .wb__quote-row.is-off { color:var(--text-2); cursor:not-allowed; }
+.wb__quote-list .wb__quote-row.is-off:hover { background:transparent; }
+.wb__quote-list .wb__quote-row span { display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
+.wb__quote-list .wb__quote-row span:first-child { flex-direction:row; align-items:center; gap:4px; }
+.wb__tag { font-style:normal; font-size:11px; font-weight:700; color:var(--express);
+  background:var(--express-soft); border-radius:4px; padding:0 5px; line-height:1.6; }
+.wb__neg { font-size:11px; color:var(--danger); font-weight:400; }
+.wb__pos { font-size:11px; color:var(--ok); font-weight:400; }
 .wb__opt { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line);
   border-radius:8px; cursor:pointer; }
 .wb__opt--on { border-color:var(--danger); background:var(--danger-soft); }

@@ -11,18 +11,21 @@ import { useNavigate } from 'react-router-dom'
 import { Bell, Bike, CircleAlert, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
-  Channel, CourierLive, DeliveryEventInfo, DeliveryInfo, LocalDeliverySettings, Order, OrderItem,
-  QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
+  Channel, CourierLive, DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView,
+  LocalDeliverySettings, Order, OrderItem, QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
 } from '../types'
 import {
-  acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip, callRider, cancelDelivery,
-  getLocalSettings, getOrder, getOrderDelivery, getWorkbenchSnapshot, markOrderDelivered, precancelDelivery,
-  rejectOrder, reprintOrder, resetKd100Circuit, selfDeliverOrder, shipOrder, voidUnknownDelivery,
+  acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
+  callRider, cancelDelivery, cancelExpressBooking, getExpressBooking,
+  getLocalSettings, getOrder, getOrderDelivery, getWorkbenchSnapshot, markOrderDelivered, modifyExpressBooking,
+  precancelDelivery, rejectCancelRequest, rejectExpressCancelRequest, rejectOrder, reprintOrder,
+  resetKd100Circuit, selfDeliverOrder, shipOrder, voidExpressBooking, voidUnknownDelivery,
   refreshOrderQuote, getCourierLive,
 } from '../api/admin'
 import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
+import ExpressBookingModal, { DAYS, HOURS, slotError } from '../components/ExpressBookingModal'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useIsPhone } from '../hooks/useIsPhone'
 import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn } from '../utils/time'
@@ -460,31 +463,39 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
   )
 }
 
-/** 取消配送 / 取消呼叫：先问运力方取消费，把钱写进确认文案再让人点（§6） */
+/** 取消配送 / 取消呼叫（同城）或取消取件预约（邮寄）：先问运力方取消费，把钱写进确认文案再让人点（§6） */
 function CancelDeliveryModal({ orderId, channel, title, onClose, onDone }: {
   orderId: number; channel: Channel; title: string; onClose: () => void; onDone: (msg: string) => void
 }) {
-  const [fee, setFee] = useState<number | null | undefined>(undefined)
+  const isExpress = channel === 'EXPRESS'
+  // 邮寄不查 precancel 费：快递100 没有这个接口，规则是「上门前取消不收费；已取件要联系快递公司」，
+  // 不是一个能提前问出来的数字。fee 直接定死 0，走同城那套「本次取消不产生取消费」的文案分支。
+  const [fee, setFee] = useState<number | null | undefined>(isExpress ? 0 : undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
+    if (isExpress) return
     let alive = true
     precancelDelivery(orderId).then(
       (r) => { if (alive) setFee(r.data.data.cancelFeeFen) },
       () => { if (alive) setFee(null) }
     )
     return () => { alive = false }
-  }, [orderId])
+  }, [orderId, isExpress])
   const submit = async () => {
     setBusy(true); setError('')
-    try { await cancelDelivery(orderId, '商家取消'); onDone('已取消配送') }
-    catch (e) {
+    try {
+      await (isExpress ? cancelExpressBooking(orderId, '商家取消') : cancelDelivery(orderId, '商家取消'))
+      onDone(isExpress ? '已取消取件预约' : '已取消配送')
+    } catch (e) {
       setError(apiCode(e) === 42238 ? '运力方响应超时，请稍后重试（配送单状态未变化）' : apiMessage(e, '取消失败，请重试'))
     } finally { setBusy(false) }
   }
-  const costText = fee === undefined ? '正在向运力方预估取消费…'
-    : fee === null ? '取消费未知——骑手已接单的单通常会产生几元取消费，由门店承担。'
-      : fee > 0 ? `本次取消费约 ¥${yuan(fee)}，由门店承担。` : '本次取消不产生取消费。'
+  const costText = isExpress
+    ? '快递员上门前取消不收费；若已经取件，需要联系快递公司协商（本弹窗只作废这条预约记录）。'
+    : fee === undefined ? '正在向运力方预估取消费…'
+      : fee === null ? '取消费未知——骑手已接单的单通常会产生几元取消费，由门店承担。'
+        : fee > 0 ? `本次取消费约 ¥${yuan(fee)}，由门店承担。` : '本次取消不产生取消费。'
   return (
     <WbModal
       title={title}
@@ -494,14 +505,16 @@ function CancelDeliveryModal({ orderId, channel, title, onClose, onDone }: {
         <>
           <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
           <FillButton channel={channel} onClick={submit} disabled={busy || fee === undefined}>
-            {busy ? '处理中…' : '确认取消配送'}
+            {busy ? '处理中…' : isExpress ? '确认取消预约' : '确认取消配送'}
           </FillButton>
         </>
       }
     >
       <WhatBlock
-        what="向运力方取消这张配送单，骑手不再来取货；订单退回「备餐中」，你可以重新呼叫或改自己送。"
-        customer="顾客看到配送已取消，订单仍在备餐中。"
+        what={isExpress
+          ? '向快递100 取消这条取件预约，快递员不再来取件；订单退回「备货中」，你可以重新预约或手填单号。'
+          : '向运力方取消这张配送单，骑手不再来取货；订单退回「备餐中」，你可以重新呼叫或改自己送。'}
+        customer={isExpress ? '顾客看到商家仍在备货中。' : '顾客看到配送已取消，订单仍在备餐中。'}
         cost={costText}
       />
       {fee !== 0 && <div className="wb__amber">{costText}</div>}
@@ -620,6 +633,59 @@ function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
         <input className="wb__input" placeholder="快递公司名称" value={otherCompany} onChange={(e) => setOtherCompany(e.target.value)} />
       )}
       <input className="wb__input" placeholder="快递单号" value={expressNo} onChange={(e) => setExpressNo(e.target.value)} />
+    </WbModal>
+  )
+}
+
+type Day = (typeof DAYS)[number]
+/** 邮寄「改约时间」：只改时段，快递家不能换（服务端 modifyBookingSlot 本就不收 kuaidicom）。
+ *  校验规则与 ExpressBookingModal 用同一个 slotError——两处必须字字一致，所以从那边 export 复用。
+ *  booking 只有 WorkbenchCard.express.booking 那份精简字段（没有原始 kuaidicom 编码），
+ *  顺丰必填时段的判断用 courierLabel 反查回 'shunfeng' 这一个值即可，slotError 只关心它是不是这一家。 */
+function ModifySlotModal({ orderId, booking, onClose, onDone }: {
+  orderId: number
+  booking: { courierLabel: string; slotText: string } | null
+  onClose: () => void
+  onDone: (msg: string) => void
+}) {
+  const [day, setDay] = useState<Day>('今天')
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const pseudoKuaidicom = booking?.courierLabel === '顺丰速运' ? 'shunfeng' : ''
+  const nowMin = (() => { const d = new Date(Date.now() + 8 * 3600 * 1000); return d.getUTCHours() * 60 + d.getUTCMinutes() })()
+  const err = slotError(day, start, end, pseudoKuaidicom, nowMin)
+  const submit = async () => {
+    if (err) return
+    setBusy(true); setError('')
+    try {
+      await modifyExpressBooking(orderId, { dayType: day, pickupStart: start || null, pickupEnd: end || null })
+      onDone('已改约')
+    } catch (e) { setError(apiMessage(e, '改约失败，请重试')) } finally { setBusy(false) }
+  }
+  return (
+    <WbModal
+      title="改约取件时间"
+      onClose={onClose}
+      error={error}
+      footer={
+        <>
+          <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>再想想</button>
+          <FillButton channel="EXPRESS" onClick={submit} disabled={busy || !!err}>
+            {busy ? '改约中…' : '确认改约'}
+          </FillButton>
+        </>
+      }
+    >
+      {booking && <div className="wb__meta">当前：{booking.slotText || '时段不限'}</div>}
+      <div className="wb__row">
+        <select className="wb__select" value={day} onChange={(e) => setDay(e.target.value as Day)}>{DAYS.map((d) => <option key={d} value={d}>{d}</option>)}</select>
+        <select className="wb__select" value={start} onChange={(e) => setStart(e.target.value)}><option value="">不限</option>{HOURS.map((h) => <option key={h} value={h}>{h}</option>)}</select>
+        <span>–</span>
+        <select className="wb__select" value={end} onChange={(e) => setEnd(e.target.value)}><option value="">不限</option>{HOURS.map((h) => <option key={h} value={h}>{h}</option>)}</select>
+      </div>
+      {err && <div className="wb__error">{err}</div>}
     </WbModal>
   )
 }
@@ -897,20 +963,27 @@ function ColumnTabs({ snap, active, onPick }: {
   )
 }
 
-function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: {
+function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, onReject, rejecting }: {
   card: WorkbenchCard; colKey: ColKey; now: number
-  /** 顾客可申请取消 / 店员可处理的窗口（分钟，接单起算），用来算「还剩多久自动回绝」 */
+  /** 顾客可申请取消 / 店员可处理的窗口（分钟，接单起算），用来算「还剩多久自动回绝」——
+   *  按渠道传进来的那一个值（同城传 acceptGraceMin，邮寄传 expressAcceptGraceMin） */
   graceMin: number
   /** 当下的备餐时长（分，高峰取上界）——「备餐中」那一列的正常停留时长就是它 */
   prepMin: number
   onOpen: () => void; onHandleCancel: () => void
+  /** 驳回取消申请（同城/邮寄两渠道都有，调用方按 card.channel 分派具体接口） */
+  onReject: () => void
+  rejecting?: boolean
 }) {
   const local = card.channel === 'LOCAL'
   const d = card.local?.delivery ?? null
   const badFlow = !!d && ['ABNORMAL', 'UNKNOWN', 'FAILED'].includes(d.status)
   // 呼叫失败是「立即处理」级别（§5 红框）：不重呼或改自送，这单就一直停在备餐中没人送
   const callFailed = !!d?.callFailed
-  const alert = !!card.local && (card.local.cancelRequested || badFlow || callFailed)
+  // 取消申请/驳回痕迹两个渠道共用同一套字段形状（cancelRequested/cancelRejected/acceptedAt），
+  // 卡片这里不用关心是哪个渠道——哪个非空就用哪个（同一张卡两者不会同时非空）
+  const cancelState = card.local ?? card.express
+  const alert = !!cancelState?.cancelRequested || badFlow || callFailed
   // 已完成列不再用等待胶囊的琥珀/红底：红是本页面最稀缺的信号（§0/§5「红框=立即处理」），
   // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
   // 改显示静态的完成时刻（服务端给 done 列的锚点就是 completedAt，即 card.waitSince）。
@@ -971,26 +1044,43 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel }: 
         )) : (
           <>
             <span>{card.express?.province}{card.express?.city && card.express.city !== card.express.province ? ` ${card.express.city}` : ''}</span>
-            <span>{card.express?.expressCompany ?? '未发货'}</span>
+            {/* 有预约就说预约的事（状态 · 快递 · 时段），没预约才退回旧的「快递公司/未发货」——
+                预约成功那一刻起 Shipment 也写了公司/单号，但那不是店员此刻最关心的（§4：备餐中要看的是接不接得到人）。
+                FAILED 用红字直接顶出失败原因，比统一格式更快让店员看到「这单出问题了」。 */}
+            {card.express?.booking ? (
+              <span style={card.express.booking.status === 'FAILED' ? { color: 'var(--danger)' } : undefined}>
+                {card.express.booking.status === 'FAILED' && card.express.booking.failReason
+                  ? card.express.booking.failReason
+                  : `${card.express.booking.statusLabel} · ${card.express.booking.courierLabel} · ${card.express.booking.slotText}${card.express.booking.status === 'ACCEPTED' && card.express.booking.courierName ? ` · ${card.express.booking.courierName}` : ''}`}
+              </span>
+            ) : (
+              <span>{card.express?.expressCompany ?? '未发货'}</span>
+            )}
             <span>{card.express?.expressNo ?? '无运单号'}</span>
           </>
         )}
       </div>
 
-      {/* 取消申请：不用「去处理」，因为**不处理就是驳回**——接单满 acceptGraceMin 分钟系统自动
-          回绝（服务端 autoRejectStaleCancelRequests，「甲」口径）。所以这条只需要回答一件事：
-          「你要不要退他钱」，以及「不动的话还剩多久自动回绝」。倒计时归零后本条会随下一次
-          快照刷新自然消失（变成下面那条「已驳回」）。 */}
-      {card.local?.cancelRequested && (
+      {/* 取消申请：不点「驳回」的话**不处理就是驳回**——接单满 graceMin 分钟系统自动回绝
+          （服务端 autoRejectStaleCancelRequests，「甲」口径）。手动驳回只是把这个结果提前，
+          用在店员已经跟顾客通过电话、确定要继续做这单的时候。这条要回答三件事：
+          「你要不要退他钱」「不退的话要不要现在就明确回绝」，以及「不动的话还剩多久自动回绝」。
+          倒计时归零后本条会随下一次快照刷新自然消失（变成下面那条「已驳回」）。 */}
+      {cancelState?.cancelRequested && (
         <div className="wb__strip wb__strip--warn">
-          <span>顾客要退菜{autoRejectLeft(card.local.acceptedAt, graceMin, now) ?? ''}</span>
-          <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>同意退款</button>
+          <span>顾客要退菜{autoRejectLeft(cancelState.acceptedAt, graceMin, now) ?? ''}</span>
+          <span style={{ display: 'flex', gap: 4 }}>
+            <button className="wb__iconbtn" disabled={rejecting} onClick={(e) => { e.stopPropagation(); onReject() }}>
+              {rejecting ? '处理中…' : '驳回'}
+            </button>
+            <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>同意退款</button>
+          </span>
         </div>
       )}
       {/* 驳回之后厨房要继续做。PO 2026-09-07 定：这件事只显示在屏幕上，不再出票 */}
-      {!card.local?.cancelRequested && card.local?.cancelRejected && (
+      {!cancelState?.cancelRequested && cancelState?.cancelRejected && (
         <div className="wb__strip">
-          <span>{card.local.cancelRejected === 'AUTO' ? '超时未处理，已自动回绝退菜' : '已回绝退菜'} · 继续完成此订单</span>
+          <span>{cancelState.cancelRejected === 'AUTO' ? '超时未处理，已自动回绝退菜' : '已回绝退菜'} · 继续完成此订单</span>
         </div>
       )}
       {(badFlow || callFailed) && d && (
@@ -1103,6 +1193,8 @@ type ModalState =
   | { kind: 'reject' }
   | { kind: 'cancelRefund' }
   | { kind: 'exit' }
+  | { kind: 'book' }
+  | { kind: 'modifySlot' }
   | null
 
 /** 点日夜按钮后会切到的目标主题——按钮图标/文案要描述这个，不是当前主题（§8） */
@@ -1146,6 +1238,9 @@ export default function Workbench() {
     // quoteFreshMs：服务端下发的新鲜度阈值，配合 quotedAt 由 CallQuoteBlock 自己实时重算 stale
     quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean; quoteFreshMs: number } | null
     costFen: number
+    // 邮寄单的取件预约详情——只在 EXPRESS 抽屉打开时拉取（同 delivery 一样只在 loadDetail 里加载，
+    // 与轮询换列/afterAction 同一节奏，见 loadDetail 与其调用处）
+    expressBooking: { booking: ExpressBookingView | null; active: boolean; events: ExpressBookingEventInfo[] } | null
   } | null>(null)
   // 轮询发现抽屉换列/配送状态变了，但新详情还没拉回来这段窗口期：renderActions 的按钮
   // 全部由 detail.delivery 算，此时 detail 仍是旧列的——不置这个标记的话按钮会短暂
@@ -1174,6 +1269,8 @@ export default function Workbench() {
   const [lastOkAt, setLastOkAt] = useState<number | null>(null)
   const [pollFailCount, setPollFailCount] = useState(0)
   const [reprinting, setReprinting] = useState(false)
+  /** 卡片上直接点「驳回」时正在处理的那张卡的 orderId——按钮据此置灰，防止重复提交 */
+  const [rejectingId, setRejectingId] = useState<number | null>(null)
 
   const load = useCallback(async (fresh = false) => {
     const seq = ++loadSeqRef.current
@@ -1276,7 +1373,11 @@ export default function Workbench() {
     const seq = ++detailSeqRef.current
     setDetailLoading(true)
     try {
-      const [o, d] = await Promise.all([getOrder(orderId), channel === 'LOCAL' ? getOrderDelivery(orderId) : null])
+      const [o, d, eb] = await Promise.all([
+        getOrder(orderId),
+        channel === 'LOCAL' ? getOrderDelivery(orderId) : null,
+        channel === 'EXPRESS' ? getExpressBooking(orderId) : null,
+      ])
       // 弱网下这次响应可能是后发先至的旧请求（openCard/afterAction/轮询换列都会调 loadDetail）：
       // 只应用最新那一发，否则旧详情落地会把刚刚已经生效的新详情又盖回去
       if (seq < appliedDetailSeqRef.current) return
@@ -1287,6 +1388,7 @@ export default function Workbench() {
         events: d?.data.data.events ?? [],
         quote: d?.data.data.quote ?? null,
         costFen: d?.data.data.costFen ?? 0,
+        expressBooking: eb?.data.data ?? null,
       })
       setDetailRefreshing(false)
     } catch (e) {
@@ -1425,6 +1527,21 @@ export default function Workbench() {
     finally { setCircuitBusy(false) }
   }
 
+  /** 卡片上的「驳回」：不弹确认框，因为它只是把「不处理」这个必然结果提前——同城/邮寄按渠道分派各自接口 */
+  const rejectCancelForCard = async (card: WorkbenchCard) => {
+    setRejectingId(card.orderId)
+    try {
+      await (card.channel === 'EXPRESS' ? rejectExpressCancelRequest(card.orderId) : rejectCancelRequest(card.orderId))
+      toast.success('已驳回')
+      await load(true)
+      if (drawer?.card.orderId === card.orderId) await loadDetail(card.orderId, card.channel)
+    } catch (e) {
+      toast.error(apiMessage(e, '驳回失败，请重试'))
+    } finally {
+      setRejectingId(null)
+    }
+  }
+
   // ── 操作区（§6 分级确认：改状态或花钱的全弹；打给骑手/看进度/查物流不弹）──
   const renderActions = (): ReactNode => {
     if (!drawer || !detail) return null
@@ -1529,6 +1646,16 @@ export default function Workbench() {
       amber: '作废前请先在快递100 后台确认这张单确实不存在；若它其实已成单，重呼会变成两张单、两笔钱。',
       run: async () => { await voidUnknownDelivery(order.id); await callRider(order.id) },
     }
+    // 「作废预约」在「备餐中」（罕见：一般 UNKNOWN 会先进「等待配送员」列，这里是防御性兜底）
+    // 与「等待配送员」两列都可能出现，文案抽成一处（同 voidRecallSpec 的道理）
+    const voidBookingSpec: ConfirmSpec = {
+      title: '作废待核对的预约', channel: ch, confirmText: '确认作废', okMsg: '已作废',
+      what: '把这条「待核对」的预约记为作废，之后可以重新预约或手填单号。',
+      customer: '顾客看到「商家备货中」。',
+      cost: '不产生费用。',
+      amber: '作废前请先到快递100 后台确认这张单确实不存在；若它其实已成单，重约会变成两张单、两笔钱。',
+      run: () => voidExpressBooking(order.id),
+    }
 
     if (colKey === 'pending') {
       btns.push(fill('accept', '接单', () => confirm({
@@ -1564,7 +1691,17 @@ export default function Workbench() {
           btns.push(ghost('self', '自己送', () => setModal({ kind: 'self' })))
         }
       } else {
-        btns.push(fill('ship', '填单号发货', () => setModal({ kind: 'ship' })))
+        // 邮寄「备餐中」按钮矩阵：有活跃预约（BOOKED/ACCEPTED）时那张卡其实已经在
+        // 「等待配送员」列了（见服务端 workbench.ts 的列归属），这里的 UNKNOWN 分支是防御性兜底
+        // （轮询窗口内卡片可能还没换列）——正常情况下走的是下面 !activeB 那支：没预约/预约已终态。
+        const b = card.express?.booking
+        const activeB = b && ['BOOKED', 'ACCEPTED', 'UNKNOWN'].includes(b.status)
+        if (b?.status === 'UNKNOWN') {
+          btns.push(fill('void-booking', '作废预约', () => confirm(voidBookingSpec)))
+        } else if (!activeB) {
+          btns.push(fill('book', b?.status === 'FAILED' || b?.status === 'CANCELLED' ? '重新预约取件' : '预约取件', () => setModal({ kind: 'book' })))
+          btns.push(ghost('ship', '填单号发货', () => setModal({ kind: 'ship' })))
+        }
       }
     }
 
@@ -1578,6 +1715,16 @@ export default function Workbench() {
         btns.push(ghost('cancel-dlv', '取消配送', () => setModal({ kind: 'cancelDelivery', title: '取消配送' })))
       }
       if (active?.courierMobile) btns.push(tel('call-rider', '打给骑手', active.courierMobile))
+      if (ch === 'EXPRESS') {
+        const b = card.express?.booking
+        if (b?.status === 'UNKNOWN') {
+          btns.push(fill('void-booking2', '作废预约', () => confirm(voidBookingSpec)))
+        } else if (b) {
+          btns.push(fill('modify-slot', '改约时间', () => setModal({ kind: 'modifySlot' })))
+          btns.push(ghost('cancel-booking', '取消预约', () => setModal({ kind: 'cancelDelivery', title: '取消取件预约' })))
+        }
+        if (b?.courierMobile) btns.push(tel('call-courier', '打给快递员', b.courierMobile))
+      }
     }
 
     if (colKey === 'delivering') {
@@ -1601,7 +1748,7 @@ export default function Workbench() {
       }
     }
 
-    if (ch === 'LOCAL' && delivery) {
+    if ((ch === 'LOCAL' && delivery) || (ch === 'EXPRESS' && detail.expressBooking?.booking)) {
       btns.push(ghost('progress', showEvents ? '收起进度' : '看进度', () => setShowEvents((v) => !v)))
     }
     if (order.receiverPhone) btns.push(tel('call-customer', '打给顾客', order.receiverPhone))
@@ -1638,7 +1785,7 @@ export default function Workbench() {
           </div>
 
           <div className="wb__drawer-body">
-            {card.local?.cancelRequested && (
+            {(card.local ?? card.express)?.cancelRequested && (
               <div className="wb__strip wb__strip--warn">
                 <span>顾客申请取消{o?.cancelRequestNote ? `：${o.cancelRequestNote}` : ''}</span>
                 {/* 详情刷新中/订单已离开看板时置灰：退款引导要用可退余额，这两种情况下
@@ -1781,6 +1928,48 @@ export default function Workbench() {
               </div>
             )}
 
+            {!local && detail?.expressBooking?.booking && (() => {
+              const b = detail.expressBooking!.booking!
+              return (
+                <div className="wb__block">
+                  <div className="wb__block-t">取件预约</div>
+                  <div className="wb__line"><span>状态</span><span>{b.statusLabel}</span></div>
+                  <div className="wb__line"><span>快递</span><span>{b.courierLabel}{b.serviceType ? ` · ${b.serviceType}` : ''}</span></div>
+                  <div className="wb__line"><span>时段</span><span>{b.slotText || '不限'}</span></div>
+                  <div className="wb__line">
+                    <span>单号</span>
+                    <span>
+                      {b.kuaidinum ?? '--'}
+                      {b.kuaidinum && (
+                        <button className="wb__iconbtn" style={{ marginLeft: 6 }} onClick={() => copyText(b.kuaidinum!)}>
+                          <Copy className="w-3 h-3" />复制
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                  <div className="wb__line">
+                    <span>快递员</span>
+                    {b.courierMobile
+                      ? <a className="wb__tel" style={{ color: chColor(card.channel) }} href={`tel:${b.courierMobile}`}>{b.courierName ?? b.courierMobile} {b.courierMobile}</a>
+                      : <span>{b.courierName ?? '未接单'}</span>}
+                  </div>
+                  {b.failReason && <div className="wb__line"><span>失败原因</span><span style={{ color: 'var(--danger)' }}>{b.failReason}</span></div>}
+                  {showEvents && (
+                    <div style={{ marginTop: 6 }}>
+                      {detail.expressBooking!.events.length
+                        ? detail.expressBooking!.events.map((ev) => (
+                          <div className="wb__line" key={ev.id}>
+                            <span>{dateTime(ev.createdAt)}</span>
+                            <span style={{ textAlign: 'right' }}>{ev.statusDesc ?? ev.source}</span>
+                          </div>
+                        ))
+                        : <div className="wb__empty">暂无进度记录</div>}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
             <div className="wb__block">
               <div className="wb__block-t">金额明细</div>
               <div className="wb__line"><span>商品小计</span><span className="wb__amt">¥{yuan(o?.totalAmount ?? 0)}</span></div>
@@ -1811,6 +2000,19 @@ export default function Workbench() {
                   )}
                 </>
               )}
+              {!local && detail?.expressBooking?.booking && (() => {
+                const b = detail.expressBooking!.booking!
+                return (
+                  <div className="wb__line">
+                    <span>邮寄成本</span>
+                    <span className="wb__amt">
+                      顾客付 ¥{yuan(b.customerFeeFen)} · 预扣 {b.prepaidFeeFen != null ? `¥${yuan(b.prepaidFeeFen)}` : '—'}
+                      {' · '}实扣 {b.settledFeeFen != null ? `¥${yuan(b.settledFeeFen)}` : '—'}
+                      {' · '}计费 {b.billedWeightG != null ? `${(b.billedWeightG / 1000).toFixed(1)} kg` : '—'}
+                    </span>
+                  </div>
+                )
+              })()}
             </div>
 
             <div className="wb__block">
@@ -1909,6 +2111,10 @@ export default function Workbench() {
         return <SelfDeliverModal orderId={o.id} defaultPhone={settings?.store.phone ?? ''} onClose={close} onDone={afterAction} />
       case 'reject':
         return <RejectModal order={o} channel={ch} onClose={close} onDone={async (m) => { await afterAction(m); closeDrawer() }} />
+      case 'book':
+        return <ExpressBookingModal orderId={o.id} defaultRemark="食品请勿重压" onClose={close} onDone={afterAction} />
+      case 'modifySlot':
+        return <ModifySlotModal orderId={o.id} booking={card.express?.booking ?? null} onClose={close} onDone={afterAction} />
       case 'cancelRefund':
         return (
           <CancelAndRefundModal
@@ -1916,10 +2122,13 @@ export default function Workbench() {
             orderNo={o.orderNo}
             amountFen={o.remainingRefundable}
             channel={ch}
-            deliveryStatusLabel={card.local?.delivery?.statusLabel ?? null}
-            hasActiveDelivery={!!d && d.activeOrderId === o.id && !TERMINAL_DELIVERY.includes(d.status)}
+            deliveryStatusLabel={ch === 'EXPRESS' ? (card.express?.booking?.statusLabel ?? null) : (card.local?.delivery?.statusLabel ?? null)}
+            hasActiveDelivery={ch === 'EXPRESS'
+              ? !!card.express?.booking && ['BOOKED', 'ACCEPTED', 'UNKNOWN'].includes(card.express.booking.status)
+              : !!d && d.activeOrderId === o.id && !TERMINAL_DELIVERY.includes(d.status)}
+            expressBookingStatus={ch === 'EXPRESS' ? (card.express?.booking?.status ?? null) : null}
             onClose={close}
-            onDone={async () => { await afterAction('已取消配送并退款'); closeDrawer() }}
+            onDone={async () => { await afterAction(ch === 'EXPRESS' ? '已取消预约并退款' : '已取消配送并退款'); closeDrawer() }}
           />
         )
       default:
@@ -2000,9 +2209,11 @@ export default function Workbench() {
                     <Card
                       key={c.orderId} card={c} colKey={col.key} now={now}
                       onOpen={() => openCard(c, col.key)}
-                      graceMin={snap?.acceptGraceMin ?? 0}
+                      graceMin={c.channel === 'EXPRESS' ? (snap?.expressAcceptGraceMin ?? 0) : (snap?.acceptGraceMin ?? 0)}
                       prepMin={prepMin}
                       onHandleCancel={() => openCard(c, col.key, true)}
+                      onReject={() => void rejectCancelForCard(c)}
+                      rejecting={rejectingId === c.orderId}
                     />
                   ))}
               </div>

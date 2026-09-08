@@ -3,11 +3,14 @@
  * 放服务端保证小程序端未来复用同一口径。3 秒缓存挡 10s×N 店员的轮询洪峰；?fresh=1 供操作后强刷。
  */
 import { Router, Request, Response, NextFunction } from 'express'
+import { ExpressBooking } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { DELIVERY_STATUS_LABEL } from '../../services/delivery/state'
 import { getCircuitState } from '../../services/delivery/circuit'
 import { getLocalSettings, isOpenNow } from '../../services/local-settings'
+import { getExpressSettings } from '../../services/express-settings'
+import { bookingView } from '../../services/delivery/express-booking'
 import { REAL_ORDERS } from '../../utils/stats-scope'
 import { getWorkbenchPrinterHealth, PrinterHealthEntry } from '../../services/ticket'
 
@@ -49,7 +52,7 @@ async function loadOrders() {
   })
 }
 
-function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null): Record<string, unknown> {
+function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: ExpressBooking | null): Record<string, unknown> {
   const units = o.items.reduce((n, it) => n + it.quantity, 0)
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
@@ -59,7 +62,13 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
     note: o.remark || null,
     receiver: { name: o.receiverName, phone: o.receiverPhone },
     express: o.deliveryType === 'EXPRESS'
-      ? { province: o.receiverProvince, city: o.receiverCity, expressCompany: o.shipment?.expressCompany ?? null, expressNo: o.shipment?.expressNo ?? null }
+      ? {
+          province: o.receiverProvince, city: o.receiverCity, expressCompany: o.shipment?.expressCompany ?? null, expressNo: o.shipment?.expressNo ?? null,
+          booking: b ? (() => { const v = bookingView(b); return { status: v.status, statusLabel: v.statusLabel, courierLabel: v.courierLabel, courierName: v.courierName, courierMobile: v.courierMobile, slotText: v.slotText, kuaidinum: v.kuaidinum, failReason: v.failReason, bookedAt: v.bookedAt } })() : null,
+          cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
+          cancelRejected: !!o.cancelRequestRejectedAt && ['PAID', 'PREPARING'].includes(o.status) ? (o.cancelRequestRejectedBy === 'AUTO' ? 'AUTO' : 'MANUAL') : null,
+          acceptedAt: o.acceptedAt?.toISOString() ?? null,
+        }
       : null,
     local: o.deliveryType === 'LOCAL'
       ? {
@@ -94,7 +103,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     // 命中缓存要返回副本：缓存对象会被 3 秒内的每一个请求共享，
     // 将来任何一个中间件顺手往响应体上挂个字段，就会污染所有后续读者。
     if (req.query.fresh !== '1' && cache && Date.now() - cache.at < 3000) return success(res, structuredClone(cache.data))
-    const [orders, settings] = await Promise.all([loadOrders(), getLocalSettings()])
+    const [orders, settings, expressSettings] = await Promise.all([loadOrders(), getLocalSettings(), getExpressSettings()])
     const localIds = orders.filter((o) => o.deliveryType === 'LOCAL').map((o) => o.id)
     const actives = localIds.length
       ? await prisma.delivery.findMany({ where: { activeOrderId: { in: localIds } }, select: { activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, pickedUpAt: true } })
@@ -113,17 +122,28 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       for (const d of finished) byOrder.set(d.orderId, { ...d, activeOrderId: d.orderId })
     }
 
+    // 邮寄预约：与上面同城 delivery 一个道理——按 orderId 折成「最后一条」，preparing/waitingCourier
+    // 归属与卡片显示都要用它。一单同一时刻最多一条活跃预约（唯一索引），但历史预约（取消重约）可能有多条，
+    // 升序遍历后 Map 里留下的就是最后一条。
+    const expressIds = orders.filter((o) => o.deliveryType === 'EXPRESS').map((o) => o.id)
+    const bookings = expressIds.length
+      ? await prisma.expressBooking.findMany({ where: { orderId: { in: expressIds } }, orderBy: { id: 'asc' } })
+      : []
+    const bookingByOrder = new Map(bookings.map((b) => [b.orderId, b]))
+
     const cols: Record<string, ReturnType<typeof toCard>[]> = { pending: [], preparing: [], waitingCourier: [], delivering: [], done: [] }
     for (const o of orders) {
       const d = byOrder.get(o.id) ?? null
-      if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d))
+      if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d, bookingByOrder.get(o.id) ?? null))
       else if (o.status === 'PREPARING') {
-        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d))
-        else cols.preparing.push(toCard(o, o.acceptedAt, d))
+        const b = bookingByOrder.get(o.id) ?? null
+        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d, null))
+        else if (o.deliveryType === 'EXPRESS' && b && b.activeOrderId === o.id) cols.waitingCourier.push(toCard(o, b.bookedAt ?? b.createdAt, null, b))
+        else cols.preparing.push(toCard(o, o.acceptedAt, d, b))
       }
       // Order 没有 shippedAt 列——同城取配送单的取货时间，邮寄取运单的发货时间，都缺则退回接单时间
-      else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, d?.pickedUpAt ?? o.shipment?.shippedAt ?? o.acceptedAt, d))
-      else if (o.status === 'COMPLETED') cols.done.push(toCard(o, o.completedAt, d))
+      else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, d?.pickedUpAt ?? o.shipment?.shippedAt ?? o.acceptedAt, d, bookingByOrder.get(o.id) ?? null))
+      else if (o.status === 'COMPLETED') cols.done.push(toCard(o, o.completedAt, d, bookingByOrder.get(o.id) ?? null))
     }
     for (const k of ['pending', 'preparing', 'waitingCourier', 'delivering'] as const) sortColumn(cols[k] as never)
     sortColumn(cols.done as never, true)
@@ -138,7 +158,8 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       // paidAt 也必须限定今天：跨零点完成的单（昨晚下单、今早送达）会把「平均送达时长」拉成好几小时，
       // 而它的真实配送时长并不长——店主读到的那个数就废了。
       prisma.order.findMany({ where: { ...REAL_ORDERS, deliveryType: 'LOCAL', status: 'COMPLETED', completedAt: { gte: today }, paidAt: { gte: today } }, select: { paidAt: true, completedAt: true }, take: 200 }),
-      prisma.order.count({ where: { deliveryType: 'LOCAL', cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } } }),
+      // 不分渠道：邮寄单同样会有顾客申请取消，待处理告警要把它算进去，否则店员看不到工作台顶栏的提醒
+      prisma.order.count({ where: { cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] } } }),
       prisma.delivery.count({ where: { activeOrderId: { not: null }, status: { in: ['ABNORMAL', 'UNKNOWN'] } } }),
       getWorkbenchPrinterHealth(),
     ])
@@ -156,6 +177,9 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       // 「甲」口径：顾客可申请取消的窗口 = 店员可处理的窗口 = 接单后这么多分钟。
       // 卡片用它 + acceptedAt 自己算倒计时（每秒重渲染，不能让服务端算好再传）。
       acceptGraceMin: settings.acceptGraceMin,
+      // 同一条「甲」口径的邮寄版本：卡片上邮寄取消申请的倒计时要用它，不能借用同城那个数
+      // （两个渠道的宽限分钟数在设置里各自可调，混用会在店主调过其中一个之后读出错的倒计时）。
+      expressAcceptGraceMin: expressSettings.acceptGraceMin,
       paused: settings.paused ? { reason: settings.paused.reason, until: settings.paused.until } : null,
       printer: {
         status: summarizePrinterStatus(printerEntries),

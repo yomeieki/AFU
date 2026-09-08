@@ -39,6 +39,9 @@ import type {
   OverviewStats,
   LocalStats,
   ExpressStats,
+  ExpressBookingView,
+  ExpressBookingEventInfo,
+  ExpressBookingQuotes,
 } from '../types'
 
 // Auth
@@ -245,6 +248,24 @@ export const resumeLocal = () =>
 export const getWorkbenchSnapshot = (fresh = false) =>
   client.get<ApiResponse<WorkbenchSnapshot>>('/admin/workbench/snapshot', { params: fresh ? { fresh: 1 } : undefined })
 
+// 邮寄订单——取件预约操作（apps/server/src/routes/admin/express.ts）
+export const getExpressBooking = (id: number) =>
+  client.get<ApiResponse<{ booking: ExpressBookingView | null; active: boolean; events: ExpressBookingEventInfo[] }>>(`/admin/express/orders/${id}/booking`)
+export const getExpressBookingQuotes = (id: number, weightKg?: number) =>
+  client.get<ApiResponse<ExpressBookingQuotes>>(`/admin/express/orders/${id}/quotes`, { params: weightKg ? { weightKg } : undefined })
+export const bookExpress = (id: number, data: { kuaidicom: string; serviceType?: string | null; weightKg?: number; dayType: '今天' | '明天' | '后天'; pickupStart?: string | null; pickupEnd?: string | null; remark?: string | null }) =>
+  client.post<ApiResponse<{ bookingNo: string; status: 'BOOKED' | 'UNKNOWN'; kuaidinum: string | null }>>(`/admin/express/orders/${id}/book`, data)
+export const cancelExpressBooking = (id: number, reason?: string) =>
+  client.post<ApiResponse<null>>(`/admin/express/orders/${id}/booking/cancel`, { reason })
+export const modifyExpressBooking = (id: number, data: { dayType: '今天' | '明天' | '后天'; pickupStart?: string | null; pickupEnd?: string | null }) =>
+  client.post<ApiResponse<null>>(`/admin/express/orders/${id}/booking/modify`, data)
+export const voidExpressBooking = (id: number) =>
+  client.post<ApiResponse<null>>(`/admin/express/orders/${id}/booking/void`)
+export const rejectExpressCancelRequest = (id: number) =>
+  client.post<ApiResponse<Order>>(`/admin/express/orders/${id}/cancel-request/reject`)
+export const approveExpressCancelRequest = (id: number) =>
+  client.post<ApiResponse<unknown>>(`/admin/express/orders/${id}/cancel-request/approve`)
+
 // 同城订单——接单/呼叫/配送单操作
 export const acceptLocalOrder = (id: number) => client.post<ApiResponse<Order>>(`/admin/local/orders/${id}/accept`)
 export const acceptAndCallLocalOrder = (id: number) =>
@@ -277,6 +298,9 @@ export const precancelDelivery = (id: number) =>
   client.post<ApiResponse<{ cancelFeeFen: number | null }>>(`/admin/local/orders/${id}/delivery/precancel`)
 export const cancelDelivery = (id: number, reason?: string) =>
   client.post<ApiResponse<{ cancelFeeFen: number | null }>>(`/admin/local/orders/${id}/delivery/cancel`, { reason })
+// 驳回顾客的取消申请（同城）——邮寄单用上面的 rejectExpressCancelRequest
+export const rejectCancelRequest = (id: number) =>
+  client.post<ApiResponse<Order>>(`/admin/local/orders/${id}/cancel-request/reject`)
 export const addDeliveryTip = (id: number, amount: number) =>
   client.post<ApiResponse<{ tipFeeFen: number }>>(`/admin/local/orders/${id}/delivery/tip`, { amount })
 export const selfDeliverOrder = (id: number, data: { name: string; phone: string }) =>

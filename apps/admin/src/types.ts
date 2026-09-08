@@ -446,6 +446,60 @@ export interface DeliveryEventInfo {
   createdAt: string
 }
 
+/** 邮寄取件预约详情。与服务端 services/delivery/express-booking.ts 的 BookingView 同构 */
+export interface ExpressBookingView {
+  id: number
+  bookingNo: string
+  status: string
+  statusLabel: string
+  kuaidicom: string
+  courierLabel: string
+  serviceType: string | null
+  kuaidinum: string | null
+  dayType: string | null
+  pickupDate: string | null
+  pickupStart: string | null
+  pickupEnd: string | null
+  slotText: string
+  weightKg: number
+  customerFeeFen: number
+  quotedFeeFen: number | null
+  prepaidFeeFen: number | null
+  settledFeeFen: number | null
+  billedWeightG: number | null
+  courierName: string | null
+  courierMobile: string | null
+  failReason: string | null
+  cancelledBy: string | null
+  bookedAt: string | null
+  acceptedAt: string | null
+  pickedAt: string | null
+  deliveredAt: string | null
+  cancelledAt: string | null
+}
+
+/** 邮寄预约事件时间线（与服务端 ExpressBookingEvent 模型同构，仅取前端用得到的字段） */
+export interface ExpressBookingEventInfo {
+  id: number
+  source: string
+  providerStatus: number | null
+  statusDesc: string | null
+  courierName: string | null
+  operator: string | null
+  createdAt: string
+}
+
+/** 预约取件弹窗用的报价（GET /admin/express/orders/:id/quotes） */
+export interface ExpressBookingQuotes {
+  quotes: { kuaidicom: string; serviceType: string | null; priceFen: number | null; defPriceFen: number | null }[]
+  weightKg: number
+  customerFeeFen: number
+  fromSnapshot: boolean
+  quotedAt: string | null
+  suggestedSlot: { dayType: '今天' | '明天' | '后天'; pickupStart: string | null; pickupEnd: string | null }
+  couriers: { code: string; label: string }[]
+}
+
 /** 工作台看板卡片。与服务端 GET /admin/workbench/snapshot 的 toCard() 同构 */
 export interface WorkbenchCard {
   orderId: number
@@ -458,7 +512,19 @@ export interface WorkbenchCard {
   items: { first: string[]; kinds: number; units: number }
   note: string | null
   receiver: { name: string; phone: string }
-  express: { province: string; city: string; expressCompany: string | null; expressNo: string | null } | null
+  express: {
+    province: string; city: string; expressCompany: string | null; expressNo: string | null
+    /** 最近一条取件预约（不分终态/活跃）；null = 从未预约过 */
+    booking: {
+      status: string; statusLabel: string; courierLabel: string; courierName: string | null; courierMobile: string | null
+      slotText: string; kuaidinum: string | null; failReason: string | null; bookedAt: string | null
+    } | null
+    cancelRequested: boolean
+    /** 取消申请被驳回过：AUTO=接单满 expressAcceptGraceMin 分钟系统自动驳回，MANUAL=店员点的。null=没被驳回过 */
+    cancelRejected: 'AUTO' | 'MANUAL' | null
+    /** 接单时刻。卡片用它 + snapshot.expressAcceptGraceMin 自己算「还剩多久自动驳回」的倒计时 */
+    acceptedAt: string | null
+  } | null
   local: {
     distanceM: number | null
     estimatedDeliveryAt: string | null   // 规格 §3 要求同城卡片出现「预计送达」，来自 Order.estimatedDeliveryAt
@@ -492,6 +558,8 @@ export interface WorkbenchSnapshot {
   localOpenNow: boolean
   /** 顾客可申请取消 / 店员可处理的窗口（分钟，从接单起算）——同一条线，见服务端「甲」口径 */
   acceptGraceMin: number
+  /** 邮寄版本的「甲」口径宽限分钟数，与 acceptGraceMin 各自可调，不能混用 */
+  expressAcceptGraceMin: number
   paused: { reason: string; until: string | null } | null
   /** 多台打印机取「最差」状态归并（见服务端 workbench.ts 的 summarizePrinterStatus） */
   printer: {
