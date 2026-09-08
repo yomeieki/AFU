@@ -1,3 +1,4 @@
+# 需要 SCHEDULER_DISABLED=true 启动后端：心跳里的 reconcileExpressUnknown 会消费 mock 的 detail 指令
 echo "== 59. 邮寄预约回调：验签/去重/乱序/接单/取件→已发货/结算/签收→完成/失败/取消 =="
 # 复用主体 helper 与 §58 留下的 $X58_KEEP_O2（BOOKED，极兔）。变量 X59_ 前缀。
 X59_CB=/tmp/e2e-xcb.json

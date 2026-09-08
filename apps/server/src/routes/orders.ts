@@ -740,8 +740,11 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     // notifyCancelRequest 不再自己读配置：win.cancelGraceMin 是这次请求刚判过窗口用的那个值，
     // 同城传同城的、邮寄传邮寄的，两边不会因为读的时机不同而对不上。
     // 通知本身仍是 fire-and-forget（不阻塞这次请求的响应），失败只留痕，不能让推送失败连累取消申请本身
-    notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note }, win.cancelGraceMin)
-      .catch((err) => console.error('[orders] notifyCancelRequest 失败:', (err as Error).message))
+    notifyCancelRequest(
+      { orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note },
+      win.cancelGraceMin,
+      order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
+    ).catch((err) => console.error('[orders] notifyCancelRequest 失败:', (err as Error).message))
     // 出票（规格 §8b「顾客申请取消」）：这一步只是挂起申请、订单状态未变，但厨房该立刻知道「先别做了」，
     // 不必等店员处理完才收到消息——票面是给店内看的物理提醒，与走推送通知的 notifyCancelRequest 并列。
     // H6：kind 用独立的 CANCEL_REQUEST（不是 CANCEL）——这只是「申请」，店员可能驳回，票面文案、

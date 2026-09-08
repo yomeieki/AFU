@@ -16,7 +16,7 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": [
         "-c",
-        "cd apps/server && PORT=3100 WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true WECHAT_QRCODE_MOCK=true LOCAL_DELIVERY_PROVIDER_MOCK=true PRINTER_PROVIDER_MOCK=true npx ts-node-dev --respawn --transpile-only src/app.ts"
+        "cd apps/server && PORT=3100 WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true WECHAT_QRCODE_MOCK=true LOCAL_DELIVERY_PROVIDER_MOCK=true PRINTER_PROVIDER_MOCK=true SCHEDULER_DISABLED=true npx ts-node-dev --respawn --transpile-only src/app.ts"
       ],
       "port": 3100
     },

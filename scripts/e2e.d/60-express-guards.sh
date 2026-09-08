@@ -1,3 +1,4 @@
+# 需要 SCHEDULER_DISABLED=true 启动后端：心跳里的 reconcileExpressUnknown 会消费 mock 的 detail 指令
 echo "== 60. 邮寄守卫：有预约不能手填发货/退款/拒单；顾客取消窗口；同意=先取消预约再退款；定时提醒与对账 =="
 # 依赖 §59 的 $X59_KEEP_O4（ACCEPTED，京东）。变量 X60_ 前缀。
 X60_ORIG=$(req GET /api/admin/settings/express "$AT" | jq -c .data)

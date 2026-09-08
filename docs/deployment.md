@@ -151,6 +151,7 @@ PUBLIC_BASE_URL="https://api.yourdomain.com"
 - `KD100_KEY`/`KD100_SECRET`：不填时呼叫骑手会在请求发起前直接报错「Missing required env var」（`config.ts:validateKd100Config`）；mock 模式（`LOCAL_DELIVERY_PROVIDER_MOCK=true`）下不校验，因为呼叫骑手会走 mock 分支不打真实接口。
 - `PUBLIC_BASE_URL`：拼进快递100 回调 URL（`{PUBLIC_BASE_URL}/api/kd/{deliveryNo}`），也是微信支付回调等其他外部回调 URL 的基础域名。**必须不带尾斜杠**，多一个 `/` 会让回调 URL 长度和路径都变样。
 - `LOCAL_DELIVERY_PROVIDER_MOCK`：**生产环境这一项只要等于字符串 `"true"` 服务就会拒绝启动**（`config.ts` 生产环境校验，与 `WECHAT_PAY_MOCK` 等其他 mock 开关同一逻辑）。`.env.example` 里这一行已经注释掉，**不要整段复制 `.env.example` 到生产 `.env`**，逐项用下面的 `set-env.sh` 填。本地开发/e2e 才需要在启动命令里带这个变量为 `true`。
+- 跑完整 `scripts/e2e.sh`（含邮寄 §59/§60）时，启动命令里还要带 `SCHEDULER_DISABLED=true`：后台 60s 心跳里的 `reconcileExpressUnknown` 会调用 mock provider 的 `detail()`，偷走 §59/§60 测试脚本自己排进 mock 指令队列的那一条，打乱精确计数断言（`.claude/launch.json` 的 `api-3100` 已经带上这个变量）。生产环境没有共享 mock 队列，不受影响，`SCHEDULER_DISABLED` 只是本地/e2e 才需要。
 
 #### callbackUrl 长度预算（换域名前必看）
 

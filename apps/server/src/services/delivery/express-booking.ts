@@ -240,11 +240,21 @@ export async function modifyBookingSlot(i: { orderId: number; slot: SlotInput; o
 
 export async function voidUnknownBooking(i: { orderId: number; operator: string }): Promise<void> {
   const b = await getActiveBooking(i.orderId)
-  if (!b || b.status !== 'UNKNOWN') throw new AppError(42267, '仅「待核对」的预约可作废')
+  if (!b) throw new AppError(42267, '仅「待核对」的预约可作废')
+  // PENDING 是外呼完成前的占位（createBooking 先落库再打 provider），正常情况几秒内就会推进到
+  // BOOKED/UNKNOWN/FAILED 之一。只有进程在这几秒的窗口里崩溃/重启，才会留下一条永远卡住的 PENDING
+  // ——它既不是「预约失败」（没释放 activeOrderId，挡着不能重约），也不是「待核对」（voidUnknownBooking
+  // 原本只认 UNKNOWN）。超过 2 分钟还是 PENDING 基本可以断定外呼那条协程已经没了，给个逃生舱；
+  // 2 分钟内的 PENDING 大概率只是正常下单中，不能当成卡死处理，否则会跟真实下单撞车作废掉一个正在成功的预约。
+  const stalePending = b.status === 'PENDING' && b.createdAt.getTime() < Date.now() - 2 * 60 * 1000
+  if (b.status !== 'UNKNOWN' && !stalePending) {
+    if (b.status === 'PENDING') throw new AppError(42267, '预约正在下单中，请稍候再试')
+    throw new AppError(42267, '仅「待核对」的预约可作废')
+  }
   await prisma.$transaction(async (tx) => {
-    const moved = await tx.expressBooking.updateMany({ where: { id: b.id, status: 'UNKNOWN' }, data: { status: 'VOID', activeOrderId: null, cancelledAt: new Date(), cancelledBy: 'STAFF' } })
+    const moved = await tx.expressBooking.updateMany({ where: { id: b.id, status: b.status }, data: { status: 'VOID', activeOrderId: null, cancelledAt: new Date(), cancelledBy: 'STAFF' } })
     if (moved.count === 0) throw new AppError(42267, '预约状态已变化，请刷新')
-    await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'ADMIN', statusDesc: '人工作废（快递100 后台核对无单）', operator: i.operator })
+    await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'ADMIN', statusDesc: stalePending ? '人工作废（下单占位卡住超过 2 分钟）' : '人工作废（快递100 后台核对无单）', operator: i.operator })
   })
 }
 

@@ -23,5 +23,13 @@ export async function approveExpressCancelRequest(i: { orderId: number; operator
   if (order.deliveryType !== 'EXPRESS') throw new AppError(42204, '仅邮寄订单')
   if (!order.cancelRequestedAt) throw new AppError(42204, '该订单没有待处理的取消申请')
   if (await getActiveBooking(i.orderId)) await cancelBooking({ orderId: i.orderId, operator: i.operator, by: 'CUSTOMER' })
-  return initiateRefund({ orderId: i.orderId, amount: remainingRefundable(order), reason: '顾客申请取消', operator: i.operator })
+  const result = await initiateRefund({ orderId: i.orderId, amount: remainingRefundable(order), reason: '顾客申请取消', operator: i.operator })
+  // 退款已经发起（不管即时到账还是转入 REFUNDING）：徽标/催办该跟着停，否则工作台会同时显示
+  // 「正在退款」和「有取消申请待处理」，店员会分不清这单到底还要不要再操作一次。
+  // 只清标记列，不动订单状态本身——状态已经由 initiateRefund 内部按结果推进过了。
+  await prisma.order.updateMany({
+    where: { id: i.orderId, cancelRequestedAt: { not: null } },
+    data: { cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null },
+  })
+  return result
 }
