@@ -1,5 +1,8 @@
 // 封面六个入口的唯一事实来源。
 //
+// enTracking —— 英文字距（rpx）。v3 设计把两个配送按钮的英文字距分了两档：
+//   同城 1.6、全国邮寄 1.1（见交付包 specs/design-tokens.json 的 deliveryEnglish）。
+//
 // rect —— 点击热区，单位 rpx，基准画板 750 × 1333（方案 C 青瓦简约版）。
 //   坐标出自设计交付包 specs/hotspots.json。与该文件唯一的差异：会员中心 / 优惠券 /
 //   积分商城原坐标边界完全相接（140-297-454-610），与交付包《转换准备》里
@@ -18,6 +21,7 @@ module.exports = [
     id: 'local_delivery',
     label: '同城配送',
     en: 'LOCAL DELIVERY',
+    enTracking: 1.6,
     event: 'tap_local_delivery',
     variant: 'delivery',
     rect: { x: 58, y: 558, width: 306, height: 120 },
@@ -28,6 +32,7 @@ module.exports = [
     id: 'nationwide_shipping',
     label: '全国邮寄',
     en: 'NATIONWIDE SHIPPING',
+    enTracking: 1.1,
     event: 'tap_nationwide_shipping',
     variant: 'delivery',
     rect: { x: 386, y: 558, width: 306, height: 120 },

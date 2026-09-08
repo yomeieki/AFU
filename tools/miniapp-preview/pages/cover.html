@@ -6,8 +6,9 @@
 <link rel="stylesheet" href="/cover.generated.css">
 <!-- 镜像说明：真机上 .cover-stage 的 translateY/scale 是 index.js 按屏幕比例算出来的，
      预览台不跑 JS，所以这里硬编码 375×812（状态栏 44pt）这一种情况的结果：
-     rpx=2 → 屏高 1624rpx，胶囊下沿+8 = 176rpx，stageOffset = 176-135 = 41rpx，无需缩放。
-     它能验的是「热区是否压在文字/框上」；clamp 与短屏缩放验不了，那要去微信开发者工具。
+     rpx=2 → 屏高 1624rpx，胶囊下沿+8 = 176rpx，stageOffset = 176-135 = 41rpx（= 20.5px），无需缩放。
+     内联样式里的数值是「设计 rpx × 0.5」；类名里的 rpx 由 generated.css 自己换算。
+     它能验的是「热区是否压在按钮上」与 v3 按钮层次；clamp 与短屏缩放验不了，那要去微信开发者工具。
      .hot-debug 默认开着——这个镜像存在的意义就是看框对不对。 -->
 <style>
   html { --rpx: .5px }
@@ -15,8 +16,8 @@
   .mp-page { height: 812px }
   /* 预览台没有 image 组件的 mode="widthFix"，用 img 的自然宽高比等价替代 */
   .cover-bg { height: auto }
-  /* 镜像专用：让热区框可见 */
-  .hot-debug { background: rgba(195, 71, 58, .14); outline: 1px dashed rgba(195, 71, 58, .55) }
+  /* 镜像专用：让热区框可见。z-index 要高过热区自身的 3。 */
+  .hot-debug { background: rgba(195, 71, 58, .14); outline: 1px dashed rgba(195, 71, 58, .55); z-index: 8 }
 </style>
 </head>
 <body>
@@ -27,30 +28,46 @@
 
     <div class="cover-stage" style="transform: translateY(20.5px) scale(1)">
       <img class="cover-logo" src="/assets/cover/logo-anniversary.png">
-      <div class="cover-divider" style="left:148.5px"></div>
-      <div class="cover-divider" style="left:227px"></div>
 
-      <div class="hot hot-debug" style="left:29px;top:279px;width:153px;height:60px">
-        <div class="card card-delivery"><span class="delivery-cn">同城配送</span><span class="delivery-en">LOCAL DELIVERY</span></div>
+      <div class="tray"></div>
+      <div class="tray-inner"></div>
+      <div class="tray-rule" style="left:148.5px;top:373px;height:7.5px"></div>
+      <div class="tray-rule" style="left:148.5px;top:386.5px;height:8px"></div>
+      <div class="tray-diamond" style="left:148.5px;top:383.5px"></div>
+      <div class="tray-rule" style="left:227px;top:373px;height:7.5px"></div>
+      <div class="tray-rule" style="left:227px;top:386.5px;height:8px"></div>
+      <div class="tray-diamond" style="left:227px;top:383.5px"></div>
+
+      <div class="hot" style="left:29px;top:279px;width:153px;height:60px">
+        <div class="df"></div><div class="delivery-cn">同城配送</div>
+        <div class="delivery-en" style="letter-spacing:.8px;padding-left:.8px">LOCAL DELIVERY</div>
       </div>
-      <div class="hot hot-debug" style="left:193px;top:279px;width:153px;height:60px">
-        <div class="card card-delivery"><span class="delivery-cn">全国邮寄</span><span class="delivery-en">NATIONWIDE SHIPPING</span></div>
+      <div class="hot" style="left:193px;top:279px;width:153px;height:60px">
+        <div class="df"></div><div class="delivery-cn">全国邮寄</div>
+        <div class="delivery-en" style="letter-spacing:.55px;padding-left:.55px">NATIONWIDE SHIPPING</div>
       </div>
 
-      <div class="hot hot-debug" style="left:73px;top:362px;width:72.5px;height:44px"><div class="nav-text">会员中心</div></div>
-      <div class="hot hot-debug" style="left:151.5px;top:362px;width:72.5px;height:44px"><div class="nav-text">优惠券</div></div>
-      <div class="hot hot-debug" style="left:230px;top:362px;width:72px;height:44px"><div class="nav-text">积分商城</div></div>
+      <div class="hot" style="left:73px;top:362px;width:72.5px;height:44px"><div class="nav-text">会员中心</div></div>
+      <div class="hot" style="left:151.5px;top:362px;width:72.5px;height:44px"><div class="nav-text">优惠券</div></div>
+      <div class="hot" style="left:230px;top:362px;width:72px;height:44px"><div class="nav-text">积分商城</div></div>
 
-      <div class="hot hot-debug" style="left:70px;top:422px;width:235px;height:60px">
-        <div class="card card-cold">
-          <span class="cold-cn">全国冷链配送</span><span class="cold-en">COLD-CHAIN DELIVERY</span>
-          <div class="cold-divider"></div>
-          <div class="cold-action"><div class="l1">点击</div><div class="l2">查看</div></div>
-        </div>
+      <div class="hot" style="left:70px;top:422px;width:235px;height:60px">
+        <div class="cc-under"></div><div class="cc-main"></div><div class="cc-inner"></div>
+        <div class="cc-highlight"></div>
+        <div class="cold-cn">全国冷链配送</div><div class="cold-en">COLD-CHAIN DELIVERY</div>
+        <div class="cc-rule"></div>
+        <div class="cc-tag"></div><div class="cc-tag-inner"></div>
+        <div class="cc-tag-cha">查</div><div class="cc-tag-kan">看</div>
       </div>
+
+      <div class="hot hot-debug" style="left:29px;top:279px;width:153px;height:60px"></div>
+      <div class="hot hot-debug" style="left:193px;top:279px;width:153px;height:60px"></div>
+      <div class="hot hot-debug" style="left:73px;top:362px;width:72.5px;height:44px"></div>
+      <div class="hot hot-debug" style="left:151.5px;top:362px;width:72.5px;height:44px"></div>
+      <div class="hot hot-debug" style="left:230px;top:362px;width:72px;height:44px"></div>
+      <div class="hot hot-debug" style="left:70px;top:422px;width:235px;height:60px"></div>
     </div>
 
-    <div class="cover-orders"><span class="cover-orders-text">我的订单 ›</span></div>
   </div>
 </div>
 </body>
