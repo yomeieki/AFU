@@ -1573,3 +1573,40 @@ e2e 第 48 段用 `has("issuedBy") == false` 锁住。
 
 - 会员中心/积分商城/我的券/领券中心/积分明细五个小程序页面、封面入口接线 — M4。
 - `docs/staff-guide.md`「优惠券与积分」章节、`docs/miniapp-release-checklist.md` 的规则公示检查项 — M5。
+
+---
+
+## 附录 F：全国邮寄报价（批次一，2026-09）
+
+设计依据 `docs/superpowers/specs/2026-09-08-express-shipping-kuaidi100-design.md`。
+本批只做报价与下单；预约取件、轨迹、顾客端时间线是批次二/三，见 spec 末尾「批次二/批次三」。
+
+### 小程序端
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/express/quote` | 需登录。Body `{ addressId, cartItemIds? \| directItem?, gifts? }`（与 `POST /orders` 同形，清单与凭证按同一份签）。返回 `{ feeFen, quotedFeeFen, feeSource('QUOTE'\|'TABLE'), weightKg, groupName, freeShipMinFen, freeShip, belowMin, minOrderAmountFen, subtotalFen, quoteCount, quoteToken, quoteExpiresAt }`。**不下发各家成本价**（`quoteCount` 只报回价家数，不报是哪几家、多少钱）。`quoteToken` TTL 15 分钟，签入 `addressId`、收货地址内容摘要（`addressHash`）、清单指纹（`itemsHash`）、重量、报价、各家成本价快照。 |
+| `POST /api/orders`（EXPRESS 渠道） | `quoteToken` **可选**（老客户端兼容）。带了：验签、`addressId`/`addressHash`/`itemsHash` 三项任一不符 → `42261`，小程序自动重报价；QUOTE 口径锁凭证价与重量，TABLE 口径现算。不带：服务端自己走一遍查价（带缓存）与计算，不报 42261。包邮、起送、不寄送一律按**下单时**的设置与真实小计判（凭证里的 `freeShip` 不信）。收货地址原地改过（`PUT /api/addresses/:id`）会让 `addressHash` 不再匹配，旧凭证随即失效。订单落 `express_quote_snapshot`（JSON）、`express_region_group`（VARCHAR 32）、`express_weight_g`（INT，克，不是公斤）。 |
+| `GET /api/orders/meta` | `shipping` 改为邮寄设置「其他」组的兼容视图 `{ fee, freeThreshold, minOrderAmount }`，仅供老版本小程序显示；新版本走 `/api/express/quote`。 |
+
+### 管理端
+
+| 接口 | 说明 |
+|---|---|
+| `GET/PUT /api/admin/settings/express` | 邮寄设置全量读写，结构见 `services/express-settings.ts` 的 `ExpressSettings`（地区分组、包邮门槛、兜底表、参与定价的快递池、重量参数等）。PUT 先 sanitize 非法输入回落默认值，再 validate；校验失败 `40001`，`message` 是多条错误用「；」连接的字符串。 |
+| `GET/PUT /api/admin/settings/shipping` | **兼容垫片**（`services/settings.ts` 现为迁移用的只读 legacy，`setShippingSettings` 已删除）：GET 返回「其他」组的兼容视图；PUT 把传入的一口价写成「全部分组同一张兜底表 + 同一包邮线」并把 `fee.mode` 切到 `TABLE`。批次二后计划删除，新代码一律走 `settings/express`。 |
+| `/api/admin/system/express-mock/{reset,queue,calls}` | 仅 `EXPRESS_PROVIDER_MOCK=true` 时挂载。`POST reset` 清空指令队列、调用记录与服务端报价缓存；`POST queue` Body `{ directive: {kind:'ok', quotes?} \| {kind:'timeout'} \| {kind:'error', code, message?} }`，服务端校验 `kind` 取值与各分支必填字段；`GET calls` 读调用记录，供 e2e/联调断言。 |
+
+### 错误码
+
+| 码 | 含义 |
+|---|---|
+| 42260 | 该地区暂不支持邮寄（省级不寄送名单，`ExpressSettings.regionGroups[].blocked`） |
+| 42261 | 运费已更新，请重新确认（`quoteToken` 验签/TTL/地址/清单指纹任一不符；仅在带了 `quoteToken` 时才会报） |
+| 42262 | 收货地址过长（收货地址 `fullAddress` 超过 300 字节，快递100 `recManPrintAddr` 限长） |
+
+### 环境变量
+
+`KD100_EXPRESS_API_URL`（默认 `https://poll.kuaidi100.com/order/borderapi.do`）、
+`KD100_EXPRESS_KEY` / `KD100_EXPRESS_SECRET`（缺省复用 `KD100_KEY` / `KD100_SECRET`，与同城共用一套快递100账号）、
+`EXPRESS_PROVIDER_MOCK`（`true` 时查价走内存 mock 且挂载上面的管理端 mock 控制面；生产环境禁止开启）。

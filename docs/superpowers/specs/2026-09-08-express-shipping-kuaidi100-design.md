@@ -75,15 +75,15 @@ interface ExpressSettings {
 输入：收货地址（省/市/区/详细/全地址）、商品行（productId, qty, netWeightG?）、券前小计。
 
 1. **重量** `weightKg = ceil10((Σ (netWeightG ?? defaultItemG) × qty + packagingG) / 1000)`，最小 0.1 kg。
-2. **分组**：按 `receiverProvince` 全名匹配 `regionGroups`，无匹配落「其他」。`blocked` → `AppError(42240, '该地区暂不支持邮寄')`。
+2. **分组**：按 `receiverProvince` 全名匹配 `regionGroups`，无匹配落「其他」。`blocked` → `AppError(42260, '该地区暂不支持邮寄')`。
 3. **查价**：`mode === 'QUOTE'` 时调 `batchPrice(pricingPool, senderAddr, receiverFullAddr, weightKg)`，超时 5 s（与同城顾客侧一致）。剔除 `price == null` 的家。
 4. **中位数**：有效家数 `≥ minQuoteCount` → 排序取中位数（偶数取中间两家均值）→ `+ markupFen` → 向上取整到 `roundToFen`。否则 `feeSource = 'TABLE'`：`tableFirstFen + tableOverPerKgFen × max(0, ceil(weightKg) − 1)`。
 5. **包邮**：券前小计 `≥ freeShipMinFen`（>0）→ 运费 0，但保留 `quotedFee` 供成本展示。
 6. **起送**：小计 `< minOrderAmountFen` → 返回 `belowMin` 由结算页提示，下单时再拦。
 7. **输出**：`{ feeFen, quotedFeeFen, feeSource, weightKg, groupName, freeShipMinFen, freeShip, belowMin, quotes: {kuaidicom, serviceType, priceFen, defPriceFen}[], quoteToken }`。
 
-**凭证**：HMAC 签名，载荷 `{ addressId, itemsHash(productId+skuId+qty 排序后), weightKg, feeFen, quotedFeeFen, feeSource, groupName, quotes, iat }`，TTL 15 分钟，密钥复用同城 `verifyQuote` 的密钥来源。
-**缓存**：`(addressId, weightKg)` → 快递100 回价，15 分钟；换券、改备注不触发查价。
+**凭证**：HMAC 签名，载荷 `{ addressId, addressHash(收货地址 fullAddress 摘要), itemsHash(productId+skuId+qty 排序后), weightKg, feeFen, quotedFeeFen, feeSource, groupName, quotes, iat }`，TTL 15 分钟，密钥复用同城 `verifyQuote` 的密钥来源。凭证同时绑定收货地址内容摘要：`PUT /api/addresses/:id` 原地改地址（同 id 换省市区/详细地址）会让 `addressHash` 不再匹配，旧凭证随即失效，下单走 42261 重报价。
+**缓存**：`(addressId, addressHash, weightKg)` → 快递100 回价，15 分钟；换券、改备注不触发查价。
 **限流**：复用 `localQuoteLimiter` 的参数，单独实例。
 
 实测口径（2026-09-08 数据）：成都 1.5 kg 约 ¥7.50，北京 ¥10.50，北京 3 kg ¥13.50。
@@ -94,8 +94,8 @@ interface ExpressSettings {
 
 - 选地址或购物车变动 → `POST /api/express/quote { addressId, items }`。删除 `pages/order/confirm.js` 里本地算一口价的那段；运费只显示服务端返回值。
 - 展示：`运费 ¥X` / `已包邮` / `再买 ¥Y 包邮（四川满 ¥99）` / `该地区暂不支持邮寄`（禁用付款）/ `计算中…`。`feeSource === 'TABLE'` 不对顾客区分显示。
-- 下单 `POST /api/orders` 邮寄单必带 `quoteToken`。服务端：验签、TTL、`addressId` 一致、`itemsHash` 一致；三项任一不符 → `42241 '运费已更新，请重新确认'`，小程序自动重报价。运费取凭证 `feeFen`；包邮、起送、不寄送按**当前设置**重判（凭证里的 `freeShip` 不信）。
-- 订单落库：`shippingFee`、`expressQuoteSnapshot`（凭证载荷整体）、`expressRegionGroup`、`expressWeightKg`。
+- 下单 `POST /api/orders` 邮寄单**带则校验，不带（老客户端）服务端现算**：带了 `quoteToken` 时服务端验签、TTL、`addressId` 一致、`addressHash` 一致、`itemsHash` 一致，任一不符 → `42261 '运费已更新，请重新确认'`，小程序自动重报价；运费取凭证 `feeFen`。不带时服务端现查现算，不报 42261。包邮、起送、不寄送一律按**当前设置**重判（凭证里的 `freeShip` 不信）。
+- 订单落库：`shippingFee`、`expressQuoteSnapshot`（凭证载荷整体）、`expressRegionGroup`、`expressWeightG`。
 
 ### 4.2 订单详情物流卡片
 
@@ -135,7 +135,7 @@ interface ExpressSettings {
 
 ### 5.2 预约弹窗
 
-- **重量**：默认 `expressWeightKg`，可改；改后重查价（查价免费）。
+- **重量**：默认 `expressWeightG`，可改；改后重查价（查价免费）。
 - **报价列表**：来自订单 `expressQuoteSnapshot.quotes`；快照超过 2 小时或重量改过则重查 `batchPrice`（全部 9 家，不只定价名单）。按价排序，最低标「最低」默认选中；每行显示「比顾客付的 +¥2.30 / −¥0.50」；顶部「顾客付 ¥10.50」。无价的家灰显。
 - **时段**：`dayType` 今天/明天/后天 + 起止时间下拉（整点，09:00–20:00）。预填：当前时间 + 2 小时向上取整到整点作为开始，结束 = 开始 + 2 小时；超出 20:00 则明天 09:00–11:00。校验：结束 − 开始 ≥ 1 h；今天的时段要求 `now < end − 2h`；顺丰必须有时段，其余家允许留空（留空则不传）。
 - **货物/备注**：货物固定「食品」；备注默认 `pickup.defaultRemark`，可改，≤ 50 字。
@@ -195,7 +195,7 @@ BOOKED ──(1 已接单/2 收件中)──► ACCEPTED ──(10 已取件)─
 
 新表 `express_bookings`：`id, bookingNo(唯一, E+订单序号+序)`, `orderId`, `orderNo`, `kuaidicom`, `serviceType`, `taskId`, `kdOrderId`, `kuaidinum`, `status`, `dayType`, `pickupDate`, `pickupStart`, `pickupEnd`, `weightKg`, `customerFeeFen`, `quotedFeeFen`(所选家报价), `prepaidFeeFen`, `settledFeeFen`, `billedWeightKg`, `feeDetailsJson`, `courierName`, `courierMobile`, `salt`, `pollToken`, `trackJson`, `trackStatus`, `trackUpdatedAt`, `failReason`, `cancelledBy(STAFF/KD100/CUSTOMER)`, `createdBy`, `createdAt/updatedAt`。索引：`orderId`、`status`、活跃唯一。
 新表 `express_booking_events`：`bookingId, status, rawJson, createdAt`。
-`Order` 新列：`expressQuoteSnapshot Json?`、`expressRegionGroup VarChar(32)?`、`expressWeightKg Decimal(6,1)?`。提醒类「每单只发一次」标记放在 `express_bookings` 上（`unacceptedRemindedAt`、`unpickedRemindedAt`、`costAlertedAt`），不动 `Order`。
+`Order` 新列：`expressQuoteSnapshot Json?`、`expressRegionGroup VarChar(32)?`、`expressWeightG Int?`。提醒类「每单只发一次」标记放在 `express_bookings` 上（`unacceptedRemindedAt`、`unpickedRemindedAt`、`costAlertedAt`），不动 `Order`。
 `Shipment` 不变。设置表新 key。
 迁移全部为加表/加可空列，无删改。
 
@@ -213,7 +213,7 @@ BOOKED ──(1 已接单/2 收件中)──► ACCEPTED ──(10 已取件)─
 | 查价超时/失败 | TABLE 兜底，`feeSource=TABLE`，写审计；顾客无感 |
 | 回价 < minQuoteCount | 同上 |
 | 省份名不在任何组 | 落「其他」 |
-| 地址 > 300 字节 | 下单前截断校验，超长报 `42243 '收货地址过长，请精简'`（结算页提示） |
+| 地址 > 300 字节 | 下单前截断校验，超长报 `42262 '收货地址过长，请精简'`（结算页提示） |
 | 下单业务失败 | 原话展示，不建记录 |
 | 下单超时 | UNKNOWN + 自动对账 |
 | 余额不足 | `BALANCE` → 横幅 + 推送 |
@@ -230,7 +230,7 @@ BOOKED ──(1 已接单/2 收件中)──► ACCEPTED ──(10 已取件)─
 
 ### 12.1 服务端单元
 
-`express-quote.ts`：中位数奇数家 / 偶数家取中间两家均值 / 只有一家回价退兜底 / 全部无价退兜底；`markupFen` 与 `roundToFen`（0 不取整、50 取五毛、¥8.33 → ¥8.50 只往上）；省份精确匹配 / 未归组落「其他」/ blocked 报 42240；包邮按券前小计判且保留 `quotedFeeFen`；起送 `belowMin`；重量（净重缺省、礼盒计入净重、包装附加、0.1 kg 向上取整、最小值）；兜底表首重 1 kg 与续重向上取整。
+`express-quote.ts`：中位数奇数家 / 偶数家取中间两家均值 / 只有一家回价退兜底 / 全部无价退兜底；`markupFen` 与 `roundToFen`（0 不取整、50 取五毛、¥8.33 → ¥8.50 只往上）；省份精确匹配 / 未归组落「其他」/ blocked 报 42260；包邮按券前小计判且保留 `quotedFeeFen`；起送 `belowMin`；重量（净重缺省、礼盒计入净重、包装附加、0.1 kg 向上取整、最小值）；兜底表首重 1 kg 与续重向上取整。
 时段校验：间隔 < 1 h 拒；今天且 `now ≥ end − 2h` 拒；顺丰缺时段拒；其他家允许留空；预填规则（含 20:00 后翻到明天）。
 状态白名单：全部合法转移通过，`PICKED` 后收 1/2、`CANCELLED` 后收 10、`VOID` 后任何回调都忽略并记事件。
 凭证：签名篡改 / 过期 / `addressId` 不符 / `itemsHash` 不符（改数量、加商品、换规格）四种都拒；正常通过。
@@ -241,8 +241,8 @@ BOOKED ──(1 已接单/2 收件中)──► ACCEPTED ──(10 已取件)─
 
 主链路：邮寄下单（带凭证）→ 接单 → 预约 → 回调 1（记快递员）→ 回调 10（订单 SHIPPED、`Shipment` 写入、发货订阅消息调用一次）→ 轨迹推送 ×2（JSON 覆盖、最新在上）→ 签收（COMPLETED、`completedAt` 有值）。
 分支：
-- 凭证：无凭证 / 过期 / 换地址 / 换购物车后用旧凭证 → 42241；重报价后成功。
-- 分组：四川地址包邮门槛 99、其他省 199、新疆下单 42240、地址超长 42243。
+- 凭证：无凭证 / 过期 / 换地址 / 换购物车后用旧凭证 → 42261；重报价后成功。
+- 分组：四川地址包邮门槛 99、其他省 199、新疆下单 42260、地址超长 42262。
 - 换券不改运费；起送不足拒单；`TABLE` 兜底（mock 查价超时）能下单且 `feeSource=TABLE`。
 - 预约：最便宜默认；手选贵的那家 `quotedFeeFen` 记所选家；重量改动后重查价；有活跃预约时再预约被拒；有活跃预约时 `/ship` 填单号被拒。
 - 取消/退款：预约后店员取消 → CANCELLED、订单仍 PREPARING、可再约；预约后同意顾客取消申请 → 先取消再退款；mock 取消失败 → 不退款、订单不变；有活跃预约点全额退款 → 42242；有活跃预约点拒单 → 42242；取件后全额退款不再碰预约。
