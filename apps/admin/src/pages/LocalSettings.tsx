@@ -5,6 +5,7 @@ import Button from '../components/ui/Button'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import type { LocalDeliverySettings } from '../types'
+import { RowList, TimeRangeRow, validateRanges, sortRanges } from '../components/ui/RowList'
 import { useUnsavedSettings } from '../components/UnsavedSettings'
 
 const toYuan = (fen: number) => (fen / 100).toFixed(2)
@@ -31,7 +32,7 @@ export default function LocalSettings() {
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
   const [money, setMoney] = useState({ baseFee: '', perKmFee: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
-  const [tiersText, setTiersText] = useState('')
+  const [tiers, setTiers] = useState<{ minAmountFen: number; maxKm: number }[]>([])
   // 门店坐标另有一条写入路径（小程序商家端一键定位 → PATCH store-location），而本页的保存是整包
   // 覆盖式 PUT、服务端没有乐观锁。店主按本页指引去店门口定完位、回到这个还开着的标签页改别的参数
   // 再保存，若把页面加载时缓存的旧坐标一起写回，新坐标就被静默改掉了。
@@ -47,7 +48,7 @@ export default function LocalSettings() {
       quoteNearMarkup: toYuan(v.fee.quoteNearMarkupFen),
       minOrderAmount: toYuan(v.fee.minOrderAmount), maxPerCall: toYuan(v.tip.maxPerCall), maxPerOrder: toYuan(v.tip.maxPerOrder),
     })
-    setTiersText((v.fee.freeShipTiers ?? []).map((t) => `${toYuan(t.minAmountFen)}-${t.maxKm}`).join('\n'))
+    setTiers([...(v.fee.freeShipTiers ?? [])])
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
     setCoordDirty(false)
     setDirty(false)
@@ -71,7 +72,7 @@ export default function LocalSettings() {
   const handleSave = async (enabledOverride?: boolean) => {
     const fen = Object.fromEntries(Object.entries(money).map(([k, v]) => [k, toFen(v)])) as Record<keyof typeof money, number | null>
     if (Object.values(fen).some((v) => v === null)) { toast.error('金额格式不正确（最多两位小数）'); return }
-    if (tiersBad) { toast.error('阶梯免运费格式不对，每行应为「满额-公里」，例如 100-3'); return }
+    if (formErrors) { toast.error(formErrors); return }
     // 手填坐标只在店主动过输入框时才算数；没动过就在下面用服务端最新值
     let typedLatE6: number | null = null, typedLngE6: number | null = null
     if (coordDirty && (coord.lat.trim() || coord.lng.trim())) {
@@ -99,11 +100,14 @@ export default function LocalSettings() {
       const lngE6 = coordDirty ? typedLngE6 : fresh.store.lngE6
       const payload: LocalDeliverySettings = {
         ...s,
+        // 保存前按开始时间排好——编辑时不排（行会跳），存进去的顺序就是顾客看到的顺序
+        businessHours: sortRanges(s.businessHours),
+        peak: { ...s.peak, windows: sortRanges(s.peak.windows) },
         version: fresh.version,
         paused: fresh.paused,
         enabled: enabledOverride ?? s.enabled,
         store: { ...s.store, latE6, lngE6 },
-        fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, minOrderAmount: fen.minOrderAmount!, freeShipTiers: parsedTiers,
+        fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, minOrderAmount: fen.minOrderAmount!, freeShipTiers: [...tiers].sort((a, b) => a.maxKm - b.maxKm),
           quoteMarkupFen: fen.quoteMarkup ?? s.fee.quoteMarkupFen, roundToFen: fen.roundTo ?? s.fee.roundToFen,
           quoteNearMarkupFen: fen.quoteNearMarkup ?? s.fee.quoteNearMarkupFen },
         tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
@@ -169,26 +173,19 @@ export default function LocalSettings() {
     if (km > s.radiusKm) return '超出配送范围'
     return `¥${toYuan(baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * perKm)}`
   }
-  /**
-   * 阶梯免运费用受控 textarea（`tiersText`），不像营业时段那样用 defaultValue：
-   * 保存时要把它解析成结构体，而 defaultValue 的值只活在 DOM 里、读不回来。
-   * 每行「满额-公里」，空行忽略；整栏留空 = 关闭满额免运费。
-   */
-  const parsedTiers = tiersText.split('\n').map((l) => l.trim()).filter(Boolean)
-    .map((l) => {
-      const [amt, km] = l.split('-')
-      return { minAmountFen: toFen(amt ?? '') ?? -1, maxKm: Number(km) }
-    })
-    .filter((t) => t.minAmountFen >= 0 && Number.isFinite(t.maxKm) && t.maxKm > 0)
-  /** 有非空行却一行都解析不出来 → 格式写错了，保存前拦住，别让他以为已经生效 */
-  const tiersBad = tiersText.split('\n').some((l) => l.trim()) && parsedTiers.length === 0
-
-  const hoursText = s.businessHours.map((h) => `${h.start}-${h.end}`).join('\n')
-  const peakText = s.peak.windows.map((h) => `${h.start}-${h.end}`).join('\n')
-  // 与营业时段同一套解析：每行 HH:mm-HH:mm，空行忽略。**允许清空**（= 全天不分高峰），
-  // 所以不做「空则回默认」的兜底——店主清空这一栏就该真的关掉高峰加时。
-  const parseWindows = (v: string) => v.split('\n').map((l) => l.trim()).filter(Boolean)
-    .map((l) => { const [start, end] = l.split('-'); return { start: start?.trim() ?? '', end: end?.trim() ?? '' } })
+  // 三处分段列表的校验：任一处有错，保存键置灰并提示。错误就地标红在那一行。
+  const hoursErrs = validateRanges(s.businessHours)
+  const peakErrs = validateRanges(s.peak.windows)
+  const tierErrs = tiers.map((t) => (t.minAmountFen < 0 || !Number.isFinite(t.minAmountFen)) ? '满额要填' : (!(t.maxKm > 0)) ? '公里数要大于 0' : undefined)
+  const formErrors = hoursErrs.some(Boolean) ? '营业时段有错误，请先改正' : peakErrs.some(Boolean) ? '高峰时段有错误，请先改正' : tierErrs.some(Boolean) ? '阶梯免运费有错误，请先改正' : ''
+  const fmtRanges = (rows: { start: string; end: string }[]) => sortRanges(rows).map((h) => `${h.start}–${h.end}`).join('、')
+  const breakText = (() => {
+    // 有错误时不算：拿着重叠/未填完的行算出的「23:59–10:00 午间休息」只会误导
+    if (hoursErrs.some(Boolean)) return ''
+    const r = sortRanges(s.businessHours)
+    if (r.length < 2) return ''
+    return r.slice(1).map((h, i) => `${r[i].end}–${h.start}`).join('、') + ' 顾客端显示「午间休息」'
+  })()
 
   return (
     <div className="space-y-4 max-w-3xl" onChangeCapture={() => setDirty(true)}>
@@ -273,9 +270,29 @@ export default function LocalSettings() {
             <input className={inputCls} type="number" step="0.5" min={0} value={s.fee.baseKm} onChange={(e) => patch({ fee: { ...s.fee, baseKm: Number(e.target.value) } })} /></Field>
           <Field label="超出每公里加价（元）"><input className={inputCls} inputMode="decimal" value={money.perKmFee} onChange={(e) => setMoney({ ...money, perKmFee: e.target.value })} /></Field>
           <Field label="阶梯满额免运费"
-            hint="每行一档：「满多少元-免到几公里」。跑得越远要求点得越多——9.5 km 的运费实测已经 ¥21.50，旧的「满 99 免运费不看距离」等于白送订单金额的两成。留空 = 关闭。按**券前**商品小计判（选券不会让运费跳动）。">
-            <textarea className={`${inputCls} font-mono`} rows={4} value={tiersText}
-              onChange={(e) => setTiersText(e.target.value)} placeholder={'80-2\n100-3\n130-5\n190-10'} /></Field>
+            hint="跑得越远要求点得越多。按券前商品小计判，取所有达标档里公里数最大的那一档。">
+            <RowList rows={tiers} onChange={setTiers}
+              blank={() => ({ minAmountFen: 0, maxKm: 0 })} errors={tierErrs} addLabel="再加一档"
+              emptyHint="留空 = 关闭满额免运费"
+              render={(row, set) => (
+                <>
+                  <span className="text-sm text-gray-500 shrink-0">满</span>
+                  <input className={`${inputCls} !w-16 !px-2 shrink-0`} type="number" min={0} step={1}
+                    value={row.minAmountFen ? row.minAmountFen / 100 : ''} placeholder="元"
+                    onChange={(e) => set({ minAmountFen: Math.round(Number(e.target.value || 0) * 100) })} />
+                  <span className="text-sm text-gray-500 shrink-0">元·免</span>
+                  <input className={`${inputCls} !w-14 !px-2 shrink-0`} type="number" min={0.5} step={0.5}
+                    value={row.maxKm || ''} placeholder="公里"
+                    onChange={(e) => set({ maxKm: Number(e.target.value || 0) })} />
+                  <span className="text-sm text-gray-500 shrink-0">km</span>
+                </>
+              )} />
+            {tiers.length > 0 && !tierErrs.some(Boolean) && (
+              <p className="mt-1 text-xs text-gray-500">
+                {[...tiers].sort((a, b) => a.maxKm - b.maxKm).map((t) => `满 ${t.minAmountFen / 100} 元 ${t.maxKm} 公里内免`).join('；')}
+              </p>
+            )}
+          </Field>
           <Field label="起送金额（元）" hint="0 = 无门槛"><input className={inputCls} inputMode="decimal" value={money.minOrderAmount} onChange={(e) => setMoney({ ...money, minOrderAmount: e.target.value })} /></Field>
         </div>
         <div className="rounded-md bg-gray-50 border border-gray-200 p-3">
@@ -319,9 +336,12 @@ export default function LocalSettings() {
       <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="font-medium text-gray-800">营业与履约</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="营业时段（每行一段 HH:mm-HH:mm）" hint="首期不支持跨零点；多段不可重叠">
-            <textarea className={inputCls} rows={3} defaultValue={hoursText}
-              onBlur={(e) => patch({ businessHours: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [start, end] = l.split('-'); return { start: start?.trim() ?? '', end: end?.trim() ?? '' } }) })} />
+          <Field label="营业时段" hint={breakText || '首期不支持跨零点；多段不可重叠'}>
+            <RowList rows={s.businessHours} onChange={(rows) => patch({ businessHours: rows })}
+              blank={() => ({ start: '', end: '' })} errors={hoursErrs} addLabel="再加一段"
+              emptyHint="一段都没有 = 全天不营业"
+              render={(row, set) => <TimeRangeRow row={row} set={set} cls={inputCls} />} />
+            {s.businessHours.length > 0 && !hoursErrs.some(Boolean) && <p className="mt-1 text-xs text-gray-500">今天 {fmtRanges(s.businessHours)} 营业</p>}
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="备餐时长（分）" hint="从点「接单」开始算，不含顾客下单到接单那一段"><input className={inputCls} type="number" min={0} value={s.prepMinutes} onChange={(e) => patch({ prepMinutes: Number(e.target.value) })} /></Field>
@@ -349,9 +369,11 @@ export default function LocalSettings() {
           报晚了顾客早收到是惊喜，报早了是投诉。
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="高峰时段（每行一段 HH:mm-HH:mm）" hint="留空 = 全天不分高峰">
-            <textarea className={inputCls} rows={3} defaultValue={peakText}
-              onBlur={(e) => patch({ peak: { ...s.peak, windows: parseWindows(e.target.value) } })} />
+          <Field label="高峰时段" hint="这几段里备餐按下面的高峰时长算；留空 = 全天不分高峰">
+            <RowList rows={s.peak.windows} onChange={(rows) => patch({ peak: { ...s.peak, windows: rows } })}
+              blank={() => ({ start: '', end: '' })} errors={peakErrs} addLabel="再加一段"
+              emptyHint="留空 = 全天不分高峰"
+              render={(row, set) => <TimeRangeRow row={row} set={set} cls={inputCls} />} />
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="高峰备餐最短（分）">
@@ -399,7 +421,8 @@ export default function LocalSettings() {
       </section>
 
       <div className="flex justify-end">
-        <Button loading={saving} onClick={() => handleSave()}>{saving ? '保存中...' : '保存'}</Button>
+        {formErrors && <span className="text-xs text-red-600 self-center mr-2">{formErrors}</span>}
+        <Button loading={saving} disabled={!!formErrors} onClick={() => handleSave()}>{saving ? '保存中...' : '保存'}</Button>
       </div>
     </div>
   )
