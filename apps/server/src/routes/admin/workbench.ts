@@ -82,7 +82,7 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
           province: o.receiverProvince, city: o.receiverCity, expressCompany: o.shipment?.expressCompany ?? null, expressNo: o.shipment?.expressNo ?? null,
           // bookingView() 按完整 ExpressBooking 类型声明形参，但实际只读 bookingSelect 里选出的这些列——
           // cast 是安全的，见 bookingSelect 上方注释。
-          booking: b ? (() => { const v = bookingView(b as unknown as ExpressBooking); return { status: v.status, statusLabel: v.statusLabel, courierLabel: v.courierLabel, courierName: v.courierName, courierMobile: v.courierMobile, slotText: v.slotText, kuaidinum: v.kuaidinum, failReason: v.failReason, bookedAt: v.bookedAt, kuaidicom: v.kuaidicom, dayType: v.dayType, pickupStart: v.pickupStart, pickupEnd: v.pickupEnd } })() : null,
+          booking: b ? (() => { const v = bookingView(b as unknown as ExpressBooking); return { status: v.status, statusLabel: v.statusLabel, courierLabel: v.courierLabel, courierName: v.courierName, courierMobile: v.courierMobile, slotText: v.slotText, kuaidinum: v.kuaidinum, failReason: v.failReason, bookedAt: v.bookedAt, kuaidicom: v.kuaidicom, dayType: v.dayType, pickupDate: v.pickupDate, pickupStart: v.pickupStart, pickupEnd: v.pickupEnd } })() : null,
           cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
           cancelRejected: !!o.cancelRequestRejectedAt && ['PAID', 'PREPARING'].includes(o.status) ? (o.cancelRequestRejectedBy === 'AUTO' ? 'AUTO' : 'MANUAL') : null,
           acceptedAt: o.acceptedAt?.toISOString() ?? null,

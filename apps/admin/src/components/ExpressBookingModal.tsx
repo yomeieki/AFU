@@ -1,5 +1,5 @@
 /** 邮寄「预约取件」弹窗：各家报价（最便宜默认选中、标注与顾客付款的差价）、重量可改、时段手选（预填最近可约）、备注。 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '../pages/Workbench.css'
 import { bookExpress, getExpressBookingQuotes } from '../api/admin'
 import type { ExpressBookingQuotes } from '../types'
@@ -34,6 +34,10 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
   const [remark, setRemark] = useState(defaultRemark)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // 首次加载才预填快递默认选中项与建议时段；kuaidicom 会在重量变化重新查价时被清空
+  // （见下方 else 分支），若继续拿「kuaidicom 是否为空」当「是否首次加载」的判据，
+  // 那次清空会让下一次重量失焦重新触发预填分支，把店员手选的 day/start/end 悄悄覆盖掉。
+  const firstLoad = useRef(true)
 
   const load = useCallback(async (w?: number) => {
     setLoading(true); setError('')
@@ -41,7 +45,8 @@ export default function ExpressBookingModal({ orderId, defaultRemark, onClose, o
       const r = (await getExpressBookingQuotes(orderId, w)).data.data
       setQ(r)
       setWeight(String(r.weightKg))
-      if (!kuaidicom) {
+      if (firstLoad.current) {
+        firstLoad.current = false
         const cheapest = [...r.quotes].filter((x) => x.priceFen !== null).sort((a, b) => a.priceFen! - b.priceFen!)[0]
         setKuaidicom(cheapest?.kuaidicom ?? '')
         setDay(r.suggestedSlot.dayType)

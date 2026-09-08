@@ -28,7 +28,7 @@ import CancelAndRefundModal from '../components/CancelAndRefundModal'
 import ExpressBookingModal, { DAYS, HOURS, slotError } from '../components/ExpressBookingModal'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useIsPhone } from '../hooks/useIsPhone'
-import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn } from '../utils/time'
+import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn, todayKey } from '../utils/time'
 import { providerLabel, callStrategyLabel } from '../utils/providers'
 
 type ColKey = keyof WorkbenchSnapshot['columns']
@@ -638,18 +638,29 @@ function ShipModal({ order, onClose, onDone }: { order: Order; onClose: () => vo
 }
 
 type Day = (typeof DAYS)[number]
+/** 把预约存的 pickupDate（Asia/Shanghai 日历日，'YYYY-MM-DD'）换算成相对「今天」的 Day。
+ *  不能直接用存的 dayType：dayType 是下单/上次改约那一刻算出来的相对值，服务端建单时已经
+ *  用 pickupDateOf(dayType) 把它换算成了绝对日期存下——如果预约是昨天创建、dayType 是
+ *  '明天'（当时就是指今天），改约弹窗今天打开时若仍照 dayType 原样预填，会显示成「明天」，
+ *  实际就是今天，选中项和真实要改的日期对不上。绝对日期在跨零点时才不会变，所以要用它反推。 */
+function dayFromPickupDate(pickupDate: string | null): Day {
+  if (!pickupDate) return '今天'
+  const parseYMD = (s: string) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d) }
+  const diffDays = Math.round((parseYMD(pickupDate) - parseYMD(todayKey())) / 86400000)
+  return diffDays === 1 ? '明天' : diffDays === 2 ? '后天' : '今天'
+}
 /** 邮寄「改约时间」：只改时段，快递家不能换（服务端 modifyBookingSlot 本就不收 kuaidicom）。
  *  校验规则与 ExpressBookingModal 用同一个 slotError——两处必须字字一致，所以从那边 export 复用。
- *  booking 现在带了原始 kuaidicom/dayType/pickupStart/pickupEnd（不再只有格式化后的展示字段），
+ *  booking 现在带了原始 kuaidicom/dayType/pickupDate/pickupStart/pickupEnd（不再只有格式化后的展示字段），
  *  顺丰必填时段直接判 kuaidicom === 'shunfeng'，不用再从 courierLabel 反查；同时用它们预填
  *  当前时段，不然店员改约时看到的永远是空白下拉，得自己把「当前」那行字翻译回三个选择器。 */
 function ModifySlotModal({ orderId, booking, onClose, onDone }: {
   orderId: number
-  booking: { kuaidicom: string; courierLabel: string; slotText: string; dayType: string | null; pickupStart: string | null; pickupEnd: string | null } | null
+  booking: { kuaidicom: string; courierLabel: string; slotText: string; dayType: string | null; pickupDate: string | null; pickupStart: string | null; pickupEnd: string | null } | null
   onClose: () => void
   onDone: (msg: string) => void
 }) {
-  const [day, setDay] = useState<Day>(() => (booking?.dayType && (DAYS as readonly string[]).includes(booking.dayType) ? (booking.dayType as Day) : '今天'))
+  const [day, setDay] = useState<Day>(() => dayFromPickupDate(booking?.pickupDate ?? null))
   const [start, setStart] = useState(() => booking?.pickupStart ?? '')
   const [end, setEnd] = useState(() => booking?.pickupEnd ?? '')
   const [busy, setBusy] = useState(false)
