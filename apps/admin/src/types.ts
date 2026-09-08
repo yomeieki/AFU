@@ -765,3 +765,38 @@ export interface MemberSettings {
   /** 规则说明页的补充文案 */
   rulesText: string
 }
+
+// ── 经营概览（spec 2026-09-08） ──
+export interface StatsRangeParams { startDate: string; endDate: string }
+export interface StatsRangeOut { startDate: string; endDate: string; prevStartDate: string; prevEndDate: string }
+export interface ChannelAgg { orderCount: number; revenueFen: number }
+export interface OverviewStats {
+  range: StatsRangeOut
+  kpi: { revenueFen: number; refundFen: number; orderCount: number; avgOrderFen: number; prev: { revenueFen: number; refundFen: number; orderCount: number; avgOrderFen: number } }
+  channels: { LOCAL: ChannelAgg; EXPRESS: ChannelAgg }
+  trend: { date: string; LOCAL: ChannelAgg; EXPRESS: ChannelAgg }[]
+  hourly: number[]
+  customers: { users: number; newUsers: number; returningUsers: number; repeatRate: number | null }
+  hotProducts: { productId: number; name: string; qty: number; revenueFen: number }[]
+}
+export interface LocalStatsKpi { orderCount: number; revenueFen: number; avgDistanceM: number | null; freeShipCount: number; freeShipRate: number | null }
+export interface LocalStats {
+  range: StatsRangeOut
+  kpi: LocalStatsKpi & { prev: LocalStatsKpi }
+  freight: { customerPaidFen: number; deliveryFen: number; tipFen: number; cancelFen: number; riderTotalFen: number; netFen: number; prev: { customerPaidFen: number; riderTotalFen: number; netFen: number } }
+  timing: { stages: { key: string; label: string; medianMin: number | null; p90Min: number | null; n: number }[] }
+  providers: { provider: string; count: number; avgFeeFen: number; avgPickupMin: number | null }[]
+  ladder: { first: number; cheapestN: number; all: number }
+  distance: { label: string; count: number }[]
+  cancels: { requested: number; deliveryCancelled: number }
+}
+export interface ExpressStatsKpi { orderCount: number; revenueFen: number; shippingFeeFen: number }
+export interface ExpressStats {
+  range: StatsRangeOut
+  kpi: ExpressStatsKpi & { prev: ExpressStatsKpi }
+  backlog: { count: number; oldestHours: number | null; oldestOrderNo: string | null }
+  shipTiming: { medianHours: number | null; p90Hours: number | null; n: number }
+  companies: { name: string; count: number }[]
+  regions: { province: string; count: number }[]
+  afterSales: { refundCount: number; refundFen: number; afterSaleCount: number }
+}
