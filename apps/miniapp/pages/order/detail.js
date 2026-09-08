@@ -259,11 +259,22 @@ function decorateOrder(order) {
   var eb = order.expressBooking
   var expressStageText = ''
   if (isExpress && ['PAID', 'PREPARING', 'SHIPPED'].indexOf(order.status) !== -1) {
-    if (!eb || eb.status === 'CANCELLED') expressStageText = order.status === 'SHIPPED' ? '' : '商家备货中'
-    else if (eb.status === 'BOOKED' || eb.status === 'UNKNOWN') expressStageText = '已预约快递员上门取件' + (eb.slotText ? ' · ' + eb.slotText : '')
-    else if (eb.status === 'ACCEPTED') expressStageText = '快递员已接单' + (eb.courierName ? ' · ' + eb.courierName : '') + (eb.slotText ? ' · ' + eb.slotText : '')
-    else if (eb.status === 'PICKED' || eb.status === 'DELIVERED') expressStageText = '已取件 · ' + (eb.courierLabel || '') + (eb.kuaidinum ? ' ' + eb.kuaidinum : '')
+    var ebs = eb ? eb.status : ''
+    if (order.status === 'SHIPPED') {
+      // 已发货：下面的「物流信息」（Shipment）卡信息更全，这张卡让位，免得两张同名卡叠在一起
+      expressStageText = ''
+    } else if (ebs === 'BOOKED' || ebs === 'UNKNOWN') {
+      expressStageText = '已预约快递员上门取件' + (eb.slotText ? ' · ' + eb.slotText : '')
+    } else if (ebs === 'ACCEPTED') {
+      expressStageText = '快递员已接单' + (eb.courierName ? ' · ' + eb.courierName : '') + (eb.slotText ? ' · ' + eb.slotText : '')
+    } else if (ebs === 'PICKED' || ebs === 'DELIVERED') {
+      expressStageText = '已取件 · ' + (eb.courierLabel || '') + (eb.kuaidinum ? ' ' + eb.kuaidinum : '')
+    } else {
+      // 无预约 / 已取消 / 下单中（PENDING）/ 未识别状态：对顾客一律「商家备货中」
+      expressStageText = '商家备货中'
+    }
   }
+
   var delivery = order.delivery
   var deliveryStatus = delivery && delivery.status
   var isDeliveryNeutral = !!deliveryStatus && DELIVERY_NEUTRAL.indexOf(deliveryStatus) !== -1

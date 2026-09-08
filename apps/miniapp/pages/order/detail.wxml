@@ -84,13 +84,13 @@
     <view class="local-cancel-submitted" wx:if="{{order.cancelRequestedAt}}">取消申请已提交，商家会尽快处理</view>
     <!-- 申请被驳回（店员点的或超时自动）。不写明是哪一种：对顾客而言结论一样，
          而「系统自动回绝」听起来比「商家考虑后未同意」更冷。 -->
-    <view class="local-cancel-unavailable" wx:elif="{{order.showLocalCancelRejected}}">商家未同意取消，订单继续制作中。如有问题请联系商家</view>
+    <view class="local-cancel-unavailable" wx:elif="{{order.showLocalCancelRejected}}">商家未同意取消，订单继续{{order.isExpress ? '备货' : '制作'}}中。如有问题请联系商家</view>
     <view wx:elif="{{order.canRequestCancel}}">
       <text class="local-cancel-title">可申请取消</text>
       <text class="local-cancel-copy" wx:if="{{graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.cancelDeadlineText}}）</text>
       <text class="local-cancel-copy" wx:elif="{{order.cancelDeadlineText}}">可申请取消截止 {{order.cancelDeadlineText}}</text>
     </view>
-    <view class="local-cancel-unavailable" wx:else>订单已开始制作，如有问题请联系商家</view>
+    <view class="local-cancel-unavailable" wx:else>订单已开始{{order.isExpress ? '备货' : '制作'}}，如有问题请联系商家</view>
   </view>
 
   <!-- Items -->
@@ -244,14 +244,18 @@
   <view class="card" wx:if="{{order.showExpressStage}}">
     <view class="card-title">物流信息</view>
     <view class="express-stage">{{order.expressStageText}}</view>
-    <view class="info-row" wx:if="{{order.expressBooking && order.expressBooking.kuaidinum && order.status !== 'SHIPPED' && order.status !== 'COMPLETED'}}">
+    <view class="info-row" wx:if="{{order.expressBooking && order.expressBooking.courierLabel && order.expressBooking.status !== 'CANCELLED'}}">
+      <text class="info-label">快递公司</text>
+      <text class="info-value">{{order.expressBooking.courierLabel}}</text>
+    </view>
+    <view class="info-row" wx:if="{{order.expressBooking && order.expressBooking.kuaidinum && order.expressBooking.status !== 'CANCELLED'}}">
       <text class="info-label">快递单号</text>
       <text class="info-value">{{order.expressBooking.kuaidinum}}</text>
     </view>
   </view>
 
   <!-- Shipment -->
-  <view class="card" wx:if="{{!order.isLocal && order.shipment && (order.status === 'SHIPPED' || order.status === 'COMPLETED')}}">
+  <view class="card" wx:if="{{!order.isLocal && order.shipment && !order.showExpressStage}}">
     <view class="card-title">物流信息</view>
     <view class="info-row">
       <text class="info-label">快递公司</text>
