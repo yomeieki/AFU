@@ -152,8 +152,9 @@ if (isProduction) {
 
   // 邮寄取件回调（bOrder 的 callBackUrl）限长 200，比同城那条宽松得多；最坏单号 E999999-99 一样留足余量。
   const worstKdExpressUrl = `${publicBaseUrl}/api/kd-express/E999999-99`
-  if (worstKdExpressUrl.length > 200) {
-    console.error(`[config] 快递100 邮寄回调 URL 超长（${worstKdExpressUrl.length} > 200）：${worstKdExpressUrl}，服务拒绝启动`)
+  const worstKdExpressUrlBytes = Buffer.byteLength(worstKdExpressUrl)
+  if (worstKdExpressUrlBytes > 200) {
+    console.error(`[config] 快递100 邮寄回调 URL 超长（${worstKdExpressUrlBytes} > 200）：${worstKdExpressUrl}，服务拒绝启动`)
     process.exit(1)
   }
 }

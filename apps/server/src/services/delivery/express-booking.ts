@@ -166,7 +166,12 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
   // 不能再走上面「预约失败」的分支去释放 activeOrderId，否则店员会重约、撞出双单。
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.expressBooking.update({ where: { id: row.id }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, bookedAt: new Date(), taskId: r.taskId, kdOrderId: r.kdOrderId, kuaidinum: r.kuaidinum, pollToken: r.pollToken } })
+      // 用 updateMany + status:'PENDING' 守：回调可能在外呼期间已经把这行推进到 ACCEPTED/PICKED 等更靠后的状态，
+      // 这里绝不能把它们回退成 BOOKED——count===0 时只补 identity 字段（taskId 唯一索引要求先占位），不碰 status。
+      const moved = await tx.expressBooking.updateMany({ where: { id: row.id, status: 'PENDING' }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, bookedAt: new Date(), taskId: r.taskId, kdOrderId: r.kdOrderId, kuaidinum: r.kuaidinum, pollToken: r.pollToken } })
+      if (moved.count === 0) {
+        await tx.expressBooking.updateMany({ where: { id: row.id, taskId: null }, data: { taskId: r.taskId, kdOrderId: r.kdOrderId, pollToken: r.pollToken, ...(r.kuaidinum ? { kuaidinum: r.kuaidinum } : {}) } })
+      }
       await recordBookingEvent(tx, { bookingId: row.id, dedupeKey: adminBookingEventKey(), source: 'ADMIN', statusDesc: `预约成功 ${COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom}${r.kuaidinum ? ` 单号 ${r.kuaidinum}` : '（单号待回调）'}`, operator: i.operator })
       // 单号一到就写 Shipment（不写 shippedAt、不改订单状态——那是「已取件」回调的事）
       if (r.kuaidinum) {
