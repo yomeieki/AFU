@@ -214,25 +214,10 @@ export async function getExpressSettings(): Promise<ExpressSettings> {
     } else {
       const legacy = await getShippingSettings()
       const base = sanitizeExpressSettings(DEFAULT_EXPRESS_SETTINGS)
-      /*
-       * 迁移语义（与 applyLegacyShipping 保持一致，0 的含义不能出现两套解读）：
-       * - minOrderAmountFen：老起送金额直接搬过来，0 也照搬（= 无门槛）。
-       * - freeShipMinFen：老包邮门槛是「一口价」时代唯一的门槛，搬到每个未 blocked 的组，
-       *   0 也照搬——老设置没有包邮线，迁移后自然也不该凭空多出一条。
-       *   blocked 的组本来就不寄送，不用管包邮门槛，留 0。
-       * - 「其他」组的 tableFirstFen：老 fee 是「兜底价」，但 0 在老口径里表示免运费，
-       *   不能拿来当新的兜底价（兜底价用于快递100报价失败时兜底收费，不能是 0）。
-       *   所以只在 legacy.fee > 0 时覆盖，否则保留默认的 ¥12。
-       */
-      value = {
-        ...base,
-        minOrderAmountFen: legacy.minOrderAmount,
-        regionGroups: base.regionGroups.map((g) => ({
-          ...g,
-          freeShipMinFen: g.blocked ? 0 : legacy.freeThreshold,
-          tableFirstFen: g.name === OTHER_GROUP && legacy.fee > 0 ? legacy.fee : g.tableFirstFen,
-        })),
-      }
+      // 首次读取时完全复刻旧一口价（含 0 = 免运费），店主在新页面切到 QUOTE 才开始按报价收——
+      // 服务端可以先于小程序上线：mode 强制 TABLE，每个分组的兜底表都填成老的那一口价，
+      // 不能让刚部署这一批代码的当晚，价格就悄悄从「旧一口价」跳成「按快递100报价中位数」。
+      value = applyLegacyShipping(base, legacy)
     }
   } catch (e) {
     const message = (e as Error).message

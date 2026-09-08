@@ -70,14 +70,3 @@ export async function getShippingSettings(): Promise<ShippingSettings> {
 export function clearSettingsCache(): void {
   cached = null
 }
-
-/**
- * 按商品小计算运费。
- * 口径固定为「商品小计」而非含运费总价——后者会自我循环
- * （加了运费才够包邮门槛，包邮后又不够了）。
- */
-export function calcShippingFee(itemsSubtotal: number, s: ShippingSettings): number {
-  if (s.fee <= 0) return 0
-  if (s.freeThreshold > 0 && itemsSubtotal >= s.freeThreshold) return 0
-  return s.fee
-}

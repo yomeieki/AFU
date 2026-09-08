@@ -69,7 +69,9 @@ export function calcExpressFee(
     // 一家一票：快递100 同一家可能回多个产品档，取最低那条
     const lowestByKuaidicom = new Map<string, number>()
     for (const q of quotes ?? []) {
-      if (!pool.has(q.kuaidicom) || q.priceFen === null) continue
+      // priceFen <= 0 防线与 yuanToFen 的 null 化重复一层：不管报价快照来自哪个 provider
+      // （含 mock/未来新接口），非正价格都不能被当成"最低价"抢进中位数。
+      if (!pool.has(q.kuaidicom) || q.priceFen === null || q.priceFen <= 0) continue
       const prev = lowestByKuaidicom.get(q.kuaidicom)
       if (prev === undefined || q.priceFen < prev) lowestByKuaidicom.set(q.kuaidicom, q.priceFen)
     }

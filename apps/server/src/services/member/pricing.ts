@@ -13,8 +13,8 @@
  *   实付 = 小计 − 折扣 + 运费
  *
  * ⚠️ 「运费按券前小计判定」这一条不在本文件里实现，而在 `routes/orders.ts`：那里的
- * `calcLocalFee(s, distanceM, totalAmount)` 与 `calcShippingFee(totalAmount, shipping)`
- * 收到的 `totalAmount` 必须始终是券前小计。本文件只负责「券那一步」和最后的加减法，
+ * `calcLocalFee(s, distanceM, totalAmount)` 与 `calcExpressFee(s, group, weightKg, quotes, totalAmount, locked)`
+ * 收到的 `totalAmount`/`subtotalFen` 必须始终是券前小计。本文件只负责「券那一步」和最后的加减法，
  * 不给调用方任何把券后金额传进运费计算的机会——`computeCheckout` 拿到的 `shippingFee`
  * 是已经算好的结果，不是让它去算。
  */

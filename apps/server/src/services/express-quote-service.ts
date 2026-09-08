@@ -12,6 +12,7 @@ import { getExpressProvider } from './delivery/kd100-express'
 import { loadOrderLines, assertLinesSellable, DirectItemInput } from './order-lines'
 import { loadGiftLines } from './member/checkout'
 import { getLocalSettings } from './local-settings'
+import { notifySystemAlert } from './notify'
 
 /** 顾客在结算页等报价的上限，与同城顾客侧一致 */
 export const CUSTOMER_QUOTE_TIMEOUT_MS = 5000
@@ -50,6 +51,9 @@ export async function fetchCourierQuotes(s: ExpressSettings, addressId: number, 
     return quotes
   } catch (e) {
     console.warn('[express-quote] 查价失败，退回兜底表:', (e as Error).message)
+    notifySystemAlert('邮寄查价失败，已退回兜底表', [`地址 #${addressId} ${weightKg}kg`, (e as Error).message], {
+      key: 'express:quote-fallback',
+    })
     return null
   }
 }

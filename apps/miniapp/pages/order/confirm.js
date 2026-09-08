@@ -180,8 +180,9 @@ Page({
         self.refreshQuote('load')
       })
       .catch(function() {
-        // request 已 toast；标记失败禁止提交，避免空单/¥0 也能点提交
-        self.setData({ items: [], totalAmount: 0, shippingFee: 0, payAmount: 0, loadFailed: true })
+        // request 已 toast；标记失败禁止提交，避免空单/¥0 也能点提交。quoting 也一并落地，
+        // 否则按钮虽被 loadFailed 挡住，运费行会一直卡在「计算中…」。
+        self.setData({ items: [], totalAmount: 0, shippingFee: 0, payAmount: 0, loadFailed: true, quoting: false })
       })
   },
 

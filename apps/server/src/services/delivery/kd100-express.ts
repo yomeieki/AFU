@@ -39,7 +39,11 @@ export function _buildBatchPriceParam(i: ExpressBatchPriceInput): Record<string,
 
 const yuanToFen = (v: unknown): number | null => {
   if (v === null || v === undefined || v === '') return null
-  const n = Number(v); return Number.isFinite(n) ? Math.round(n * 100) : null
+  const n = Number(v)
+  // 非正价格（0 / 负数 / 脏数据）不是一个可用报价——留在这里会被当成"最低价"抢进中位数，
+  // 把顾客运费直接算成 0 附近。统一在这里挡掉，calcExpressFee 的池过滤不用再重复这条判断。
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.round(n * 100)
 }
 
 export function _parseBatchPrice(data: unknown): CourierQuote[] {

@@ -81,6 +81,19 @@ t('一家一票：快递100 同一家可能回多个产品档，取最低那条�
   assert.strictEqual(calcExpressFee({ ...s2, fee: { ...s2.fee, minQuoteCount: 2 } }, SC, 1.5, twoRows, 5000).feeSource, 'QUOTE')
   assert.strictEqual(calcExpressFee({ ...s2, fee: { ...s2.fee, minQuoteCount: 3 } }, SC, 1.5, twoRows, 5000).feeSource, 'TABLE')
 })
+t('priceFen<=0 的脏报价不进中位数、也不占 minQuoteCount 名额', () => {
+  // pool 里 jtexpress 报价被污染成 0（脏数据/异常响应未被 yuanToFen 挡住的兜底场景）：
+  // 应等效于该家没有报价——6 家名单实际只剩 5 家有效，中位数按剩下 5 家算，且不能把 0 当最低价卷进去
+  const dirty: CourierQuote[] = [{ ...Q[0], priceFen: 0 }, ...Q.slice(1)]
+  const sExact = { ...S, fee: { ...S.fee, roundToFen: 0 } }
+  const r = calcExpressFee(sExact, SC, 1.5, dirty, 5000)
+  assert.strictEqual(r.feeSource, 'QUOTE')
+  // 定价名单 6 家里 jtexpress 报价作废，有效值 690,705,710,830,1130，中位数取中间 710
+  assert.strictEqual(r.quotedFeeFen, 710)
+  // 若 0 只剩这一家有报价（其余 null），应该跌破 minQuoteCount 落 TABLE，而不是把 0 当唯一有效价
+  const onlyZero: CourierQuote[] = [{ kuaidicom: 'jtexpress', serviceType: null, priceFen: 0, defPriceFen: null }]
+  assert.strictEqual(calcExpressFee(S, SC, 1.5, onlyZero, 5000).feeSource, 'TABLE')
+})
 t('回价不足 minQuoteCount → TABLE；quotes 为 null → TABLE；mode=TABLE 无视报价', () => {
   const one = Q.filter((q) => q.kuaidicom === 'jd')
   assert.strictEqual(calcExpressFee(S, SC, 1.5, one, 5000).feeSource, 'TABLE')

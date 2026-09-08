@@ -28,6 +28,16 @@ async function main() {
     ])
     assert.deepStrictEqual(_parseBatchPrice('garbage'), [])
   })
+  await t('解析响应：非正价格（0 / 空串）一律按 null 处理，不能进中位数', () => {
+    const q = _parseBatchPrice([
+      { kuaidiCom: 'jd', price: '0' },
+      { kuaidiCom: 'yunda', price: '' },
+    ])
+    assert.deepStrictEqual(q, [
+      { kuaidicom: 'jd', serviceType: null, priceFen: null, defPriceFen: null },
+      { kuaidicom: 'yunda', serviceType: null, priceFen: null, defPriceFen: null },
+    ])
+  })
   await t('错误码映射：503/600/601 → CONFIG，余额 → BALANCE，其余 BUSINESS', () => {
     assert.strictEqual(_mapExpressReturnCode('503'), 'CONFIG')
     assert.strictEqual(_mapExpressReturnCode('600'), 'CONFIG')

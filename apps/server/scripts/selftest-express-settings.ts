@@ -97,5 +97,24 @@ t('legacyShippingView / applyLegacyShipping 往返：blocked 组的 blocked 不�
   assert.strictEqual(blocked.blocked, true)
   assert.deepStrictEqual(legacyShippingView(s), { fee: 500, freeThreshold: 9900, minOrderAmount: 2000 })
 })
+t('迁移语义（getExpressSettings 首次无行分支复用 applyLegacyShipping）：完全复刻旧一口价，0 也照搬', () => {
+  // legacy.fee=500：mode TABLE，非 blocked 组 500/0/9900（首重/续重/包邮门槛），blocked 组 500/0/0
+  const s = applyLegacyShipping(DEFAULT_EXPRESS_SETTINGS, { fee: 500, freeThreshold: 9900, minOrderAmount: 2000 })
+  assert.strictEqual(s.fee.mode, 'TABLE')
+  assert.strictEqual(s.minOrderAmountFen, 2000)
+  for (const g of s.regionGroups) {
+    assert.strictEqual(g.tableFirstFen, 500)
+    assert.strictEqual(g.tableOverPerKgFen, 0)
+    assert.strictEqual(g.freeShipMinFen, g.blocked ? 0 : 9900)
+  }
+  // legacy.fee=0（旧一口价就是免运费）：tableFirstFen 处处为 0，不能被误当成"未配置"回落到默认 ¥12
+  const s0 = applyLegacyShipping(DEFAULT_EXPRESS_SETTINGS, { fee: 0, freeThreshold: 0, minOrderAmount: 0 })
+  for (const g of s0.regionGroups) {
+    assert.strictEqual(g.tableFirstFen, 0)
+    assert.strictEqual(g.tableOverPerKgFen, 0)
+    assert.strictEqual(g.freeShipMinFen, 0)
+  }
+  assert.strictEqual(s0.minOrderAmountFen, 0)
+})
 
 console.log(`\n通过 ${pass} 条${process.exitCode ? '，有失败' : ''}`)

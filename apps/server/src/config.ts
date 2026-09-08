@@ -208,9 +208,11 @@ export const config = {
     apiBase: (env.FEIE_API_BASE ?? '').replace(/\/+$/, ''),
   },
   kd100Express: {
-    apiUrl: (env.KD100_EXPRESS_API_URL ?? 'https://poll.kuaidi100.com/order/borderapi.do').trim(),
-    key: env.KD100_EXPRESS_KEY ?? env.KD100_KEY ?? '',
-    secret: env.KD100_EXPRESS_SECRET ?? env.KD100_SECRET ?? '',
+    // env 空串（.env.example 里 KD100_EXPRESS_* 默认注释掉，但历史部署可能残留 ""）不是 nullish，
+    // `??` 接不住——必须用 isSet 才能真正落到"未设置"这条回退路径。
+    apiUrl: isSet(env.KD100_EXPRESS_API_URL) ? env.KD100_EXPRESS_API_URL.trim() : 'https://poll.kuaidi100.com/order/borderapi.do',
+    key: isSet(env.KD100_EXPRESS_KEY) ? env.KD100_EXPRESS_KEY : (env.KD100_KEY ?? ''),
+    secret: isSet(env.KD100_EXPRESS_SECRET) ? env.KD100_EXPRESS_SECRET : (env.KD100_SECRET ?? ''),
   },
 }
 

@@ -232,7 +232,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       }
     }
 
-    // 两套计费互不叠加：EXPRESS 走 services/settings.ts；LOCAL 走 services/local-settings.ts
+    // 两套计费互不叠加：EXPRESS 走 services/express-quote(-service).ts；LOCAL 走 services/local-settings.ts
     let shippingFee = 0
     let localSnapshot: {
       receiverLatE6?: number; receiverLngE6?: number; receiverPoiName?: string | null
