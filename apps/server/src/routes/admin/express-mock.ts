@@ -22,13 +22,25 @@ router.post('/queue', async (req: Request, res: Response, next: NextFunction) =>
     const d = body.directive
     if (!d || !['ok', 'timeout', 'error'].includes(d.kind)) throw new AppError(40000, '无效指令', 400)
     if (d.kind === 'error' && (typeof d.code !== 'string' || !d.code)) throw new AppError(40000, 'error 指令需要 code', 400)
-    if (d.kind === 'ok' && d.quotes !== undefined && !Array.isArray(d.quotes)) throw new AppError(40000, 'quotes 需为数组', 400)
+    if (d.kind === 'ok') {
+      if (d.quotes !== undefined && !Array.isArray(d.quotes)) throw new AppError(40000, 'quotes 需为数组', 400)
+      if (d.status !== undefined && typeof d.status !== 'number') throw new AppError(40000, 'status 需为数字', 400)
+      if (d.found !== undefined && typeof d.found !== 'boolean') throw new AppError(40000, 'found 需为布尔', 400)
+      for (const k of ['taskId', 'kdOrderId', 'courierName', 'courierMobile'] as const) {
+        if (d[k] !== undefined && typeof d[k] !== 'string') throw new AppError(40000, `${k} 需为字符串`, 400)
+      }
+      if (d.kuaidinum !== undefined && d.kuaidinum !== null && typeof d.kuaidinum !== 'string') throw new AppError(40000, 'kuaidinum 需为字符串或 null', 400)
+    }
     queueExpressDirective(d, op); success(res, {})
   } catch (e) { next(e) }
 })
 // GET /api/admin/system/express-mock/calls?op=book
 router.get('/calls', async (req: Request, res: Response, next: NextFunction) => {
-  try { success(res, getExpressCalls(req.query.op as ExpressMockOp | undefined)) } catch (e) { next(e) }
+  try {
+    const op = req.query.op as ExpressMockOp | undefined
+    if (op !== undefined && !OPS.includes(op)) throw new AppError(40000, '无效 op', 400)
+    success(res, getExpressCalls(op))
+  } catch (e) { next(e) }
 })
 // GET /api/admin/system/express-mock/salt/:bookingNo — e2e 构造合法回调用
 router.get('/salt/:bookingNo', async (req: Request, res: Response, next: NextFunction) => {

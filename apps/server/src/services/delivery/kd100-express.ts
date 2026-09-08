@@ -11,7 +11,7 @@ import { postKd100 } from './kd100-client'
 import { ProviderErrorKind } from './types'
 import { CourierQuote } from '../express-quote'
 import { expressMockProvider } from './express-mock'
-import { verifyAndParseExpressCallback, _parseCallbackParam, ExpressCallbackPayload } from './express-callback-sign'
+import { verifyAndParseExpressCallback, _parseCallbackParam, ExpressCallbackPayload, str, numOrNull } from './express-callback-sign'
 
 export type { ExpressCallbackPayload }
 export { _parseCallbackParam }
@@ -85,9 +85,6 @@ export function _parseBatchPrice(data: unknown): CourierQuote[] {
   }
   return out
 }
-
-const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : null)
-const numOrNull = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null }
 
 /** bOrder 参数（docs/research §3.1）。时段/业务类型只在给了才传：顺丰必填，其它家留空表示「随时」 */
 export function _buildBookParam(i: ExpressBookInput): Record<string, unknown> {

@@ -1,5 +1,5 @@
 /**
- * 邮寄预约状态机与协议自测（无需 DB）：
+ * 邮寄预约状态机与协议自测（无需 DB，但需要能通过 config 的 env 校验）：
  *   cd apps/server && npx ts-node --transpile-only scripts/selftest-express-booking.ts
  */
 import assert from 'assert'
@@ -85,6 +85,10 @@ await t('回调 param 解析：顶层与 data 两层都读，费用元→分', (
   const q = _parseCallbackParam({ data: { status: '1' } })
   assert.strictEqual(q.status, '1'); assert.strictEqual(q.kuaidinum, null)
 })
+await t('回调 param 解析：空串不遮蔽另一层的真实值', () => {
+  const r = _parseCallbackParam({ status: 10, data: { status: '', kuaidinum: 'N2' }, kuaidinum: '' })
+  assert.strictEqual(r.status, '10'); assert.strictEqual(r.kuaidinum, 'N2')
+})
 await t('回调验签：正确通过、篡改失败、多字节 sign 不抛、缺 param 报 BAD_PARAM', () => {
   const salt = 'abcdef0123456789'
   const param = JSON.stringify({ status: 10, data: { status: 10 } })
@@ -95,6 +99,12 @@ await t('回调验签：正确通过、篡改失败、多字节 sign 不抛、�
   assert.deepStrictEqual(kd100ExpressProvider.verifyAndParseCallback({ param, sign: '中文中文中文中文中文中文中文中文' }, salt), { ok: false, reason: 'SIGN_MISMATCH' })
   assert.deepStrictEqual(kd100ExpressProvider.verifyAndParseCallback({ sign }, salt), { ok: false, reason: 'BAD_PARAM' })
   assert.strictEqual(kd100ExpressProvider.verifyAndParseCallback({ param, sign: sign.toLowerCase() }, salt).ok, true)
+})
+await t('回调验签：param 解出数组视为 BAD_PARAM', () => {
+  const salt2 = 'abcdef0123456789'
+  const arrParam = '[1,2]'
+  const arrSign = crypto.createHash('md5').update(arrParam + salt2, 'utf8').digest('hex').toUpperCase()
+  assert.deepStrictEqual(kd100ExpressProvider.verifyAndParseCallback({ param: arrParam, sign: arrSign }, salt2), { ok: false, reason: 'BAD_PARAM' })
 })
 await t('mock：book 默认成功返 taskId/kdOrderId/单号（韵达单号为空）；指令 timeout/error；calls 按 op 过滤', async () => {
   resetExpressMock()
@@ -140,4 +150,4 @@ await t('预填：现在+2h 向上取整点起两小时；晚于 20:00 翻到明
 
 console.log(`\n通过 ${pass} 条${process.exitCode ? '，有失败' : ''}`)
 }
-main()
+main().catch((e) => { console.error(e); process.exitCode = 1 })

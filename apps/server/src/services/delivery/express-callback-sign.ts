@@ -13,19 +13,22 @@ export interface ExpressCallbackPayload {
   statusDesc: string | null; raw: Record<string, unknown>
 }
 
-const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : null)
-const numOrNull = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null }
+export const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : null)
+export const numOrNull = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null }
 const md5U = (s: string) => crypto.createHash('md5').update(s, 'utf8').digest('hex').toUpperCase()
+
+/** 两层合并取第一个「有值」的：null/undefined/'' 都算没给，不能用 ?? 遮蔽另一层的真实值（含空串本身） */
+const pick = (...vals: unknown[]): unknown => vals.find((v) => v !== null && v !== undefined && v !== '')
 
 export function _parseCallbackParam(p: Record<string, unknown>): ExpressCallbackPayload {
   const d = (p.data && typeof p.data === 'object' ? p.data : {}) as Record<string, unknown>
   const w = numOrNull(d.weight), fr = numOrNull(d.freight), def = numOrNull(d.defPrice)
   return {
-    status: String(d.status ?? p.status ?? ''),
-    taskId: str(p.taskId ?? d.taskId), kdOrderId: str(d.orderId ?? p.orderId), kuaidinum: str(p.kuaidinum ?? d.kuaidinum ?? d.kuaidiNum),
-    courierName: str(d.courierName ?? p.courierName), courierMobile: str(d.courierMobile ?? p.courierMobile),
+    status: String(pick(d.status, p.status) ?? ''),
+    taskId: str(pick(p.taskId, d.taskId)), kdOrderId: str(pick(d.orderId, p.orderId)), kuaidinum: str(pick(p.kuaidinum, d.kuaidinum, d.kuaidiNum)),
+    courierName: str(pick(d.courierName, p.courierName)), courierMobile: str(pick(d.courierMobile, p.courierMobile)),
     weightKg: w, freightFen: fr === null ? null : Math.round(fr * 100), defPriceFen: def === null ? null : Math.round(def * 100),
-    feeDetails: d.feeDetails ?? null, statusDesc: str(p.message ?? d.statusDesc ?? d.message), raw: p,
+    feeDetails: d.feeDetails ?? null, statusDesc: str(pick(p.message, d.statusDesc, d.message)), raw: p,
   }
 }
 
@@ -41,6 +44,6 @@ export function verifyAndParseExpressCallback(
   if (!crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(got))) return { ok: false, reason: 'SIGN_MISMATCH' }
   let p: Record<string, unknown>
   try { p = JSON.parse(paramStr) as Record<string, unknown> } catch { return { ok: false, reason: 'BAD_PARAM' } }
-  if (!p || typeof p !== 'object') return { ok: false, reason: 'BAD_PARAM' }
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return { ok: false, reason: 'BAD_PARAM' }
   return { ok: true, payload: _parseCallbackParam(p) }
 }
