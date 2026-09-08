@@ -320,13 +320,14 @@ model Order {
   createdAt                   DateTime  @default(now()) @map("created_at")
   updatedAt                   DateTime  @updatedAt @map("updated_at")
 
-  user       User        @relation(fields: [userId], references: [id])
-  items      OrderItem[]
-  payment    Payment?
-  shipment   Shipment?
-  refunds    Refund[]
-  afterSales AfterSale[]
-  deliveries Delivery[]
+  user            User             @relation(fields: [userId], references: [id])
+  items           OrderItem[]
+  payment         Payment?
+  shipment        Shipment?
+  refunds         Refund[]
+  afterSales      AfterSale[]
+  deliveries      Delivery[]
+  expressBookings ExpressBooking[]
 
   @@unique([userId, clientRequestId])
   @@index([userId, status])
@@ -532,6 +533,89 @@ model Setting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("settings")
+}
+
+// ─────────────────────────────────────────────────────────
+// 邮寄取件预约（快递100 上门取件）。一单可多条（取消后重约），活跃的同一时刻最多一条（activeOrderId 唯一）
+// ─────────────────────────────────────────────────────────
+model ExpressBooking {
+  id                   Int       @id @default(autoincrement())
+  orderId              Int       @map("order_id")
+  orderNo              String    @map("order_no") @db.VarChar(32)
+  bookingNo            String    @unique @map("booking_no") @db.VarChar(32)
+  activeOrderId        Int?      @unique @map("active_order_id")
+  kuaidicom            String    @db.VarChar(32)
+  serviceType          String?   @map("service_type") @db.VarChar(32)
+  status               String    @db.VarChar(16)
+  statusRank           Int       @default(0) @map("status_rank")
+  providerStatus       Int?      @map("provider_status")
+  statusDesc           String?   @map("status_desc") @db.VarChar(255)
+  taskId               String?   @unique @map("task_id") @db.VarChar(64)
+  kdOrderId            String?   @map("kd_order_id") @db.VarChar(64)
+  kuaidinum            String?   @db.VarChar(64)
+  pollToken            String?   @map("poll_token") @db.VarChar(64)
+  dayType              String?   @map("day_type") @db.VarChar(8)
+  pickupDate           String?   @map("pickup_date") @db.VarChar(10)
+  pickupStart          String?   @map("pickup_start") @db.VarChar(5)
+  pickupEnd            String?   @map("pickup_end") @db.VarChar(5)
+  weightG              Int       @map("weight_g")
+  customerFeeFen       Int       @map("customer_fee_fen")
+  quotedFeeFen         Int?      @map("quoted_fee_fen")
+  prepaidFeeFen        Int?      @map("prepaid_fee_fen")
+  settledFeeFen        Int?      @map("settled_fee_fen")
+  billedWeightG        Int?      @map("billed_weight_g")
+  feeDetails           Json?     @map("fee_details")
+  courierName          String?   @map("courier_name") @db.VarChar(64)
+  courierMobile        String?   @map("courier_mobile") @db.VarChar(20)
+  callbackSalt         String    @map("callback_salt") @db.VarChar(40)
+  remark               String?   @db.VarChar(64)
+  errorCode            String?   @map("error_code") @db.VarChar(16)
+  failReason           String?   @map("fail_reason") @db.VarChar(255)
+  cancelledBy          String?   @map("cancelled_by") @db.VarChar(8)
+  cancelReason         String?   @map("cancel_reason") @db.VarChar(255)
+  trackJson            Json?     @map("track_json")
+  trackStatus          String?   @map("track_status") @db.VarChar(16)
+  trackUpdatedAt       DateTime? @map("track_updated_at")
+  bookedAt             DateTime? @map("booked_at")
+  acceptedAt           DateTime? @map("accepted_at")
+  pickedAt             DateTime? @map("picked_at")
+  deliveredAt          DateTime? @map("delivered_at")
+  cancelledAt          DateTime? @map("cancelled_at")
+  lastCallbackAt       DateTime? @map("last_callback_at")
+  unacceptedRemindedAt DateTime? @map("unaccepted_reminded_at")
+  unpickedRemindedAt   DateTime? @map("unpicked_reminded_at")
+  unknownRemindedAt    DateTime? @map("unknown_reminded_at")
+  costAlertedAt        DateTime? @map("cost_alerted_at")
+  reconcileTries       Int       @default(0) @map("reconcile_tries")
+  operator             String?   @db.VarChar(64)
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  order  Order                 @relation(fields: [orderId], references: [id])
+  events ExpressBookingEvent[]
+
+  @@index([orderId])
+  @@index([status, bookedAt])
+  @@map("express_bookings")
+}
+
+model ExpressBookingEvent {
+  id             Int      @id @default(autoincrement())
+  bookingId      Int      @map("booking_id")
+  dedupeKey      String   @unique @map("dedupe_key") @db.VarChar(64)
+  source         String   @db.VarChar(16)
+  providerStatus Int?     @map("provider_status")
+  statusDesc     String?  @map("status_desc") @db.VarChar(255)
+  courierName    String?  @map("courier_name") @db.VarChar(64)
+  courierMobile  String?  @map("courier_mobile") @db.VarChar(20)
+  operator       String?  @db.VarChar(64)
+  rawPayload     Json?    @map("raw_payload")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  booking ExpressBooking @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId, createdAt])
+  @@map("express_booking_events")
 }
 
 // ─────────────────────────────────────────────────────────
