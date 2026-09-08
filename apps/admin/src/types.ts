@@ -348,8 +348,12 @@ export interface LocalDeliverySettings {
     baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number
     /** QUOTE = 按实时最低报价 + 加价定价（默认）；TABLE = 起步价 + 每公里的固定表（也是查价失败时的兜底） */
     mode: 'TABLE' | 'QUOTE'
-    /** QUOTE 口径下在最低报价之上加多少（分）——第一级接得掉时，这就是每单毛利 */
+    /** QUOTE 口径下在最低报价之上加多少（分）——第一级接得掉时，这就是每单毛利。远单档 */
     quoteMarkupFen: number
+    /** 近单分界（km，道路距离）。0 = 不分档 */
+    quoteNearKm: number
+    /** 近单（≤ quoteNearKm）的加价（分） */
+    quoteNearMarkupFen: number
     /** 向上取整到这个粒度（分）；0 = 不取整 */
     roundToFen: number
   }

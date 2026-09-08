@@ -408,25 +408,39 @@ qmode_put() {  # $1 = 作用在 .fee 上的 jq 表达式
   local cur; cur=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
   req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c "$1" <<<"$cur")" >/dev/null
 }
-qmode_put '.fee.mode="QUOTE" | .fee.quoteMarkupFen=250 | .fee.roundToFen=50 | .fee.freeThreshold=0'
+qmode_put '.fee.mode="QUOTE" | .fee.quoteMarkupFen=250 | .fee.quoteNearKm=2 | .fee.quoteNearMarkupFen=150 | .fee.roundToFen=50 | .fee.freeThreshold=0'
 assert_eq "设置里落下 QUOTE 口径" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.mode)" "QUOTE"
 # 1.11 km 那组：达达 583 / 蜂鸟 605 / 顺丰 1078 / 闪送 1122 → 最低 583 + 250 = 833 → 取整 850
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1422,"quotes":[{"provider":"dadatongcheng","feeFen":583,"distanceM":1422},{"provider":"fengniaotongcheng","feeFen":605,"distanceM":1427},{"provider":"shunfengtongcheng","feeFen":1078,"distanceM":1422},{"provider":"shansongtongcheng","feeFen":1122,"distanceM":1500}]}}' >/dev/null
 R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
-assert_eq "近单按最低价定价（583+250 取整 → 850）" "$(jq -r .data.fee <<<"$R")" "850"
+# 1422 m ≤ 近单分界 2 km → 走近单加价 150：583+150=733 → 取整 750
+assert_eq "近单走近单加价（583+150 取整 → 750）" "$(jq -r .data.fee <<<"$R")" "750"
 assert_eq "近单 feeSource=QUOTE" "$(jq -r .data.feeSource <<<"$R")" "QUOTE"
 # 不是平均价（(583+605+1078+1122)/4=847 → 取整 850 也是 850，会撞车）——换一组能区分两者的报价：
 # 最低 583，平均 (583+2000+2000+2000)/4=1146。最低价口径给 850，平均价口径会给 1150。
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1422,"quotes":[{"provider":"dadatongcheng","feeFen":583,"distanceM":1422},{"provider":"fengniaotongcheng","feeFen":2000,"distanceM":1427},{"provider":"shunfengtongcheng","feeFen":2000,"distanceM":1422},{"provider":"shansongtongcheng","feeFen":2000,"distanceM":1500}]}}' >/dev/null
 R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
-assert_eq "取的是最低价不是平均价（850，平均会是 1150）" "$(jq -r .data.fee <<<"$R")" "850"
+assert_eq "取的是最低价不是平均价（750，平均会是 1150+）" "$(jq -r .data.fee <<<"$R")" "750"
 # 8.94 km 那组：最低 1623 + 250 = 1873 → 取整 1900
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":8979,"quotes":[{"provider":"dadatongcheng","feeFen":1623,"distanceM":8979},{"provider":"shunfengtongcheng","feeFen":1738,"distanceM":8979},{"provider":"fengniaotongcheng","feeFen":1815,"distanceM":8940},{"provider":"shansongtongcheng","feeFen":2332,"distanceM":8700}]}}' >/dev/null
 R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
-assert_eq "远单按最低价定价（1623+250 取整 → 1900）" "$(jq -r .data.fee <<<"$R")" "1900"
+assert_eq "远单走远单加价（1623+250 取整 → 1900）" "$(jq -r .data.fee <<<"$R")" "1900"
+# 分档必须真的按距离切：把分界推到 10 km，同一组报价的远单应当改走近单加价（1623+150=1773 → 1800）
+qmode_put '.fee.quoteNearKm=10'
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":8979,"quotes":[{"provider":"dadatongcheng","feeFen":1623,"distanceM":8979}]}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "分界推到 10km 后同一单改走近单加价（1623+150 → 1800）" "$(jq -r .data.fee <<<"$R")" "1800"
+# 分界 0 = 关掉分档，一律远单加价
+qmode_put '.fee.quoteNearKm=0'
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"ok","distanceM":1422,"quotes":[{"provider":"dadatongcheng","feeFen":583,"distanceM":1422}]}}' >/dev/null
+R=$(req POST /api/local/quote "" '{"latE6":29350000,"lngE6":104790000,"subtotal":3000}')
+assert_eq "分界 0 = 关掉分档，近单也走远单加价（583+250 → 850）" "$(jq -r .data.fee <<<"$R")" "850"
+qmode_put '.fee.quoteNearKm=2'
 # 查价失败必须退回固定表——否则顾客那一栏就没有运费可显示了
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
 for _ in 1 2 3; do req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"price","directive":{"kind":"error","code":"50000"}}' >/dev/null; done
@@ -447,11 +461,11 @@ qmode_put '.fee.quoteMarkupFen=5000'
 QLOCK_C=$(req POST /api/cart "$UT" "{\"productId\":$LPID,\"quantity\":1}" | jq -r '.data.id // empty')
 R=$(req POST /api/orders "$UT" "{\"cartItemIds\":[$QLOCK_C],\"addressId\":$QLOCK_ADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$QLOCK_TOKEN\"}")
 assert_eq "改了加价后旧凭证仍可下单（QUOTE 锁价）" "$(code "$R")" "0"
-assert_eq "成交价仍是报价那一刻的 850（不是改后的 5583）" \
-  "$(req GET "/api/orders/$(jq -r .data.orderId <<<"$R")" "$UT" | jq -r .data.shippingFee)" "850"
+assert_eq "成交价仍是报价那一刻的 750（不是改后的 5583）" \
+  "$(req GET "/api/orders/$(jq -r .data.orderId <<<"$R")" "$UT" | jq -r .data.shippingFee)" "750"
 
 # 还原成 TABLE：后面几十条断言仍按固定表算期望值。同样只动 fee.*，别整包覆盖。
-qmode_put '.fee.mode="TABLE" | .fee.quoteMarkupFen=250 | .fee.roundToFen=50 | .fee.freeThreshold=8000'
+qmode_put '.fee.mode="TABLE" | .fee.quoteMarkupFen=250 | .fee.quoteNearKm=2 | .fee.quoteNearMarkupFen=150 | .fee.roundToFen=50 | .fee.freeThreshold=8000'
 assert_eq "口径已还原为 TABLE" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.mode)" "TABLE"
 assert_eq "满额免运费也还原了（后面的断言按 8000 算）" "$(req GET /api/admin/settings/local-delivery "$AT" | jq -r .data.fee.freeThreshold)" "8000"
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null

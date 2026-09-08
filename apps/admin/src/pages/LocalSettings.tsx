@@ -29,7 +29,7 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
 export default function LocalSettings() {
   const { setDirty } = useUnsavedSettings()
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
-  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', freeThreshold: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '' })
+  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', freeThreshold: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
   // 门店坐标另有一条写入路径（小程序商家端一键定位 → PATCH store-location），而本页的保存是整包
   // 覆盖式 PUT、服务端没有乐观锁。店主按本页指引去店门口定完位、回到这个还开着的标签页改别的参数
@@ -43,6 +43,7 @@ export default function LocalSettings() {
     setMoney({
       baseFee: toYuan(v.fee.baseFee), perKmFee: toYuan(v.fee.perKmFee), freeThreshold: toYuan(v.fee.freeThreshold),
       quoteMarkup: toYuan(v.fee.quoteMarkupFen), roundTo: toYuan(v.fee.roundToFen),
+      quoteNearMarkup: toYuan(v.fee.quoteNearMarkupFen),
       minOrderAmount: toYuan(v.fee.minOrderAmount), maxPerCall: toYuan(v.tip.maxPerCall), maxPerOrder: toYuan(v.tip.maxPerOrder),
     })
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
@@ -100,7 +101,8 @@ export default function LocalSettings() {
         enabled: enabledOverride ?? s.enabled,
         store: { ...s.store, latE6, lngE6 },
         fee: { ...s.fee, baseFee: fen.baseFee!, perKmFee: fen.perKmFee!, freeThreshold: fen.freeThreshold!, minOrderAmount: fen.minOrderAmount!,
-          quoteMarkupFen: fen.quoteMarkup ?? s.fee.quoteMarkupFen, roundToFen: fen.roundTo ?? s.fee.roundToFen },
+          quoteMarkupFen: fen.quoteMarkup ?? s.fee.quoteMarkupFen, roundToFen: fen.roundTo ?? s.fee.roundToFen,
+          quoteNearMarkupFen: fen.quoteNearMarkup ?? s.fee.quoteNearMarkupFen },
         tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
       }
       // 保存后的提示按「这次是否动了门店坐标」分叉，因为两种情况对顾客的影响完全不同：
@@ -139,6 +141,23 @@ export default function LocalSettings() {
     } catch (e) {
       toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '恢复失败，请重试')
     }
+  }
+
+  /**
+   * 预计送达试算——**与服务端 estimateMinutesRange 同一套公式**，改这里必须同时改那边。
+   *
+   * 顾客看到的分钟数 = 出餐 + 路上，其中「出餐」按呼叫方式分两种：
+   *   手动呼叫（自动呼叫延迟 = 0）：备餐 + 呼叫到取货  —— 保守按**串行**算，
+   *     因为什么时候点「呼叫骑手」取决于店员，最可能是菜装好了才点。
+   *   自动呼叫：max(备餐, 延迟 + 呼叫到取货) —— 骑手赶来与备餐**并行**，取更晚的那个。
+   * 摆在设置页上，是为了让店主改备餐时长时立刻看到顾客那一栏会变成什么。
+   */
+  const etaParts = (km: number, prep: number) => {
+    const ride = Math.round((km / s.riderSpeedKmh) * 60)
+    const pickup = s.autoCallDelayMin > 0
+      ? Math.max(prep, s.autoCallDelayMin + s.callToPickupMin)
+      : prep + s.callToPickupMin
+    return { ride, pickup, total: pickup + ride }
   }
 
   // 按距离档试算
@@ -216,10 +235,17 @@ export default function LocalSettings() {
           </Field>
           {s.fee.mode === 'QUOTE' && (
             <>
-              <Field label="报价加价（元）"
+              <Field label="加价 · 远单（元）"
                 hint="收顾客的钱 = 最低报价 + 这个数。呼叫第一级接得掉时，它就是这一单的毛利。2026-09-06 实测：1.11 km 最低 ¥5.83、8.94 km 最低 ¥16.23">
                 <input className={inputCls} inputMode="decimal" value={money.quoteMarkup}
                   onChange={(e) => setMoney({ ...money, quoteMarkup: e.target.value })} /></Field>
+              <Field label="近单分界（km）" hint="道路距离在此以内算近单，用下面那档加价。0 = 不分档，一律用远单加价">
+                <input className={inputCls} type="number" step="0.5" min={0} max={50} value={s.fee.quoteNearKm}
+                  onChange={(e) => patch({ fee: { ...s.fee, quoteNearKm: Number(e.target.value) } })} /></Field>
+              <Field label="加价 · 近单（元）"
+                hint="近单绝对运费低，按远单同样加价相当于在旧价上涨四成，怕吓走最核心的近距离顾客；但也不能退回旧的固定 ¥6——按 80% 第一级接单率算那是每单亏 ¥0.17。">
+                <input className={inputCls} inputMode="decimal" value={money.quoteNearMarkup}
+                  onChange={(e) => setMoney({ ...money, quoteNearMarkup: e.target.value })} /></Field>
               <Field label="运费向上取整到（元）" hint="0 = 不取整。取 0.5 时 ¥8.33 会收 ¥8.50——只往上取，不会少收">
                 <input className={inputCls} inputMode="decimal" value={money.roundTo}
                   onChange={(e) => setMoney({ ...money, roundTo: e.target.value })} /></Field>
@@ -239,6 +265,34 @@ export default function LocalSettings() {
           <ul className="text-xs text-gray-600 space-y-1">
             <li>1 km → {sample(1)}</li><li>3 km → {sample(3)}</li><li>5 km → {sample(5)}</li><li>{s.radiusKm + 1} km → {sample(s.radiusKm + 1)}</li>
           </ul>
+        </div>
+        {/* 预计送达试算：把三段拆开写出来，改备餐时长时能立刻看到顾客那一栏变成什么 */}
+        <div className="rounded-md bg-gray-50 border border-gray-200 p-3">
+          <p className="text-xs font-medium text-gray-600 mb-1.5">
+            结算页「大概多久送到」试算 ——{' '}
+            {s.autoCallDelayMin > 0
+              ? `已开自动呼叫（接单后 ${s.autoCallDelayMin} 分），骑手赶来与备餐并行，取两者较晚的`
+              : '当前是手动呼叫，按「备餐 → 呼叫 → 骑手到店 → 送」串行保守估算'}
+          </p>
+          <ul className="text-xs text-gray-600 space-y-1">
+            {[1, 3, 5].map((km) => {
+              const flat = etaParts(km, s.prepMinutes)
+              const peak = etaParts(km, s.peak.prepMaxMinutes)
+              return (
+                <li key={km}>
+                  {km} km → 平时 <b>{flat.total} 分</b>
+                  <span className="text-gray-400">
+                    （出餐 {flat.pickup} + 路上 {flat.ride}）
+                  </span>
+                  {s.peak.windows.length > 0 && <> · 高峰 <b>{peak.total} 分</b></>}
+                </li>
+              )
+            })}
+          </ul>
+          <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">
+            计时从<b>店员接单</b>起算，不含顾客下单到接单那一段（结算页已写明这一点）。
+            骑手取货之后，顾客端会改用骑手实时位置重算，不再用这个估算。
+          </p>
         </div>
       </section>
 

@@ -54,8 +54,20 @@ export interface LocalDeliverySettings {
   fee: {
     baseFee: number; baseKm: number; perKmFee: number; freeThreshold: number; minOrderAmount: number
     mode: 'TABLE' | 'QUOTE'
-    /** QUOTE 口径下，在最低报价之上加多少（分）。这就是每单的毛利（第一级接得掉时） */
+    /**
+     * QUOTE 口径下，在最低报价之上加多少（分）。第一级接得掉时，这就是这一单的毛利。
+     *
+     * **分两档**（PO 2026-09-08）：`quoteNearKm` 以内用 `quoteNearMarkupFen`，以外用本字段。
+     * 近单加价薄一点是**定价决定**，不是成本决定——近单的绝对运费低（实测 ¥5.83 那一档），
+     * 按远单同样加 ¥2.5 相当于在旧价 ¥6 上涨 42%，怕吓走最核心的那批近距离顾客。
+     * 但也不能退回旧的固定 ¥6：按 80% 第一级接单率算，¥6 的近单期望是 **−¥0.17/单**
+     * （那 20% 升级的单成本跳到 ¥6–10.78，一单吃掉三十几单的利润），¥7.50 才转正到 +¥1.33。
+     */
     quoteMarkupFen: number
+    /** 近单分界（km，按**道路距离**）。0 = 不分档，一律用 quoteMarkupFen */
+    quoteNearKm: number
+    /** 近单（≤ quoteNearKm）的加价（分） */
+    quoteNearMarkupFen: number
     /** 向上取整到这个粒度（分）。50 = 五毛；0 = 不取整（¥8.33 这种零头会原样出现在结算页） */
     roundToFen: number
   }
@@ -181,7 +193,7 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   // 只有把客单价推上去才摊得平。先跑一个月看单量与距离分布再调。
   fee: {
     baseFee: 600, baseKm: 3, perKmFee: 250, freeThreshold: 9900, minOrderAmount: 4000,
-    mode: 'QUOTE', quoteMarkupFen: 250, roundToFen: 50,
+    mode: 'QUOTE', quoteMarkupFen: 250, quoteNearKm: 2, quoteNearMarkupFen: 150, roundToFen: 50,
   },
   businessHours: [{ start: '09:00', end: '20:00' }],
   // 15 → 20（PO 2026-09-07）：15 是拍脑袋的初值。首单实测接单→取货 10.4 分钟，看着够，
@@ -275,6 +287,8 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       mode: fee.mode === 'TABLE' || fee.mode === 'QUOTE' ? fee.mode : D.fee.mode,
       // 上限 5000 分（¥50）：加价比这还高的话，问题多半出在别处，不该靠运费找补。
       quoteMarkupFen: int(fee.quoteMarkupFen, D.fee.quoteMarkupFen, 0, 5_000),
+      quoteNearKm: num(fee.quoteNearKm, D.fee.quoteNearKm, 0, 50),
+      quoteNearMarkupFen: int(fee.quoteNearMarkupFen, D.fee.quoteNearMarkupFen, 0, 5_000),
       // 0 = 不取整；上限 500 分（¥5），再粗顾客会觉得在乱收
       roundToFen: int(fee.roundToFen, D.fee.roundToFen, 0, 500),
     },
@@ -520,14 +534,24 @@ export function tableBaseFee(s: LocalDeliverySettings, distanceM: number): numbe
   return s.fee.baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * s.fee.perKmFee
 }
 
+/** 这个距离该加多少钱。近单一档、其余一档；`quoteNearKm = 0` 关掉分档 */
+export function markupFor(s: LocalDeliverySettings, distanceM: number): number {
+  return s.fee.quoteNearKm > 0 && distanceM <= Math.round(s.fee.quoteNearKm * 1000)
+    ? s.fee.quoteNearMarkupFen
+    : s.fee.quoteMarkupFen
+}
+
 /**
- * QUOTE 口径的基础运费：**最低报价 + 加价**，再向上取整到 `roundToFen`。
+ * QUOTE 口径的基础运费：**最低报价 + 加价**（加价按距离分档），再向上取整到 `roundToFen`。
  *
  * 取最低而不是平均，理由见 `LocalDeliverySettings.fee` 的注释。向上取整而不是四舍五入：
- * 取整这一步只该往我们有利的方向走，`¥8.33 → ¥8.50` 而不是 `→ ¥8.00`。
+ * 取整这一步只该往我们有利的方向走，`¥7.33 → ¥7.50` 而不是 `→ ¥7.00`。
+ *
+ * ⚠️ 分档会在边界造成台阶：1.99 km 与 2.01 km 之间除了报价本身的差，还多跳一个加价差。
+ * 旧的固定表本来就是台阶式的（≤3 km 一律 ¥6），顾客对这个形态不陌生，所以接受。
  */
-export function quoteBaseFee(s: LocalDeliverySettings, lowestFen: number): number {
-  const raw = lowestFen + s.fee.quoteMarkupFen
+export function quoteBaseFee(s: LocalDeliverySettings, lowestFen: number, distanceM: number): number {
+  const raw = lowestFen + markupFor(s, distanceM)
   return s.fee.roundToFen > 0 ? Math.ceil(raw / s.fee.roundToFen) * s.fee.roundToFen : raw
 }
 

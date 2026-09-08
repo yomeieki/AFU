@@ -65,7 +65,7 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
     // 退回是**必须有**的一条路：查价 5 秒超时或运力方报错时没有价可依，
     // 而顾客只是在看运费——给他一个偏保守的表价，远好过让运费这一栏空着。
     const baseFee = s.fee.mode === 'QUOTE' && measured?.lowestFen != null
-      ? quoteBaseFee(s, measured.lowestFen)
+      ? quoteBaseFee(s, measured.lowestFen, distanceM)
       : tableBaseFee(s, distanceM)
     const feeSource: 'QUOTE' | 'TABLE' =
       s.fee.mode === 'QUOTE' && measured?.lowestFen != null ? 'QUOTE' : 'TABLE'
