@@ -24,6 +24,7 @@ import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
+import { useIsPhone } from '../hooks/useIsPhone'
 import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn } from '../utils/time'
 import { providerLabel, callStrategyLabel } from '../utils/providers'
 
@@ -35,24 +36,10 @@ const COLUMNS: { key: ColKey; title: string }[] = [
   { key: 'done', title: '已完成' },
 ]
 
-/**
- * ⚠ 必须与 Workbench.css 的 `@media (max-width:700px)` 逐字一致。
- * 两边对不上会出现「手机 DOM 套桌面样式」，比两端都不改更糟。
- * 700 这条线是为了把 iPad 排除在外（iPad mini 竖屏 744、iPad 竖屏 768/810/834）。
- */
-const PHONE_QUERY = '(max-width: 700px)'
-
-function useIsPhone() {
-  const [phone, setPhone] = useState(() => window.matchMedia(PHONE_QUERY).matches)
-  useEffect(() => {
-    const mq = window.matchMedia(PHONE_QUERY)
-    const onChange = (e: MediaQueryListEvent) => setPhone(e.matches)
-    mq.addEventListener('change', onChange)
-    setPhone(mq.matches)   // 挂载与首帧之间可能已经转过屏
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
-  return phone
-}
+// useIsPhone 已抽到 hooks/useIsPhone.ts（经营概览页共用）。
+// ⚠ 其中的 PHONE_QUERY 必须与 Workbench.css 的 `@media (max-width:700px)` 逐字一致——
+// 两边对不上会出现「手机 DOM 套桌面样式」，比两端都不改更糟。
+// 700 这条线是为了把 iPad 排除在外（iPad mini 竖屏 744、iPad 竖屏 768/810/834）。
 
 /** 顶栏营业状态：桌面顶栏与手机顶栏共用，措辞只此一处 */
 function openStateOf(snap: WorkbenchSnapshot | null): { text: string; cls: string } {

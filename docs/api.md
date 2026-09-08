@@ -854,9 +854,31 @@
 
 ### 3.7 数据统计
 
+> 口径（2026-09-08 起）：所有经营统计按**付款日**归属（`paid_at` 落在区间，上海自然日），
+> 状态不限、排除测试单（`is_test`）。区间参数 `startDate`/`endDate`（`YYYY-MM-DD`，含端，默认近 7 天，最长 92 天）。
+> 每个接口返回 `range.{startDate,endDate,prevStartDate,prevEndDate}`，`prev` 为紧挨在前的等长区间。金额单位分。
+
+#### GET /api/admin/stats/overview?startDate&endDate&channel=ALL|LOCAL|EXPRESS
+总览：`kpi{revenueFen,refundFen,orderCount,avgOrderFen,prev}`、`channels{LOCAL,EXPRESS}{orderCount,revenueFen}`、
+`trend[{date,LOCAL,EXPRESS}]`、`hourly[24]`、`customers{users,newUsers,returningUsers,repeatRate}`、
+`hotProducts[{productId,name,qty,revenueFen}]`（按 order_items 聚合、排除赠品；只有它受 `channel` 影响）。
+
+#### GET /api/admin/stats/local?startDate&endDate
+同城：`kpi{orderCount,revenueFen,avgDistanceM,freeShipCount,freeShipRate,prev}`、
+`freight{customerPaidFen,deliveryFen,tipFen,cancelFen,riderTotalFen,netFen,prev}`（netFen<0 = 补贴）、
+`timing.stages[{key,label,medianMin,p90Min,n}]`（acceptToCall/callToRider/riderToPickup/pickupToDone/total）、
+`providers[{provider,count,avgFeeFen,avgPickupMin}]`（`provider` 是 `courierCompany`/kuaidicom 编码——闪送/达达一类，
+不是 Delivery.provider 那个 KD100|SELF|MOCK 渠道抽象；avgPickupMin = 呼叫→取货）、`ladder{first,cheapestN,all}`、
+`distance[{label,count}]`、`cancels{requested,deliveryCancelled}`。
+
+#### GET /api/admin/stats/express?startDate&endDate
+邮寄：`kpi{orderCount,revenueFen,shippingFeeFen,prev}`、`backlog{count,oldestHours,oldestOrderNo}`（**实时**，不受区间影响）、
+`shipTiming{medianHours,p90Hours,n}`、`companies[{name,count}]`、`regions[{province,count}]`（Top 5）、
+`afterSales{refundCount,refundFen,afterSaleCount}`。
+
 #### GET /api/admin/stats
 
-基础统计数据。
+基础统计数据。`today.*` 与 `/trend` 同为付款日口径（见上）。
 
 **Response:**
 ```json

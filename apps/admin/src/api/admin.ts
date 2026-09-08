@@ -5,7 +5,6 @@ import type {
   Category,
   Product,
   Order,
-  Stats,
   QrCodeResult,
   Shipment,
   AdminUser,
@@ -13,7 +12,6 @@ import type {
   ScanSummary,
   ScanTrendPoint,
   ScanProductRow,
-  SalesTrendPoint,
   Banner,
   RefundSummary,
   AfterSale,
@@ -36,6 +34,10 @@ import type {
   PointsGood,
   PointsLedgerRow,
   MemberSettings,
+  StatsRangeParams,
+  OverviewStats,
+  LocalStats,
+  ExpressStats,
 } from '../types'
 
 // Auth
@@ -46,9 +48,6 @@ export const login = (username: string, password: string) =>
       adminInfo: { id: number; username: string; name: string | null; role: string }
     }>
   >('/admin/login', { username, password })
-
-// Stats
-export const getStats = () => client.get<ApiResponse<Stats>>('/admin/stats')
 
 // Categories
 export const getCategories = (channel?: Channel) =>
@@ -189,10 +188,6 @@ export const getScanProducts = (params?: ScanRangeParams & { page?: number; page
     '/admin/scan-stats/products',
     { params }
   )
-
-// 销售趋势
-export const getSalesTrend = (days: 7 | 30 = 7) =>
-  client.get<ApiResponse<{ list: SalesTrendPoint[] }>>('/admin/stats/trend', { params: { days } })
 
 // Banner 管理
 export const getBanners = () => client.get<ApiResponse<Banner[]>>('/admin/banners')
@@ -371,3 +366,11 @@ export const getUserCoupons = (userId: number, params?: { status?: string }) =>
 // 只能用 source='ADMIN' 的模板；remark 必填（这个端点凭空造钱，得留下「为什么发」）
 export const issueUserCoupon = (userId: number, data: { templateId: number; remark: string; orderNo?: string }) =>
   client.post<ApiResponse<UserCouponRow>>(`/admin/users/${userId}/coupons`, data).then((r) => r.data.data)
+
+// 经营概览（三 tab 各一个接口）
+export const getOverviewStats = (params: StatsRangeParams & { channel?: 'ALL' | 'LOCAL' | 'EXPRESS' }) =>
+  client.get<ApiResponse<OverviewStats>>('/admin/stats/overview', { params })
+export const getLocalStats = (params: StatsRangeParams) =>
+  client.get<ApiResponse<LocalStats>>('/admin/stats/local', { params })
+export const getExpressStats = (params: StatsRangeParams) =>
+  client.get<ApiResponse<ExpressStats>>('/admin/stats/express', { params })
