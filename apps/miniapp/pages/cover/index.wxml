@@ -37,30 +37,29 @@
           aria-role="button" aria-label="{{item.label}}"
           data-id="{{item.id}}" bindtap="onTapEntry">
 
-      <!-- 同城配送 / 全国邮寄：阶梯转角金框走 SVG 背景，文字是原生节点 -->
+      <!-- 同城配送 / 全国邮寄：阶梯转角金框与「图标 + 隶书中文」都走 SVG 背景，英文仍是原生节点 -->
       <block wx:if="{{item.variant === 'delivery'}}">
         <view class="df" aria-hidden="true"></view>
-        <text class="delivery-cn">{{item.label}}</text>
+        <view class="glyphs {{item.glyph}}" aria-hidden="true"></view>
         <text class="delivery-en"
               style="letter-spacing: {{item.enTracking}}rpx; padding-left: {{item.enTracking}}rpx;">{{item.en}}</text>
       </block>
 
-      <!-- 会员中心 / 优惠券 / 积分商城：托盘在装饰层，这里只有文字 -->
-      <view wx:elif="{{item.variant === 'text'}}" class="nav-text">{{item.label}}</view>
+      <!-- 会员中心 / 优惠券 / 积分商城：托盘在装饰层，这里只有隶书字形层 -->
+      <view wx:elif="{{item.variant === 'text'}}" class="glyphs {{item.glyph}}" aria-hidden="true"></view>
 
-      <!-- 全国冷链配送：纸层 / 主框 / 内框 / 高光 / 竖线 / 朱红查看小签 -->
+      <!-- 全国冷链配送：纸层 / 主框 / 内框 / 高光 / 竖线 / 朱红查看小签；
+           中文与小签上的「查看」都在同一张字形图里 -->
       <block wx:else>
         <view class="cc-under" aria-hidden="true"></view>
         <view class="cc-main" aria-hidden="true"></view>
         <view class="cc-inner" aria-hidden="true"></view>
         <view class="cc-highlight" aria-hidden="true"></view>
-        <text class="cold-cn">{{item.label}}</text>
+        <view class="glyphs {{item.glyph}}" aria-hidden="true"></view>
         <text class="cold-en">{{item.en}}</text>
         <view class="cc-rule" aria-hidden="true"></view>
         <view class="cc-tag" aria-hidden="true"></view>
         <view class="cc-tag-inner" aria-hidden="true"></view>
-        <text class="cc-tag-cha">查</text>
-        <text class="cc-tag-kan">看</text>
       </block>
 
     </view>

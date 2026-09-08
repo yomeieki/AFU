@@ -1,5 +1,10 @@
 // 封面六个入口的唯一事实来源。
 //
+// glyph —— 中文字形层的类名。v4 中文改隶书 STLibianSC-Regular，那是 macOS 独占字体，
+//   iOS/安卓都没有，走 font-family 会退化成宋体。交付包为此提供了字形已转路径的
+//   homepage-formal-outlined.svg，样式里按热区把它做成矢量 SVG 数据 URI 当背景。
+//   label 仍是无障碍朗读与埋点用的真实文案。
+//
 // enTracking —— 英文字距（rpx）。v3 设计把两个配送按钮的英文字距分了两档：
 //   同城 1.6、全国邮寄 1.1（见交付包 specs/design-tokens.json 的 deliveryEnglish）。
 //
@@ -19,6 +24,7 @@
 module.exports = [
   {
     id: 'local_delivery',
+    glyph: 'gl-local-delivery',
     label: '同城配送',
     en: 'LOCAL DELIVERY',
     enTracking: 1.6,
@@ -30,6 +36,7 @@ module.exports = [
   },
   {
     id: 'nationwide_shipping',
+    glyph: 'gl-nationwide-shipping',
     label: '全国邮寄',
     en: 'NATIONWIDE SHIPPING',
     enTracking: 1.1,
@@ -41,6 +48,7 @@ module.exports = [
   },
   {
     id: 'member_center',
+    glyph: 'gl-member-center',
     label: '会员中心',
     en: '',
     event: 'tap_member_center',
@@ -51,6 +59,7 @@ module.exports = [
   },
   {
     id: 'coupon',
+    glyph: 'gl-coupon',
     label: '优惠券',
     en: '',
     event: 'tap_coupon',
@@ -61,6 +70,7 @@ module.exports = [
   },
   {
     id: 'points_mall',
+    glyph: 'gl-points-mall',
     label: '积分商城',
     en: '',
     event: 'tap_points_mall',
@@ -73,6 +83,7 @@ module.exports = [
     // 现状：冷链与「全国邮寄」落到同一个 tabBar 主页（沿用亭子版封面 goExpress 的行为）。
     // 交付包把它列为独立入口，但没给独立页面；是否要单开页面/WebView/客服会话待业务方定。
     id: 'cold_chain',
+    glyph: 'gl-cold-chain',
     label: '全国冷链配送',
     en: 'COLD-CHAIN DELIVERY',
     event: 'tap_cold_chain',
