@@ -1610,3 +1610,118 @@ e2e 第 48 段用 `has("issuedBy") == false` 锁住。
 `KD100_EXPRESS_API_URL`（默认 `https://poll.kuaidi100.com/order/borderapi.do`）、
 `KD100_EXPRESS_KEY` / `KD100_EXPRESS_SECRET`（缺省复用 `KD100_KEY` / `KD100_SECRET`，与同城共用一套快递100账号）、
 `EXPRESS_PROVIDER_MOCK`（`true` 时查价走内存 mock 且挂载上面的管理端 mock 控制面；生产环境禁止开启）。
+
+---
+
+## 附录 G：全国邮寄预约取件（批次二，2026-09）
+
+设计依据 `docs/superpowers/specs/2026-09-08-express-shipping-kuaidi100-design.md` §5–§8。
+本批做：工作台「预约快递员上门取件」（选快递/改重量/选时段）、快递100 上门取件回调把订单推到「已发货」、
+改约/取消/作废、顾客取消申请前置、顾客端订单详情预约状态、三条兜底定时任务。轨迹订阅与顾客端时间线是批次三。
+
+### 管理端：`/api/admin/express/orders/:id/*`
+
+挂载于 `apps/server/src/routes/admin/express.ts`（`routes/admin/index.ts` 里 `router.use('/express/orders', expressAdminRouter)`），
+均需管理员登录。`:id` 是订单 id（不是 `bookingNo`）。
+
+| 接口 | 说明 |
+|---|---|
+| `GET /:id/booking` | 该订单最近一条预约（含是否为「活跃」预约、事件列表）。返回 `{ booking: BookingView \| null, active: boolean, events: [] }`。`BookingView` 含 `status/statusLabel/kuaidicom/courierLabel/serviceType/kuaidinum/dayType/pickupDate/pickupStart/pickupEnd/slotText/weightKg/customerFeeFen/quotedFeeFen/prepaidFeeFen/settledFeeFen/billedWeightG/courierName/courierMobile/failReason/cancelledBy` 及各阶段时间戳。`active` 为 `true` 当且仅当这条预约就是订单当前的 `activeOrderId` 指向对象（`BOOKED/ACCEPTED/UNKNOWN`，`PENDING` 占位也算——见状态机）。事件字段：`id/source/providerStatus/statusDesc/courierName/operator/createdAt`。 |
+| `GET /:id/quotes?weightKg=` | 预约弹窗打开时拉一次。`weightKg` 可选（0.1–50，不传用订单商品算出的默认重量）。返回各家报价（快照 2 小时内且重量未变则复用下单时的快照，否则现查全部 9 家）+ `suggestedSlot`（预填时段）+ `couriers`（`{code,label}[]`，供下拉渲染）。 |
+| `POST /:id/book` | 建预约。Body `{ kuaidicom, serviceType?, weightKg?, dayType, pickupStart?, pickupEnd?, remark? }`。成功返回 `{ bookingId, bookingNo, status: 'BOOKED'\|'UNKNOWN', kuaidinum }`（`UNKNOWN` 时 `kuaidinum` 可能非空——外呼可能已经成功只是响应超时）。校验顺序：订单须 `PREPARING`；无待处理取消申请（`42266`）；快递公司需在 `EXPRESS_COURIERS` 内；地区不在不寄送名单；收货地址 ≤ 300 字节（`42262`）；时段合规（`42269`）；无活跃预约（`42265`）；下单超时进 `UNKNOWN`；业务失败 `42270`（原话）。 |
+| `POST /:id/booking/cancel` | 取消当前活跃预约。Body `{ reason? }`（≤30 字，缺省按操作者是店员/顾客给默认文案）。`UNKNOWN` 状态不可取消（`42267`，需先等对账或作废）；快递100 拒绝取消（已揽收）→ `42267` 原话；请求超时 → `42268`（状态未变）。成功后预约转 `CANCELLED`，订单不受影响（本就在 `PREPARING`），可重新预约。 |
+| `POST /:id/booking/modify` | 改约。Body `{ dayType, pickupStart?, pickupEnd? }`（不能换快递公司——`modifyBookingSlot` 不收 `kuaidicom`）。仅 `BOOKED/ACCEPTED` 可改；时段不合规 `42269`；快递100 拒绝或超时同「取消」的 `42267/42268`。成功后清空「未取件提醒」标记（避免刚改完又立刻被旧时段触发提醒）。 |
+| `POST /:id/booking/void` | 作废「待核对」（`UNKNOWN`）的预约，或作废下单占位卡住超过 2 分钟的 `PENDING`。其余状态一律 `42267`。作废后 `activeOrderId` 释放，可重新预约或改填单号发货。**人工操作，系统从不自动作废**（见状态机）。 |
+| `POST /:id/cancel-request/reject` | 驳回顾客的取消申请（同城/邮寄共用 `rejectCancelRequest`，无 Body）。 |
+| `POST /:id/cancel-request/approve` | 同意顾客的取消申请：**先取消预约（若有活跃预约）→ 成功后再全额退款**；第一步失败直接抛错，不进入第二步。无活跃预约时跳过第一步直接退款。 |
+
+### 顾客端回调：`POST /api/kd-express/:bookingNo`
+
+公开路由（`apps/server/src/routes/kd-express-callback.ts`，挂载于 `app.ts` 的 `express.json()` 之前），`x-www-form-urlencoded` 表单体，字段 `param`（JSON 字符串）+ `sign`。
+
+- **验签**：`sign = MD5(param + callbackSalt)`（大小写不敏感），`callbackSalt` 是**每条预约随机生成**的 32 字节十六进制串，存在 `express_bookings.callback_salt`（不是全局密钥）。验签失败**仍 ack 200**（不处理状态，只记一条留痕事件并告警店员核对）——这样对方不会因为收到失败形状而无限重推，同时也不给伪造请求提供「猜中签名就能推进状态」的攻击面（签名本身仍必须对得上 `callbackSalt` 才会被采信）。
+- **ack**：一律 `{"result":true,"returnCode":"200","message":"成功"}`（HTTP 200）。只有处理过程中抛出未捕获异常才回 `HTTP 500`（触发对方重推，最多 2 次，间隔约 1 分钟）。
+- **限流 503**：`kdExpressCallbackLimiter`（`middlewares/rate-limit.ts`）触发时直接 `HTTP 503`，body `{"result":false,"returnCode":"503","message":"请求过于频繁，请稍后重推"}`——**不是**成功形状，让对方按「失败」重推，避免限流把回调静默吞掉。
+- **幂等**：`(bookingNo, providerStatus, rawBody 摘要)` 组成去重键（`makeExpressDedupeKey`），重复推送直接 ack 不重复处理状态；同一条内容变了（如 `statusDesc` 更新）视为新事件仍会处理。
+- **处理顺序**：查预约（查不到只告警，仍 ack 200）→ 验签 → 事务内去重留痕 → `UNKNOWN` 认领（任何一条验签通过的回调都证明单在快递100 那头真实存在，直接转 `BOOKED`）→ 按状态映射推进（终态后的尾随回调只留痕，`FEE` 类例外——结算可能晚于签收）→ 订单联动（仅 `PICKED`/`DELIVERED` 两处，见下）→ 事务外发通知。
+
+### 状态映射（`KD_EXPRESS_STATUS_MAP`，`express-booking-state.ts`）
+
+回调 `data.status` → 本地动作：
+
+| 快递100 状态码 | 含义 | 本地动作 |
+|---|---|---|
+| `0` | 下单成功 | `ExpressBooking.status = BOOKED`；同时记一次预扣（`prepaidFeeFen`，只写第一次） |
+| `1` | 已接单 | `ACCEPTED`，记 `acceptedAt` |
+| `2` | 收件中 | `ACCEPTED`，记 `acceptedAt`（与 `1` 同一动作） |
+| `10` | 已取件 | `PICKED`，记 `pickedAt`；**同一事务** `Order.status: PAID/PREPARING → SHIPPED`，`Shipment` 写公司/单号/`shippedAt`；事务外发一次发货订阅消息 |
+| `13` | 已签收 | `DELIVERED`，记 `deliveredAt`；`Order.status: SHIPPED → COMPLETED`（仅当订单当前正是 `SHIPPED`） |
+| `11` | 揽货失败 | `FAILED`，释放 `activeOrderId`，推送店员一次 |
+| `610` | 下单失败（异步） | `FAILED`，同上 |
+| `9` | 用户取消 | `CANCELLED`（`cancelledBy=KD100`），释放 `activeOrderId`，推送店员一次（提示重新预约或改填单号） |
+| `99` | 订单取消 | `CANCELLED`，同 `9` |
+| `15` | 已结算 | 落 `settledFeeFen`/`billedWeightG`/`feeDetails`；随后调一次 `synPay(kdOrderId)`；若实扣/预扣 `> costAlertRatio` 告警一次（`costAlertedAt` 标记去重） |
+| `155` | 修改重量 | 同 `15`（更新实扣/计费重，不重复调 `synPay`） |
+| `101` | 运输中 | 仅落 identity 字段（单号/快递员等），不推进状态 |
+| `400` | 派送中 | 同 `101` |
+| `200` | 已出单 | 同 `101` |
+| `201` | 出单失败 | 同 `101`（忽略，不算 `FAILED`——出单是快递公司内部动作，不代表揽收失败） |
+| `12` | 已退回 | 落 identity，告警店员核实 |
+| `14` | 异常签收 | 同 `12` |
+| `166` | 订单复活 | 同 `12` |
+| 未在表中的状态码 | — | 落 identity，告警一次「未知状态」，不推进 |
+
+订单侧联动**只在两处**：`PICKED` → `Order.SHIPPED` + `Shipment` + 发货订阅消息；`DELIVERED` → `Order.COMPLETED`（仅当此前是 `SHIPPED`）。其余状态一律不碰订单状态。
+
+### 预约记录状态机
+
+```
+PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/2)──► ACCEPTED ──(10)──► PICKED ──(13)──► DELIVERED
+    │                                        │
+    ├──(9/99、店员取消)────────────────────► CANCELLED
+    ├──(11、610)──────────────────────────► FAILED
+    └──(外呼超时/落库失败等不确定情形)──► UNKNOWN ──(任意一条验签通过的回调)──► BOOKED
+          │
+          └──(店员在快递100 后台核实无单后手动作废；或 PENDING 卡住超 2 分钟)──► VOID
+```
+
+- `PENDING` 是 `createBooking` 先落库占位、还没等到外呼结果时的中间态；正常几秒内会推进到 `BOOKED/UNKNOWN/FAILED` 之一。只有进程在这几秒窗口崩溃重启才会留下一条永远卡住的 `PENDING`——超过 2 分钟可视为卡死，允许人工 `void`；2 分钟内一律当作「正常下单中」处理（`voidUnknownBooking` 会拒绝）。
+- **活跃** = `BOOKED / ACCEPTED / UNKNOWN`（`activeOrderId` 唯一索引，一单同时最多一条活跃预约；`PENDING` 虽然也占着 `activeOrderId`，但不算「活跃」三态之一，只在按钮矩阵里当占位处理）。
+- 终态 `DELIVERED/CANCELLED/FAILED/VOID` 不可再被任何回调或人工操作改动；回调的 rank 只能前进，`PICKED` 之后不能再被取消/失败（取件后只走售后）。
+- `VOID` 只能由店员通过 `POST .../booking/void` 手动触发，**系统不会自动把 `UNKNOWN` 转成 `VOID`**——`detail` 按 `thirdOrderId` 查询在测试环境未验证过，若自动作废判错就是同一单在快递100 那头真实存在、店内却又重新建了一单的「双单」事故。
+
+### 错误码（4226x 段，接续批次一的 42260–42262）
+
+| 码 | 含义 |
+|---|---|
+| 42263 | 该订单有取件预约（待取件），请先取消预约再退款 —— `initiateRefund`/拒单路径的前置校验，与同城 `42221` 同款理由 |
+| 42264 | 该订单有取件预约，请先取消预约再手填单号发货 —— `/api/admin/orders/:id/ship` 的前置校验 |
+| 42265 | 该订单已有取件预约，请先取消再重约 —— 建预约时已存在活跃预约（含并发建单撞唯一索引的兜底） |
+| 42266 | 顾客有待处理的取消申请，请先处理再预约 —— 建预约前置校验，避免与取消申请的处理顺序打架 |
+| 42267 | 预约状态不允许该操作 —— 取消/改约/作废时目标预约不存在、状态已变化、或 `UNKNOWN`（待核对，需先等对账或作废）；也覆盖快递100 明确拒绝（如已揽收不可取消）的原话透传 |
+| 42268 | 快递100 请求超时，状态未变化 —— 取消/改约请求超时，本地状态未回滚，可重试 |
+| 42269 | 取件时段不合规 —— 少于 1 小时、今天的时段未留够 2 小时提前量、顺丰未填时段等（原话由 `validateSlot` 给出） |
+| 42270 | 快递100 下单失败：`<原话>` —— 建预约时业务失败（风控/停派/地址过短/重量超限/余额不足等），不建记录 |
+
+### 顾客端变化：`GET /api/orders/:id`
+
+- 新增 `expressBooking: { status, statusLabel, courierLabel, courierName, slotText, kuaidinum } | null`（`FAILED/VOID` 对顾客等同「没预约」，不下发；`CANCELLED` 仍下发，顾客端按「商家备货中」展示）。顾客白名单：不下发快递员手机号、不下发任何费用字段。
+- 新增 `cancelGraceMin`（本单渠道对应的取消申请宽限分钟数，`LOCAL` 读 `localSettings.acceptGraceMin`、`EXPRESS` 读 `expressSettings.acceptGraceMin`）；`canRequestCancel`/`cancelRequestDeadline` 两个既有字段现在 `EXPRESS` 渠道同样会算（`cancelWindowOf` 按 `deliveryType` 分流）。
+- `POST /:id/cancel-request`：接单后宽限期内可申请，`EXPRESS` 与 `LOCAL` 走同一条路由；申请时快照当前活跃预约状态到 `cancelRequestDeliveryStatus`（供店员处理时判断快递员是否已在路上）。
+
+### 定时任务与阈值覆盖
+
+`apps/server/src/services/delivery/express-booking-tasks.ts` 三条，接入 `scheduler.ts` 每分钟一轮（与同城任务同一个 tick，互不阻塞）：
+
+| 任务 | 函数 | 默认阈值（读 `ExpressSettings.pickup`） | 覆盖参数（`POST /api/admin/system/run-scheduler` 的 `overrides`，仅非生产可用） |
+|---|---|---|---|
+| 无人接单提醒 | `remindExpressUnaccepted` | `unacceptedRemindHours`（默认 4 小时） | `expressUnacceptedHours` |
+| 时段过未取件提醒 | `remindExpressUnpicked` | `unpickedRemindMin`（默认 60 分钟） | `expressUnpickedMin` |
+| `UNKNOWN` 对账 | `reconcileExpressUnknown` | `minAge` 默认 1 分钟 | `expressUnknownMin` |
+
+`UNKNOWN` 对账用 `detail` 按 `thirdOrderId`（即 `bookingNo`）查单：查到 → 认领为 `BOOKED` 并补 `taskId/kdOrderId/kuaidinum`；**查不到只记一次查单事件、`reconcileTries` 加一，不自动作废**（理由见上面状态机小节）；连续 10 次查不到提醒店员一次；累计 30 次或预约超过 24 小时后停止自动查询（再提醒一次「已停止自动查单」），之后只能人工核实后 `void`。每单每类提醒只发一次，标记列放在 `express_bookings` 上（`unacceptedRemindedAt`/`unpickedRemindedAt`/`unknownRemindedAt`），改约会清空「未取件提醒」标记。
+
+### 环境变量与 mock
+
+- `EXPRESS_PROVIDER_MOCK`（沿用批次一）：`true` 时预约的下单/取消/改约/查单/结算通知全部走内存 mock，且挂载 `apps/server/src/routes/admin/express-mock.ts`（`/api/admin/system/express-mock/{reset,queue,calls,salt/:bookingNo}`）。`POST queue` 的 `op` 现可传 `book/cancel/modify/detail/synPay`（原 `batchPrice` 之外新增五个）；`GET salt/:bookingNo` 供 e2e/联调构造合法签名的回调请求；生产环境禁止开启。
+- `SCHEDULER_DISABLED=true` 时上面三条定时任务与其余全部 scheduler 任务一起停跑（多实例部署时只留一个实例跑 scheduler）。

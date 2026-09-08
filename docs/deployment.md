@@ -421,6 +421,24 @@ curl -s -w '\nHTTP %{http_code}\n' -X POST "https://api.yourdomain.com/api/kd/${
 
 预期：`HTTP 200` 且响应体 `{"result":true,...}`；再用 `GET /api/admin/local/orders/:id/delivery`（管理员 token）确认该订单的配送单状态确实推进了。**这条演练会真的改动一条真实（测试）配送单的状态**，只应该对着一笔专门造出来的测试订单跑，跑完按 `docs/ops-test-orders.md` 的收尾步骤清理，不要拿一笔真实顾客订单练手。
 
+**邮寄「上门取件」回调**（批次二，2026-09）：路由是 `POST /api/kd-express/:bookingNo`（不是 `/api/kd/`），验签盐**按预约各自随机生成**、存在 `express_bookings.callback_salt`，不是全局密钥，所以每条预约都要单独去查：
+
+```bash
+# 盐从数据库直接查（生产没有 mock 模式的 /express-mock/salt 端点可用，
+# 那个端点只在 EXPRESS_PROVIDER_MOCK=true 时才挂载，生产严禁开 mock）：
+#   mysql -uroot -p food_shop -e \
+#     "SELECT booking_no, callback_salt FROM express_bookings WHERE booking_no='E<orderId>-1'"
+BOOKING_NO="$1"; SALT="$2"; STATUS="${3:-1}"; DESC="${4:-演练:快递员已接单}"
+PARAM=$(printf '{"status":"%s","data":{"status":%s,"statusDesc":"%s","courierName":"演练快递员","courierMobile":"13900000000"}}' \
+  "$STATUS" "$STATUS" "$DESC")
+SIGN=$(printf '%s%s' "$PARAM" "$SALT" | md5sum | cut -d' ' -f1)
+curl -s -w '\nHTTP %{http_code}\n' -X POST "https://api.yourdomain.com/api/kd-express/${BOOKING_NO}" \
+  --data-urlencode "param=${PARAM}" \
+  --data-urlencode "sign=${SIGN}"
+```
+
+预期：`HTTP 200` 且响应体 `{"result":true,"returnCode":"200","message":"成功"}`（ack 固定形状，验签失败也是这个 ack——只是不处理状态，见 `docs/api.md` 附录 G）；再用 `GET /api/admin/express/orders/:id/booking`（管理员 token）确认这条预约的状态确实推进了。同样**只对测试订单跑**，跑完按 `docs/ops-test-orders.md` 清理。限流触发时返回的是 `HTTP 503`（不是 200 成功形状），演练时不用特意验证，正常调用频率下不会碰到。
+
 ---
 
 ## 八、数据库备份
