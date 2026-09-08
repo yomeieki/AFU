@@ -5,6 +5,7 @@ import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { COURIER_LABEL, EXPRESS_COURIERS } from '../../services/express-settings'
 import { getBookingQuotes, createBooking, cancelBooking, modifyBookingSlot, voidUnknownBooking, getActiveBooking, bookingView, suggestSlot, SlotInput } from '../../services/delivery/express-booking'
+import { rejectCancelRequest, approveExpressCancelRequest } from '../../services/cancel-request'
 
 const router = Router()
 const slotSchema = z.object({ dayType: z.enum(['今天', '明天', '后天']), pickupStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(), pickupEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional() })
@@ -61,5 +62,13 @@ router.post('/:id/booking/modify', async (req: Request, res: Response, next: Nex
 })
 router.post('/:id/booking/void', async (req: Request, res: Response, next: NextFunction) => {
   try { await voidUnknownBooking({ orderId: idOf(req), operator: req.adminUsername ?? 'admin' }); success(res, {}) } catch (e) { next(e) }
+})
+// POST /api/admin/express/orders/:id/cancel-request/reject — 驳回顾客的取消申请（同城/邮寄共用 rejectCancelRequest）
+router.post('/:id/cancel-request/reject', async (req: Request, res: Response, next: NextFunction) => {
+  try { success(res, await rejectCancelRequest(idOf(req), 'MANUAL')) } catch (e) { next(e) }
+})
+// POST /api/admin/express/orders/:id/cancel-request/approve — 同意：先取消预约（有的话），成功再全额退款
+router.post('/:id/cancel-request/approve', async (req: Request, res: Response, next: NextFunction) => {
+  try { success(res, await approveExpressCancelRequest({ orderId: idOf(req), operator: req.adminUsername ?? 'admin' })) } catch (e) { next(e) }
 })
 export default router

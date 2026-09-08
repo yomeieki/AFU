@@ -25,6 +25,7 @@ import {
 import { DELIVERY_STATUS_LABEL, providerLabel } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getCourierLocationByOrder } from '../services/delivery/courier-location'
+import { bookingView } from '../services/delivery/express-booking'
 import { settlePoints } from '../services/member/points'
 import { allocateOrderNo } from '../services/order-no'
 
@@ -76,14 +77,13 @@ function isPayExpired(order: { createdAt: Date }): boolean {
   return Date.now() >= payExpireAtOf(order.createdAt, config.order.payTimeoutMin).getTime()
 }
 
-/** D6 ②：同城订单接单后 acceptGraceMin 分钟内可申请取消 */
+/** D6 ②：同城/邮寄订单接单后 acceptGraceMin 分钟内可申请取消（各渠道各自的宽限分钟，0 = 关闭） */
 async function cancelWindowOf(order: { deliveryType: string; status: string; acceptedAt: Date | null; cancelRequestedAt: Date | null }) {
-  if (order.deliveryType !== 'LOCAL' || order.status !== 'PREPARING' || !order.acceptedAt) {
-    return { canRequestCancel: false, cancelRequestDeadline: null as Date | null }
-  }
-  const s = await getLocalSettings()
-  const deadline = new Date(order.acceptedAt.getTime() + s.acceptGraceMin * 60 * 1000)
-  return { canRequestCancel: !order.cancelRequestedAt && Date.now() < deadline.getTime(), cancelRequestDeadline: deadline }
+  if (order.status !== 'PREPARING' || !order.acceptedAt) return { canRequestCancel: false, cancelRequestDeadline: null as Date | null, cancelGraceMin: 0 }
+  const graceMin = order.deliveryType === 'LOCAL' ? (await getLocalSettings()).acceptGraceMin : order.deliveryType === 'EXPRESS' ? (await getExpressSettings()).acceptGraceMin : 0
+  if (graceMin <= 0) return { canRequestCancel: false, cancelRequestDeadline: null as Date | null, cancelGraceMin: 0 }
+  const deadline = new Date(order.acceptedAt.getTime() + graceMin * 60 * 1000)
+  return { canRequestCancel: !order.cancelRequestedAt && Date.now() < deadline.getTime(), cancelRequestDeadline: deadline, cancelGraceMin: graceMin }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -665,6 +665,16 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       const d = await prisma.delivery.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' } })
       delivery = d ? customerDeliveryView(d) : null
     }
+    // 顾客白名单：不给手机号、不给费用（同城 customerDeliveryView 同一原则）。
+    // FAILED/VOID 对顾客等同「没预约」；CANCELLED 也下发，顾客端按「商家备货中」显示（Task 7 处理）。
+    let expressBooking: { status: string; statusLabel: string; courierLabel: string; courierName: string | null; slotText: string; kuaidinum: string | null } | null = null
+    if (order.deliveryType === 'EXPRESS') {
+      const b = await prisma.expressBooking.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' } })
+      if (b && !['FAILED', 'VOID'].includes(b.status)) {
+        const v = bookingView(b)
+        expressBooking = { status: v.status, statusLabel: v.statusLabel, courierLabel: v.courierLabel, courierName: v.courierName, slotText: v.slotText, kuaidinum: v.kuaidinum }
+      }
+    }
     // 券只在详情页带，列表不带——列表带就是 N+1（Order.couponId 是普通 Int 列，
     // 没有关系字段可 include，只能一单一查）。顾客在列表上看到「优惠 −¥X」已经够了，
     // 想知道用的哪张券点进详情。
@@ -684,6 +694,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       canApplyAfterSale: ['SHIPPED', 'COMPLETED'].includes(order.status) && remaining > 0 && !activeAfterSale,
       subscribeTemplateIds: getSubscribeTemplateIds(),
       delivery,
+      expressBooking,
     })
   } catch (e) {
     next(e)
@@ -708,10 +719,13 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     if (!win.canRequestCancel) {
       throw new AppError(42229, order.status === 'PAID' ? '商家尚未接单，请直接申请退款' : '已超过可取消时间，如有问题请联系商家')
     }
-    // 快照有效 Delivery 的当前状态（无在途配送单则 NONE）：店员处理取消申请时据此判断
-    // 骑手是否已在路上，而不是等到点开配送详情才发现——申请那一刻的状态才是决策依据。
+    // 快照有效 Delivery/ExpressBooking 的当前状态（无在途单则 NONE）：店员处理取消申请时据此判断
+    // 骑手是否已在路上/快递员是否已在路上，而不是等到点开详情才发现——申请那一刻的状态才是决策依据。
     const cancelRequestedAt = new Date()
-    const snapshotStatus = (await prisma.delivery.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE'
+    const snapshotStatus =
+      order.deliveryType === 'LOCAL'
+        ? ((await prisma.delivery.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE')
+        : ((await prisma.expressBooking.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE')
     const moved = await prisma.order.updateMany({
       where: { id, status: 'PREPARING', cancelRequestedAt: null },
       data: {
@@ -723,9 +737,10 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     })
     // 真并发兜底：两个请求同时读到 cancelRequestedAt=null，只有一个能写入
     if (moved.count === 0) throw new AppError(42229, '已提交过取消申请')
-    // notifyCancelRequest 现在要读一次 getLocalSettings() 拼窗口分钟数，改成了 async——
+    // notifyCancelRequest 不再自己读配置：win.cancelGraceMin 是这次请求刚判过窗口用的那个值，
+    // 同城传同城的、邮寄传邮寄的，两边不会因为读的时机不同而对不上。
     // 通知本身仍是 fire-and-forget（不阻塞这次请求的响应），失败只留痕，不能让推送失败连累取消申请本身
-    notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note })
+    notifyCancelRequest({ orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note }, win.cancelGraceMin)
       .catch((err) => console.error('[orders] notifyCancelRequest 失败:', (err as Error).message))
     // 出票（规格 §8b「顾客申请取消」）：这一步只是挂起申请、订单状态未变，但厨房该立刻知道「先别做了」，
     // 不必等店员处理完才收到消息——票面是给店内看的物理提醒，与走推送通知的 notifyCancelRequest 并列。

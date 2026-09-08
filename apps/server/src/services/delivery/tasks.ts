@@ -5,13 +5,16 @@
 import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { config } from '../../config'
+import { AppError } from '../../middlewares/error'
 import { getLocalSettings, isOpenNow } from '../local-settings'
+import { getExpressSettings } from '../express-settings'
+import { rejectCancelRequest } from '../cancel-request'
 import { isCircuitTripped } from './circuit'
 import { callRider, cancelDelivery, precancelDelivery, getActiveDelivery, HELD_OF, NEXT_RUNG, DeliveryCallStrategy } from './orchestrator'
 import { refreshOrderQuote, QUOTE_FRESH_MS } from './quote'
 import { recordDeliveryEvent, adminEventKey } from './events'
 import { notifySystemAlert } from '../notify'
-import { notifyLocalDeliveryAlert } from '../order-notify'
+import { notifyLocalDeliveryAlert, notifyExpressAlert } from '../order-notify'
 import { DELIVERY_STATUS_LABEL, TERMINAL, providerLabel } from './state'
 
 const BATCH = 100
@@ -111,22 +114,23 @@ export async function remindLocalUncalled(min = 10): Promise<number> {
   return n
 }
 
-/** 顾客取消申请长时间无人处理（每单只推一次） */
+/** 顾客取消申请长时间无人处理（每单只推一次）。同城与邮寄共用同一阈值 min，各自走对应告警渠道 */
 export async function remindCancelRequestPending(min = 5): Promise<number> {
   const rows = await prisma.order.findMany({
     where: {
-      deliveryType: 'LOCAL', cancelRequestedAt: { lt: ago(min) },
+      cancelRequestedAt: { lt: ago(min) },
       status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] },
       cancelRequestRemindedAt: null,
     },
-    take: BATCH, select: { id: true, orderNo: true },
+    take: BATCH, select: { id: true, orderNo: true, deliveryType: true },
   })
   let n = 0
   for (const o of rows) {
     const marked = await prisma.order.updateMany({ where: { id: o.id, cancelRequestRemindedAt: null }, data: { cancelRequestRemindedAt: new Date() } })
     if (marked.count === 0) continue
     n++
-    notifyLocalDeliveryAlert('顾客取消申请待处理', [`订单 ${o.orderNo}`, `取消申请已挂起超过 ${min} 分钟`, '请尽快确认是否取消'])
+    const alert = o.deliveryType === 'EXPRESS' ? notifyExpressAlert : notifyLocalDeliveryAlert
+    alert('顾客取消申请待处理', [`订单 ${o.orderNo}`, `取消申请已挂起超过 ${min} 分钟`, '请尽快确认是否取消'])
   }
   return n
 }
@@ -148,33 +152,43 @@ export async function remindCancelRequestPending(min = 5): Promise<number> {
  * ⚠️ 与 `remindCancelRequestPending` 的关系：那个任务在 acceptGraceMin=5 的当前配置下
  * 基本永远轮不到（自动驳回总是先到），但它**不是死代码**——店主若把可取消窗口调大到 30 分钟，
  * 申请就能真的挂很久，那时它才是有用的。两者阈值不同、语义不同，保留。
+ *
+ * EXPRESS 复用同一口径：同城读同城 acceptGraceMin、邮寄读邮寄 acceptGraceMin——阈值不传时
+ * 各走各的配置；e2e 传 min 覆盖时对两个渠道统一生效（覆盖口本就是给联调用的，不细分渠道）。
+ * 实际的 updateMany 抽到 services/cancel-request.ts 的 rejectCancelRequest，两渠道共用。
  */
 export async function autoRejectStaleCancelRequests(min?: number): Promise<number> {
-  const s = await getLocalSettings()
-  const threshold = min ?? s.acceptGraceMin
+  const localS = await getLocalSettings()
+  const expressS = await getExpressSettings()
+  const localThreshold = min ?? localS.acceptGraceMin
+  const expressThreshold = min ?? expressS.acceptGraceMin
   const rows = await prisma.order.findMany({
     where: {
-      deliveryType: 'LOCAL', status: 'PREPARING',
+      status: 'PREPARING',
       cancelRequestedAt: { not: null },
-      acceptedAt: { lt: ago(threshold) },
+      OR: [
+        { deliveryType: 'LOCAL', acceptedAt: { lt: ago(localThreshold) } },
+        { deliveryType: 'EXPRESS', acceptedAt: { lt: ago(expressThreshold) } },
+      ],
     },
-    take: BATCH, select: { id: true, orderNo: true, cancelRequestNote: true },
+    take: BATCH, select: { id: true, orderNo: true, cancelRequestNote: true, deliveryType: true },
   })
   let n = 0
   for (const o of rows) {
-    // 与人工驳回同一套写法：条件带上 cancelRequestedAt 非空，店员在这一瞬间抢先处理了就让给他
-    const moved = await prisma.order.updateMany({
-      where: { id: o.id, status: 'PREPARING', cancelRequestedAt: { not: null } },
-      data: {
-        cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
-        cancelRequestRejectedAt: new Date(), cancelRequestRejectedBy: 'AUTO',
-      },
-    })
-    if (moved.count === 0) continue
+    // 与人工驳回同一套写法：rejectCancelRequest 内部的条件写带 cancelRequestedAt 非空，
+    // 店员在这一瞬间抢先处理了就会撞上 42204（count=0），这里接住跳过，不算失败。
+    try {
+      await rejectCancelRequest(o.id, 'AUTO')
+    } catch (e) {
+      if (e instanceof AppError && e.code === 42204) continue
+      throw e
+    }
     n++
+    const threshold = o.deliveryType === 'LOCAL' ? localThreshold : expressThreshold
     // 告知而不是告警：这是预期内的规则生效，不是异常。但店员该知道「有个顾客想取消、
     // 系统按规则替你回绝了」——他可能想主动打个电话，而不是等顾客打进来。
-    notifyLocalDeliveryAlert('取消申请已自动驳回', [
+    const alert = o.deliveryType === 'EXPRESS' ? notifyExpressAlert : notifyLocalDeliveryAlert
+    alert('取消申请已自动驳回', [
       `订单 ${o.orderNo}`,
       `接单已超过 ${threshold} 分钟仍无人处理，按规则不再受理取消`,
       ...(o.cancelRequestNote ? [`顾客当时写的理由：${o.cancelRequestNote}`] : []),

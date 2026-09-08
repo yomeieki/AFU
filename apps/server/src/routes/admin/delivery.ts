@@ -10,6 +10,7 @@ import {
 import { refreshOrderQuote, kickOffQuote, isQuoteStale, QUOTE_FRESH_MS } from '../../services/delivery/quote'
 import { getCourierLocationByOrder } from '../../services/delivery/courier-location'
 import { getLocalSettings, haversineM, estimateMinutes } from '../../services/local-settings'
+import { rejectCancelRequest } from '../../services/cancel-request'
 
 const router = Router()
 
@@ -114,25 +115,15 @@ router.post('/:id/call', async (req: Request, res: Response, next: NextFunction)
 router.post('/:id/cancel-request/reject', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true, cancelRequestedAt: true } })
+    const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true } })
     if (!target) throw new AppError(40401, '订单不存在', 404)
     if (target.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单有取消申请')
-    // 终态/退款中的单上这个标记只是历史痕迹（徽标口径同 workbench.ts），不该再被「驳回」改写
-    const moved = await prisma.order.updateMany({
-      where: { id, cancelRequestedAt: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED', 'REFUNDING'] } },
-      data: {
-        cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
-        // 清空上面四列等于抹掉「有人申请过」的全部痕迹，所以必须同事务留下驳回痕迹——
-        // 工作台要靠它显示「已驳回 · 继续完成此订单」，顾客端要靠它显示「商家未同意取消」。
-        cancelRequestRejectedAt: new Date(), cancelRequestRejectedBy: 'MANUAL',
-      },
-    })
-    if (moved.count === 0) {
-      throw new AppError(42204, target.cancelRequestedAt ? `订单状态为 ${target.status}，取消申请已无需处理` : '该订单没有待处理的取消申请')
-    }
+    // 清空四列标记等于抹掉「有人申请过」的全部痕迹，所以必须同事务留下驳回痕迹——
+    // 工作台要靠它显示「已驳回 · 继续完成此订单」，顾客端要靠它显示「商家未同意取消」。
+    // 实际的 updateMany 抽到 services/cancel-request.ts（同城与邮寄共用），这里只保留渠道判断。
     // 不出票（PO 2026-09-07 定）：取消流程只留「顾客申请取消」那一张票。厨房不看票做判断，
     // 店员会口头通知；「继续做」这件事显示在工作台卡片上就够了，多一张票只是多一次噪音播报。
-    success(res, await prisma.order.findUnique({ where: { id } }))
+    success(res, await rejectCancelRequest(id, 'MANUAL'))
   } catch (e) { next(e) }
 })
 

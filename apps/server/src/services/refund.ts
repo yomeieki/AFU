@@ -18,6 +18,7 @@ import { notifyRefundResult } from './order-notify'
 import { notifySystemAlert } from './notify'
 import { sendRefundSubscribeMessage } from './subscribe-message'
 import { DELIVERY_STATUS_LABEL } from './delivery/state'
+import { BOOKING_STATUS_LABEL } from './delivery/express-booking-state'
 import { deductPointsOnRefund } from './member/points'
 import { enqueueOrderTicket } from './ticket'
 
@@ -109,6 +110,12 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
     if (activeDelivery) {
       throw new AppError(42221, `该订单有在途配送单（${DELIVERY_STATUS_LABEL[activeDelivery.status] ?? activeDelivery.status}），请先取消配送再退款`)
     }
+  }
+  // 42263：邮寄单有活跃取件预约（快递员可能已在路上）先取消预约再退款——同 42221 的理由。
+  // 只拦全额：部分退款不碰货、不动订单状态，放行。
+  if (isFull && order.deliveryType === 'EXPRESS' && !['COMPLETED', 'REFUNDED'].includes(order.status)) {
+    const active = await prisma.expressBooking.findFirst({ where: { activeOrderId: orderId }, select: { status: true } })
+    if (active) throw new AppError(42263, `该订单有取件预约（${BOOKING_STATUS_LABEL[active.status] ?? active.status}），请先取消预约再退款`)
   }
   if (!order.payment || order.payment.status !== 'SUCCESS') {
     throw new AppError(42207, '订单无成功支付记录，无法退款')

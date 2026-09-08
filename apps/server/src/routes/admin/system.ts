@@ -120,6 +120,9 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         settleMissedPointsAfterMin: num(body.settleMissedPointsAfterMin),
         forceDailyMemberTasks: bool(body.forceDailyMemberTasks),
         dailyTaskBatchLimit: num(body.dailyTaskBatchLimit),
+        expressUnacceptedHours: num(body.expressUnacceptedHours),
+        expressUnpickedMin: num(body.expressUnpickedMin),
+        expressUnknownMin: num(body.expressUnknownMin),
       })
     )
   } catch (e) {

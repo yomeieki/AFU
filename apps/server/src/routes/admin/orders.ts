@@ -12,6 +12,7 @@ import { notifySystemAlert } from '../../services/notify'
 import { enqueueOrderTicket } from '../../services/ticket'
 import { LOW_STOCK_THRESHOLD } from '../../utils/constants'
 import { displayAddress } from '../../utils/address'
+import { BOOKING_STATUS_LABEL } from '../../services/delivery/express-booking-state'
 
 const router = Router()
 
@@ -179,6 +180,15 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
         refunds: { orderBy: { createdAt: 'desc' } },
         afterSales: { orderBy: { createdAt: 'desc' } },
         user: { select: { id: true, nickname: true, phone: true } },
+        expressBookings: {
+          orderBy: { id: 'desc' as const },
+          take: 1,
+          select: {
+            id: true, bookingNo: true, status: true, kuaidicom: true, kuaidinum: true, dayType: true, pickupDate: true, pickupStart: true, pickupEnd: true,
+            courierName: true, courierMobile: true, customerFeeFen: true, quotedFeeFen: true, prepaidFeeFen: true, settledFeeFen: true, billedWeightG: true,
+            weightG: true, failReason: true, activeOrderId: true,
+          },
+        },
       },
     })
     if (!order) throw new AppError(40401, '订单不存在', 404)
@@ -245,6 +255,8 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
     if (!['PAID', 'PREPARING'].includes(order.status)) {
       throw new AppError(42204, `订单状态为 ${order.status}，仅待接单/备餐中订单可发货`)
     }
+    const activeBooking = await prisma.expressBooking.findFirst({ where: { activeOrderId: id }, select: { status: true } })
+    if (activeBooking) throw new AppError(42264, `该订单有取件预约（${BOOKING_STATUS_LABEL[activeBooking.status] ?? activeBooking.status}），请先取消预约再手填单号`)
 
     const shippedAt = new Date()
     const result = await prisma.$transaction(async (tx) => {
