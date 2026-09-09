@@ -25,6 +25,7 @@ import {
 import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
+import VersionBanner from '../components/VersionBanner'
 import ExpressBookingModal, { DAYS, HOURS, slotError } from '../components/ExpressBookingModal'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useIsPhone } from '../hooks/useIsPhone'
@@ -1025,9 +1026,9 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
-      {/* 尾号与单号同行：骑手在柜台报的是手机尾号，店员对袋子时不用翻抽屉 */}
+      {/* 尾号与单号同行：骑手/快递员在柜台报的是手机尾号，两个渠道都要 */}
       <div className="wb__no">
-        <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{local && card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
+        <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
         <b>¥{yuan(card.amountFen)}</b>
       </div>
       <div className="wb__items">{itemsSummary(card.items, card.channel)}</div>
@@ -1784,7 +1785,7 @@ export default function Workbench() {
               {local ? <Bike className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
               {local ? '同城配送' : '全国邮寄'}
             </span>
-            <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{local && card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
+            <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
 
@@ -2158,6 +2159,7 @@ export default function Workbench() {
 
   return (
     <div className={`wb ${focus ? 'wb--focus' : ''}`} data-theme={theme ?? undefined} ref={rootRef}>
+      <VersionBanner />
       {isPhone ? (
         <PhoneTopBar
           snap={snap} shopName={settings?.store.name || '接单工作台'}

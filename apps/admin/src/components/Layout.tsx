@@ -8,6 +8,7 @@ import { useAuthStore } from '../store/auth'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useUnsavedSettings } from './UnsavedSettings'
 import { activeNavLabel, mainNavigation, topNavigation, workbenchNav } from '../navigation'
+import VersionBanner from './VersionBanner'
 
 /**
  * 图标按 to 取，不写进 navigation.ts —— 那个模块要能被 node --test 直接加载，
@@ -94,6 +95,7 @@ export default function Layout() {
 
   return (
     <div className="relative flex h-screen flex-col bg-gray-100">
+      <VersionBanner />
       <header className="relative z-30 flex h-14 shrink-0 items-center gap-3 border-b border-gray-100 bg-white px-3 shadow-sm md:px-4">
         <NavLink
           to="/dashboard"

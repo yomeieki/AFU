@@ -11,6 +11,7 @@ import kdExpressCallbackRouter from './routes/kd-express-callback'
 import prisma from './utils/prisma'
 import { notifySystemAlert } from './services/notify'
 import { startScheduler } from './services/scheduler'
+import { APP_VERSION } from './utils/app-version'
 
 const app = express()
 const PORT = config.port
@@ -35,6 +36,9 @@ app.use(
         : {}
   )
 )
+
+// 每个响应带版本头：后台据此发现自己是发版前的旧包（见 apps/admin/src/store/version.ts）
+app.use((_req, res, next) => { res.setHeader('X-App-Version', APP_VERSION); next() })
 
 // Mount before express.json() so wechat-pay notify receives raw body for signature verification
 app.post('/api/wechat/pay/notify', express.text({ type: '*/*' }), wechatPayNotifyHandler)
@@ -86,6 +90,7 @@ process.on('uncaughtException', (err) => {
 app.listen(PORT, () => {
   console.log(`[server] running on http://localhost:${PORT}`)
   console.log(`[server] env: ${config.nodeEnv}`)
+  console.log(`[server] version: ${APP_VERSION}`)
   startScheduler()
   if (config.isProduction) {
     // 生产启动打点：频繁收到即说明重启风暴

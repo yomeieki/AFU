@@ -397,6 +397,7 @@ nginx -t && nginx -s reload
   curl -s -D- -o /dev/null -H 'Accept-Encoding: gzip' https://api.yuegui-hotel.online/api/products | grep -i content-encoding
   ```
 - `location /uploads/` 存量本地图片过渡期直出；COS 迁移完成一个部署周期后可删
+- `location = /index.html` 给 `Cache-Control: no-cache`（`/assets/` 保持 `immutable` 一年不变）；子 location 里写 `add_header` 不再继承 server 级安全头，模板里重复了 `X-Frame-Options`/`X-Content-Type-Options` 两条。发版后店员挂着的后台页面会在 30 秒内看到「后台已更新」横幅，切回前台自动刷新；本次上线前生产 nginx 要按模板补这一段。
 
 ### 部署后回调链路演练（curl，不依赖真实骑手触发）
 
