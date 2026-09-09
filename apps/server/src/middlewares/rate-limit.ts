@@ -161,8 +161,10 @@ export const kdCallbackLimiter = rateLimit({
   message: { result: true, returnCode: '200', message: '请求过于频繁，请稍后再试' },
 })
 
-/** 邮寄取件回调限流。被限流时回 503 让快递100 重推——同城那条回 200 成功形状会让回调静默丢失（memory 里记过） */
+/** 邮寄取件回调限流。被限流时回 503 让快递100 重推——同城那条回 200 成功形状会让回调静默丢失（memory 里记过）。
+ *  状态回调（/kd-express/:bookingNo）和轨迹回调（/kd-express/:bookingNo/track）共用这一个桶，
+ *  120/min 在两条都在推的时候太紧，503 只是让快递100 延迟重推、不丢数据，上调到 300/min。 */
 export const kdExpressCallbackLimiter = rateLimit({
-  windowMs: 60 * 1000, limit: devCeiling(120, 2000), standardHeaders: true, legacyHeaders: false,
+  windowMs: 60 * 1000, limit: devCeiling(300, 2000), standardHeaders: true, legacyHeaders: false,
   statusCode: 503, message: { result: false, returnCode: '503', message: '请求过于频繁，请稍后重推' },
 })

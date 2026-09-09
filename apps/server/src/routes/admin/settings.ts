@@ -6,6 +6,7 @@
 
 import { Router } from 'express'
 import { z } from 'zod'
+import { config } from '../../config'
 import { getMemberSettings, setMemberSettings } from '../../services/member/settings'
 import { AppError } from '../../middlewares/error'
 import {
@@ -38,15 +39,19 @@ router.get('/shipping', async (_req, res, next) => {
   }
 })
 
-router.put('/shipping', async (req, res, next) => {
-  try {
-    const body = shippingSchema.parse(req.body)
-    const merged = applyLegacyShipping(await getExpressSettings(), body)
-    res.json({ code: 0, message: 'ok', data: legacyShippingView(await setExpressSettings(merged)) })
-  } catch (e) {
-    next(e)
-  }
-})
+// 写侧只在非生产挂载：applyLegacyShipping 会把全店切回 TABLE 一口价并抹平分组表（2026-09-09 线上事故），
+// 生产只留 GET 兼容视图；e2e（dev 端口）仍靠 PUT 造一口价基线。
+if (!config.isProduction) {
+  router.put('/shipping', async (req, res, next) => {
+    try {
+      const body = shippingSchema.parse(req.body)
+      const merged = applyLegacyShipping(await getExpressSettings(), body)
+      res.json({ code: 0, message: 'ok', data: legacyShippingView(await setExpressSettings(merged)) })
+    } catch (e) {
+      next(e)
+    }
+  })
+}
 
 // 数值范围与结构在此校验；templateId 是否存在且为 NEWCOMER 模板，业务语义更重，交给
 // setMemberSettings 去查库校验（返回 40001，见 services/member/settings.ts）

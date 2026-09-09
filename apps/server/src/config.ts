@@ -150,8 +150,9 @@ if (isProduction) {
     process.exit(1)
   }
 
-  // 邮寄取件回调（bOrder 的 callBackUrl / pollCallBackUrl）各限长 200；最坏的是轨迹那条 E999999-99/track，它过了状态回调也过。
-  const worstKdExpressUrl = `${publicBaseUrl}/api/kd-express/E999999-99/track`
+  // 邮寄取件回调（bOrder 的 callBackUrl / pollCallBackUrl）各限长 200；最坏的是轨迹那条 E9999999999-999/track，它过了状态回调也过。
+  // bookingNo = E${orderId}-${seq}：订单号按十位数上界估、同订单重约次数按三位数上界估。
+  const worstKdExpressUrl = `${publicBaseUrl}/api/kd-express/E9999999999-999/track`
   const worstKdExpressUrlBytes = Buffer.byteLength(worstKdExpressUrl)
   if (worstKdExpressUrlBytes > 200) {
     console.error(`[config] 快递100 邮寄回调 URL 超长（${worstKdExpressUrlBytes} > 200）：${worstKdExpressUrl}，服务拒绝启动`)

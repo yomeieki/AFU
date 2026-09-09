@@ -301,16 +301,6 @@ export interface Banner {
   updatedAt: string
 }
 
-/** 运费规则。金额单位「分」，与订单接口一致。 */
-export interface ShippingSettings {
-  /** 运费（分）。0 = 不收运费 */
-  fee: number
-  /** 满额包邮门槛（分），按商品小计判断。0 = 不设门槛 */
-  freeThreshold: number
-  /** 起送金额（分），按商品小计判断。0 = 无门槛 */
-  minOrderAmount: number
-}
-
 /** 邮寄设置（与服务端 services/express-settings.ts 同构；金额分、重量克） */
 export interface RegionGroup { name: string; provinces: string[]; freeShipMinFen: number; tableFirstFen: number; tableOverPerKgFen: number; blocked: boolean }
 export interface ExpressSettings {

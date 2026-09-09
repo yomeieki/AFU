@@ -127,3 +127,41 @@ e2e 断言分布：§56 报价 25、§57 下单 22、§58 预约 38、§59 回�
 4. 验收：店主按 4.3 表跑一遍真单并留档。
 
 以上 1–3 预计一个小批次（一个 SDD 任务组、一次终审），不动同城，不加迁移。
+
+## 六、整改状态（批次四）
+
+> 实施计划：`docs/superpowers/plans/2026-09-09-express-shipping-batch4-closeout.md`。Task 1（Critical，`a897e78`）、Task 2（Important + Minor 批处理 + 文档，本提交）。
+
+### Critical（第 2.1 节）
+
+- **已修（`a897e78`）**：`applyProviderStatus` 内置「13 直达而预约未到 PICKED 时先按 10 走一遍」，三条签收路径（回调/轨迹/对账）共用一处；`reconcileExpressStale` 加「预约已签收但订单仍 PAID/PREPARING」兜底支路，只告警一次不改单；e2e §59 新增⑩、§61 新增⑦b/⑦c；selftest 加一条断言。
+
+### Important（第 2.2 节）
+
+- **已修（本提交）**：`PUT /api/admin/settings/shipping` 写侧改为 `!config.isProduction` 才挂载，生产只保留 GET 兼容视图；删 `apps/admin/src/api/admin.ts` 的 `getShippingSettings`/`updateShippingSettings` 两个死导出，随之 `apps/admin/src/types.ts` 的 `ShippingSettings` 类型（唯一引用点消失）一并删除；`docs/api.md:1597` 措辞改为「写侧仅非生产环境挂载（e2e 用），生产只保留 GET 兼容视图」。
+
+### Minor 批处理（第 2.3 节，逐条）
+
+| # | 问题 | 状态 | 说明 |
+|---|---|---|---|
+| 1 | 快照保鲜以 `order.createdAt` 为基准，实际报价可能早 30 分钟 | 未修（按 Q3 默认改口） | 不改快照结构记 `quotedAt`，改为缩短 `BOOKING_QUOTE_STALE_MS` 到 90 分钟收窄误差窗口 |
+| 1 | 只有 1 家回价时快照仍存那 1 条，预约弹窗首屏只显示一家有价 | 已修（本提交） | `getBookingQuotes` 复用条件加「有价家数 `snap.quotes.filter(priceFen>0).length >= s.fee.minQuoteCount`」，家数不够就现查 |
+| 1 | 快照 quotes 类型断言含 `defPriceFen` 但实际不存 | 未修 | 不在本批白名单（`express-booking.ts` 仅限改 `BOOKING_QUOTE_STALE_MS`/复用条件/42225 文案三处），类型收窄留给下一次改动该文件时顺手做 |
+| 4 | `express-booking.ts` 两处 Shipment upsert 无 `activeOrderId` 守卫（靠上下文保证） | 未修 | 同上，不在本批白名单内；现状靠调用上下文保证正确，风险未升级，留待下次触碰该文件时一并加 |
+| 5 | PAID（未接单）也显示「商家备货中」物流卡 | **不改**（Q5 默认） | spec §4.2 明确写 PAID/PREPARING 都显示，审核建议与 spec 冲突，以 spec 为准 |
+| 5 | 预约卡里的 `shipment.remark` 行恒不显示（预约路径不写 remark） | 已修（本提交） | 删 `apps/miniapp/pages/order/detail.wxml` 预约卡（`order.showExpressStage`）内的三行 |
+| 7 | 未取件提醒与对账无进展提醒同一 tick 双发 | 已修（`a897e78`，按 Q2 默认） | 保留两条任务；`reconcileStaleBooking` 对已发过未取件提醒的预约不再发对账无进展提醒（打标照旧，只抑制通知，避免与 §61 既有断言冲突） |
+| 7 | UNKNOWN 认领后同一 tick 对账再查一次 detail | 未修（可忽略） | 审核原文已判定「可忽略」，本批未处理 |
+| 8 | 42225 文案用字符数、比较用字节数；启动自检假设订单号 ≤ 6 位；回调限流 120/min 状态+轨迹共用 | 已修（本提交，按 Q4 默认） | 文案改 `Buffer.byteLength`；`worstKdExpressUrl` 上界改 `E9999999999-999`（订单号十位、序号三位）；`kdExpressCallbackLimiter` 限流上调到 300/min |
+| 9 | `42210`、`42225` 未列入 api.md 邮寄章节 | 已修（本提交，按 Q6 默认） | `docs/api.md` 邮寄错误码表补两行；`42225` 不换码（客户端契约不动，只补文档） |
+
+### 未决歧义 Q1–Q6 的默认（均已按默认执行，未有人工改判）
+
+| # | 默认 | 落地 |
+|---|---|---|
+| Q1 | 只检测 + 一次性告警，不自动改订单状态 | `reconcileStaleBooking` DELIVERED 分支只打 `staleRemindedAt`、发告警，不动 `orders.status`（`a897e78`） |
+| Q2 | 保留两条任务，对账方对已发过未取件提醒的预约不再发无进展提醒 | 同上，打标不变、只抑制通知（`a897e78`） |
+| Q3 | 缩短 `BOOKING_QUOTE_STALE_MS` 到 90 分钟，不改快照结构 | 本提交 |
+| Q4 | 回调限流上调到 300/min，状态+轨迹共用一桶 | 本提交 |
+| Q5 | 不改 PAID 卡片文案，spec 说了算 | 本批未改 |
+| Q6 | `42225` 不换码，只补文档 | 本提交 |

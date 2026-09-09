@@ -1594,13 +1594,14 @@ e2e 第 48 段用 `has("issuedBy") == false` 锁住。
 | 接口 | 说明 |
 |---|---|
 | `GET/PUT /api/admin/settings/express` | 邮寄设置全量读写，结构见 `services/express-settings.ts` 的 `ExpressSettings`（地区分组、包邮门槛、兜底表、参与定价的快递池、重量参数等）。PUT 先 sanitize 非法输入回落默认值，再 validate；校验失败 `40001`，`message` 是多条错误用「；」连接的字符串。 |
-| `GET/PUT /api/admin/settings/shipping` | **兼容垫片**（`services/settings.ts` 现为迁移用的只读 legacy，`setShippingSettings` 已删除）：GET 返回「其他」组的兼容视图；PUT 把传入的一口价写成「全部分组同一张兜底表 + 同一包邮线」并把 `fee.mode` 切到 `TABLE`。批次二后计划删除，新代码一律走 `settings/express`。 |
+| `GET/PUT /api/admin/settings/shipping` | **兼容垫片**（`services/settings.ts` 现为迁移用的只读 legacy，`setShippingSettings` 已删除）：GET 返回「其他」组的兼容视图；PUT 把传入的一口价写成「全部分组同一张兜底表 + 同一包邮线」并把 `fee.mode` 切到 `TABLE`。写侧仅非生产环境挂载（e2e 用），生产只保留 GET 兼容视图；新代码一律走 `settings/express`。 |
 | `/api/admin/system/express-mock/{reset,queue,calls}` | 仅 `EXPRESS_PROVIDER_MOCK=true` 时挂载。`POST reset` 清空指令队列、调用记录与服务端报价缓存；`POST queue` Body `{ directive: {kind:'ok', quotes?} \| {kind:'timeout'} \| {kind:'error', code, message?} }`，服务端校验 `kind` 取值与各分支必填字段；`GET calls` 读调用记录，供 e2e/联调断言。 |
 
 ### 错误码
 
 | 码 | 含义 |
 |---|---|
+| 42210 | 邮寄订单未达起送金额（复用同城「未达起送门槛」码值，`ExpressSettings.minOrderAmountFen`；下单时校验，`routes/orders.ts` EXPRESS 分支） |
 | 42260 | 该地区暂不支持邮寄（省级不寄送名单，`ExpressSettings.regionGroups[].blocked`） |
 | 42261 | 运费已更新，请重新确认（`quoteToken` 验签/TTL/地址/清单指纹任一不符；仅在带了 `quoteToken` 时才会报） |
 | 42262 | 收货地址过长（收货地址 `fullAddress` 超过 300 字节，快递100 `recManPrintAddr` 限长） |
@@ -1724,6 +1725,7 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 | 42268 | 快递100 请求超时，状态未变化 —— 取消/改约请求超时，本地状态未回滚，可重试 |
 | 42269 | 取件时段不合规 —— 少于 1 小时、今天的时段未留够 2 小时提前量、顺丰未填时段等（原话由 `validateSlot` 给出） |
 | 42270 | 快递100 下单失败：`<原话>` —— 建预约时业务失败（风控/停派/地址过短/重量超限/余额不足等），不建记录 |
+| 42225 | 回调地址超长（复用同城「呼叫骑手失败」码值，客户端契约不动）—— 建预约时 `callbackUrl`/`pollCallbackUrl` 超过 200 字节，`createBooking` |
 
 ### 顾客端变化：`GET /api/orders/:id`
 

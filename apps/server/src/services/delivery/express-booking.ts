@@ -20,7 +20,7 @@ import { notifyExpressAlert } from '../order-notify'
 import { notifySystemAlert } from '../notify'
 import { parseStoredTrack } from './express-track-json'
 
-export const BOOKING_QUOTE_STALE_MS = 2 * 60 * 60 * 1000
+export const BOOKING_QUOTE_STALE_MS = 90 * 60 * 1000
 const DAY_TYPES = ['今天', '明天', '后天'] as const
 export interface SlotInput { dayType: (typeof DAY_TYPES)[number]; pickupStart: string | null; pickupEnd: string | null }
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -93,7 +93,7 @@ async function orderWeightKg(o: Awaited<ReturnType<typeof loadExpressOrder>>): P
   return calcPackageWeightKg(o.items.map((it) => ({ netWeightG: it.product?.netWeightG ?? null, quantity: it.quantity })), s.weight)
 }
 
-/** 弹窗用：各家报价（快照 2 小时内且重量未变就复用，否则现查）+ 顾客付的运费
+/** 弹窗用：各家报价（快照 90 分钟内、重量未变、有价家数达标就复用，否则现查）+ 顾客付的运费
  *  preloaded：调用方（如 createBooking）已经查过订单/配置时传进来，省一次重复查询。 */
 export async function getBookingQuotes(
   orderId: number,
@@ -107,7 +107,9 @@ export async function getBookingQuotes(
   const fresh = Date.now() - o.createdAt.getTime() < BOOKING_QUOTE_STALE_MS
   // defaultRemark 带给预约弹窗当备注预填（spec §5.2）：跟着这次已经查好的 settings 一起返回，
   // 不用再让前端/路由单独多打一次 GET /api/admin/settings/express。
-  if (snap?.quotes?.length && snap.weightKg === w && fresh) {
+  // 复用快照前还要求「有价家数」达标：报价家数够、但报出来的都是 0（挂了/超区）的快照不该被当成新鲜结果复用。
+  const pricedCount = snap?.quotes?.filter((q) => (q.priceFen ?? 0) > 0).length ?? 0
+  if (snap?.quotes?.length && snap.weightKg === w && fresh && pricedCount >= s.fee.minQuoteCount) {
     return { quotes: snap.quotes, weightKg: w, customerFeeFen: o.shippingFee, fromSnapshot: true, quotedAt: o.createdAt.toISOString(), defaultRemark: s.pickup.defaultRemark }
   }
   const live = (await fetchCourierQuotes(s, 0, o.receiverFullAddress, w, { ignoreMode: true })) ?? []
@@ -133,9 +135,9 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
   const seq = (await prisma.expressBooking.count({ where: { orderId: i.orderId } })) + 1
   const bookingNo = `E${i.orderId}-${seq}`
   const callbackUrl = `${config.publicBaseUrl}/api/kd-express/${bookingNo}`
-  if (Buffer.byteLength(callbackUrl) > 200) throw new AppError(42225, `回调地址超长（${callbackUrl.length}>200），请联系管理员`)
+  if (Buffer.byteLength(callbackUrl) > 200) throw new AppError(42225, `回调地址超长（${Buffer.byteLength(callbackUrl)}>200），请联系管理员`)
   const pollCallbackUrl = `${callbackUrl}/track`
-  if (Buffer.byteLength(pollCallbackUrl) > 200) throw new AppError(42225, `轨迹回调地址超长（${pollCallbackUrl.length}>200），请联系管理员`)
+  if (Buffer.byteLength(pollCallbackUrl) > 200) throw new AppError(42225, `轨迹回调地址超长（${Buffer.byteLength(pollCallbackUrl)}>200），请联系管理员`)
   const callbackSalt = crypto.randomBytes(16).toString('hex')
   // store 放在 create 之前查：create 之后到外呼之间只剩「拼 book() 的入参」，不能再插会抛错的 await
   // ——否则外呼真成功后万一那段代码抛错，这行 PENDING 会一直卡着，既不是「预约失败」也不是「已下单待核对」。
