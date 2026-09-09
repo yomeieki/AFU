@@ -105,6 +105,9 @@ export async function applyProviderStatus(tx: Tx, booking: ExpressBooking & { or
   if (mapped.type === 'rank' && mapped.status === 'DELIVERED' && current.statusRank < BOOKING_RANK.PICKED) {
     // 单独留一条 SYSTEM 事件：外层只记了这条 13 回调，补记的 10 不留痕的话抽屉时间线看不出「为什么突然发货了」
     await recordBookingEvent(tx, { bookingId: current.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', providerStatus: 10, statusDesc: '回调直接签收，补记取件' })
+    // 递归前先把单号同步到 current：递归里「单号一到就同步 Shipment」那段会因为 p.kuaidinum === current.kuaidinum 而跳过，
+    // 避免同一单号在递归里再 upsert 一次 Shipment（真正写 shippedAt 的那次留给递归的 PICKED 分支）
+    current = { ...current, kuaidinum: p.kuaidinum ?? current.kuaidinum }
     await applyProviderStatus(tx, current, { ...p, status: '10', statusDesc: '回调直接签收，补记取件' }, after, costAlertRatio)
     current = { ...current, status: 'PICKED', statusRank: BOOKING_RANK.PICKED, kuaidinum: p.kuaidinum ?? current.kuaidinum }
   }

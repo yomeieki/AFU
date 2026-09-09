@@ -168,31 +168,31 @@ R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "查不到：这次才计�
 assert_eq "查不到后提醒补打标" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN9';")" "SET"
 req POST "/api/admin/express/orders/$X61_O9/booking/cancel" "$AT" '{}' >/dev/null
 echo "-- ⑦b 兜底：预约已签收但订单仍备货 → 对账只告警一次、不改状态 --"
-X61_O7=$(x58_paid_preparing)
-req POST "/api/admin/express/orders/$X61_O7/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}' >/dev/null
-X61_BN7=$(x59_bk "$X61_O7" | jq -r .data.booking.bookingNo)
-x59_cb "$X61_BN7" 10 '{"kuaidinum":"JD-REPAIR"}' >/dev/null; x59_cb "$X61_BN7" 13 '{}' >/dev/null
-assert_eq "前置：预约 DELIVERED" "$(x59_bk "$X61_O7" | jq -r .data.booking.status)" "DELIVERED"
-sql "UPDATE orders SET status='PREPARING', completed_at=NULL WHERE id=$X61_O7;"
+X61_O10=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O10/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}' >/dev/null
+X61_BN10=$(x59_bk "$X61_O10" | jq -r .data.booking.bookingNo)
+x59_cb "$X61_BN10" 10 '{"kuaidinum":"JD-REPAIR"}' >/dev/null; x59_cb "$X61_BN10" 13 '{}' >/dev/null
+assert_eq "前置：预约 DELIVERED" "$(x59_bk "$X61_O10" | jq -r .data.booking.status)" "DELIVERED"
+sql "UPDATE orders SET status='PREPARING', completed_at=NULL WHERE id=$X61_O10;"
 R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "兜底不推进（只告警）" "$(jq -r '.data.expressStale // -1' <<<"$R")" "0"
-assert_eq "兜底：订单仍 PREPARING（不自动改）" "$(order_status $X61_O7)" "PREPARING"
-assert_eq "兜底：已打一次性告警标记" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN7';")" "SET"
-X61_REM7=$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no='$X61_BN7';")
+assert_eq "兜底：订单仍 PREPARING（不自动改）" "$(order_status $X61_O10)" "PREPARING"
+assert_eq "兜底：已打一次性告警标记" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN10';")" "SET"
+X61_REM10=$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no='$X61_BN10';")
 R=$(sched '{"expressStaleIntervalMin":0}')
-assert_eq "兜底：第二次 tick 不再告警（标记不变）" "$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no='$X61_BN7';")" "$X61_REM7"
-sql "UPDATE orders SET status='COMPLETED', completed_at=NOW() WHERE id=$X61_O7;"
+assert_eq "兜底：第二次 tick 不再告警（标记不变）" "$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no='$X61_BN10';")" "$X61_REM10"
+sql "UPDATE orders SET status='COMPLETED', completed_at=NOW() WHERE id=$X61_O10;"
 echo "-- ⑦c 未取件提醒先发，对账无进展不重复提醒 --"
-X61_O8=$(x58_paid_preparing)
-req POST "/api/admin/express/orders/$X61_O8/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
-X61_BN8=$(x59_bk "$X61_O8" | jq -r .data.booking.bookingNo)
-sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN8';"
+X61_O11=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O11/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
+X61_BN11=$(x59_bk "$X61_O11" | jq -r .data.booking.bookingNo)
+sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN11';"
 R=$(sched '{"expressUnpickedMin":0,"expressStaleIntervalMin":9999}'); assert_eq "未取件提醒 1 条" "$(jq -r '.data.expressUnpicked // -1' <<<"$R")" "1"
 req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":false}}' >/dev/null
 R=$(sched '{"expressStaleIntervalMin":0}')
-assert_eq "对账无结论：照旧打标（通知被抑制由代码复核确认）" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN8';")" "SET"
-assert_eq "前置成立：未取件提醒确实先打过标" "$(sql "SELECT IF(unpicked_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN8';")" "SET"
-assert_eq "对账确实查过（计次 ≥ 1；首轮 tick 里 expressStale 也会占坑一次，所以不断言恰好 1）" "$(sql "SELECT stale_tries >= 1 FROM express_bookings WHERE booking_no='$X61_BN8';")" "1"
-req POST "/api/admin/express/orders/$X61_O8/booking/cancel" "$AT" '{}' >/dev/null
+assert_eq "对账无结论：照旧打标（通知被抑制由代码复核确认）" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN11';")" "SET"
+assert_eq "前置成立：未取件提醒确实先打过标" "$(sql "SELECT IF(unpicked_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN11';")" "SET"
+assert_eq "对账确实查过（计次 ≥ 1；首轮 tick 里 expressStale 也会占坑一次，所以不断言恰好 1）" "$(sql "SELECT stale_tries >= 1 FROM express_bookings WHERE booking_no='$X61_BN11';")" "1"
+req POST "/api/admin/express/orders/$X61_O11/booking/cancel" "$AT" '{}' >/dev/null
 req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
 
 X61_KEEP_O=$X61_O   # DELIVERED，留给 §62/工作台走查

@@ -116,7 +116,8 @@ export async function reconcileExpressStale(intervalMin = 30, pickedDays = 10): 
       { status: { in: ['BOOKED', 'ACCEPTED'] }, AND: [{ OR: [{ pickupDate: { lt: cutDate } }, { pickupDate: cutDate, pickupEnd: { lte: nowHm } }] }, due] },
       { status: 'PICKED', pickedAt: { lt: ago(pickedDays * 24 * 60) }, AND: [due] },
       // C. 预约已签收但订单还停在备货：历史上「漏推 10 直推 13」留下的孤儿单（T1 之后不再产生）。只告警不改单。
-      { status: 'DELIVERED', staleRemindedAt: null, order: { status: { in: ['PAID', 'PREPARING'] } } },
+      // 终态只增不减，不能每分钟全表扫：加 30 天签收时间窗，配合 due 的 staleTries/staleCheckedAt 节流。
+      { status: 'DELIVERED', staleRemindedAt: null, deliveredAt: { gt: ago(30 * 24 * 60) }, order: { status: { in: ['PAID', 'PREPARING'] } }, AND: [due] },
     ] },
     take: BATCH, select: { id: true, staleCheckedAt: true },
   })
