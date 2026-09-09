@@ -18,6 +18,7 @@ import { BOOKING_ACTIVE, BOOKING_RANK, BOOKING_STATUS_LABEL } from './express-bo
 import { recordBookingEvent, adminBookingEventKey, truncStr } from './express-events'
 import { notifyExpressAlert } from '../order-notify'
 import { notifySystemAlert } from '../notify'
+import { parseStoredTrack } from './express-track-json'
 
 export const BOOKING_QUOTE_STALE_MS = 2 * 60 * 60 * 1000
 const DAY_TYPES = ['今天', '明天', '后天'] as const
@@ -60,6 +61,7 @@ export interface BookingView {
   weightKg: number; customerFeeFen: number; quotedFeeFen: number | null; prepaidFeeFen: number | null; settledFeeFen: number | null; billedWeightG: number | null
   courierName: string | null; courierMobile: string | null; failReason: string | null; cancelledBy: string | null
   bookedAt: string | null; acceptedAt: string | null; pickedAt: string | null; deliveredAt: string | null; cancelledAt: string | null
+  trackStatus: string | null; trackUpdatedAt: string | null; trackCount: number; latestTrack: { context: string; ftime: string } | null
 }
 const iso = (d: Date | null) => (d ? d.toISOString() : null)
 export function bookingView(b: ExpressBooking): BookingView {
@@ -72,6 +74,9 @@ export function bookingView(b: ExpressBooking): BookingView {
     weightKg: b.weightG / 1000, customerFeeFen: b.customerFeeFen, quotedFeeFen: b.quotedFeeFen, prepaidFeeFen: b.prepaidFeeFen, settledFeeFen: b.settledFeeFen, billedWeightG: b.billedWeightG,
     courierName: b.courierName, courierMobile: b.courierMobile, failReason: b.failReason, cancelledBy: b.cancelledBy,
     bookedAt: iso(b.bookedAt), acceptedAt: iso(b.acceptedAt), pickedAt: iso(b.pickedAt), deliveredAt: iso(b.deliveredAt), cancelledAt: iso(b.cancelledAt),
+    trackStatus: b.trackStatus, trackUpdatedAt: iso(b.trackUpdatedAt),
+    trackCount: parseStoredTrack(b.trackJson)?.items.length ?? 0,
+    latestTrack: parseStoredTrack(b.trackJson)?.items[0] ?? null,
   }
 }
 
@@ -128,6 +133,8 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
   const bookingNo = `E${i.orderId}-${seq}`
   const callbackUrl = `${config.publicBaseUrl}/api/kd-express/${bookingNo}`
   if (Buffer.byteLength(callbackUrl) > 200) throw new AppError(42225, `回调地址超长（${callbackUrl.length}>200），请联系管理员`)
+  const pollCallbackUrl = `${callbackUrl}/track`
+  if (Buffer.byteLength(pollCallbackUrl) > 200) throw new AppError(42225, `轨迹回调地址超长（${pollCallbackUrl.length}>200），请联系管理员`)
   const callbackSalt = crypto.randomBytes(16).toString('hex')
   // store 放在 create 之前查：create 之后到外呼之间只剩「拼 book() 的入参」，不能再插会抛错的 await
   // ——否则外呼真成功后万一那段代码抛错，这行 PENDING 会一直卡着，既不是「预约失败」也不是「已下单待核对」。
@@ -152,7 +159,7 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
       sender: { name: store.name, mobile: store.phone, addr: `${store.province}${store.city}${store.district}${store.address}` },
       receiver: { name: o.receiverName, mobile: o.receiverPhone, addr: o.receiverFullAddress },
       cargo: s.pickup.cargoName, weightKg, remark: row.remark, dayType: i.slot.dayType, pickupStart: i.slot.pickupStart, pickupEnd: i.slot.pickupEnd,
-      callbackUrl, pollCallbackUrl: callbackUrl + '/track', salt: callbackSalt,
+      callbackUrl, pollCallbackUrl, salt: callbackSalt,
     })
   } catch (e) {
     if (e instanceof ProviderError && e.kind === 'TIMEOUT') {

@@ -10,10 +10,13 @@ export const truncStr = (s: string | null | undefined, n: number): string | null
 export function makeExpressDedupeKey(bookingNo: string, providerStatus: string, rawBody: string): string {
   return `CB:${bookingNo}:${providerStatus}:${md5hex(rawBody)}`.slice(0, 64)
 }
+export function makeExpressTrackDedupeKey(bookingNo: string, status: string, rawBody: string): string {
+  return `TR:${bookingNo}:${status}:${md5hex(rawBody)}`.slice(0, 64)
+}
 export function adminBookingEventKey(): string { return `ADM:${crypto.randomUUID()}`.slice(0, 64) }
 
 export interface RecordBookingEventInput {
-  bookingId: number; dedupeKey: string; source: 'CALLBACK' | 'ADMIN' | 'SYSTEM'
+  bookingId: number; dedupeKey: string; source: 'CALLBACK' | 'ADMIN' | 'SYSTEM' | 'TRACK'
   providerStatus?: number | null; statusDesc?: string | null; courierName?: string | null; courierMobile?: string | null
   operator?: string | null; rawPayload?: Prisma.InputJsonValue | null
 }

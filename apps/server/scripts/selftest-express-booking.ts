@@ -110,7 +110,7 @@ await t('回调验签：param 解出数组视为 BAD_PARAM', () => {
 })
 await t('mock：book 默认成功返 taskId/kdOrderId/单号（韵达单号为空）；指令 timeout/error；calls 按 op 过滤', async () => {
   resetExpressMock()
-  const base = { bookingNo: 'E1-1', sender: { name: 'a', mobile: '1', addr: 'x' }, receiver: { name: 'b', mobile: '2', addr: 'y' }, cargo: '食品', weightKg: 1, callbackUrl: 'u', salt: 's' }
+  const base = { bookingNo: 'E1-1', sender: { name: 'a', mobile: '1', addr: 'x' }, receiver: { name: 'b', mobile: '2', addr: 'y' }, cargo: '食品', weightKg: 1, callbackUrl: 'u', pollCallbackUrl: 'http://x/api/kd-express/E1-1/track', salt: 's' }
   const r = await expressMockProvider.book({ ...base, kuaidicom: 'jd' })
   assert.ok(r.taskId && r.kdOrderId && r.kuaidinum && r.kuaidinum.startsWith('JD'))
   const y = await expressMockProvider.book({ ...base, bookingNo: 'E1-2', kuaidicom: 'yunda' })
@@ -181,7 +181,9 @@ await t('轨迹 param 解析：最新在上、缺字段剔除、ischeck/state �
   assert.deepStrictEqual(_parseTrackParam({ status: 'abort', message: '单号不存在' }).items, [])
   assert.strictEqual(_parseTrackParam({ status: 'abort', message: '单号不存在' }).message, '单号不存在')
   const many = Array.from({ length: 60 }, (_, i) => ({ context: `c${i}`, ftime: `2026-09-10 ${String(i % 24).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00` }))
-  assert.strictEqual(_parseTrackParam({ status: 'polling', lastResult: { data: many } }).items.length, TRACK_MAX_ITEMS)
+  const manyParsed = _parseTrackParam({ status: 'polling', lastResult: { data: many } })
+  assert.strictEqual(manyParsed.items.length, TRACK_MAX_ITEMS)
+  assert.strictEqual(manyParsed.items[0].context, 'c47')   // 最大 ftime（23:47）在原 60 条里排第 48 个，若先切 50 再排序会漏掉——钉住「先排序再截断」
   // lastResult 是数组/字符串这类脏形状不抛错
   assert.deepStrictEqual(_parseTrackParam({ status: 'polling', lastResult: [1, 2] }).items, [])
   assert.deepStrictEqual(_parseTrackParam({ status: 'polling', lastResult: 'x' }).items, [])

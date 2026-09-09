@@ -26,6 +26,7 @@ import { DELIVERY_STATUS_LABEL, providerLabel } from '../services/delivery/state
 import { enqueueOrderTicket } from '../services/ticket'
 import { getCourierLocationByOrder } from '../services/delivery/courier-location'
 import { bookingView } from '../services/delivery/express-booking'
+import { parseStoredTrack } from '../services/delivery/express-track-json'
 import { settlePoints } from '../services/member/points'
 import { allocateOrderNo } from '../services/order-no'
 
@@ -668,11 +669,15 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     // 顾客白名单：不给手机号、不给费用（同城 customerDeliveryView 同一原则）。
     // FAILED/VOID 对顾客等同「没预约」；CANCELLED 也下发，顾客端按「商家备货中」显示（Task 7 处理）。
     let expressBooking: { status: string; statusLabel: string; courierLabel: string; courierName: string | null; slotText: string; kuaidinum: string | null } | null = null
+    let track: { updatedAt: string | null; signed: boolean; items: { context: string; ftime: string }[] } | null = null
     if (order.deliveryType === 'EXPRESS') {
       const b = await prisma.expressBooking.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' } })
       if (b && !['FAILED', 'VOID'].includes(b.status)) {
         const v = bookingView(b)
         expressBooking = { status: v.status, statusLabel: v.statusLabel, courierLabel: v.courierLabel, courierName: v.courierName, slotText: v.slotText, kuaidinum: v.kuaidinum }
+        // 轨迹只给非取消的预约；最多 30 条、最新在上（服务端已排好序）。老邮寄单/同城单没有预约行，自然是 null。
+        const st = b.status !== 'CANCELLED' ? parseStoredTrack(b.trackJson) : null
+        if (st && st.items.length) track = { updatedAt: b.trackUpdatedAt ? b.trackUpdatedAt.toISOString() : null, signed: st.ischeck, items: st.items.slice(0, 30) }
       }
     }
     // 券只在详情页带，列表不带——列表带就是 N+1（Order.couponId 是普通 Int 列，
@@ -695,6 +700,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       subscribeTemplateIds: getSubscribeTemplateIds(),
       delivery,
       expressBooking,
+      track,
     })
   } catch (e) {
     next(e)
