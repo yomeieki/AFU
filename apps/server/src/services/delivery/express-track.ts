@@ -1,14 +1,14 @@
 /**
  * 快递100 轨迹推送（pollCallBackUrl）落库。轨迹是「展示层」事实：trackJson 整体覆盖，不逐条合并。
- * 只有「签收」推进预约状态——若还停在 BOOKED/ACCEPTED（10 没推到），先按 10 走一遍让订单 SHIPPED、
- * 发发货通知，再按 13 收尾；两步都复用批次二的 applyProviderStatus，状态机规则只有一份。
+ * 只有「签收」推进预约状态：按 13 交给 applyProviderStatus；若预约还没到 PICKED（10 没推到），
+ * 「先补一步 10」让订单 SHIPPED、发发货通知已内置在 applyProviderStatus 里（批次四），三条签收
+ * 路径（回调 / 轨迹 / 对账）共用同一处状态机规则，这里不用再自己走两步。
  * 顺序同状态回调：查单 → 验签 → 事务内去重留痕 → 写 JSON → 签收推进 → 事务外通知。
  */
 import { ExpressBooking, Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { verifyAndParseExpressTrack, ExpressTrackPayload, ExpressCallbackPayload } from './express-callback-sign'
 import { recordBookingEvent, makeExpressTrackDedupeKey } from './express-events'
-import { BOOKING_RANK } from './express-booking-state'
 import { applyProviderStatus } from './express-callback'
 import { toStoredTrack, parseStoredTrack, trackAlertKinds } from './express-track-json'
 import { notifySystemAlert } from '../notify'
@@ -16,8 +16,6 @@ import { notifyExpressAlert } from '../order-notify'
 import { getExpressSettings, COURIER_LABEL } from '../express-settings'
 
 const NO_TRACK_STATUSES = ['CANCELLED', 'FAILED', 'VOID']
-
-type BookingWithOrder = ExpressBooking & { order: { orderNo: string; user: { openid: string }; items: { productName: string }[] } }
 
 export async function handleExpressTrackCallback(bookingNo: string, body: Record<string, string>): Promise<{ http: 200 | 500 }> {
   const rawBody = JSON.stringify(body)
@@ -59,14 +57,9 @@ export async function handleExpressTrackCallback(bookingNo: string, body: Record
         }
       }
       if (!p.ischeck || booking.status === 'DELIVERED') return
-      // 签收 = 取件 + 签收两件事都成立：没到 PICKED 的先按 10 走一遍（订单 SHIPPED、Shipment、发货通知），再按 13 收尾
-      const steps = booking.statusRank < BOOKING_RANK.PICKED ? ['10', '13'] : ['13']
-      let cur: BookingWithOrder = booking
-      for (const s of steps) {
-        await applyProviderStatus(tx, cur, syntheticPayload(cur, p, s), after, costAlertRatio)
-        const st = s === '10' ? 'PICKED' : 'DELIVERED'
-        cur = { ...cur, status: st, statusRank: BOOKING_RANK[st], kuaidinum: p.nu ?? cur.kuaidinum }
-      }
+      // 签收 = 取件 + 签收：预约还没到 PICKED 时的「先补一步 10」已内置在 applyProviderStatus（批次四），
+      // 三条签收路径（回调 / 轨迹 / 对账）共用一处，这里只按 13 走一遍
+      await applyProviderStatus(tx, booking, syntheticPayload(booking, p, '13'), after, costAlertRatio)
     })
   } catch (e) {
     console.error('[kd-express-track] 处理失败:', e)

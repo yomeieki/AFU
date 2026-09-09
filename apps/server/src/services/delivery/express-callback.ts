@@ -104,11 +104,11 @@ export async function applyProviderStatus(tx: Tx, booking: ExpressBooking & { or
   // 且 7 天自动完成 / 对账任务 / 未取件提醒都够不到它。三条签收路径（回调 / 轨迹 / 对账）都经过这里，只修一处。
   if (mapped.type === 'rank' && mapped.status === 'DELIVERED' && current.statusRank < BOOKING_RANK.PICKED) {
     // 单独留一条 SYSTEM 事件：外层只记了这条 13 回调，补记的 10 不留痕的话抽屉时间线看不出「为什么突然发货了」
-    await recordBookingEvent(tx, { bookingId: current.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', providerStatus: 10, statusDesc: '回调直接签收，补记取件' })
+    await recordBookingEvent(tx, { bookingId: current.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', providerStatus: 10, statusDesc: '签收到达而预约未取件，补记取件' })
     // 递归前先把单号同步到 current：递归里「单号一到就同步 Shipment」那段会因为 p.kuaidinum === current.kuaidinum 而跳过，
     // 避免同一单号在递归里再 upsert 一次 Shipment（真正写 shippedAt 的那次留给递归的 PICKED 分支）
     current = { ...current, kuaidinum: p.kuaidinum ?? current.kuaidinum }
-    await applyProviderStatus(tx, current, { ...p, status: '10', statusDesc: '回调直接签收，补记取件' }, after, costAlertRatio)
+    await applyProviderStatus(tx, current, { ...p, status: '10', statusDesc: '签收到达而预约未取件，补记取件' }, after, costAlertRatio)
     current = { ...current, status: 'PICKED', statusRank: BOOKING_RANK.PICKED, kuaidinum: p.kuaidinum ?? current.kuaidinum }
   }
   if (mapped.type === 'rank') {

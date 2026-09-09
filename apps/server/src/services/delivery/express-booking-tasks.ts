@@ -133,12 +133,12 @@ export async function reconcileExpressStale(intervalMin = 30, pickedDays = 10): 
 
 /**
  * detail 是单条快照，不是回调流——BOOKED/ACCEPTED 单（时段过期未取件那类）如果快递100 已经跳到
- * 在途/派送中/签收（101/400/13），说明「10 揽收」那条回调八成没推到：如果直接把这条快照套给
- * applyProviderStatus，13 会让预约越过 PICKED 直接 DELIVERED，但订单联动的 `where status='SHIPPED'`
- * 扑空（订单还停在 PREPARING），Shipment 没有 shippedAt、发货提醒也没发；101/400 是 IGNORE，
- * 状态原地不动，还会被判成「无进展」发一条文案错误的提醒（明明已经在途/签收了却说「无取件回调」）。
- * 与 express-track.ts 处理签收轨迹同一手法：没到 PICKED 的先补一步「10」把取件相关的订单联动、
- * 发货通知都走一遍，再套真正的状态；两步共用同一次 detail 快照，cur 在两步之间原样再派生。
+ * 在途/派送中（101/400），说明「10 揽收」那条回调八成没推到：这两个是 IGNORE 状态，套给
+ * applyProviderStatus 后状态原地不动，还会被判成「无进展」发一条文案错误的提醒（明明已经在途了
+ * 却说「无取件回调」），订单也迟迟不 SHIPPED。所以先补一步「10」把取件相关的订单联动、发货通知
+ * 都走一遍，再套真正的状态；两步共用同一次 detail 快照，cur 在两步之间原样再派生。
+ * （13/签收的补记已内置在 applyProviderStatus 里——回调 / 轨迹 / 对账三条签收路径共用一处，这里
+ * 直接把 13 套给它就够，不用再自己判断要不要补 10。）
  */
 export async function reconcileStaleBooking(bookingId: number, pickedDays = 10): Promise<'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND' | 'ERROR'> {
   const b = await prisma.expressBooking.findUnique({ where: { id: bookingId }, include: orderInclude })
@@ -167,7 +167,8 @@ export async function reconcileStaleBooking(bookingId: number, pickedDays = 10):
     const { costAlertRatio } = await getExpressSettings()
     const after: (() => void)[] = []
     const orderStatusBefore = b.order.status
-    const needsPickBackfill = b.statusRank < BOOKING_RANK.PICKED && ['13', '101', '400'].includes(status)
+    // 13（签收）的补记已内置在 applyProviderStatus；这里只管 101/400 这两种「在途但还没取件回调」的 IGNORE 状态
+    const needsPickBackfill = b.statusRank < BOOKING_RANK.PICKED && ['101', '400'].includes(status)
     const steps = needsPickBackfill ? ['10', status] : [status]
     // $transaction 只包裹「已经查到快照」之后的落库；DB 错误让它抛出去，由 reconcileExpressStale
     // 的调用方（调度器每任务 try/catch）记账继续，不要在这里吞掉再误判成「detail 失败」

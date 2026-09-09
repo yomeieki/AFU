@@ -59,6 +59,7 @@ R=$(x59_bk "$X61_O2"); assert_eq "BOOKED 直接签收 → DELIVERED" "$(jq -r .d
 assert_eq "pickedAt 也补上了" "$(jq -r '.data.booking.pickedAt != null' <<<"$R")" "true"
 assert_eq "订单 COMPLETED（经过 SHIPPED）" "$(order_status $X61_O2)" "COMPLETED"
 assert_eq "Shipment 单号取轨迹 nu、有 shippedAt" "$(sql "SELECT CONCAT(express_no,'|',IF(shipped_at IS NULL,'NULL','SET')) FROM shipments WHERE order_id=$X61_O2;")" "JD-TRK-61|SET"
+assert_eq "补记取件留痕只有一条、且来自统一入口（SYSTEM）" "$(sql "SELECT COUNT(*) FROM express_booking_events e JOIN express_bookings b ON b.id=e.booking_id WHERE b.booking_no='$X61_BN2' AND e.provider_status=10 AND e.source='SYSTEM';")" "1"
 
 echo "-- ⑤ abort 只留痕不改状态；取消的预约来轨迹只留痕不写 JSON --"
 X61_O3=$(x58_paid_preparing)
