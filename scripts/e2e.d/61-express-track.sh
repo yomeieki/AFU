@@ -190,7 +190,7 @@ sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WH
 R=$(sched '{"expressUnpickedMin":0,"expressStaleIntervalMin":9999}'); assert_eq "未取件提醒 1 条" "$(jq -r '.data.expressUnpicked // -1' <<<"$R")" "1"
 req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":false}}' >/dev/null
 R=$(sched '{"expressStaleIntervalMin":0}')
-assert_eq "对账无结论：照旧打标（通知被抑制由代码复核确认）" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN11';")" "SET"
+assert_eq "对账查不到该单：照旧打标（通知不再被抑制，见下条）" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN11';")" "SET"
 assert_eq "前置成立：未取件提醒确实先打过标" "$(sql "SELECT IF(unpicked_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN11';")" "SET"
 assert_eq "对账确实查过（计次 ≥ 1；首轮 tick 里 expressStale 也会占坑一次，所以不断言恰好 1）" "$(sql "SELECT stale_tries >= 1 FROM express_bookings WHERE booking_no='$X61_BN11';")" "1"
 assert_eq "查不到该单：即使已发过未取件提醒也留一条 SYSTEM 事件（通知随之发出）" "$(sql "SELECT COUNT(*) FROM express_booking_events e JOIN express_bookings b ON b.id=e.booking_id WHERE b.booking_no='$X61_BN11' AND e.source='SYSTEM' AND e.status_desc LIKE '%查不到该单%';")" "1"

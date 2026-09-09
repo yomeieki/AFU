@@ -9,7 +9,7 @@ async function main() {
   const rows = await prisma.expressBooking.findMany({
     where: { status: 'DELIVERED', order: { status: { in: ['PAID', 'PREPARING'] } } },
     orderBy: { deliveredAt: 'asc' },
-    select: { id: true, bookingNo: true, orderNo: true, orderId: true, kuaidicom: true, kuaidinum: true, deliveredAt: true, staleRemindedAt: true, order: { select: { status: true } } },
+    select: { id: true, bookingNo: true, orderNo: true, kuaidicom: true, kuaidinum: true, deliveredAt: true, staleRemindedAt: true, order: { select: { status: true } } },
   })
   console.log('booking_id\tbooking_no\torder_no\torder_status\tkuaidicom\tkuaidinum\tdelivered_at\treminded')
   for (const r of rows) console.log([r.id, r.bookingNo, r.orderNo, r.order.status, r.kuaidicom, r.kuaidinum ?? '', r.deliveredAt?.toISOString() ?? '', r.staleRemindedAt ? 'Y' : 'N'].join('\t'))

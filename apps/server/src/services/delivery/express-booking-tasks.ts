@@ -178,7 +178,7 @@ export async function reconcileStaleBooking(bookingId: number, pickedDays = 10):
       let cur = b
       for (const s of steps) {
         const synthetic = s === '10' && needsPickBackfill
-        await applyProviderStatus(tx, cur, { status: s, taskId: d.taskId, kdOrderId: d.kdOrderId, kuaidinum: d.kuaidinum, courierName: d.courierName, courierMobile: d.courierMobile, weightKg: null, freightFen: d.freightFen, defPriceFen: null, feeDetails: null, statusDesc: synthetic ? '对账查单：快递100 已在途/已签收，补记取件' : '对账补状态', raw: (d.raw ?? {}) as Record<string, unknown> }, after, costAlertRatio)
+        await applyProviderStatus(tx, cur, { status: s, taskId: d.taskId, kdOrderId: d.kdOrderId, kuaidinum: d.kuaidinum, courierName: d.courierName, courierMobile: d.courierMobile, weightKg: null, freightFen: d.freightFen, defPriceFen: null, feeDetails: null, statusDesc: synthetic ? '对账查单：快递100 已在途/派送中，补记取件' : '对账补状态', raw: (d.raw ?? {}) as Record<string, unknown> }, after, costAlertRatio)
         if (synthetic) cur = { ...cur, status: 'PICKED', statusRank: BOOKING_RANK.PICKED, kuaidinum: d.kuaidinum ?? cur.kuaidinum }
       }
     })
@@ -204,7 +204,7 @@ export async function reconcileStaleBooking(bookingId: number, pickedDays = 10):
         : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
       notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
       if (result === 'NOT_FOUND') {
-        await recordBookingEvent(prisma, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', statusDesc: '对账查单：快递100 查不到该单，已提醒店员核对' })
+        try { await recordBookingEvent(prisma, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', statusDesc: '对账查单：快递100 查不到该单，已提醒店员核对' }) } catch { /* 留痕失败不升级：标记与通知已落，别让这一条炸掉本轮剩余预约 */ }
       }
     }
   }

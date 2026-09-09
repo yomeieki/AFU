@@ -194,7 +194,9 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
       await recordBookingEvent(tx, { bookingId: row.id, dedupeKey: adminBookingEventKey(), source: 'ADMIN', statusDesc: `预约成功 ${COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom}${r.kuaidinum ? ` 单号 ${r.kuaidinum}` : '（单号待回调）'}`, operator: i.operator })
       // 单号一到就写 Shipment（不写 shippedAt、不改订单状态——那是「已取件」回调的事）
       // Shipment 以 orderId 为键，只允许当前活跃预约写
-      if (r.kuaidinum && row.activeOrderId === i.orderId) {
+      // 外呼那几秒里回调可能已把这行推成 FAILED/CANCELLED 并清掉 activeOrderId，重读一次再决定写不写 Shipment
+      const cur = await tx.expressBooking.findUnique({ where: { id: row.id }, select: { activeOrderId: true } })
+      if (r.kuaidinum && cur?.activeOrderId === i.orderId) {
         await tx.shipment.upsert({ where: { orderId: i.orderId }, update: { expressCompany: COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom, expressNo: r.kuaidinum }, create: { orderId: i.orderId, orderNo: o.orderNo, deliveryType: 'EXPRESS', expressCompany: COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom, expressNo: r.kuaidinum } })
       }
     })
