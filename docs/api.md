@@ -1626,7 +1626,7 @@ e2e 第 48 段用 `has("issuedBy") == false` 锁住。
 
 | 接口 | 说明 |
 |---|---|
-| `GET /:id/booking` | 该订单最近一条预约（含是否为「活跃」预约、事件列表）。返回 `{ booking: BookingView \| null, active: boolean, events: [] }`。`BookingView` 含 `status/statusLabel/kuaidicom/courierLabel/serviceType/kuaidinum/dayType/pickupDate/pickupStart/pickupEnd/slotText/weightKg/customerFeeFen/quotedFeeFen/prepaidFeeFen/settledFeeFen/billedWeightG/courierName/courierMobile/failReason/cancelledBy` 及各阶段时间戳。`active` 为 `true` 当且仅当这条预约就是订单当前的 `activeOrderId` 指向对象（`BOOKED/ACCEPTED/UNKNOWN`，`PENDING` 占位也算——见状态机）。事件字段：`id/source/providerStatus/statusDesc/courierName/operator/createdAt`。 |
+| `GET /:id/booking` | 该订单最近一条预约（含是否为「活跃」预约、事件列表）。返回 `{ booking: BookingView \| null, active: boolean, events: [] }`。`BookingView` 含 `status/statusLabel/kuaidicom/courierLabel/serviceType/kuaidinum/dayType/pickupDate/pickupStart/pickupEnd/slotText/weightKg/customerFeeFen/quotedFeeFen/prepaidFeeFen/settledFeeFen/billedWeightG/courierName/courierMobile/failReason/cancelledBy` 及各阶段时间戳，另加 `trackStatus/trackUpdatedAt/trackCount/latestTrack`（批次三，见下方「`bookingView` 与管理端加字段」）。`active` 为 `true` 当且仅当这条预约就是订单当前的 `activeOrderId` 指向对象（`BOOKED/ACCEPTED/UNKNOWN`，`PENDING` 占位也算——见状态机）。事件字段：`id/source/providerStatus/statusDesc/courierName/operator/createdAt`，`source` 现有 `CALLBACK/ADMIN/SYSTEM/TRACK` 四种（`TRACK` 为批次三新增，轨迹推送落的留痕事件）。 |
 | `GET /:id/quotes?weightKg=` | 预约弹窗打开时拉一次。`weightKg` 可选（0.1–50，不传用订单商品算出的默认重量）。返回各家报价（快照 2 小时内且重量未变则复用下单时的快照，否则现查全部 9 家）+ `suggestedSlot`（预填时段）+ `couriers`（`{code,label}[]`，供下拉渲染）。 |
 | `POST /:id/book` | 建预约。Body `{ kuaidicom, serviceType?, weightKg?, dayType, pickupStart?, pickupEnd?, remark? }`。成功返回 `{ bookingId, bookingNo, status: 'BOOKED'\|'UNKNOWN', kuaidinum }`（`UNKNOWN` 时 `kuaidinum` 可能非空——外呼可能已经成功只是响应超时）。校验顺序：订单须 `PREPARING`；无待处理取消申请（`42266`）；快递公司需在 `EXPRESS_COURIERS` 内；地区不在不寄送名单；收货地址 ≤ 300 字节（`42262`）；时段合规（`42269`）；无活跃预约（`42265`）；下单超时进 `UNKNOWN`；业务失败 `42270`（原话）。 |
 | `POST /:id/booking/cancel` | 取消当前活跃预约。Body `{ reason? }`（≤30 字，缺省按操作者是店员/顾客给默认文案）。`UNKNOWN` 状态不可取消（`42267`，需先等对账或作废）；快递100 拒绝取消（已揽收）→ `42267` 原话；请求超时 → `42268`（状态未变）。成功后预约转 `CANCELLED`，订单不受影响（本就在 `PREPARING`），可重新预约。 |
@@ -1644,6 +1644,28 @@ e2e 第 48 段用 `has("issuedBy") == false` 锁住。
 - **限流 503**：`kdExpressCallbackLimiter`（`middlewares/rate-limit.ts`）触发时直接 `HTTP 503`，body `{"result":false,"returnCode":"503","message":"请求过于频繁，请稍后重推"}`——**不是**成功形状，让对方按「失败」重推，避免限流把回调静默吞掉。
 - **幂等**：`(bookingNo, providerStatus, rawBody 摘要)` 组成去重键（`makeExpressDedupeKey`），重复推送直接 ack 不重复处理状态；同一条内容变了（如 `statusDesc` 更新）视为新事件仍会处理。
 - **处理顺序**：查预约（查不到只告警，仍 ack 200）→ 验签 → 事务内去重留痕 → `UNKNOWN` 认领（任何一条验签通过的回调都证明单在快递100 那头真实存在，直接转 `BOOKED`）→ 按状态映射推进（终态后的尾随回调只留痕，`FEE` 类例外——结算可能晚于签收）→ 订单联动（仅 `PICKED`/`DELIVERED` 两处，见下）→ 事务外发通知。
+
+### 轨迹推送：`POST /api/kd-express/:bookingNo/track`（批次三）
+
+`apps/server/src/routes/kd-express-callback.ts` 同一个 router 上另一条路由，处理函数是 `handleExpressTrackCallback`（`services/delivery/express-track.ts`）。
+
+- **来源**：下单时传 `op=1` + `pollCallBackUrl`（`${callbackUrl}/track`，`express-booking.ts`），这是免费订阅——不是另计费的主动查轨迹接口。表单同样是 `param`（JSON 字符串）+ `sign=MD5(param+callbackSalt)`，**盐与状态回调是同一条预约的同一个 `callback_salt`**，不是另一把。查不到预约、验签失败、限流触发三条行为与状态回调完全一致（ack 固定形状、`HTTP 500` 仅未捕获异常、`HTTP 503` 限流）——见上一小节。
+- **`param` 形状**（`_parseTrackParam`，`express-callback-sign.ts`）：`{ status: 'polling'|'shutdown'|'abort'|'updateall', message, lastResult: { nu, com, ischeck, state, data: [{ context, ftime, time, status, areaName }] } }`。解析规则：`data` 里缺 `context` 或 `ftime`（`time` 兜底）的条目直接剔除；`context` 截 255 字节、`ftime` 截 32 字节；不管来源顺序，一律按 `ftime` 字符串降序重排一遍；整体封顶 `TRACK_MAX_ITEMS = 50` 条。
+- **落库**（`express-track-json.ts` 的 `toStoredTrack`）：`trackJson = { status, ischeck, state, nu, items: [{context, ftime}] }` **整体覆盖**（不是逐条 append）；同时更新 `trackStatus`（`status` 截 16 字节）、`trackUpdatedAt`。事件表 `source='TRACK'`，去重键 `TR:<bookingNo>:<status>:<md5(rawBody)>`（`makeExpressTrackDedupeKey`）——同一条内容的重推直接 ack 不重复处理，`status`/正文任一变化都算新事件。`abort` 且这次推送不带任何轨迹条目时**不覆盖**已落库的 `trackJson`（大概率是「单号有误/已超期」这类空推送，不能拿它去顶掉顾客已经看到的历史轨迹），但仍刷新 `trackStatus`/`trackUpdatedAt` 留痕。
+- **状态联动**：`ischeck==='1'` 或 `state==='3'` 视为签收。若该预约还没到 `PICKED`（10 没推到），**先按状态回调的「10」走一遍**（`Order.SHIPPED` + `Shipment` + 发货订阅消息），再按「13」收尾（`DELIVERED`；`Order.SHIPPED → COMPLETED`）——两步共用 `applyProviderStatus`，状态机规则只有一份，实现在 `syntheticPayload` 把轨迹签收伪装成状态回调的形状。`CANCELLED/FAILED/VOID` 的预约收到轨迹推送只留痕、不写 `trackJson`（顾客端读的是「最新一条预约」，不该被旧单的轨迹顶掉）。`DELIVERED` 之后的尾随轨迹推送仍会更新 `trackJson`（展示层数据，没有「终态后拒收」这一说）。`abort` 与 `state ∈ {4,6,14}`（退签/退回/拒签）各告警店员一次（`express-track-abort:<id>`、`express-track-return:<id>`）。
+
+### `bookingView` 与管理端 `GET /:id/booking` 加字段
+
+`BookingView`（`services/delivery/express-booking.ts`）新增四个字段，`GET /api/admin/express/orders/:id/booking` 原样透出：
+
+| 字段 | 说明 |
+|---|---|
+| `trackStatus` | 最近一次轨迹推送的 `status`（`polling`/`shutdown`/`abort`/`updateall`），未收到过为 `null` |
+| `trackUpdatedAt` | 最近一次轨迹推送落库时间（ISO），未收到过为 `null` |
+| `trackCount` | `trackJson.items` 条数（0–50） |
+| `latestTrack` | `trackJson.items[0]`（`{context, ftime}`），最新一条在最上面；没有轨迹为 `null` |
+
+工作台抽屉「取件预约」块用 `latestTrack.context` + `trackCount` 拼「最新轨迹」一行，`trackStatus === 'abort'` 时后面加「· 订阅已中止」。
 
 ### 状态映射（`KD_EXPRESS_STATUS_MAP`，`express-booking-state.ts`）
 
@@ -1706,20 +1728,29 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 ### 顾客端变化：`GET /api/orders/:id`
 
 - 新增 `expressBooking: { status, statusLabel, courierLabel, courierName, slotText, kuaidinum } | null`（`FAILED/VOID` 对顾客等同「没预约」，不下发；`CANCELLED` 仍下发，顾客端按「商家备货中」展示）。顾客白名单：不下发快递员手机号、不下发任何费用字段。
+- **（批次三）** 新增 `track: { updatedAt, signed, items: [{context, ftime}] } | null`（`routes/orders.ts`）。`updatedAt` 是 `trackUpdatedAt`；`signed` 即 `ischeck`；`items` 最多 30 条、最新在上（服务端已按 `ftime` 排好序，前端不再排）。以下情况一律 `null`：预约已 `CANCELLED`；预约是 `FAILED/VOID`（`expressBooking` 字段自己也是 `null`，等同「没预约」）；预约没有 `trackJson` 或 `trackJson.items` 为空（老邮寄单手填单号、同城单没有 `expressBooking` 行，自然是 `null`）。
 - 新增 `cancelGraceMin`（本单渠道对应的取消申请宽限分钟数，`LOCAL` 读 `localSettings.acceptGraceMin`、`EXPRESS` 读 `expressSettings.acceptGraceMin`）；`canRequestCancel`/`cancelRequestDeadline` 两个既有字段现在 `EXPRESS` 渠道同样会算（`cancelWindowOf` 按 `deliveryType` 分流）。
 - `POST /:id/cancel-request`：接单后宽限期内可申请，`EXPRESS` 与 `LOCAL` 走同一条路由；申请时快照当前活跃预约状态到 `cancelRequestDeliveryStatus`（供店员处理时判断快递员是否已在路上）。
 
 ### 定时任务与阈值覆盖
 
-`apps/server/src/services/delivery/express-booking-tasks.ts` 三条，接入 `scheduler.ts` 每分钟一轮（与同城任务同一个 tick，互不阻塞）：
+`apps/server/src/services/delivery/express-booking-tasks.ts` 四条，接入 `scheduler.ts` 每分钟一轮（与同城任务同一个 tick，互不阻塞）：
 
 | 任务 | 函数 | 默认阈值（读 `ExpressSettings.pickup`） | 覆盖参数（`POST /api/admin/system/run-scheduler` 的 `overrides`，仅非生产可用） |
 |---|---|---|---|
 | 无人接单提醒 | `remindExpressUnaccepted` | `unacceptedRemindHours`（默认 4 小时） | `expressUnacceptedHours` |
 | 时段过未取件提醒 | `remindExpressUnpicked` | `unpickedRemindMin`（默认 60 分钟） | `expressUnpickedMin` |
 | `UNKNOWN` 对账 | `reconcileExpressUnknown` | `minAge` 默认 1 分钟 | `expressUnknownMin` |
+| 对账（时段过期/取件超期） | `reconcileExpressStale` | 间隔 30 分钟、`PICKED` 超 10 天、每单封顶 48 次 | `expressStaleIntervalMin` / `expressPickedStaleDays` |
 
 `UNKNOWN` 对账用 `detail` 按 `thirdOrderId`（即 `bookingNo`）查单：查到 → 认领为 `BOOKED` 并补 `taskId/kdOrderId/kuaidinum`；**查不到只记一次查单事件、`reconcileTries` 加一，不自动作废**（理由见上面状态机小节）；连续 10 次查不到提醒店员一次；累计 30 次或预约超过 24 小时后停止自动查询（再提醒一次「已停止自动查单」），之后只能人工核实后 `void`。每单每类提醒只发一次，标记列放在 `express_bookings` 上（`unacceptedRemindedAt`/`unpickedRemindedAt`/`unknownRemindedAt`），改约会清空「未取件提醒」标记。
+
+`reconcileExpressStale`（`express-booking-tasks.ts`，批次三，spec §7「对账定时任务」）是「该有回调了却没有」两类单的主动查单，不是 `UNKNOWN` 对账的重复：
+
+- **A 类**：`BOOKED/ACCEPTED` 且预约时段已结束超过 `unpickedRemindMin`——快递100 有时不推揽收/揽货失败回调。
+- **B 类**：`PICKED` 且取件已超 `pickedDays`（默认 10）天仍未 `DELIVERED`——`autoCompleteShippedOrders` 7 天规则已经把订单转 `COMPLETED`，这里只是把预约本身收尾，不重复处理订单。
+- 三列标记语义（都在 `express_bookings` 上）：`staleCheckedAt` 是「上次查过」的时间戳，与 `intervalMin`（默认 30 分钟）比较决定这轮要不要再查，`updateMany({ staleCheckedAt: 旧值 })` 先占坑再查，避免并发双 tick 重复调用 provider；`staleTries` 每查一次加一，达到 `STALE_MAX_TRIES = 48`（30 分钟一次、约 24 小时）后不再自动查，转人工；`staleRemindedAt` 是「无结论提醒过」的一次性标记，查到 `ADVANCED`（预约或订单状态确有推进）不会碰它，查不到/无进展时才打标并只提醒一次。
+- 查到快照后走两步补状态的逻辑同轨迹回调：`BOOKED/ACCEPTED` 单如果 `detail` 已经显示 `13`（签收）、`101`（运输中）、`400`（派送中），说明「10 揽收」那条回调大概率没推到——先合成一次「10」把订单 `SHIPPED`/`Shipment`/发货通知走一遍，再套真正的状态，避免 `13` 直接把预约从 `BOOKED` 跳到 `DELIVERED` 而订单联动的 `where status='SHIPPED'` 扑空。`detail` 请求失败（provider 抖动）算 `ERROR`，不占「无结论提醒」的名额——外层调度器的 `try/catch` 记账继续，下一轮正常重试。
 
 ### 环境变量与 mock
 

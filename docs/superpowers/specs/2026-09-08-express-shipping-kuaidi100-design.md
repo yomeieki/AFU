@@ -186,8 +186,8 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1 
 - **限流**：单独的 `kdExpressCallbackLimiter`，触发时回 503（不是成功形状），让快递100 重推。
 - nginx：`location /api/kd-express/` 与 `/api/kd/` 同配置（关 gzip、独立 burst）。
 - 幂等：`(bookingNo, status, kuaidinum)` 重复推送直接 ack 不重处理。
-- 轨迹：整体覆盖写 `ExpressBooking.trackJson = lastResult`、`trackStatus`、`trackUpdatedAt`；`ischeck === '1'` 或 `state` 表示签收 → `DELIVERED`。顾客端只读这个 JSON。
-- 对账定时任务（每 30 分钟）：`BOOKED/ACCEPTED` 且 `pickupEnd + unpickedRemindMin` 已过 → `detail` 补状态；`PICKED` 超过 10 天未 DELIVERED → `detail`；仍无结论只提醒一次。UNKNOWN 对账每分钟（§5.3）。
+- 轨迹：整体覆盖写 `ExpressBooking.trackJson = lastResult`、`trackStatus`、`trackUpdatedAt`；`ischeck === '1'` 或 `state` 表示签收 → `DELIVERED`。顾客端只读这个 JSON。（实现回改，批次三：`trackJson` 落地形状是 `{status, ischeck, state, nu, items:[{context, ftime}]}`，不是原样存 `lastResult`——`items` 只留 `context/ftime` 两个字段，且解析时剔除缺 `context`/`ftime` 的条目、按 `ftime` 降序重排、服务端存库封顶 50 条，顾客端 `GET /api/orders/:id` 再截到 30 条。签收若预约还没到 `PICKED`（10 没推到），先合成一次「10」把订单 `SHIPPED`/`Shipment`/发货通知走一遍，再套「13」收尾，不会让预约跳过 `PICKED` 直接到 `DELIVERED`；`CANCELLED/FAILED/VOID` 的预约收到轨迹只留痕不写 `trackJson`；`abort` 与 `state ∈ {4,6,14}`（退签/退回/拒签）各告警店员一次，`abort` 且本次不带任何条目时不清空已落库的轨迹。）
+- 对账定时任务（每 30 分钟）：`BOOKED/ACCEPTED` 且 `pickupEnd + unpickedRemindMin` 已过 → `detail` 补状态；`PICKED` 超过 10 天未 DELIVERED → `detail`；仍无结论只提醒一次。UNKNOWN 对账每分钟（§5.3）。（实现回改，批次三：三列打标落地为 `staleCheckedAt`（先占坑再查，`updateMany` 原子比对旧值防并发双 tick 重复调 provider）、`staleRemindedAt`（无结论只提醒一次的标记）、`staleTries`（累计查单次数，达到 `STALE_MAX_TRIES = 48` 次——30 分钟一轮约合 24 小时——后不再自动查，转人工）；`detail` 抖动失败算 `ERROR`，不占「无结论提醒」的名额，交给调度器 `try/catch` 下一轮重试；查到快照后与轨迹签收同一手法两步补状态：`BOOKED/ACCEPTED` 单若 `detail` 已显示 `13/101/400`，先合成「10」补齐取件相关的订单联动，再套真正状态。）
 
 ## 8. 通知与提醒
 
@@ -306,7 +306,7 @@ PushPlus 四类事件各触发一次并核对文案与订单号；发货订阅�
 
 1. **批次一**：邮寄设置页 + 报价 + 结算页 + 下单校验 + 数据迁移。运费先按新规则收，店员流程不变。
 2. **批次二**：预约表 + 协议层 + 预约弹窗 + 回调 + 状态联动 + 退款前置 + 顾客取消窗口 + 提醒。
-3. **批次三**：轨迹订阅与展示 + 签收自动完成 + 对账任务。
+3. **批次三**（已实现）：轨迹订阅与展示 + 签收自动完成 + 对账任务。
 
 每批独立迁移、独立回滚。
 

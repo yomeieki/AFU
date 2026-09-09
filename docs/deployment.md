@@ -439,6 +439,18 @@ curl -s -w '\nHTTP %{http_code}\n' -X POST "https://api.yourdomain.com/api/kd-ex
 
 预期：`HTTP 200` 且响应体 `{"result":true,"returnCode":"200","message":"成功"}`（ack 固定形状，验签失败也是这个 ack——只是不处理状态，见 `docs/api.md` 附录 G）；再用 `GET /api/admin/express/orders/:id/booking`（管理员 token）确认这条预约的状态确实推进了。同样**只对测试订单跑**，跑完按 `docs/ops-test-orders.md` 清理。限流触发时返回的是 `HTTP 503`（不是 200 成功形状），演练时不用特意验证，正常调用频率下不会碰到。
 
+**轨迹推送**（批次三）：路由 `POST /api/kd-express/:bookingNo/track`，盐同上一条预约的 `callback_salt`，`param` 形状不同：
+
+```bash
+BOOKING_NO="$1"; SALT="$2"
+PARAM='{"status":"polling","lastResult":{"nu":"演练单号","com":"jd","ischeck":"0","state":"0","data":[{"context":"【演练】已揽收","ftime":"2026-09-10 10:00:00"}]}}'
+SIGN=$(printf '%s%s' "$PARAM" "$SALT" | md5sum | cut -d' ' -f1)
+curl -s -w '\nHTTP %{http_code}\n' -X POST "https://api.yourdomain.com/api/kd-express/${BOOKING_NO}/track" \
+  --data-urlencode "param=${PARAM}" --data-urlencode "sign=${SIGN}"
+```
+
+预期同上（`HTTP 200` + 固定 ack）；`GET /api/admin/express/orders/:id/booking` 的 `booking.latestTrack.context` 变成「【演练】已揽收」。**不要**把 `ischeck` 改成 `"1"` 对真实订单演练——那会把订单直接转「已完成」。
+
 ---
 
 ## 八、数据库备份
