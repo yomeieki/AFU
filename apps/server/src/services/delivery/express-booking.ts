@@ -244,7 +244,7 @@ export async function modifyBookingSlot(i: { orderId: number; slot: SlotInput; o
     throw new AppError(42267, `快递100 拒绝改约：${(e as Error).message}`)
   }
   await prisma.$transaction(async (tx) => {
-    const moved = await tx.expressBooking.updateMany({ where: { id: b.id, status: { in: ['BOOKED', 'ACCEPTED'] } }, data: { dayType: i.slot.dayType, pickupDate: pickupDateOf(i.slot.dayType), pickupStart: i.slot.pickupStart, pickupEnd: i.slot.pickupEnd, unpickedRemindedAt: null } })
+    const moved = await tx.expressBooking.updateMany({ where: { id: b.id, status: { in: ['BOOKED', 'ACCEPTED'] } }, data: { dayType: i.slot.dayType, pickupDate: pickupDateOf(i.slot.dayType), pickupStart: i.slot.pickupStart, pickupEnd: i.slot.pickupEnd, unpickedRemindedAt: null, staleCheckedAt: null, staleRemindedAt: null, staleTries: 0 } })
     if (moved.count === 0) throw new AppError(42267, '预约状态已变化，请刷新')
     await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'ADMIN', statusDesc: `改约 ${i.slot.dayType} ${i.slot.pickupStart ?? ''}–${i.slot.pickupEnd ?? ''}`, operator: i.operator })
   })

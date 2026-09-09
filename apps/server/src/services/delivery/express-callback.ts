@@ -106,10 +106,12 @@ export async function applyProviderStatus(tx: Tx, booking: ExpressBooking & { or
     if (r.count === 0) return
     if (mapped.status === 'PICKED') {
       const kuaidinum = p.kuaidinum ?? current.kuaidinum
-      await tx.order.updateMany({ where: { id: current.orderId, status: { in: ['PAID', 'PREPARING'] } }, data: { status: 'SHIPPED' } })
+      const moved = await tx.order.updateMany({ where: { id: current.orderId, status: { in: ['PAID', 'PREPARING'] } }, data: { status: 'SHIPPED' } })
       const shipment = await tx.shipment.upsert({ where: { orderId: current.orderId }, update: { expressCompany: label, ...(kuaidinum ? { expressNo: kuaidinum } : {}), shippedAt: new Date() }, create: { orderId: current.orderId, orderNo: current.orderNo, deliveryType: 'EXPRESS', expressCompany: label, expressNo: kuaidinum, shippedAt: new Date() } })
-      const o = current.order
-      after.push(() => sendShipSubscribeMessage(o.user.openid, { id: current.orderId, orderNo: current.orderNo }, shipment, o.items[0]?.productName))
+      if (moved.count > 0) {
+        const o = current.order
+        after.push(() => sendShipSubscribeMessage(o.user.openid, { id: current.orderId, orderNo: current.orderNo }, shipment, o.items[0]?.productName))
+      }
     } else if (mapped.status === 'DELIVERED') {
       await tx.order.updateMany({ where: { id: current.orderId, status: 'SHIPPED' }, data: { status: 'COMPLETED', completedAt: new Date() } })
     }

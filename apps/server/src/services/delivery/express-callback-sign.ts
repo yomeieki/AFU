@@ -56,7 +56,7 @@ export function _parseTrackParam(p: Record<string, unknown>): ExpressTrackPayloa
   return {
     status: String(str(p.status) ?? '').toLowerCase(),
     ischeck: String(lr.ischeck ?? '') === '1' || state === '3',
-    state, nu: str(lr.nu), com: str(lr.com), message: str(pick(p.message, lr.message)),
+    state, nu: str(lr.nu)?.slice(0, 64) ?? null, com: str(lr.com)?.slice(0, 32) ?? null, message: str(pick(p.message, lr.message)),
     items: items.slice(0, TRACK_MAX_ITEMS), raw: p,
   }
 }

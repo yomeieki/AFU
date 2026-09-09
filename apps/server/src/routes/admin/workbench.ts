@@ -23,7 +23,10 @@ let cache: { at: number; data: unknown } | null = null
  * 这张表还有 callbackSalt（回调验签用的密钥）、pollToken、taskId、feeDetails 等字段，工作台
  * 快照这种「取一屏所有在办订单」的高频查询没有理由把它们也搬一遍。
  * bookingView() 的参数类型是完整的 Prisma `ExpressBooking`，这里选出来的是它的子集——它确实
- * 只读下面这些列（含 trackJson/trackStatus/trackUpdatedAt），调用处 cast 一下是安全的。
+ * 只读下面这些列（trackJson 故意不选，见下），调用处 cast 一下是安全的。
+ * 不选 trackJson：工作台快照没有地方展示轨迹条目，`parseStoredTrack(undefined)` 会返回 null，
+ * 所以 bookingView() 算出来的 trackCount/latestTrack 在这里按设计退化成 0/null——需要看轨迹的
+ * 抽屉走的是按单号查询的 per-order 接口，不靠这张快照表。
  */
 const bookingSelect = {
   id: true, orderId: true, activeOrderId: true, bookingNo: true, status: true, kuaidicom: true, serviceType: true,
@@ -31,7 +34,7 @@ const bookingSelect = {
   customerFeeFen: true, quotedFeeFen: true, prepaidFeeFen: true, settledFeeFen: true, billedWeightG: true,
   courierName: true, courierMobile: true, failReason: true, cancelledBy: true,
   bookedAt: true, acceptedAt: true, pickedAt: true, deliveredAt: true, cancelledAt: true, createdAt: true,
-  trackJson: true, trackStatus: true, trackUpdatedAt: true,
+  trackStatus: true, trackUpdatedAt: true,
 } satisfies Prisma.ExpressBookingSelect
 type BookingRow = Prisma.ExpressBookingGetPayload<{ select: typeof bookingSelect }>
 

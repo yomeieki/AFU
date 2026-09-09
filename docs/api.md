@@ -1650,8 +1650,8 @@ e2e 第 48 段用 `has("issuedBy") == false` 锁住。
 `apps/server/src/routes/kd-express-callback.ts` 同一个 router 上另一条路由，处理函数是 `handleExpressTrackCallback`（`services/delivery/express-track.ts`）。
 
 - **来源**：下单时传 `op=1` + `pollCallBackUrl`（`${callbackUrl}/track`，`express-booking.ts`），这是免费订阅——不是另计费的主动查轨迹接口。表单同样是 `param`（JSON 字符串）+ `sign=MD5(param+callbackSalt)`，**盐与状态回调是同一条预约的同一个 `callback_salt`**，不是另一把。查不到预约、验签失败、限流触发三条行为与状态回调完全一致（ack 固定形状、`HTTP 500` 仅未捕获异常、`HTTP 503` 限流）——见上一小节。
-- **`param` 形状**（`_parseTrackParam`，`express-callback-sign.ts`）：`{ status: 'polling'|'shutdown'|'abort'|'updateall', message, lastResult: { nu, com, ischeck, state, data: [{ context, ftime, time, status, areaName }] } }`。解析规则：`data` 里缺 `context` 或 `ftime`（`time` 兜底）的条目直接剔除；`context` 截 255 字节、`ftime` 截 32 字节；不管来源顺序，一律按 `ftime` 字符串降序重排一遍；整体封顶 `TRACK_MAX_ITEMS = 50` 条。
-- **落库**（`express-track-json.ts` 的 `toStoredTrack`）：`trackJson = { status, ischeck, state, nu, items: [{context, ftime}] }` **整体覆盖**（不是逐条 append）；同时更新 `trackStatus`（`status` 截 16 字节）、`trackUpdatedAt`。事件表 `source='TRACK'`，去重键 `TR:<bookingNo>:<status>:<md5(rawBody)>`（`makeExpressTrackDedupeKey`）——同一条内容的重推直接 ack 不重复处理，`status`/正文任一变化都算新事件。`abort` 且这次推送不带任何轨迹条目时**不覆盖**已落库的 `trackJson`（大概率是「单号有误/已超期」这类空推送，不能拿它去顶掉顾客已经看到的历史轨迹），但仍刷新 `trackStatus`/`trackUpdatedAt` 留痕。
+- **`param` 形状**（`_parseTrackParam`，`express-callback-sign.ts`）：`{ status: 'polling'|'shutdown'|'abort'|'updateall', message, lastResult: { nu, com, ischeck, state, data: [{ context, ftime, time, status, areaName }] } }`。解析规则：`data` 里缺 `context` 或 `ftime`（`time` 兜底）的条目直接剔除；`context` 截 255 字符、`ftime` 截 32 字符；不管来源顺序，一律按 `ftime` 字符串降序重排一遍；整体封顶 `TRACK_MAX_ITEMS = 50` 条。
+- **落库**（`express-track-json.ts` 的 `toStoredTrack`）：`trackJson = { status, ischeck, state, nu, items: [{context, ftime}] }` **整体覆盖**（不是逐条 append）；同时更新 `trackStatus`（`status` 截 16 字符）、`trackUpdatedAt`。事件表 `source='TRACK'`，去重键 `TR:<bookingNo>:<status>:<md5(rawBody)>`（`makeExpressTrackDedupeKey`）——同一条内容的重推直接 ack 不重复处理，`status`/正文任一变化都算新事件。`abort` 且这次推送不带任何轨迹条目时**不覆盖**已落库的 `trackJson`（大概率是「单号有误/已超期」这类空推送，不能拿它去顶掉顾客已经看到的历史轨迹），但仍刷新 `trackStatus`/`trackUpdatedAt` 留痕。
 - **状态联动**：`ischeck==='1'` 或 `state==='3'` 视为签收。若该预约还没到 `PICKED`（10 没推到），**先按状态回调的「10」走一遍**（`Order.SHIPPED` + `Shipment` + 发货订阅消息），再按「13」收尾（`DELIVERED`；`Order.SHIPPED → COMPLETED`）——两步共用 `applyProviderStatus`，状态机规则只有一份，实现在 `syntheticPayload` 把轨迹签收伪装成状态回调的形状。`CANCELLED/FAILED/VOID` 的预约收到轨迹推送只留痕、不写 `trackJson`（顾客端读的是「最新一条预约」，不该被旧单的轨迹顶掉）。`DELIVERED` 之后的尾随轨迹推送仍会更新 `trackJson`（展示层数据，没有「终态后拒收」这一说）。`abort` 与 `state ∈ {4,6,14}`（退签/退回/拒签）各告警店员一次（`express-track-abort:<id>`、`express-track-return:<id>`）。
 
 ### `bookingView` 与管理端 `GET /:id/booking` 加字段
@@ -1755,4 +1755,4 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 ### 环境变量与 mock
 
 - `EXPRESS_PROVIDER_MOCK`（沿用批次一）：`true` 时预约的下单/取消/改约/查单/结算通知全部走内存 mock，且挂载 `apps/server/src/routes/admin/express-mock.ts`（`/api/admin/system/express-mock/{reset,queue,calls,salt/:bookingNo}`）。`POST queue` 的 `op` 现可传 `book/cancel/modify/detail/synPay`（原 `batchPrice` 之外新增五个）；`GET salt/:bookingNo` 供 e2e/联调构造合法签名的回调请求；生产环境禁止开启。
-- `SCHEDULER_DISABLED=true` 时上面三条定时任务与其余全部 scheduler 任务一起停跑（多实例部署时只留一个实例跑 scheduler）。
+- `SCHEDULER_DISABLED=true` 时上面四条定时任务与其余全部 scheduler 任务一起停跑（多实例部署时只留一个实例跑 scheduler）。

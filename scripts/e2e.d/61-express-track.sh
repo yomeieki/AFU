@@ -12,7 +12,7 @@ x61_cust() { req GET "/api/orders/$1" "$UT"; }
 X61_I1='[{"context":"【自贡市】已揽收","ftime":"2026-09-10 10:00:00"}]'
 X61_I2='[{"context":"【自贡市】已揽收","ftime":"2026-09-10 10:00:00"},{"context":"【成都市】运输中","ftime":"2026-09-10 12:00:00","areaName":"成都"}]'
 
-echo "-- ① 下单参数带 op=1 与 pollCallBackUrl --"
+echo "-- ① 下单参数带 pollCallBackUrl --"
 X61_O=$(x58_paid_preparing)
 req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
 req POST "/api/admin/express/orders/$X61_O/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}' >/dev/null
@@ -70,6 +70,16 @@ req POST "/api/admin/express/orders/$X61_O3/booking/cancel" "$AT" '{}' >/dev/nul
 x61_track "$X61_BN3" polling 0 0 "$X61_I1" >/dev/null
 assert_eq "取消后来轨迹：顾客 track 仍 null" "$(x61_cust "$X61_O3" | jq -c .data.track)" "null"
 assert_eq "取消后来轨迹：只留痕" "$(x59_bk "$X61_O3" | jq -r '[.data.events[]|select(.source=="TRACK")]|length')" "2"
+
+echo "-- ⑤a FAILED 的预约收到轨迹推送：顾客 track 仍 null，只留痕 --"
+X61_O3C=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O3C/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}' >/dev/null
+X61_BN3C=$(x59_bk "$X61_O3C" | jq -r .data.booking.bookingNo)
+x59_cb "$X61_BN3C" 11 '{}' >/dev/null
+assert_eq "预约先 FAILED" "$(x59_bk "$X61_O3C" | jq -r .data.booking.status)" "FAILED"
+HTTPC=$(x61_track "$X61_BN3C" polling 0 0 "$X61_I1"); assert_eq "FAILED 后轨迹推送仍 200" "$HTTPC" "200"
+assert_eq "FAILED 后来轨迹：顾客 track 仍 null" "$(x61_cust "$X61_O3C" | jq -c .data.track)" "null"
+assert_eq "FAILED 后来轨迹：只留痕（event 数 1）" "$(x59_bk "$X61_O3C" | jq -r '[.data.events[]|select(.source=="TRACK")]|length')" "1"
 
 echo "-- ⑤b abort 且条目为空不清空已有轨迹 --"
 X61_O3B=$(x58_paid_preparing)

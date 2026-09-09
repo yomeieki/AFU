@@ -7,7 +7,8 @@ import { BOOKING_RANK, BOOKING_TERMINAL, BOOKING_ACTIVE, KD_EXPRESS_STATUS_MAP, 
 import { makeExpressDedupeKey } from '../src/services/delivery/express-events'
 import { _buildBookParam, _parseBook, _parseDetail, _parseCallbackParam, kd100ExpressProvider } from '../src/services/delivery/kd100-express'
 import { expressMockProvider, queueExpressDirective, resetExpressMock, getExpressCalls } from '../src/services/delivery/express-mock'
-import { _parseTrackParam, verifyAndParseExpressTrack, verifyAndParseExpressCallback, TRACK_MAX_ITEMS } from '../src/services/delivery/express-callback-sign'
+import { _parseTrackParam, verifyAndParseExpressTrack, verifyAndParseExpressCallback, TRACK_MAX_ITEMS, ExpressTrackPayload } from '../src/services/delivery/express-callback-sign'
+import { parseStoredTrack, trackAlertKinds } from '../src/services/delivery/express-track-json'
 import crypto from 'crypto'
 import { ProviderError } from '../src/services/delivery/types'
 import { validateSlot, suggestSlot, pickupDateOf } from '../src/services/delivery/express-booking'
@@ -181,9 +182,10 @@ await t('轨迹 param 解析：最新在上、缺字段剔除、ischeck/state �
   assert.deepStrictEqual(_parseTrackParam({ status: 'abort', message: '单号不存在' }).items, [])
   assert.strictEqual(_parseTrackParam({ status: 'abort', message: '单号不存在' }).message, '单号不存在')
   const many = Array.from({ length: 60 }, (_, i) => ({ context: `c${i}`, ftime: `2026-09-10 ${String(i % 24).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00` }))
+  many[55] = { context: 'c55', ftime: '2026-09-11 00:00:00' }   // 真正的最大 ftime，故意放在 index 55（≥ 50）
   const manyParsed = _parseTrackParam({ status: 'polling', lastResult: { data: many } })
   assert.strictEqual(manyParsed.items.length, TRACK_MAX_ITEMS)
-  assert.strictEqual(manyParsed.items[0].context, 'c47')   // 最大 ftime（23:47）在原 60 条里排第 48 个，若先切 50 再排序会漏掉——钉住「先排序再截断」
+  assert.strictEqual(manyParsed.items[0].context, 'c55')   // 最大 ftime 在原 60 条里排第 56 个（index 55），若先切前 50 条再排序，这条会被漏在截断之外——钉住「先排序再截断」
   // lastResult 是数组/字符串这类脏形状不抛错
   assert.deepStrictEqual(_parseTrackParam({ status: 'polling', lastResult: [1, 2] }).items, [])
   assert.deepStrictEqual(_parseTrackParam({ status: 'polling', lastResult: 'x' }).items, [])
@@ -203,6 +205,27 @@ await t('轨迹推送验签：与状态回调同公式；篡改/缺 param/非对
   // 同一个 salt 下状态回调仍然照常（重构 verifySignedParam 不能改变既有行为）
   const cb = verifyAndParseExpressCallback({ param: JSON.stringify({ status: 1, data: { status: 1 } }), sign: crypto.createHash('md5').update(JSON.stringify({ status: 1, data: { status: 1 } }) + salt, 'utf8').digest('hex').toUpperCase() }, salt)
   assert.ok(cb.ok && cb.payload.status === '1')
+})
+
+await t('parseStoredTrack：容错解析（脏数据/缺字段都不抛）', () => {
+  assert.strictEqual(parseStoredTrack(null), null)
+  assert.strictEqual(parseStoredTrack('x'), null)
+  assert.strictEqual(parseStoredTrack([]), null)
+  const one = parseStoredTrack({ items: [{ context: 'a', ftime: 't' }, { context: '' }, { ftime: 't' }, 5] })
+  assert.strictEqual(one?.items.length, 1)
+  assert.deepStrictEqual(one?.items[0], { context: 'a', ftime: 't' })
+  const missing = parseStoredTrack({})
+  assert.strictEqual(missing?.status, ''); assert.strictEqual(missing?.ischeck, false)
+  assert.strictEqual(parseStoredTrack({ ischeck: 'yes' })?.ischeck, false)
+})
+await t('trackAlertKinds：abort/退签退回都只在跟上一次不同时才告警（一个预约一次）', () => {
+  const base: Omit<ExpressTrackPayload, 'status' | 'state'> = { ischeck: false, nu: null, com: null, message: null, items: [], raw: {} }
+  assert.deepStrictEqual(trackAlertKinds(null, null, { ...base, status: 'abort', state: null }), ['abort'])
+  assert.deepStrictEqual(trackAlertKinds('abort', null, { ...base, status: 'abort', state: null }), [])
+  assert.deepStrictEqual(trackAlertKinds(null, null, { ...base, status: 'polling', state: '6' }), ['return'])
+  assert.deepStrictEqual(trackAlertKinds(null, '6', { ...base, status: 'polling', state: '6' }), [])
+  assert.deepStrictEqual(trackAlertKinds(null, null, { ...base, status: 'polling', state: '4' }), ['return'])
+  assert.deepStrictEqual(trackAlertKinds(null, '4', { ...base, status: 'polling', state: '6' }), ['return'])
 })
 
 console.log(`\n通过 ${pass} 条${process.exitCode ? '，有失败' : ''}`)
