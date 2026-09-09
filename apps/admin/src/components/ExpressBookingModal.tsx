@@ -43,12 +43,13 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
   // （见下方 else 分支），若继续拿「kuaidicom 是否为空」当「是否首次加载」的判据，
   // 那次清空会让下一次重量失焦重新触发预填分支，把店员手选的 day/start/end 悄悄覆盖掉。
   const firstLoad = useRef(true)
-  const inFlightWeight = useRef<number | null>(null)   // 同一重量的报价在途时不重复请求
+  const inFlightKey = useRef<number | null>(null)   // 同一重量（含首轮 undefined）的报价在途时不重复请求
   const debounceRef = useRef<number | null>(null)
 
   const load = useCallback(async (w?: number) => {
-    if (w !== undefined && inFlightWeight.current === w) return
-    inFlightWeight.current = w ?? null
+    const key = w ?? -1
+    if (inFlightKey.current === key) return
+    inFlightKey.current = key
     setLoading(true); setError('')
     try {
       const r = (await getExpressBookingQuotes(orderId, w)).data.data
@@ -65,10 +66,10 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
         // 重量改了会重新查价，报价可能跟着变——已选中的那家如果这次查出来是「无价」，
         // 必须把选择清空，逼店员重新挑一家，而不是让「无价不可提交」的按钮悄悄卡死在原地不给出理由
         const still = r.quotes.find((x) => x.kuaidicom === kuaidicom)
-        if (!still || still.priceFen === null) setKuaidicom('')
+        if (kuaidicom && (!still || still.priceFen === null)) setKuaidicom('')
       }
     } catch (e) { setError(apiMessage(e, '报价加载失败，可点「重新报价」重试')) }
-    finally { setLoading(false); inFlightWeight.current = null }
+    finally { setLoading(false); inFlightKey.current = null }
   }, [orderId, kuaidicom])
   useEffect(() => { void load() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -111,7 +112,7 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
             <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input className="wb__input" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} onBlur={requote}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); requote() } }} />
-              <button type="button" className="wb__btn wb__btn--ghost" onClick={requote} disabled={loading || !weightValid || weightSynced}>{loading ? '查价中…' : '重新报价'}</button>
+              <button type="button" className="wb__btn wb__btn--ghost" style={{ whiteSpace: 'nowrap' }} onClick={requote} disabled={loading || !weightValid || weightSynced}>{loading ? '查价中…' : '重新报价'}</button>
             </span>
           </label>
           {!loading && !weightValid && <div className="wb__redbar">重量需在 0.1–50 kg</div>}
