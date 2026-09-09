@@ -1743,7 +1743,7 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 | `UNKNOWN` 对账 | `reconcileExpressUnknown` | `minAge` 默认 1 分钟 | `expressUnknownMin` |
 | 对账（时段过期/取件超期） | `reconcileExpressStale` | 间隔 30 分钟、`PICKED` 超 10 天、每单封顶 48 次 | `expressStaleIntervalMin` / `expressPickedStaleDays` |
 
-`UNKNOWN` 对账用 `detail` 按 `thirdOrderId`（即 `bookingNo`）查单：查到 → 认领为 `BOOKED` 并补 `taskId/kdOrderId/kuaidinum`；**查不到只记一次查单事件、`reconcileTries` 加一，不自动作废**（理由见上面状态机小节）；连续 10 次查不到提醒店员一次；累计 30 次或预约超过 24 小时后停止自动查询（再提醒一次「已停止自动查单」），之后只能人工核实后 `void`。每单每类提醒只发一次，标记列放在 `express_bookings` 上（`unacceptedRemindedAt`/`unpickedRemindedAt`/`unknownRemindedAt`），改约会清空「未取件提醒」标记。
+`UNKNOWN` 对账用 `detail` 按 `thirdOrderId`（即 `bookingNo`）查单：查到 → 认领为 `BOOKED` 并补 `taskId/kdOrderId/kuaidinum`；**查不到只记一次查单事件、`reconcileTries` 加一，不自动作废**（理由见上面状态机小节）；连续 10 次查不到提醒店员一次；累计 30 次或预约超过 24 小时后停止自动查询（再提醒一次「已停止自动查单」），之后只能人工核实后 `void`。每单每类提醒只发一次，标记列放在 `express_bookings` 上（`unacceptedRemindedAt`/`unpickedRemindedAt`/`unknownRemindedAt`），改约会清空「未取件提醒」标记，同时清空对账三列 `staleCheckedAt`/`staleRemindedAt`/`staleTries`（批次三）。
 
 `reconcileExpressStale`（`express-booking-tasks.ts`，批次三，spec §7「对账定时任务」）是「该有回调了却没有」两类单的主动查单，不是 `UNKNOWN` 对账的重复：
 
