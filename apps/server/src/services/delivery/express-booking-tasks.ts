@@ -9,8 +9,8 @@ import { getExpressSettings, COURIER_LABEL } from '../express-settings'
 import { notifyExpressAlert } from '../order-notify'
 import { notifySystemAlert } from '../notify'
 import { reconcileUnknownBooking } from './express-booking'
-import { getExpressProvider } from './kd100-express'
-import { KD_EXPRESS_STATUS_MAP } from './express-booking-state'
+import { getExpressProvider, ExpressDetailResult } from './kd100-express'
+import { KD_EXPRESS_STATUS_MAP, BOOKING_RANK } from './express-booking-state'
 import { applyProviderStatus } from './express-callback'
 import { recordBookingEvent } from './express-events'
 import crypto from 'crypto'
@@ -123,47 +123,72 @@ export async function reconcileExpressStale(intervalMin = 30, pickedDays = 10): 
     // 先占坑再查：并发双 tick 只有一个能把 staleCheckedAt 从旧值改掉
     const claimed = await prisma.expressBooking.updateMany({ where: { id: b.id, staleCheckedAt: b.staleCheckedAt }, data: { staleCheckedAt: new Date(), staleTries: { increment: 1 } } })
     if (claimed.count === 0) continue
-    if ((await reconcileStaleBooking(b.id)) === 'ADVANCED') n++
+    if ((await reconcileStaleBooking(b.id, pickedDays)) === 'ADVANCED') n++
   }
   return n
 }
 
-export async function reconcileStaleBooking(bookingId: number): Promise<'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND' | 'ERROR'> {
+/**
+ * detail 是单条快照，不是回调流——BOOKED/ACCEPTED 单（时段过期未取件那类）如果快递100 已经跳到
+ * 在途/派送中/签收（101/400/13），说明「10 揽收」那条回调八成没推到：如果直接把这条快照套给
+ * applyProviderStatus，13 会让预约越过 PICKED 直接 DELIVERED，但订单联动的 `where status='SHIPPED'`
+ * 扑空（订单还停在 PREPARING），Shipment 没有 shippedAt、发货提醒也没发；101/400 是 IGNORE，
+ * 状态原地不动，还会被判成「无进展」发一条文案错误的提醒（明明已经在途/签收了却说「无取件回调」）。
+ * 与 express-track.ts 处理签收轨迹同一手法：没到 PICKED 的先补一步「10」把取件相关的订单联动、
+ * 发货通知都走一遍，再套真正的状态；两步共用同一次 detail 快照，cur 在两步之间原样再派生。
+ */
+export async function reconcileStaleBooking(bookingId: number, pickedDays = 10): Promise<'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND' | 'ERROR'> {
   const b = await prisma.expressBooking.findUnique({ where: { id: bookingId }, include: orderInclude })
   if (!b || !['BOOKED', 'ACCEPTED', 'PICKED'].includes(b.status)) return 'UNCHANGED'
   const label = COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom
-  let result: 'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND' | 'ERROR'
+  let d: ExpressDetailResult
   try {
-    const d = await getExpressProvider().detail({ taskId: b.taskId, thirdOrderId: b.bookingNo })
-    if (!d.found || d.status === null) result = 'NOT_FOUND'
-    else {
-      const status = String(d.status)
-      const rawStr = JSON.stringify(d.raw ?? {})
-      const { costAlertRatio } = await getExpressSettings()
-      const after: (() => void)[] = []
-      await prisma.$transaction(async (tx) => {
-        const ev = await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: `RC:${b.bookingNo}:${status}:${crypto.createHash('md5').update(rawStr, 'utf8').digest('hex')}`.slice(0, 64), source: 'SYSTEM', providerStatus: /^\d+$/.test(status) ? Number(status) : null, statusDesc: `对账查单：快递100 状态 ${status}${KD_EXPRESS_STATUS_MAP[status] && 'label' in KD_EXPRESS_STATUS_MAP[status] ? `（${(KD_EXPRESS_STATUS_MAP[status] as { label: string }).label}）` : ''}`, rawPayload: d.raw as Prisma.InputJsonValue })
-        if (ev.duplicate) return
-        await applyProviderStatus(tx, b, { status, taskId: d.taskId, kdOrderId: d.kdOrderId, kuaidinum: d.kuaidinum, courierName: d.courierName, courierMobile: d.courierMobile, weightKg: null, freightFen: d.freightFen, defPriceFen: null, feeDetails: null, statusDesc: '对账补状态', raw: (d.raw ?? {}) as Record<string, unknown> }, after, costAlertRatio)
-      })
-      for (const f of after) { try { f() } catch (e) { console.error('[express-stale] after 失败:', e) } }
-      const now = await prisma.expressBooking.findUnique({ where: { id: b.id }, select: { status: true } })
-      result = now && now.status !== b.status ? 'ADVANCED' : 'UNCHANGED'
-    }
+    d = await getExpressProvider().detail({ taskId: b.taskId, thirdOrderId: b.bookingNo })
   } catch (e) {
+    // detail 失败（provider 抖动）不算「无结论」，交给外层 catch 由调度器记账继续；这里只是分类返回值
     console.warn('[express-stale] detail 失败:', (e as Error).message)
-    result = 'ERROR'
+    return 'ERROR'
+  }
+  let result: 'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND'
+  if (!d.found) result = 'NOT_FOUND'
+  else if (d.status === null) result = 'UNCHANGED' // 有单但查不到状态：跟「查不到该单」不是一回事，文案要分开
+  else {
+    const status = String(d.status)
+    const rawStr = JSON.stringify(d.raw ?? {})
+    const { costAlertRatio } = await getExpressSettings()
+    const after: (() => void)[] = []
+    const orderStatusBefore = b.order.status
+    const needsPickBackfill = b.statusRank < BOOKING_RANK.PICKED && ['13', '101', '400'].includes(status)
+    const steps = needsPickBackfill ? ['10', status] : [status]
+    // $transaction 只包裹「已经查到快照」之后的落库；DB 错误让它抛出去，由 reconcileExpressStale
+    // 的调用方（调度器每任务 try/catch）记账继续，不要在这里吞掉再误判成「detail 失败」
+    await prisma.$transaction(async (tx) => {
+      const ev = await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: `RC:${b.bookingNo}:${status}:${crypto.createHash('md5').update(rawStr, 'utf8').digest('hex')}`.slice(0, 64), source: 'SYSTEM', providerStatus: /^\d+$/.test(status) ? Number(status) : null, statusDesc: `对账查单：快递100 状态 ${status}${KD_EXPRESS_STATUS_MAP[status] && 'label' in KD_EXPRESS_STATUS_MAP[status] ? `（${(KD_EXPRESS_STATUS_MAP[status] as { label: string }).label}）` : ''}`, rawPayload: d.raw as Prisma.InputJsonValue })
+      if (ev.duplicate) return
+      let cur = b
+      for (const s of steps) {
+        const synthetic = s === '10' && needsPickBackfill
+        await applyProviderStatus(tx, cur, { status: s, taskId: d.taskId, kdOrderId: d.kdOrderId, kuaidinum: d.kuaidinum, courierName: d.courierName, courierMobile: d.courierMobile, weightKg: null, freightFen: d.freightFen, defPriceFen: null, feeDetails: null, statusDesc: synthetic ? '对账查单：快递100 已在途/已签收，补记取件' : '对账补状态', raw: (d.raw ?? {}) as Record<string, unknown> }, after, costAlertRatio)
+        if (synthetic) cur = { ...cur, status: 'PICKED', statusRank: BOOKING_RANK.PICKED, kuaidinum: d.kuaidinum ?? cur.kuaidinum }
+      }
+    })
+    for (const f of after) { try { f() } catch (e) { console.error('[express-stale] after 失败:', e) } }
+    const [nowBooking, nowOrder] = await Promise.all([
+      prisma.expressBooking.findUnique({ where: { id: b.id }, select: { status: true } }),
+      prisma.order.findUnique({ where: { id: b.orderId }, select: { status: true } }),
+    ])
+    const bookingMoved = !!nowBooking && nowBooking.status !== b.status
+    const orderMoved = !!nowOrder && nowOrder.status !== orderStatusBefore
+    result = bookingMoved || orderMoved ? 'ADVANCED' : 'UNCHANGED'
   }
   if (result === 'ADVANCED') return result
-  // 无结论只提醒一次；ERROR（快递100 抖动）不算结论，不提醒也不占用那一次
-  if (result !== 'ERROR') {
-    const m = await prisma.expressBooking.updateMany({ where: { id: b.id, staleRemindedAt: null }, data: { staleRemindedAt: new Date() } })
-    if (m.count > 0) {
-      const why = b.status === 'PICKED'
-        ? [`已取件超过 10 天仍无签收回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '订单已按 7 天规则自动完成；如顾客反馈未收到，请到快递100 后台或联系快递公司查件']
-        : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
-      notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
-    }
+  // 无结论只提醒一次
+  const m = await prisma.expressBooking.updateMany({ where: { id: b.id, staleRemindedAt: null }, data: { staleRemindedAt: new Date() } })
+  if (m.count > 0) {
+    const why = b.status === 'PICKED'
+      ? [`已取件超过 ${pickedDays} 天仍无签收回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '订单已按 7 天规则自动完成；如顾客反馈未收到，请到快递100 后台或联系快递公司查件']
+      : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
+    notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
   }
   return result
 }

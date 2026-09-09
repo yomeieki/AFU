@@ -121,6 +121,42 @@ X61_DET=$(req GET "/api/admin/system/express-mock/calls?op=detail" "$AT" | jq -r
 R=$(sched '{"expressStaleIntervalMin":30}')
 assert_eq "30 分钟内不重查（detail 调用数不变）" "$(req GET "/api/admin/system/express-mock/calls?op=detail" "$AT" | jq -r '.data|length')" "$X61_DET"
 req POST "/api/admin/express/orders/$X61_O6/booking/cancel" "$AT" '{}' >/dev/null
+# 快照直接跳到「已签收」（BOOKED 未经 10 揽收回调）：不能被 applyProviderStatus 的回调流假设坑了——
+# 得先补一步 10（订单联动/Shipment/发货通知）再套真实的 13，否则订单卡在 PREPARING、Shipment 缺 shippedAt
+X61_O7=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O7/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
+X61_BN7=$(x59_bk "$X61_O7" | jq -r .data.booking.bookingNo)
+sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN7';"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":true,"status":13,"kuaidinum":"JD-ST-13"}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "快照直接跳签收：推进 1 单" "$(jq -r '.data.expressStale // -1' <<<"$R")" "1"
+assert_eq "BOOKED 快照 13 → DELIVERED（补记取件）" "$(x59_bk "$X61_O7" | jq -r .data.booking.status)" "DELIVERED"
+assert_eq "补记 pickedAt" "$(sql "SELECT IF(picked_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN7';")" "SET"
+assert_eq "订单直接 COMPLETED" "$(order_status $X61_O7)" "COMPLETED"
+assert_eq "Shipment 补单号" "$(sql "SELECT express_no FROM shipments WHERE order_id=$X61_O7;")" "JD-ST-13"
+assert_eq "Shipment 补 shipped_at" "$(sql "SELECT IF(shipped_at IS NULL,'NULL','SET') FROM shipments WHERE order_id=$X61_O7;")" "SET"
+# 快照是「在途/派送中」（101/400，IGNORE）：同样先补 10，第二步 101 本身不动状态，但已经算「有进展」不再提醒
+X61_O8=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O8/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
+X61_BN8=$(x59_bk "$X61_O8" | jq -r .data.booking.bookingNo)
+sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN8';"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":true,"status":101}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "快照在途 101：推进 1 单" "$(jq -r '.data.expressStale // -1' <<<"$R")" "1"
+assert_eq "BOOKED 快照 101 → PICKED（补记取件）" "$(x59_bk "$X61_O8" | jq -r .data.booking.status)" "PICKED"
+assert_eq "订单 SHIPPED" "$(order_status $X61_O8)" "SHIPPED"
+assert_eq "有进展不占提醒名额" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN8';")" "NULL"
+# detail 超时（ERROR）不算「无结论」：不占用一次性提醒名额、也不误判成查无进展；下一轮真的查不到才补提醒
+X61_O9=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O9/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
+X61_BN9=$(x59_bk "$X61_O9" | jq -r .data.booking.bookingNo)
+sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN9';"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"timeout"}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "detail 超时：不算推进" "$(jq -r '.data.expressStale // -1' <<<"$R")" "0"
+assert_eq "detail 超时：计次 1" "$(sql "SELECT stale_tries FROM express_bookings WHERE booking_no='$X61_BN9';")" "1"
+assert_eq "detail 超时：不占用提醒名额" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN9';")" "NULL"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":false}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "查不到：这次才计入无结论" "$(jq -r '.data.expressStale // -1' <<<"$R")" "0"
+assert_eq "查不到后提醒补打标" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN9';")" "SET"
+req POST "/api/admin/express/orders/$X61_O9/booking/cancel" "$AT" '{}' >/dev/null
 req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
 
 X61_KEEP_O=$X61_O   # DELIVERED，留给 §62/工作台走查
