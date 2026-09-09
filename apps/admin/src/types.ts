@@ -476,6 +476,11 @@ export interface ExpressBookingView {
   pickedAt: string | null
   deliveredAt: string | null
   cancelledAt: string | null
+  /** 批次三：轨迹摘要（trackJson 由快递100 推送落库） */
+  trackStatus: string | null
+  trackUpdatedAt: string | null
+  trackCount: number
+  latestTrack: { context: string; ftime: string } | null
 }
 
 /** 邮寄预约事件时间线（与服务端 ExpressBookingEvent 模型同构，仅取前端用得到的字段） */

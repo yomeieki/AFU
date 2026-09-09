@@ -1957,6 +1957,16 @@ export default function Workbench() {
                       ? <a className="wb__tel" style={{ color: chColor(card.channel) }} href={`tel:${b.courierMobile}`}>{b.courierName ?? b.courierMobile} {b.courierMobile}</a>
                       : <span>{b.courierName ?? '未接单'}</span>}
                   </div>
+                  {b.latestTrack && (
+                    <div className="wb__line">
+                      <span>最新轨迹</span>
+                      <span style={{ textAlign: 'right' }}>
+                        {b.latestTrack.context}
+                        <br />
+                        <small className="wb__muted">{b.latestTrack.ftime}{b.trackCount > 1 ? ` · 共 ${b.trackCount} 条` : ''}{b.trackStatus === 'abort' ? ' · 订阅已中止' : ''}</small>
+                      </span>
+                    </div>
+                  )}
                   {b.failReason && <div className="wb__line"><span>失败原因</span><span style={{ color: 'var(--danger)' }}>{b.failReason}</span></div>}
                   {showEvents && (
                     <div style={{ marginTop: 6 }}>

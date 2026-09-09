@@ -10,15 +10,18 @@ function expressStageText(order) {
   if (['PAID', 'PREPARING', 'SHIPPED', 'COMPLETED'].indexOf(st) === -1) return ''
   var eb = order.expressBooking
   var ebs = eb ? eb.status : ''
-  var tail = eb ? (eb.courierLabel || '') + (eb.kuaidinum ? ' ' + eb.kuaidinum : '') : ''
+  var tailParts = []
+  if (eb && eb.courierLabel) tailParts.push(eb.courierLabel)
+  if (eb && eb.kuaidinum) tailParts.push(eb.kuaidinum)
+  var tail = tailParts.join(' ')
   if (st === 'COMPLETED') {
     // 只有预约真的走到取件/签收才说「已签收」；老邮寄单（手填单号）没有预约，照旧不显示这张卡
-    return ebs === 'DELIVERED' || ebs === 'PICKED' ? '已签收 · ' + tail : ''
+    return ebs === 'DELIVERED' || ebs === 'PICKED' ? '已签收' + (tail ? ' · ' + tail : '') : ''
   }
   if (st === 'SHIPPED') return ''
   if (ebs === 'BOOKED' || ebs === 'UNKNOWN') return '已预约快递员上门取件' + (eb.slotText ? ' · ' + eb.slotText : '')
   if (ebs === 'ACCEPTED') return '快递员已接单' + (eb.courierName ? ' · ' + eb.courierName : '') + (eb.slotText ? ' · ' + eb.slotText : '')
-  if (ebs === 'PICKED' || ebs === 'DELIVERED') return '已取件 · ' + tail
+  if (ebs === 'PICKED' || ebs === 'DELIVERED') return '已取件' + (tail ? ' · ' + tail : '')
   // 无预约 / 已取消 / 下单中（PENDING）/ 未识别状态：对顾客一律「商家备货中」
   return '商家备货中'
 }

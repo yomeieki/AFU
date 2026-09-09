@@ -16,11 +16,15 @@ test('§4.2 六种卡片文案', () => {
   assert.equal(expressStageText({ ...base, expressBooking: eb('UNKNOWN') }), '已预约快递员上门取件 · 9月9日 14:00–16:00')
   assert.equal(expressStageText({ ...base, expressBooking: eb('ACCEPTED', { courierName: '张师傅' }) }), '快递员已接单 · 张师傅 · 9月9日 14:00–16:00')
   assert.equal(expressStageText({ ...base, expressBooking: eb('PICKED', { kuaidinum: 'JD001' }) }), '已取件 · 京东物流 JD001')
+  // 批次三：courierLabel/kuaidinum 缺一个时 tail 不留多余空格或悬空「 · 」
+  assert.equal(expressStageText({ ...base, expressBooking: eb('PICKED') }), '已取件 · 京东物流')
   // 已发货：让位给 Shipment 卡（批次二决定，不变）
   assert.equal(expressStageText({ ...base, status: 'SHIPPED', expressBooking: eb('PICKED', { kuaidinum: 'JD001' }) }), '')
   // 批次三：订单完成且预约签收 → 已签收；老邮寄单（无预约）完成 → 仍不显示阶段卡
   assert.equal(expressStageText({ ...base, status: 'COMPLETED', expressBooking: eb('DELIVERED', { kuaidinum: 'JD001' }) }), '已签收 · 京东物流 JD001')
   assert.equal(expressStageText({ ...base, status: 'COMPLETED', expressBooking: eb('PICKED', { kuaidinum: 'JD001' }) }), '已签收 · 京东物流 JD001')
+  assert.equal(expressStageText({ ...base, status: 'COMPLETED', expressBooking: eb('DELIVERED', { courierLabel: '', kuaidinum: 'JD001' }) }), '已签收 · JD001')
+  assert.equal(expressStageText({ ...base, status: 'COMPLETED', expressBooking: eb('DELIVERED', { courierLabel: '', kuaidinum: null }) }), '已签收')
   assert.equal(expressStageText({ ...base, status: 'COMPLETED' }), '')
   assert.equal(expressStageText({ ...base, status: 'COMPLETED', expressBooking: eb('CANCELLED') }), '')
   // 同城/取消/退款：不显示

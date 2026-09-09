@@ -252,6 +252,10 @@
       <text class="info-label">快递单号</text>
       <text class="info-value">{{order.expressBooking.kuaidinum}}</text>
     </view>
+    <view class="info-row" wx:if="{{order.shipment && order.shipment.remark}}">
+      <text class="info-label">商家备注</text>
+      <text class="info-value">{{order.shipment.remark}}</text>
+    </view>
   </view>
 
   <!-- Shipment -->
