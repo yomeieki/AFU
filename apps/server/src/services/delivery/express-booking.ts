@@ -152,7 +152,7 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
       sender: { name: store.name, mobile: store.phone, addr: `${store.province}${store.city}${store.district}${store.address}` },
       receiver: { name: o.receiverName, mobile: o.receiverPhone, addr: o.receiverFullAddress },
       cargo: s.pickup.cargoName, weightKg, remark: row.remark, dayType: i.slot.dayType, pickupStart: i.slot.pickupStart, pickupEnd: i.slot.pickupEnd,
-      callbackUrl, salt: callbackSalt,
+      callbackUrl, pollCallbackUrl: callbackUrl + '/track', salt: callbackSalt,
     })
   } catch (e) {
     if (e instanceof ProviderError && e.kind === 'TIMEOUT') {

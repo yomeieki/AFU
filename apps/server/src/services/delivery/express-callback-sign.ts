@@ -32,11 +32,37 @@ export function _parseCallbackParam(p: Record<string, unknown>): ExpressCallback
   }
 }
 
+export interface ExpressTrackItem { context: string; ftime: string; status: string | null; areaName: string | null }
+export interface ExpressTrackPayload {
+  status: string; ischeck: boolean; state: string | null; nu: string | null; com: string | null; message: string | null
+  items: ExpressTrackItem[]; raw: Record<string, unknown>
+}
+/** 轨迹 JSON 只留最近 50 条：顾客端只看最近几条，店员抽屉只看最新一条；快递100 一单轨迹一般 10–20 条，50 是余量 */
+export const TRACK_MAX_ITEMS = 50
+
+/** pollCallBackUrl 推送的 param（调研 §3.3）：{ status, billstatus, message, lastResult:{ nu, com, ischeck, state, data:[{context,ftime,time,status,areaName}] } } */
+export function _parseTrackParam(p: Record<string, unknown>): ExpressTrackPayload {
+  const lr = (p.lastResult && typeof p.lastResult === 'object' && !Array.isArray(p.lastResult) ? p.lastResult : {}) as Record<string, unknown>
+  const items: ExpressTrackItem[] = []
+  for (const it of Array.isArray(lr.data) ? lr.data : []) {
+    const r = (it && typeof it === 'object' && !Array.isArray(it) ? it : {}) as Record<string, unknown>
+    const context = str(r.context), ftime = str(r.ftime) ?? str(r.time)
+    if (!context || !ftime) continue
+    items.push({ context: context.slice(0, 255), ftime: ftime.slice(0, 32), status: str(r.status), areaName: str(r.areaName) })
+  }
+  // 快递100 通常已是最新在前，但不赌它：按 ftime 字符串（'YYYY-MM-DD HH:mm:ss' 可直接比较）降序排一次
+  items.sort((a, b) => (a.ftime < b.ftime ? 1 : a.ftime > b.ftime ? -1 : 0))
+  const state = str(lr.state)
+  return {
+    status: String(str(p.status) ?? '').toLowerCase(),
+    ischeck: String(lr.ischeck ?? '') === '1' || state === '3',
+    state, nu: str(lr.nu), com: str(lr.com), message: str(pick(p.message, lr.message)),
+    items: items.slice(0, TRACK_MAX_ITEMS), raw: p,
+  }
+}
+
 /** sign = MD5(param + salt) 大写；多字节篡改 sign 先按字节长度筛，避免 timingSafeEqual 因长度不等直接抛异常 */
-export function verifyAndParseExpressCallback(
-  body: Record<string, string>,
-  salt: string,
-): { ok: true; payload: ExpressCallbackPayload } | { ok: false; reason: 'BAD_PARAM' | 'SIGN_MISMATCH' } {
+function verifySignedParam(body: Record<string, string>, salt: string): { ok: true; param: Record<string, unknown> } | { ok: false; reason: 'BAD_PARAM' | 'SIGN_MISMATCH' } {
   const paramStr = body.param, sign = body.sign
   if (typeof paramStr !== 'string' || !paramStr || typeof sign !== 'string') return { ok: false, reason: 'BAD_PARAM' }
   const expect = md5U(paramStr + salt), got = sign.toUpperCase()
@@ -45,5 +71,14 @@ export function verifyAndParseExpressCallback(
   let p: Record<string, unknown>
   try { p = JSON.parse(paramStr) as Record<string, unknown> } catch { return { ok: false, reason: 'BAD_PARAM' } }
   if (!p || typeof p !== 'object' || Array.isArray(p)) return { ok: false, reason: 'BAD_PARAM' }
-  return { ok: true, payload: _parseCallbackParam(p) }
+  return { ok: true, param: p }
+}
+
+export function verifyAndParseExpressCallback(body: Record<string, string>, salt: string): { ok: true; payload: ExpressCallbackPayload } | { ok: false; reason: 'BAD_PARAM' | 'SIGN_MISMATCH' } {
+  const v = verifySignedParam(body, salt)
+  return v.ok ? { ok: true, payload: _parseCallbackParam(v.param) } : v
+}
+export function verifyAndParseExpressTrack(body: Record<string, string>, salt: string): { ok: true; payload: ExpressTrackPayload } | { ok: false; reason: 'BAD_PARAM' | 'SIGN_MISMATCH' } {
+  const v = verifySignedParam(body, salt)
+  return v.ok ? { ok: true, payload: _parseTrackParam(v.param) } : v
 }

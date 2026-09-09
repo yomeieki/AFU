@@ -7,6 +7,7 @@ import { BOOKING_RANK, BOOKING_TERMINAL, BOOKING_ACTIVE, KD_EXPRESS_STATUS_MAP, 
 import { makeExpressDedupeKey } from '../src/services/delivery/express-events'
 import { _buildBookParam, _parseBook, _parseDetail, _parseCallbackParam, kd100ExpressProvider } from '../src/services/delivery/kd100-express'
 import { expressMockProvider, queueExpressDirective, resetExpressMock, getExpressCalls } from '../src/services/delivery/express-mock'
+import { _parseTrackParam, verifyAndParseExpressTrack, verifyAndParseExpressCallback, TRACK_MAX_ITEMS } from '../src/services/delivery/express-callback-sign'
 import crypto from 'crypto'
 import { ProviderError } from '../src/services/delivery/types'
 import { validateSlot, suggestSlot, pickupDateOf } from '../src/services/delivery/express-booking'
@@ -155,6 +156,51 @@ await t('unpickedCutoff：午夜边界——00:30（m=60）→ 昨天 23:30，�
 })
 await t('unpickedCutoff：常规时段——上午 12:00（m=60）→ 今天 11:00', () => {
   assert.deepStrictEqual(unpickedCutoff(new Date('2026-09-09T04:00:00Z'), 60), { cutDate: '2026-09-09', nowHm: '11:00' })
+})
+
+await t('bOrder 参数带 op=1 与 pollCallBackUrl（轨迹订阅免费，spec §7）', () => {
+  const p = _buildBookParam({ bookingNo: 'E1-1', kuaidicom: 'jd', sender: { name: 'a', mobile: '1', addr: 'A' }, receiver: { name: 'b', mobile: '2', addr: 'B' }, cargo: '食品', weightKg: 1, callbackUrl: 'http://x/api/kd-express/E1-1', pollCallbackUrl: 'http://x/api/kd-express/E1-1/track', salt: 's' })
+  assert.strictEqual(p.op, 1)
+  assert.strictEqual(p.pollCallBackUrl, 'http://x/api/kd-express/E1-1/track')
+  assert.strictEqual(p.callBackUrl, 'http://x/api/kd-express/E1-1')
+})
+await t('轨迹 param 解析：最新在上、缺字段剔除、ischeck/state 判签收、封顶 50 条', () => {
+  const p = _parseTrackParam({ status: 'POLLING', lastResult: { nu: 'JD1', com: 'jd', ischeck: '0', state: '0', data: [
+    { context: '已揽收', ftime: '2026-09-10 10:00:00' },
+    { context: '运输中', ftime: '2026-09-10 12:00:00', areaName: '成都' },
+    { ftime: '2026-09-10 13:00:00' },          // 无 context → 剔除
+    { context: '无时间' },                       // 无 ftime → 剔除
+    'garbage', null,
+  ] } })
+  assert.strictEqual(p.status, 'polling'); assert.strictEqual(p.ischeck, false); assert.strictEqual(p.nu, 'JD1')
+  assert.deepStrictEqual(p.items.map((x) => x.context), ['运输中', '已揽收'])
+  assert.strictEqual(p.items[0].areaName, '成都')
+  assert.strictEqual(_parseTrackParam({ status: 'polling', lastResult: { ischeck: '1', data: [] } }).ischeck, true)
+  assert.strictEqual(_parseTrackParam({ status: 'polling', lastResult: { ischeck: '0', state: '3', data: [] } }).ischeck, true)
+  assert.strictEqual(_parseTrackParam({ status: 'shutdown', lastResult: { data: [] } }).ischeck, false)
+  assert.deepStrictEqual(_parseTrackParam({ status: 'abort', message: '单号不存在' }).items, [])
+  assert.strictEqual(_parseTrackParam({ status: 'abort', message: '单号不存在' }).message, '单号不存在')
+  const many = Array.from({ length: 60 }, (_, i) => ({ context: `c${i}`, ftime: `2026-09-10 ${String(i % 24).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00` }))
+  assert.strictEqual(_parseTrackParam({ status: 'polling', lastResult: { data: many } }).items.length, TRACK_MAX_ITEMS)
+  // lastResult 是数组/字符串这类脏形状不抛错
+  assert.deepStrictEqual(_parseTrackParam({ status: 'polling', lastResult: [1, 2] }).items, [])
+  assert.deepStrictEqual(_parseTrackParam({ status: 'polling', lastResult: 'x' }).items, [])
+})
+await t('轨迹推送验签：与状态回调同公式；篡改/缺 param/非对象 JSON 都拒', () => {
+  const salt = 'abc123'
+  const param = JSON.stringify({ status: 'polling', lastResult: { ischeck: '0', data: [{ context: 'x', ftime: '2026-09-10 10:00:00' }] } })
+  const sign = crypto.createHash('md5').update(param + salt, 'utf8').digest('hex').toUpperCase()
+  const ok = verifyAndParseExpressTrack({ param, sign }, salt)
+  assert.ok(ok.ok && ok.payload.items.length === 1)
+  assert.deepStrictEqual(verifyAndParseExpressTrack({ param, sign: sign.toLowerCase() }, salt).ok, true)   // 大小写不敏感
+  assert.deepStrictEqual(verifyAndParseExpressTrack({ param, sign: 'DEADBEEF' }, salt), { ok: false, reason: 'SIGN_MISMATCH' })
+  assert.deepStrictEqual(verifyAndParseExpressTrack({ sign } as Record<string, string>, salt), { ok: false, reason: 'BAD_PARAM' })
+  const arrParam = '[1,2]'
+  const arrSign = crypto.createHash('md5').update(arrParam + salt, 'utf8').digest('hex').toUpperCase()
+  assert.deepStrictEqual(verifyAndParseExpressTrack({ param: arrParam, sign: arrSign }, salt), { ok: false, reason: 'BAD_PARAM' })
+  // 同一个 salt 下状态回调仍然照常（重构 verifySignedParam 不能改变既有行为）
+  const cb = verifyAndParseExpressCallback({ param: JSON.stringify({ status: 1, data: { status: 1 } }), sign: crypto.createHash('md5').update(JSON.stringify({ status: 1, data: { status: 1 } }) + salt, 'utf8').digest('hex').toUpperCase() }, salt)
+  assert.ok(cb.ok && cb.payload.status === '1')
 })
 
 console.log(`\n通过 ${pass} 条${process.exitCode ? '，有失败' : ''}`)

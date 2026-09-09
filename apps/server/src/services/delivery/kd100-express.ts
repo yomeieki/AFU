@@ -5,6 +5,7 @@
  *  - batchPrice：{ kuaidiComList, sendManPrintAddr, recManPrintAddr, weight }，响应 data 是数组，
  *    每项 { kuaidiCom, price, defPrice, serviceType, firstPrice, overPrice, ... }，没价的家 price=null
  *  - 错误码 400 参数 / 503 签名 / 600 非法用户 / 601 key 过期；业务失败走 500 + message 原话
+ *  - op=1 + pollCallBackUrl：免费订阅轨迹推送，推送验签同 salt（docs/research §3.3）
  */
 import { config, validateKd100ExpressConfig } from '../../config'
 import { postKd100 } from './kd100-client'
@@ -29,7 +30,7 @@ export interface ExpressBookInput {
   sender: ExpressParty; receiver: ExpressParty
   cargo: string; weightKg: number; remark?: string | null
   dayType?: string | null; pickupStart?: string | null; pickupEnd?: string | null
-  callbackUrl: string; salt: string; timeoutMs?: number
+  callbackUrl: string; pollCallbackUrl: string; salt: string; timeoutMs?: number
 }
 export interface ExpressBookResult { taskId: string | null; kdOrderId: string | null; kuaidinum: string | null; pollToken: string | null }
 export interface ExpressDetailResult {
@@ -92,7 +93,7 @@ export function _buildBookParam(i: ExpressBookInput): Record<string, unknown> {
     kuaidicom: i.kuaidicom,
     recManName: i.receiver.name, recManMobile: i.receiver.mobile, recManPrintAddr: i.receiver.addr,
     sendManName: i.sender.name, sendManMobile: i.sender.mobile, sendManPrintAddr: i.sender.addr,
-    callBackUrl: i.callbackUrl, salt: i.salt, thirdOrderId: i.bookingNo,
+    callBackUrl: i.callbackUrl, pollCallBackUrl: i.pollCallbackUrl, op: 1, salt: i.salt, thirdOrderId: i.bookingNo,
     cargo: i.cargo, weight: i.weightKg.toFixed(1), payment: 'SHIPPER',
   }
   if (i.serviceType) p.serviceType = i.serviceType
