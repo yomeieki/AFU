@@ -67,7 +67,7 @@ docs/superpowers/notes/2026-09-09-express-batches-integration-audit.md   # 仅�
 | A2 | `cd apps/server && npx ts-node --transpile-only scripts/selftest-express-booking.ts \| tail -1` | `通过 22 条`（原 21 + 本批 1） |
 | A3 | e2e §59 新增 ⑩「BOOKED 直推 13」 | 预约 DELIVERED、`pickedAt` 非空、订单 COMPLETED、`shipments.shipped_at` SET、`express_booking_events` 里该预约 `provider_status=10` 的 SYSTEM/CALLBACK 留痕 **恰好 1 条**、`provider_status=13` 1 条 |
 | A4 | e2e §61 新增「预约 DELIVERED 但订单被人工改回 PREPARING → 对账 tick」 | `expressStale` 不推进（0）、`stale_reminded_at` SET；第二次 tick 不再打标（值不变） |
-| A5 | e2e §60/§61 既有「未取件提醒」「对账无进展」用例 | 全部保持绿；新增断言：先跑 `expressUnpicked`（提醒 1 条）再跑 `expressStale`（`stale_reminded_at` 仍 NULL，即不重复提醒） |
+| A5 | e2e §60/§61 既有「未取件提醒」「对账无进展」用例 + 新增 ⑦c | 既有全部保持绿；⑦c：先跑 `expressUnpicked`（提醒 1 条）再跑 `expressStale` 后 `stale_reminded_at` 与 `unpicked_reminded_at` 都 SET；**通知只发一条**由 02 复核读 `reconcileStaleBooking` 确认 `unpickedRemindedAt` 非空时不调用 `notifyExpressAlert` |
 | A6 | `curl -s -o /dev/null -w '%{http_code}' -X PUT http://localhost:3100/api/admin/settings/shipping`（dev） | 401（路由存在、要鉴权）；`NODE_ENV=production` 下 `grep -n "isProduction" apps/server/src/routes/admin/settings.ts` 能看到 PUT 被条件挂载 |
 | A7 | `cd apps/admin && npx tsc --noEmit && npm test && npm run build` | 干净、12/12、build 成功；`grep -rn "settings/shipping" apps/admin/src` 为空 |
 | A8 | `npm run test:miniapp` | 79/79 |
@@ -138,7 +138,8 @@ sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WH
 R=$(sched '{"expressUnpickedMin":0,"expressStaleIntervalMin":9999}'); assert_eq "未取件提醒 1 条" "$(jq -r '.data.expressUnpicked // -1' <<<"$R")" "1"
 req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":false}}' >/dev/null
 R=$(sched '{"expressStaleIntervalMin":0}')
-assert_eq "对账查了但不重复提醒（stale_reminded_at 仍 NULL）" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN8';")" "NULL"
+assert_eq "对账无结论：照旧打标（通知被抑制由代码复核确认）" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN8';")" "SET"
+assert_eq "前置成立：未取件提醒确实先打过标" "$(sql "SELECT IF(unpicked_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN8';")" "SET"
 assert_eq "对账确实查过（计次 ≥ 1；首轮 tick 里 expressStale 也会占坑一次，所以不断言恰好 1）" "$(sql "SELECT stale_tries >= 1 FROM express_bookings WHERE booking_no='$X61_BN8';")" "1"
 req POST "/api/admin/express/orders/$X61_O8/booking/cancel" "$AT" '{}' >/dev/null
 ```
@@ -188,7 +189,7 @@ Expected: ⑩「订单 COMPLETED」实际 PREPARING、「Shipment 单号+发货�
 ```
 （`b` 的 include 里已有 `order`；确认 `orderInclude` 选出了 `order.status`，没有则在 include 里补 `status: true`——这是 select 子集，属白名单内文件。）
 
-去重复提醒：`reconcileStaleBooking` 里 BOOKED/ACCEPTED 分支的「无结论提醒」在打标 `staleRemindedAt` **之前**加条件：`if (b.status !== 'PICKED' && b.unpickedRemindedAt) return result`（已发过「时段已过仍未取件」就不再发「无进展」；`staleRemindedAt` 保持 NULL）。
+去重复提醒（00 修订，2026-09-09：原写法与 §61 ⑦ 既有断言「查不到：提醒已打标 SET」冲突，因为同一次 `run-scheduler` 里 `expressUnpicked` 先跑）：**打标照旧、只抑制通知**。`reconcileStaleBooking` 里 BOOKED/ACCEPTED 分支的「无结论提醒」保持 `updateMany({ staleRemindedAt: null })` 打标，但 `m.count > 0` 之后加：`if (b.status !== 'PICKED' && b.unpickedRemindedAt) { /* 已发过「时段已过仍未取件」，不再发第二条近义通知 */ } else { notifyExpressAlert(...) }`。既有 e2e 只断言 `stale_reminded_at` 列，不受影响；通知是否被抑制由 02 复核读代码确认（A5）。
 
 - [ ] **Step 5: selftest 一条**
 
