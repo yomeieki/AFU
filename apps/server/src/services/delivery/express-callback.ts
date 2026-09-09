@@ -6,7 +6,7 @@ import { ExpressBooking, Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { getExpressProvider, ExpressCallbackPayload } from './kd100-express'
 import { KD_EXPRESS_STATUS_MAP, BOOKING_RANK, BOOKING_TERMINAL, canTransition } from './express-booking-state'
-import { recordBookingEvent, makeExpressDedupeKey, truncStr } from './express-events'
+import { recordBookingEvent, makeExpressDedupeKey, truncStr, adminBookingEventKey } from './express-events'
 import { notifySystemAlert } from '../notify'
 import { notifyExpressAlert } from '../order-notify'
 import { sendShipSubscribeMessage } from '../subscribe-message'
@@ -99,6 +99,15 @@ export async function applyProviderStatus(tx: Tx, booking: ExpressBooking & { or
   // 状态 0（建单成功）的预扣要落库，即便这条回调因为重复推送/并发而没能推进 rank
   // （canTransition('BOOKED','BOOKED') 恒 false，rank 分支自身不会走到下面的 applyFee）
   if (mapped.type === 'rank' && mapped.status === 'BOOKED') await applyFee(tx, current, p, after, costAlertRatio)
+  // 签收（13）到达而预约还没到 PICKED：快递100 漏推了 10。先按 10 走一遍（订单 SHIPPED、Shipment.shippedAt、
+  // 发货订阅消息），再让下面的 rank 分支收尾成 DELIVERED——否则预约成了 DELIVERED、订单却永远卡在 PREPARING，
+  // 且 7 天自动完成 / 对账任务 / 未取件提醒都够不到它。三条签收路径（回调 / 轨迹 / 对账）都经过这里，只修一处。
+  if (mapped.type === 'rank' && mapped.status === 'DELIVERED' && current.statusRank < BOOKING_RANK.PICKED) {
+    // 单独留一条 SYSTEM 事件：外层只记了这条 13 回调，补记的 10 不留痕的话抽屉时间线看不出「为什么突然发货了」
+    await recordBookingEvent(tx, { bookingId: current.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', providerStatus: 10, statusDesc: '回调直接签收，补记取件' })
+    await applyProviderStatus(tx, current, { ...p, status: '10', statusDesc: '回调直接签收，补记取件' }, after, costAlertRatio)
+    current = { ...current, status: 'PICKED', statusRank: BOOKING_RANK.PICKED, kuaidinum: p.kuaidinum ?? current.kuaidinum }
+  }
   if (mapped.type === 'rank') {
     if (!canTransition(current.status, mapped.status)) { await tx.expressBooking.update({ where: { id: current.id }, data: identity }); return }
     const stamp = mapped.stamp ? { [mapped.stamp]: new Date() } : {}

@@ -89,5 +89,21 @@ assert_eq "taskId 认领" "$(sql "SELECT task_id FROM express_bookings WHERE boo
 echo "-- ⑨ 未知状态码 → 留痕 + 200 --"
 HTTPC=$(x59_cb "$X59_BN6" 777 '{}'); assert_eq "未知状态 200" "$HTTPC" "200"
 assert_eq "状态不变 ACCEPTED" "$(x59_bk "$X59_O4" | jq -r .data.booking.status)" "ACCEPTED"
+echo "-- ⑩ 漏推 10 直推 13：先补取件（订单 SHIPPED + Shipment + 发货通知）再签收 → COMPLETED --"
+X59_O5=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X59_O5/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}' >/dev/null
+X59_BN7=$(x59_bk "$X59_O5" | jq -r .data.booking.bookingNo)
+assert_eq "起点 BOOKED" "$(x59_bk "$X59_O5" | jq -r .data.booking.status)" "BOOKED"
+HTTPC=$(x59_cb "$X59_BN7" 13 '{"kuaidinum":"JD-DIRECT-13"}'); assert_eq "直推 13 HTTP 200" "$HTTPC" "200"
+R=$(x59_bk "$X59_O5")
+assert_eq "预约 DELIVERED" "$(jq -r .data.booking.status <<<"$R")" "DELIVERED"
+assert_eq "pickedAt 已补" "$(jq -r '.data.booking.pickedAt != null' <<<"$R")" "true"
+assert_eq "不再活跃" "$(jq -r .data.active <<<"$R")" "false"
+assert_eq "订单 COMPLETED（经过 SHIPPED）" "$(order_status $X59_O5)" "COMPLETED"
+assert_eq "Shipment 单号+发货时间" "$(sql "SELECT CONCAT(express_no,'|',IF(shipped_at IS NULL,'NULL','SET')) FROM shipments WHERE order_id=$X59_O5;")" "JD-DIRECT-13|SET"
+assert_eq "completedAt 有值" "$(sql "SELECT IF(completed_at IS NULL,'NULL','SET') FROM orders WHERE id=$X59_O5;")" "SET"
+assert_eq "补记取件只留痕一次（provider_status=10）" "$(sql "SELECT COUNT(*) FROM express_booking_events e JOIN express_bookings b ON b.id=e.booking_id WHERE b.booking_no='$X59_BN7' AND e.provider_status=10;")" "1"
+assert_eq "签收留痕一次（provider_status=13）" "$(sql "SELECT COUNT(*) FROM express_booking_events e JOIN express_bookings b ON b.id=e.booking_id WHERE b.booking_no='$X59_BN7' AND e.provider_status=13;")" "1"
+
 X59_KEEP_O4=$X59_O4   # ACCEPTED，留给 §60 退款前置用
 req POST /api/admin/system/express-mock/reset "$AT" >/dev/null

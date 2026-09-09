@@ -115,6 +115,8 @@ export async function reconcileExpressStale(intervalMin = 30, pickedDays = 10): 
     where: { OR: [
       { status: { in: ['BOOKED', 'ACCEPTED'] }, AND: [{ OR: [{ pickupDate: { lt: cutDate } }, { pickupDate: cutDate, pickupEnd: { lte: nowHm } }] }, due] },
       { status: 'PICKED', pickedAt: { lt: ago(pickedDays * 24 * 60) }, AND: [due] },
+      // C. 预约已签收但订单还停在备货：历史上「漏推 10 直推 13」留下的孤儿单（T1 之后不再产生）。只告警不改单。
+      { status: 'DELIVERED', staleRemindedAt: null, order: { status: { in: ['PAID', 'PREPARING'] } } },
     ] },
     take: BATCH, select: { id: true, staleCheckedAt: true },
   })
@@ -139,6 +141,12 @@ export async function reconcileExpressStale(intervalMin = 30, pickedDays = 10): 
  */
 export async function reconcileStaleBooking(bookingId: number, pickedDays = 10): Promise<'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND' | 'ERROR'> {
   const b = await prisma.expressBooking.findUnique({ where: { id: bookingId }, include: orderInclude })
+  if (b && b.status === 'DELIVERED') {
+    if (!['PAID', 'PREPARING'].includes(b.order.status)) return 'UNCHANGED'
+    const m = await prisma.expressBooking.updateMany({ where: { id: b.id, staleRemindedAt: null }, data: { staleRemindedAt: new Date() } })
+    if (m.count > 0) notifyExpressAlert('预约已签收但订单仍在备货中', [`订单 ${b.orderNo} · ${COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, '快递100 已签收，但系统没有收到取件回调，订单没有自动发货', '请在工作台「填单号发货」后再「确认收货」，或联系开发核对'], { key: `express-orphan:${b.id}` })
+    return 'UNCHANGED'
+  }
   if (!b || !['BOOKED', 'ACCEPTED', 'PICKED'].includes(b.status)) return 'UNCHANGED'
   const label = COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom
   let d: ExpressDetailResult
@@ -185,10 +193,15 @@ export async function reconcileStaleBooking(bookingId: number, pickedDays = 10):
   // 无结论只提醒一次
   const m = await prisma.expressBooking.updateMany({ where: { id: b.id, staleRemindedAt: null }, data: { staleRemindedAt: new Date() } })
   if (m.count > 0) {
-    const why = b.status === 'PICKED'
-      ? [`已取件超过 ${pickedDays} 天仍无签收回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '订单已按 7 天规则自动完成；如顾客反馈未收到，请到快递100 后台或联系快递公司查件']
-      : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
-    notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
+    // 已经发过「时段已过仍未取件」提醒的（BOOKED/ACCEPTED 起点），标记照打，但信息量更少的「无进展」不再重复轰炸
+    if (b.status !== 'PICKED' && b.unpickedRemindedAt) {
+      // 已发过「时段已过仍未取件」，不再发第二条近义通知
+    } else {
+      const why = b.status === 'PICKED'
+        ? [`已取件超过 ${pickedDays} 天仍无签收回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '订单已按 7 天规则自动完成；如顾客反馈未收到，请到快递100 后台或联系快递公司查件']
+        : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
+      notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
+    }
   }
   return result
 }

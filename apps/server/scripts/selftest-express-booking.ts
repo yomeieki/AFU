@@ -228,6 +228,12 @@ await t('trackAlertKinds：abort/退签退回都只在跟上一次不同时才�
   assert.deepStrictEqual(trackAlertKinds(null, '4', { ...base, status: 'polling', state: '6' }), ['return'])
 })
 
+await t('签收 13 的 rank 高于 PICKED，且 BOOKED/ACCEPTED 都允许直达 DELIVERED（正是补记 10 存在的理由）', () => {
+  assert.ok(BOOKING_RANK.DELIVERED > BOOKING_RANK.PICKED)
+  assert.ok(canTransition('BOOKED', 'DELIVERED') && canTransition('ACCEPTED', 'DELIVERED'))
+  assert.strictEqual(KD_EXPRESS_STATUS_MAP['13'].type, 'rank')
+})
+
 console.log(`\n通过 ${pass} 条${process.exitCode ? '，有失败' : ''}`)
 }
 main().catch((e) => { console.error(e); process.exitCode = 1 })
