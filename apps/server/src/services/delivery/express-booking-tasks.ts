@@ -4,10 +4,16 @@
  * 造成重复打扰（宁可漏一条提醒，不可轰炸店员）。
  */
 import prisma from '../../utils/prisma'
+import { Prisma } from '@prisma/client'
 import { getExpressSettings, COURIER_LABEL } from '../express-settings'
 import { notifyExpressAlert } from '../order-notify'
 import { notifySystemAlert } from '../notify'
 import { reconcileUnknownBooking } from './express-booking'
+import { getExpressProvider } from './kd100-express'
+import { KD_EXPRESS_STATUS_MAP } from './express-booking-state'
+import { applyProviderStatus } from './express-callback'
+import { recordBookingEvent } from './express-events'
+import crypto from 'crypto'
 
 const BATCH = 100
 const ago = (min: number) => new Date(Date.now() - min * 60 * 1000)
@@ -89,4 +95,75 @@ export async function reconcileExpressUnknown(minAge = 1): Promise<number> {
     }
   }
   return n
+}
+
+const STALE_MAX_TRIES = 48   // 每 30 分钟一次 = 24 小时；之后不再自动查，靠人工
+const orderInclude = { order: { include: { user: { select: { openid: true } }, items: { select: { productName: true }, take: 1, orderBy: { id: 'asc' as const } } } } }
+
+/**
+ * 「该有回调了却没有」的两类单主动查单（spec §7 对账任务）：
+ *  A. BOOKED/ACCEPTED 且预约时段结束 + unpickedRemindMin 已过——快递100 有时不推揽收/揽货失败；
+ *  B. PICKED 且取件已超 pickedDays 天——13 签收没推到（autoComplete 7 天已把订单转 COMPLETED，这里只是把预约收尾）。
+ * 每单每 intervalMin 分钟最多查一次、累计最多 STALE_MAX_TRIES 次；查到就按回调同一套 applyProviderStatus 推进；
+ * 查不到/无进展只提醒一次（staleRemindedAt 打标 count=1 才推送）。
+ */
+export async function reconcileExpressStale(intervalMin = 30, pickedDays = 10): Promise<number> {
+  const s = await getExpressSettings()
+  const { cutDate, nowHm } = unpickedCutoff(new Date(), s.pickup.unpickedRemindMin)
+  const due: Prisma.ExpressBookingWhereInput = { staleTries: { lt: STALE_MAX_TRIES }, OR: [{ staleCheckedAt: null }, { staleCheckedAt: { lt: ago(intervalMin) } }] }
+  const rows = await prisma.expressBooking.findMany({
+    where: { OR: [
+      { status: { in: ['BOOKED', 'ACCEPTED'] }, AND: [{ OR: [{ pickupDate: { lt: cutDate } }, { pickupDate: cutDate, pickupEnd: { lte: nowHm } }] }, due] },
+      { status: 'PICKED', pickedAt: { lt: ago(pickedDays * 24 * 60) }, AND: [due] },
+    ] },
+    take: BATCH, select: { id: true, staleCheckedAt: true },
+  })
+  let n = 0
+  for (const b of rows) {
+    // 先占坑再查：并发双 tick 只有一个能把 staleCheckedAt 从旧值改掉
+    const claimed = await prisma.expressBooking.updateMany({ where: { id: b.id, staleCheckedAt: b.staleCheckedAt }, data: { staleCheckedAt: new Date(), staleTries: { increment: 1 } } })
+    if (claimed.count === 0) continue
+    if ((await reconcileStaleBooking(b.id)) === 'ADVANCED') n++
+  }
+  return n
+}
+
+export async function reconcileStaleBooking(bookingId: number): Promise<'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND' | 'ERROR'> {
+  const b = await prisma.expressBooking.findUnique({ where: { id: bookingId }, include: orderInclude })
+  if (!b || !['BOOKED', 'ACCEPTED', 'PICKED'].includes(b.status)) return 'UNCHANGED'
+  const label = COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom
+  let result: 'ADVANCED' | 'UNCHANGED' | 'NOT_FOUND' | 'ERROR'
+  try {
+    const d = await getExpressProvider().detail({ taskId: b.taskId, thirdOrderId: b.bookingNo })
+    if (!d.found || d.status === null) result = 'NOT_FOUND'
+    else {
+      const status = String(d.status)
+      const rawStr = JSON.stringify(d.raw ?? {})
+      const { costAlertRatio } = await getExpressSettings()
+      const after: (() => void)[] = []
+      await prisma.$transaction(async (tx) => {
+        const ev = await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: `RC:${b.bookingNo}:${status}:${crypto.createHash('md5').update(rawStr, 'utf8').digest('hex')}`.slice(0, 64), source: 'SYSTEM', providerStatus: /^\d+$/.test(status) ? Number(status) : null, statusDesc: `对账查单：快递100 状态 ${status}${KD_EXPRESS_STATUS_MAP[status] && 'label' in KD_EXPRESS_STATUS_MAP[status] ? `（${(KD_EXPRESS_STATUS_MAP[status] as { label: string }).label}）` : ''}`, rawPayload: d.raw as Prisma.InputJsonValue })
+        if (ev.duplicate) return
+        await applyProviderStatus(tx, b, { status, taskId: d.taskId, kdOrderId: d.kdOrderId, kuaidinum: d.kuaidinum, courierName: d.courierName, courierMobile: d.courierMobile, weightKg: null, freightFen: d.freightFen, defPriceFen: null, feeDetails: null, statusDesc: '对账补状态', raw: (d.raw ?? {}) as Record<string, unknown> }, after, costAlertRatio)
+      })
+      for (const f of after) { try { f() } catch (e) { console.error('[express-stale] after 失败:', e) } }
+      const now = await prisma.expressBooking.findUnique({ where: { id: b.id }, select: { status: true } })
+      result = now && now.status !== b.status ? 'ADVANCED' : 'UNCHANGED'
+    }
+  } catch (e) {
+    console.warn('[express-stale] detail 失败:', (e as Error).message)
+    result = 'ERROR'
+  }
+  if (result === 'ADVANCED') return result
+  // 无结论只提醒一次；ERROR（快递100 抖动）不算结论，不提醒也不占用那一次
+  if (result !== 'ERROR') {
+    const m = await prisma.expressBooking.updateMany({ where: { id: b.id, staleRemindedAt: null }, data: { staleRemindedAt: new Date() } })
+    if (m.count > 0) {
+      const why = b.status === 'PICKED'
+        ? [`已取件超过 10 天仍无签收回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '订单已按 7 天规则自动完成；如顾客反馈未收到，请到快递100 后台或联系快递公司查件']
+        : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
+      notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
+    }
+  }
+  return result
 }

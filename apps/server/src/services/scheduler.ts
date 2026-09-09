@@ -22,7 +22,7 @@ import {
   remindLocalUncalled, remindCancelRequestPending, autoRejectStaleCancelRequests, autoCallRiders, autoCompleteLocalDelivered,
   housekeepingDelivery, refreshStaleQuotes, escalateSoloCalls,
 } from './delivery/tasks'
-import { remindExpressUnaccepted, remindExpressUnpicked, reconcileExpressUnknown } from './delivery/express-booking-tasks'
+import { remindExpressUnaccepted, remindExpressUnpicked, reconcileExpressUnknown, reconcileExpressStale } from './delivery/express-booking-tasks'
 import {
   processQueue as printQueueSweep, repeatAnnounce as printRepeatAnnounce, printerHealthTask,
 } from './ticket'
@@ -83,6 +83,9 @@ export interface SchedulerOverrides {
   expressUnacceptedHours?: number
   expressUnpickedMin?: number
   expressUnknownMin?: number
+  /** 批次三对账任务：查单间隔（分钟）、取件后多少天算超期 */
+  expressStaleIntervalMin?: number
+  expressPickedStaleDays?: number
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -115,6 +118,7 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['expressUnknownReconcile', () => reconcileExpressUnknown(overrides.expressUnknownMin)],
     ['expressUnaccepted', () => remindExpressUnaccepted(overrides.expressUnacceptedHours)],
     ['expressUnpicked', () => remindExpressUnpicked(overrides.expressUnpickedMin)],
+    ['expressStale', () => reconcileExpressStale(overrides.expressStaleIntervalMin, overrides.expressPickedStaleDays)],
     // 出票三任务（规格 §8b）：兜扫 PENDING/SENT 队列、未接单重复播报、打印机健康（离线/异常告警+恢复补打）。
     // 三者各自读 Setting(key=printer) 的开关/阈值（enabled/repeat.*/offlineAlertMin），不经 overrides——
     // 与其余任务不同，出票没有「联调时需要临时调阈值」的诉求：e2e 改阈值走 PUT /admin/settings/printer

@@ -123,6 +123,8 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         expressUnacceptedHours: num(body.expressUnacceptedHours),
         expressUnpickedMin: num(body.expressUnpickedMin),
         expressUnknownMin: num(body.expressUnknownMin),
+        expressStaleIntervalMin: num(body.expressStaleIntervalMin),
+        expressPickedStaleDays: num(body.expressPickedStaleDays),
       })
     )
   } catch (e) {

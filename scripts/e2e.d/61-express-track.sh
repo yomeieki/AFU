@@ -76,4 +76,42 @@ X61_O4=$(x58_paid_preparing)
 req POST "/api/admin/orders/$X61_O4/ship" "$AT" '{"expressCompany":"顺丰","expressNo":"SF-OLD-61"}' >/dev/null
 R=$(x61_cust "$X61_O4"); assert_eq "老单 expressBooking=null" "$(jq -c .data.expressBooking <<<"$R")" "null"; assert_eq "老单 track=null" "$(jq -c .data.track <<<"$R")" "null"
 assert_eq "老单 Shipment 照旧" "$(jq -r .data.shipment.expressNo <<<"$R")" "SF-OLD-61"
+echo "-- ⑦ 对账：时段过期未取件 → detail 补 10；取件超 10 天 → detail 补 13；查不到只提醒一次、间隔内不重查 --"
+X61_O5=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O5/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
+X61_BN5=$(x59_bk "$X61_O5" | jq -r .data.booking.bookingNo)
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "时段未过：不查单" "$(jq -r '.data.expressStale // -1' <<<"$R")" "0"
+assert_eq "时段未过：detail 未被调" "$(req GET "/api/admin/system/express-mock/calls?op=detail" "$AT" | jq -r '.data|length')" "0"
+sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN5';"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":true,"status":10,"kuaidinum":"JD-ST-61"}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "过期查单：推进 1 单" "$(jq -r '.data.expressStale // -1' <<<"$R")" "1"
+R=$(x59_bk "$X61_O5"); assert_eq "detail 10 → PICKED" "$(jq -r .data.booking.status <<<"$R")" "PICKED"; assert_eq "补单号" "$(jq -r .data.booking.kuaidinum <<<"$R")" "JD-ST-61"
+assert_eq "订单 SHIPPED" "$(order_status $X61_O5)" "SHIPPED"
+assert_eq "对账事件留痕 SYSTEM" "$(jq -r '[.data.events[]|select(.source=="SYSTEM" and (.statusDesc|test("对账")))]|length' <<<"$R")" "1"
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "PICKED 未满 10 天：不查" "$(jq -r '.data.expressStale // -1' <<<"$R")" "0"
+sql "UPDATE express_bookings SET picked_at=DATE_SUB(NOW(), INTERVAL 11 DAY), stale_checked_at=NULL WHERE booking_no='$X61_BN5';"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":true,"status":13}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "取件超期查单：推进 1 单" "$(jq -r '.data.expressStale // -1' <<<"$R")" "1"
+assert_eq "detail 13 → DELIVERED" "$(x59_bk "$X61_O5" | jq -r .data.booking.status)" "DELIVERED"
+assert_eq "订单 COMPLETED" "$(order_status $X61_O5)" "COMPLETED"
+# 查不到：提醒一次、计次；间隔 30 分钟内不重查
+X61_O6=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O6/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
+X61_BN6=$(x59_bk "$X61_O6" | jq -r .data.booking.bookingNo)
+sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN6';"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":false}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}'); assert_eq "查不到：不推进" "$(jq -r '.data.expressStale // -1' <<<"$R")" "0"
+assert_eq "查不到：仍 BOOKED" "$(x59_bk "$X61_O6" | jq -r .data.booking.status)" "BOOKED"
+assert_eq "查不到：提醒已打标" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN6';")" "SET"
+X61_REM=$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no='$X61_BN6';")
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":false}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}')
+assert_eq "第二轮：计次 2" "$(sql "SELECT stale_tries FROM express_bookings WHERE booking_no='$X61_BN6';")" "2"
+assert_eq "第二轮：提醒时间不变（只一次）" "$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no='$X61_BN6';")" "$X61_REM"
+X61_DET=$(req GET "/api/admin/system/express-mock/calls?op=detail" "$AT" | jq -r '.data|length')
+R=$(sched '{"expressStaleIntervalMin":30}')
+assert_eq "30 分钟内不重查（detail 调用数不变）" "$(req GET "/api/admin/system/express-mock/calls?op=detail" "$AT" | jq -r '.data|length')" "$X61_DET"
+req POST "/api/admin/express/orders/$X61_O6/booking/cancel" "$AT" '{}' >/dev/null
+req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
+
 X61_KEEP_O=$X61_O   # DELIVERED，留给 §62/工作台走查
