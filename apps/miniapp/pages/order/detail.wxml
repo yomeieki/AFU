@@ -271,6 +271,20 @@
     </view>
   </view>
 
+  <!-- 邮寄轨迹：服务端 track（快递100 推送落库）最新在上，只读；脏条目已在 utils/express-track 剔除 -->
+  <view class="card" wx:if="{{order.showExpressTrack}}">
+    <view class="card-title">物流轨迹</view>
+    <view class="track">
+      <view wx:for="{{order.expressTrack}}" wx:key="index" class="track-item {{index === 0 ? 'first' : ''}}">
+        <view class="track-dot"></view>
+        <view class="track-body">
+          <text class="track-context">{{item.context}}</text>
+          <text wx:if="{{item.timeText}}" class="track-time">{{item.timeText}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
   <view class="spacer"></view>
 </view>
 

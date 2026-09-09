@@ -540,3 +540,13 @@
   font-size: 22rpx;
   color: var(--text-3);
 }
+
+/* 邮寄轨迹（批次三）：与订单进度时间线区分——小点、无连线、长文本换行 */
+.track { padding: 8rpx 0 0; }
+.track-item { display: flex; align-items: flex-start; padding-bottom: 20rpx; }
+.track-dot { width: 14rpx; height: 14rpx; border-radius: 50%; background: var(--border); margin: 12rpx 16rpx 0 6rpx; flex-shrink: 0; }
+.track-item.first .track-dot { background: var(--brand); }
+.track-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.track-context { font-size: 26rpx; color: var(--text-3); line-height: 1.5; word-break: break-all; white-space: normal; }
+.track-item.first .track-context { color: var(--text-1); font-weight: 500; }
+.track-time { font-size: 22rpx; color: var(--text-3); margin-top: 4rpx; }

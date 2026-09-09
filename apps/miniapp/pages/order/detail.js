@@ -7,6 +7,7 @@ const { requestSubscribe } = require('../../utils/subscribe')
 var timeUtil = require('../../utils/time')
 var fmtDateTime = timeUtil.fmtDateTime
 var fmtHHmm = timeUtil.fmtHHmm
+var expressTrackUtil = require('../../utils/express-track')
 
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
@@ -256,24 +257,8 @@ function decorateOrder(order) {
     : null
   var isLocal = order.deliveryType === 'LOCAL'
   var isExpress = order.deliveryType === 'EXPRESS'
-  var eb = order.expressBooking
-  var expressStageText = ''
-  if (isExpress && ['PAID', 'PREPARING', 'SHIPPED'].indexOf(order.status) !== -1) {
-    var ebs = eb ? eb.status : ''
-    if (order.status === 'SHIPPED') {
-      // 已发货：下面的「物流信息」（Shipment）卡信息更全，这张卡让位，免得两张同名卡叠在一起
-      expressStageText = ''
-    } else if (ebs === 'BOOKED' || ebs === 'UNKNOWN') {
-      expressStageText = '已预约快递员上门取件' + (eb.slotText ? ' · ' + eb.slotText : '')
-    } else if (ebs === 'ACCEPTED') {
-      expressStageText = '快递员已接单' + (eb.courierName ? ' · ' + eb.courierName : '') + (eb.slotText ? ' · ' + eb.slotText : '')
-    } else if (ebs === 'PICKED' || ebs === 'DELIVERED') {
-      expressStageText = '已取件 · ' + (eb.courierLabel || '') + (eb.kuaidinum ? ' ' + eb.kuaidinum : '')
-    } else {
-      // 无预约 / 已取消 / 下单中（PENDING）/ 未识别状态：对顾客一律「商家备货中」
-      expressStageText = '商家备货中'
-    }
-  }
+  var expressStageText = expressTrackUtil.expressStageText(order)
+  var expressTrack = isExpress ? expressTrackUtil.buildExpressTrack(order.track) : []
 
   var delivery = order.delivery
   var deliveryStatus = delivery && delivery.status
@@ -284,6 +269,8 @@ function decorateOrder(order) {
     isExpress: isExpress,
     expressStageText: expressStageText,
     showExpressStage: !!expressStageText,
+    expressTrack: expressTrack,
+    showExpressTrack: expressTrack.length > 0,
     deliveryStatusLabel: deliveryStatus ? (DELIVERY_CUSTOMER_LABEL[deliveryStatus] || deliveryStatus) : '',
     deliveryNeutralHint: isDeliveryNeutral ? '如超过预计时间请联系商家' : '',
     showCourierCard: !!delivery && COURIER_LIVE_STATUSES.indexOf(deliveryStatus) !== -1,
