@@ -1,4 +1,5 @@
-/** 邮寄「预约取件」弹窗：各家报价（最便宜默认选中、标注与顾客付款的差价）、重量可改、时段手选（预填最近可约）、备注。 */
+/** 邮寄「预约取件」弹窗：各家报价（最便宜默认选中、标注与顾客付款的差价）、重量可改、时段手选（预填最近可约）、备注。
+ *  遮罩不带 onClick——改重量失焦触发重报价时列表变矮、弹窗整体下跳，抬手落点常已在遮罩上，点遮罩会把弹窗误关掉，别再加回去。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '../pages/Workbench.css'
 import { bookExpress, getExpressBookingQuotes } from '../api/admin'
@@ -103,8 +104,8 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
   }
 
   return (
-    <div className="wb__modal-mask" onClick={onClose}>
-      <div className="wb__modal" onClick={(e) => e.stopPropagation()}>
+    <div className="wb__modal-mask">
+      <div className="wb__modal">
         <div className="wb__modal-head"><span>预约快递员上门取件</span><button className="wb__iconbtn" onClick={onClose} aria-label="关闭">×</button></div>
         <div className="wb__modal-body">
           {q && <div className="wb__line"><span>顾客付</span><strong>¥{yuan(q.customerFeeFen)}</strong><span className="wb__muted">按 {q.weightKg} kg {q.fromSnapshot ? '取下单快照' : '刚查的价'} · {q.quotedAt ? fmtHHmm(q.quotedAt) : ''}</span></div>}
@@ -117,10 +118,11 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
           </label>
           {!loading && !weightValid && <div className="wb__redbar">重量需在 0.1–50 kg</div>}
           {!loading && weightValid && !weightSynced && q && <div className="wb__muted">重量已改为 {wNorm} kg，正在按新重量重新报价…（报价刷新前不能提交）</div>}
-          <div className="wb__quote-list" role="radiogroup" aria-label="选择快递">
+          <div className="wb__quote-list" role="radiogroup" aria-label="选择快递" aria-busy={loading}
+            style={loading && q ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
             {loading && <div className="wb__muted">查价中…</div>}
-            {!loading && rows.map((r) => {
-              const disabled = r.priceFen === null
+            {rows.map((r) => {
+              const disabled = r.priceFen === null || loading
               const diff = q && r.priceFen !== null ? r.priceFen - q.customerFeeFen : null
               return (
                 <button key={r.kuaidicom} type="button" role="radio" aria-checked={kuaidicom === r.kuaidicom} disabled={disabled}
