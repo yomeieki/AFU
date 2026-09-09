@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node ../../scripts/check-admin-timezone.mjs && tsc && vite build",
-    "test": "node --test src/navigation.test.ts",
+    "test": "node --test src/*.test.ts src/utils/*.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

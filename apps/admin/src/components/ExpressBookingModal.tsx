@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '../pages/Workbench.css'
 import { bookExpress, getExpressBookingQuotes } from '../api/admin'
 import type { ExpressBookingQuotes } from '../types'
+import { normalizeWeightKg } from '../utils/weight'
+import { fmtHHmm } from '../utils/time'
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
 const apiMessage = (e: unknown, fallback: string) => (e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback
@@ -41,8 +43,12 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
   // （见下方 else 分支），若继续拿「kuaidicom 是否为空」当「是否首次加载」的判据，
   // 那次清空会让下一次重量失焦重新触发预填分支，把店员手选的 day/start/end 悄悄覆盖掉。
   const firstLoad = useRef(true)
+  const inFlightWeight = useRef<number | null>(null)   // 同一重量的报价在途时不重复请求
+  const debounceRef = useRef<number | null>(null)
 
   const load = useCallback(async (w?: number) => {
+    if (w !== undefined && inFlightWeight.current === w) return
+    inFlightWeight.current = w ?? null
     setLoading(true); setError('')
     try {
       const r = (await getExpressBookingQuotes(orderId, w)).data.data
@@ -61,7 +67,8 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
         const still = r.quotes.find((x) => x.kuaidicom === kuaidicom)
         if (!still || still.priceFen === null) setKuaidicom('')
       }
-    } catch (e) { setError(apiMessage(e, '报价加载失败')) } finally { setLoading(false) }
+    } catch (e) { setError(apiMessage(e, '报价加载失败，可点「重新报价」重试')) }
+    finally { setLoading(false); inFlightWeight.current = null }
   }, [orderId, kuaidicom])
   useEffect(() => { void load() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -73,11 +80,18 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
   const cheapest = rows.find((r) => r.priceFen !== null)?.kuaidicom
   const chosen = rows.find((r) => r.kuaidicom === kuaidicom)
   const err = slotError(day, start, end, kuaidicom, shanghaiNowMin())
-  const weightNum = Number(weight)
-  const weightValid = weight.trim() !== '' && Number.isFinite(weightNum) && weightNum >= 0.1 && weightNum <= 50
-  const canSubmit = !!q && !!kuaidicom && !err && !busy && !loading && weightValid && chosen?.priceFen != null
+  const wNorm = normalizeWeightKg(weight)
+  const weightValid = wNorm !== null
+  const weightSynced = !!q && wNorm !== null && wNorm === q.weightKg
+  const canSubmit = !!q && !!kuaidicom && !err && !busy && !loading && weightValid && weightSynced && chosen?.priceFen != null
+  const requote = () => { if (wNorm !== null && q && wNorm !== q.weightKg) void load(wNorm) }
+  // 输入停顿 600 ms 自动重报价；回车/失焦/按钮走同一个 requote。q 变了（一次报价刚落地）不再触发。
+  useEffect(() => {
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+    debounceRef.current = window.setTimeout(requote, 600)
+    return () => { if (debounceRef.current !== null) window.clearTimeout(debounceRef.current) }
+  }, [weight])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const onWeightBlur = () => { const w = Number(weight); if (Number.isFinite(w) && w >= 0.1 && w <= 50 && q && w !== q.weightKg) void load(Math.round(w * 10) / 10) }
   const submit = async () => {
     if (!canSubmit) return
     setBusy(true); setError('')
@@ -92,9 +106,16 @@ export default function ExpressBookingModal({ orderId, onClose, onDone }: { orde
       <div className="wb__modal" onClick={(e) => e.stopPropagation()}>
         <div className="wb__modal-head"><span>预约快递员上门取件</span><button className="wb__iconbtn" onClick={onClose} aria-label="关闭">×</button></div>
         <div className="wb__modal-body">
-          {q && <div className="wb__line"><span>顾客付</span><strong>¥{yuan(q.customerFeeFen)}</strong><span className="wb__muted">{q.fromSnapshot ? '报价来自下单快照' : '刚查的价'}</span></div>}
-          <label className="wb__field"><span>重量（kg）</span><input className="wb__input" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} onBlur={onWeightBlur} /></label>
+          {q && <div className="wb__line"><span>顾客付</span><strong>¥{yuan(q.customerFeeFen)}</strong><span className="wb__muted">按 {q.weightKg} kg {q.fromSnapshot ? '取下单快照' : '刚查的价'} · {q.quotedAt ? fmtHHmm(q.quotedAt) : ''}</span></div>}
+          <label className="wb__field"><span>重量（kg）</span>
+            <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input className="wb__input" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} onBlur={requote}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); requote() } }} />
+              <button type="button" className="wb__btn wb__btn--ghost" onClick={requote} disabled={loading || !weightValid || weightSynced}>{loading ? '查价中…' : '重新报价'}</button>
+            </span>
+          </label>
           {!loading && !weightValid && <div className="wb__redbar">重量需在 0.1–50 kg</div>}
+          {!loading && weightValid && !weightSynced && q && <div className="wb__muted">重量已改为 {wNorm} kg，正在按新重量重新报价…（报价刷新前不能提交）</div>}
           <div className="wb__quote-list" role="radiogroup" aria-label="选择快递">
             {loading && <div className="wb__muted">查价中…</div>}
             {!loading && rows.map((r) => {
