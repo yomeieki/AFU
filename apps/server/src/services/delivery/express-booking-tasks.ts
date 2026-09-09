@@ -204,7 +204,7 @@ export async function reconcileStaleBooking(bookingId: number, pickedDays = 10):
         : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
       notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
       if (result === 'NOT_FOUND') {
-        try { await recordBookingEvent(prisma, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', statusDesc: '对账查单：快递100 查不到该单，已提醒店员核对' }) } catch { /* 留痕失败不升级：标记与通知已落，别让这一条炸掉本轮剩余预约 */ }
+        try { await recordBookingEvent(prisma, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', statusDesc: '对账查单：快递100 查不到该单，已提醒店员核对' }) } catch (e) { console.warn('[express-stale] 留痕失败（标记与通知已落）:', (e as Error).message) }
       }
     }
   }

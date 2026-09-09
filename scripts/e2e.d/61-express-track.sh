@@ -182,7 +182,7 @@ X61_REM10=$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no
 R=$(sched '{"expressStaleIntervalMin":0}')
 assert_eq "兜底：第二次 tick 不再告警（标记不变）" "$(sql "SELECT stale_reminded_at FROM express_bookings WHERE booking_no='$X61_BN10';")" "$X61_REM10"
 sql "UPDATE orders SET status='COMPLETED', completed_at=NOW() WHERE id=$X61_O10;"
-echo "-- ⑦c 未取件提醒先发，对账无进展不重复提醒 --"
+echo "-- ⑦c 未取件提醒先发，对账查不到该单仍通知并留痕 --"
 X61_O11=$(x58_paid_preparing)
 req POST "/api/admin/express/orders/$X61_O11/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
 X61_BN11=$(x59_bk "$X61_O11" | jq -r .data.booking.bookingNo)

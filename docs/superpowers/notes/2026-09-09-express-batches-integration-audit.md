@@ -178,7 +178,7 @@ e2e 断言分布：§56 报价 25、§57 下单 22、§58 预约 38、§59 回�
 
 ### 顺手项：Shipment 守卫（批次三审计 Minor，第 2.3 节表格第 4 行「未修」）
 
-- **已修（本提交）**：`express-booking.ts` 两处「单号一到就写 Shipment」的 `upsert` 加 `activeOrderId === orderId` 守卫——`createBooking` 事务内改为 `if (r.kuaidinum && row.activeOrderId === i.orderId)`，`reconcileUnknownBooking` 改为 `if (d.kuaidinum && b.activeOrderId === b.orderId)`，各加注释「Shipment 以 orderId 为键，只允许当前活跃预约写」。
+- **已修（本提交）**：`express-booking.ts` 两处「单号一到就写 Shipment」的 `upsert` 加 `activeOrderId === orderId` 守卫——`createBooking` 事务内先 `findUnique` 重读 `activeOrderId`，再 `if (r.kuaidinum && cur?.activeOrderId === i.orderId)`（复核指出 `row.activeOrderId` 恒真后改的），`reconcileUnknownBooking` 改为 `if (d.kuaidinum && b.activeOrderId === b.orderId)`，各加注释「Shipment 以 orderId 为键，只允许当前活跃预约写」。
 
 ### 未决歧义 Q1–Q3 的默认（均已按默认执行）
 
