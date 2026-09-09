@@ -1752,6 +1752,7 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 - **A 类**：`BOOKED/ACCEPTED` 且预约时段已结束超过 `unpickedRemindMin`——快递100 有时不推揽收/揽货失败回调。
 - **B 类**：`PICKED` 且取件已超 `pickedDays`（默认 10）天仍未 `DELIVERED`——`autoCompleteShippedOrders` 7 天规则已经把订单转 `COMPLETED`，这里只是把预约本身收尾，不重复处理订单。
 - 三列标记语义（都在 `express_bookings` 上）：`staleCheckedAt` 是「上次查过」的时间戳，与 `intervalMin`（默认 30 分钟）比较决定这轮要不要再查，`updateMany({ staleCheckedAt: 旧值 })` 先占坑再查，避免并发双 tick 重复调用 provider；`staleTries` 每查一次加一，达到 `STALE_MAX_TRIES = 48`（30 分钟一次、约 24 小时）后不再自动查，转人工；`staleRemindedAt` 是「无结论提醒过」的一次性标记，查到 `ADVANCED`（预约或订单状态确有推进）不会碰它，查不到/无进展时才打标并只提醒一次。
+- 无结论提醒每单一次；若已发过「时段过未取件」提醒，有单无进展不再重复通知，但 `detail` **查不到该单**仍通知一次并留 SYSTEM 事件『对账查单：快递100 查不到该单』（批次五）。
 - 查到快照后走两步补状态的逻辑同轨迹回调：`BOOKED/ACCEPTED` 单如果 `detail` 已经显示 `13`（签收）、`101`（运输中）、`400`（派送中），说明「10 揽收」那条回调大概率没推到——先合成一次「10」把订单 `SHIPPED`/`Shipment`/发货通知走一遍，再套真正的状态，避免 `13` 直接把预约从 `BOOKED` 跳到 `DELIVERED` 而订单联动的 `where status='SHIPPED'` 扑空。`detail` 请求失败（provider 抖动）算 `ERROR`，不占「无结论提醒」的名额——外层调度器的 `try/catch` 记账继续，下一轮正常重试。
 
 ### 环境变量与 mock

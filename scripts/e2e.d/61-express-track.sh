@@ -193,7 +193,22 @@ R=$(sched '{"expressStaleIntervalMin":0}')
 assert_eq "对账无结论：照旧打标（通知被抑制由代码复核确认）" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN11';")" "SET"
 assert_eq "前置成立：未取件提醒确实先打过标" "$(sql "SELECT IF(unpicked_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN11';")" "SET"
 assert_eq "对账确实查过（计次 ≥ 1；首轮 tick 里 expressStale 也会占坑一次，所以不断言恰好 1）" "$(sql "SELECT stale_tries >= 1 FROM express_bookings WHERE booking_no='$X61_BN11';")" "1"
+assert_eq "查不到该单：即使已发过未取件提醒也留一条 SYSTEM 事件（通知随之发出）" "$(sql "SELECT COUNT(*) FROM express_booking_events e JOIN express_bookings b ON b.id=e.booking_id WHERE b.booking_no='$X61_BN11' AND e.source='SYSTEM' AND e.status_desc LIKE '%查不到该单%';")" "1"
 req POST "/api/admin/express/orders/$X61_O11/booking/cancel" "$AT" '{}' >/dev/null
+
+echo "-- ⑦d 已发未取件提醒后，对账查到有单但无进展：仍抑制通知（不留「查不到」事件）--"
+X61_O12=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O12/book" "$AT" '{"kuaidicom":"jd","dayType":"今天"}' >/dev/null
+X61_BN12=$(x59_bk "$X61_O12" | jq -r .data.booking.bookingNo)
+sql "UPDATE express_bookings SET pickup_date='2020-01-01', pickup_end='09:00' WHERE booking_no='$X61_BN12';"
+# 首轮 sched 里 expressStale 也会占坑查一次：先排好「有单」指令，别让 mock 默认值被判成 NOT_FOUND
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":true,"status":0}}' >/dev/null
+R=$(sched '{"expressUnpickedMin":0,"expressStaleIntervalMin":9999}'); assert_eq "⑦d 未取件提醒 1 条" "$(jq -r '.data.expressUnpicked // -1' <<<"$R")" "1"
+req POST /api/admin/system/express-mock/queue "$AT" '{"op":"detail","directive":{"kind":"ok","found":true,"status":0}}' >/dev/null
+R=$(sched '{"expressStaleIntervalMin":0}')
+assert_eq "⑦d 有单无进展：打标 SET" "$(sql "SELECT IF(stale_reminded_at IS NULL,'NULL','SET') FROM express_bookings WHERE booking_no='$X61_BN12';")" "SET"
+assert_eq "⑦d 有单无进展：不留「查不到」事件" "$(sql "SELECT COUNT(*) FROM express_booking_events e JOIN express_bookings b ON b.id=e.booking_id WHERE b.booking_no='$X61_BN12' AND e.status_desc LIKE '%查不到该单%';")" "0"
+req POST "/api/admin/express/orders/$X61_O12/booking/cancel" "$AT" '{}' >/dev/null
 req POST /api/admin/system/express-mock/reset "$AT" >/dev/null
 
 X61_KEEP_O=$X61_O   # DELIVERED，留给 §62/工作台走查

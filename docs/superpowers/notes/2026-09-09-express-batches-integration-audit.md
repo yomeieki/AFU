@@ -165,3 +165,25 @@ e2e 断言分布：§56 报价 25、§57 下单 22、§58 预约 38、§59 回�
 | Q4 | 回调限流上调到 300/min，状态+轨迹共用一桶 | 本提交 |
 | Q5 | 不改 PAID 卡片文案，spec 说了算 | 本批未改 |
 | Q6 | `42225` 不换码，只补文档 | 本提交 |
+
+## 七、整改状态（批次五）
+
+> 实施计划：`docs/superpowers/plans/2026-09-09-express-shipping-batch5-cleanup.md`。Task 1（`66eab13`）、Task 2（本提交）。
+
+| # | 候选 | 状态 | 说明 |
+|---|---|---|---|
+| 1 | `express-track.ts` 签收「先 10 再 13」两步循环，批次四补记下沉到 `applyProviderStatus` 后已冗余 | 已修（`66eab13`） | 轨迹签收改为单次套用 `13`；`express-booking-tasks.ts` 的 `needsPickBackfill` 收窄到只管 `101`/`400`；`express-callback.ts` 两处补记文案统一为「签收到达而预约未取件，补记取件」；e2e §61 ④ 新增断言锁定补记留痕只来自 `applyProviderStatus`（`SYSTEM` + `provider_status=10`） |
+| 2 | 对账查单结果是「快递100 查不到该单」时，即使已发过「时段已过仍未取件」提醒，也要再通知一次；「有单但无进展」仍不重复通知（本 00 重定批次四 A5） | 已修（本提交） | `reconcileStaleBooking` 无结论提醒分支：`suppressed` 判定加 `result !== 'NOT_FOUND'`；`NOT_FOUND` 分支额外留一条 `SYSTEM` 事件（`对账查单：快递100 查不到该单，已提醒店员核对`）；`staleRemindedAt` 仍是每单一次性标记，不受本条影响。e2e §61 新增 ⑦c 断言（查不到该单留痕）、⑦d（有单无进展仍抑制、不留痕） |
+| 3 | 30 天外的历史孤儿单（预约已签收、订单仍备货）不进定时任务，给一个只读的一次性核查脚本 | 已修（本提交） | 新建 `apps/server/scripts/express-orphans.ts`：只读查询 `status='DELIVERED' AND order.status IN ('PAID','PREPARING')`，打印表头 + 明细 + 汇总行，不改任何行；处理方式沿用工作台「填单号发货」→「确认收货」的既有路径 |
+
+### 顺手项：Shipment 守卫（批次三审计 Minor，第 2.3 节表格第 4 行「未修」）
+
+- **已修（本提交）**：`express-booking.ts` 两处「单号一到就写 Shipment」的 `upsert` 加 `activeOrderId === orderId` 守卫——`createBooking` 事务内改为 `if (r.kuaidinum && row.activeOrderId === i.orderId)`，`reconcileUnknownBooking` 改为 `if (d.kuaidinum && b.activeOrderId === b.orderId)`，各加注释「Shipment 以 orderId 为键，只允许当前活跃预约写」。
+
+### 未决歧义 Q1–Q3 的默认（均已按默认执行）
+
+| # | 默认 | 落地 |
+|---|---|---|
+| Q1 | 对账 `101/400` 的补记不下沉到 `applyProviderStatus`，留在 `reconcileStaleBooking`；只删 `13` 的重复 | `66eab13` |
+| Q2 | 「查不到该单」通知仍受 `staleRemindedAt` 一次性限制，只是结论是 `NOT_FOUND` 时不再被「已发过未取件提醒」抑制 | 本提交 |
+| Q3 | 孤儿单脚本只读，打印清单与建议命令，不改任何行 | 本提交 |

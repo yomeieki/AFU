@@ -193,7 +193,8 @@ export async function createBooking(i: { orderId: number; kuaidicom: string; ser
       }
       await recordBookingEvent(tx, { bookingId: row.id, dedupeKey: adminBookingEventKey(), source: 'ADMIN', statusDesc: `预约成功 ${COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom}${r.kuaidinum ? ` 单号 ${r.kuaidinum}` : '（单号待回调）'}`, operator: i.operator })
       // 单号一到就写 Shipment（不写 shippedAt、不改订单状态——那是「已取件」回调的事）
-      if (r.kuaidinum) {
+      // Shipment 以 orderId 为键，只允许当前活跃预约写
+      if (r.kuaidinum && row.activeOrderId === i.orderId) {
         await tx.shipment.upsert({ where: { orderId: i.orderId }, update: { expressCompany: COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom, expressNo: r.kuaidinum }, create: { orderId: i.orderId, orderNo: o.orderNo, deliveryType: 'EXPRESS', expressCompany: COURIER_LABEL[i.kuaidicom] ?? i.kuaidicom, expressNo: r.kuaidinum } })
       }
     })
@@ -287,7 +288,8 @@ export async function reconcileUnknownBooking(bookingId: number): Promise<'CLAIM
     const moved = await tx.expressBooking.updateMany({ where: { id: b.id, status: 'UNKNOWN' }, data: { status: 'BOOKED', statusRank: BOOKING_RANK.BOOKED, taskId: d.taskId ?? b.taskId, kdOrderId: d.kdOrderId ?? b.kdOrderId, kuaidinum: d.kuaidinum ?? b.kuaidinum, courierName: d.courierName ?? undefined, courierMobile: d.courierMobile ?? undefined, errorCode: null, failReason: null } })
     if (moved.count === 0) return
     await recordBookingEvent(tx, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', statusDesc: `对账认领：快递100 有单（status=${d.status ?? '?'}）` })
-    if (d.kuaidinum) await tx.shipment.upsert({ where: { orderId: b.orderId }, update: { expressCompany: COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom, expressNo: d.kuaidinum }, create: { orderId: b.orderId, orderNo: b.orderNo, deliveryType: 'EXPRESS', expressCompany: COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom, expressNo: d.kuaidinum } })
+    // Shipment 以 orderId 为键，只允许当前活跃预约写
+    if (d.kuaidinum && b.activeOrderId === b.orderId) await tx.shipment.upsert({ where: { orderId: b.orderId }, update: { expressCompany: COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom, expressNo: d.kuaidinum }, create: { orderId: b.orderId, orderNo: b.orderNo, deliveryType: 'EXPRESS', expressCompany: COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom, expressNo: d.kuaidinum } })
   })
   return 'CLAIMED'
 }

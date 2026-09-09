@@ -12,7 +12,7 @@ import { reconcileUnknownBooking } from './express-booking'
 import { getExpressProvider, ExpressDetailResult } from './kd100-express'
 import { KD_EXPRESS_STATUS_MAP, BOOKING_RANK } from './express-booking-state'
 import { applyProviderStatus } from './express-callback'
-import { recordBookingEvent } from './express-events'
+import { recordBookingEvent, adminBookingEventKey } from './express-events'
 import crypto from 'crypto'
 
 const BATCH = 100
@@ -195,14 +195,17 @@ export async function reconcileStaleBooking(bookingId: number, pickedDays = 10):
   // 无结论只提醒一次
   const m = await prisma.expressBooking.updateMany({ where: { id: b.id, staleRemindedAt: null }, data: { staleRemindedAt: new Date() } })
   if (m.count > 0) {
-    // 已经发过「时段已过仍未取件」提醒的（BOOKED/ACCEPTED 起点），标记照打，但信息量更少的「无进展」不再重复轰炸
-    if (b.status !== 'PICKED' && b.unpickedRemindedAt) {
-      // 已发过「时段已过仍未取件」，不再发第二条近义通知
-    } else {
+    // 已发过「时段已过仍未取件」的（BOOKED/ACCEPTED 起点）：有单无进展不再重复轰炸；
+    // 但「查不到该单」是另一回事——快递100 那头压根没这张单，店员必须去后台核对，照发。
+    const suppressed = b.status !== 'PICKED' && !!b.unpickedRemindedAt && result !== 'NOT_FOUND'
+    if (!suppressed) {
       const why = b.status === 'PICKED'
         ? [`已取件超过 ${pickedDays} 天仍无签收回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '订单已按 7 天规则自动完成；如顾客反馈未收到，请到快递100 后台或联系快递公司查件']
         : [`预约时段已过，至今无取件回调，主动查单${result === 'NOT_FOUND' ? '查不到该单' : '也无新进展'}`, '请联系快递员确认是否已取件；未取请改约或取消后换家重约']
       notifyExpressAlert(b.status === 'PICKED' ? '邮寄单取件后长时间未签收' : '预约时段过后仍无进展', [`订单 ${b.orderNo} · ${label}${b.kuaidinum ? ` ${b.kuaidinum}` : ''}`, ...why], { key: `express-stale:${b.id}` })
+      if (result === 'NOT_FOUND') {
+        await recordBookingEvent(prisma, { bookingId: b.id, dedupeKey: adminBookingEventKey(), source: 'SYSTEM', statusDesc: '对账查单：快递100 查不到该单，已提醒店员核对' })
+      }
     }
   }
   return result
