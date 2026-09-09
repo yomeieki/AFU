@@ -45,7 +45,11 @@ export async function handleExpressTrackCallback(bookingNo: string, body: Record
       // 取消/失败/作废的预约不该再有轨迹；来了只留痕，不写 JSON——顾客端读的是「最新一条预约」，
       // 店员取消后重约的新单不能被旧单的轨迹顶掉（旧单在 findFirst orderBy id desc 里不是最新，但保险起见不写）
       if (NO_TRACK_STATUSES.includes(booking.status)) return
-      await tx.expressBooking.update({ where: { id: booking.id }, data: { trackJson: toStoredTrack(p) as unknown as Prisma.InputJsonValue, trackStatus: p.status.slice(0, 16), trackUpdatedAt: new Date() } })
+      // abort 且没带任何条目：大概率是「单号有误/超期」这类不含轨迹内容的中止推送，不能拿它去覆盖
+      // 已经落库的正常轨迹——顾客端还得看之前那些条目。仍然刷新 trackStatus/trackUpdatedAt 留痕，
+      // 只是不动 trackJson；下面的告警分支照常触发。
+      const dropTrackJson = p.status === 'abort' && p.items.length === 0
+      await tx.expressBooking.update({ where: { id: booking.id }, data: { ...(dropTrackJson ? {} : { trackJson: toStoredTrack(p) as unknown as Prisma.InputJsonValue }), trackStatus: p.status.slice(0, 16), trackUpdatedAt: new Date() } })
       const label = COURIER_LABEL[booking.kuaidicom] ?? booking.kuaidicom
       if (p.status === 'abort') {
         after.push(() => notifyExpressAlert('快递100 轨迹订阅中止', [`订单 ${booking.orderNo} · ${label}${booking.kuaidinum ? ` ${booking.kuaidinum}` : ''}`, p.message ?? '单号可能有误或已超期', '顾客端将看不到后续轨迹，可到快递100 后台核对'], { key: `express-track-abort:${booking.id}` }))

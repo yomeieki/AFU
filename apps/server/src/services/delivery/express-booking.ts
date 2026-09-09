@@ -67,6 +67,7 @@ const iso = (d: Date | null) => (d ? d.toISOString() : null)
 export function bookingView(b: ExpressBooking): BookingView {
   const date = b.pickupDate ? `${Number(b.pickupDate.slice(5, 7))}月${Number(b.pickupDate.slice(8, 10))}日` : ''
   const slotText = b.pickupStart && b.pickupEnd ? `${date} ${b.pickupStart}–${b.pickupEnd}` : date ? `${date} 时段不限` : ''
+  const st = parseStoredTrack(b.trackJson)
   return {
     id: b.id, bookingNo: b.bookingNo, status: b.status, statusLabel: BOOKING_STATUS_LABEL[b.status] ?? b.status,
     kuaidicom: b.kuaidicom, courierLabel: COURIER_LABEL[b.kuaidicom] ?? b.kuaidicom, serviceType: b.serviceType,
@@ -75,8 +76,8 @@ export function bookingView(b: ExpressBooking): BookingView {
     courierName: b.courierName, courierMobile: b.courierMobile, failReason: b.failReason, cancelledBy: b.cancelledBy,
     bookedAt: iso(b.bookedAt), acceptedAt: iso(b.acceptedAt), pickedAt: iso(b.pickedAt), deliveredAt: iso(b.deliveredAt), cancelledAt: iso(b.cancelledAt),
     trackStatus: b.trackStatus, trackUpdatedAt: iso(b.trackUpdatedAt),
-    trackCount: parseStoredTrack(b.trackJson)?.items.length ?? 0,
-    latestTrack: parseStoredTrack(b.trackJson)?.items[0] ?? null,
+    trackCount: st?.items.length ?? 0,
+    latestTrack: st?.items[0] ?? null,
   }
 }
 

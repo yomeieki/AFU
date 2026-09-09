@@ -20,10 +20,10 @@ let cache: { at: number; data: unknown } | null = null
 
 /**
  * 邮寄预约查询只取 bookingView()/toCard() 真正会读的列——不是 `include`/全量 `findMany`。
- * 这张表还有 callbackSalt（回调验签用的密钥）、pollToken、taskId、feeDetails、trackJson 等
- * 字段，工作台快照这种「取一屏所有在办订单」的高频查询没有理由把它们也搬一遍。
- * bookingView() 的参数类型是完整的 Prisma `ExpressBooking`，这里选出来的是它的子集，
- * 调用处需要 cast 一下（该函数确实只读了下面这些列，cast 是安全的）。
+ * 这张表还有 callbackSalt（回调验签用的密钥）、pollToken、taskId、feeDetails 等字段，工作台
+ * 快照这种「取一屏所有在办订单」的高频查询没有理由把它们也搬一遍。
+ * bookingView() 的参数类型是完整的 Prisma `ExpressBooking`，这里选出来的是它的子集——它确实
+ * 只读下面这些列（含 trackJson/trackStatus/trackUpdatedAt），调用处 cast 一下是安全的。
  */
 const bookingSelect = {
   id: true, orderId: true, activeOrderId: true, bookingNo: true, status: true, kuaidicom: true, serviceType: true,
@@ -31,6 +31,7 @@ const bookingSelect = {
   customerFeeFen: true, quotedFeeFen: true, prepaidFeeFen: true, settledFeeFen: true, billedWeightG: true,
   courierName: true, courierMobile: true, failReason: true, cancelledBy: true,
   bookedAt: true, acceptedAt: true, pickedAt: true, deliveredAt: true, cancelledAt: true, createdAt: true,
+  trackJson: true, trackStatus: true, trackUpdatedAt: true,
 } satisfies Prisma.ExpressBookingSelect
 type BookingRow = Prisma.ExpressBookingGetPayload<{ select: typeof bookingSelect }>
 

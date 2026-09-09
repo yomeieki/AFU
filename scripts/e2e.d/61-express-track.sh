@@ -71,6 +71,15 @@ x61_track "$X61_BN3" polling 0 0 "$X61_I1" >/dev/null
 assert_eq "取消后来轨迹：顾客 track 仍 null" "$(x61_cust "$X61_O3" | jq -c .data.track)" "null"
 assert_eq "取消后来轨迹：只留痕" "$(x59_bk "$X61_O3" | jq -r '[.data.events[]|select(.source=="TRACK")]|length')" "2"
 
+echo "-- ⑤b abort 且条目为空不清空已有轨迹 --"
+X61_O3B=$(x58_paid_preparing)
+req POST "/api/admin/express/orders/$X61_O3B/book" "$AT" '{"kuaidicom":"jd","dayType":"明天"}' >/dev/null
+X61_BN3B=$(x59_bk "$X61_O3B" | jq -r .data.booking.bookingNo)
+x61_track "$X61_BN3B" polling 0 0 "$X61_I1" >/dev/null
+x61_track "$X61_BN3B" abort 0 0 '[]' >/dev/null
+assert_eq "abort 空条目不清空轨迹" "$(x61_cust "$X61_O3B" | jq -r '.data.track.items|length')" "1"
+req POST "/api/admin/express/orders/$X61_O3B/booking/cancel" "$AT" '{}' >/dev/null
+
 echo "-- ⑥ 老邮寄单（手填单号）契约不变：expressBooking/track 都是 null --"
 X61_O4=$(x58_paid_preparing)
 req POST "/api/admin/orders/$X61_O4/ship" "$AT" '{"expressCompany":"顺丰","expressNo":"SF-OLD-61"}' >/dev/null
