@@ -207,16 +207,16 @@ function renderForKind(
 ): string {
   const channel: PrinterChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
   if (kind === 'CANCEL') {
-    return renderCancelTicket({ orderNo: order.orderNo, channel, reason: '订单取消/退款', at: new Date() })
+    return renderCancelTicket({ channel, reason: '订单取消/退款', at: new Date(), receiverPhone: order.receiverPhone })
   }
   if (kind === 'CANCEL_REQUEST') {
     return renderCancelRequestTicket({
-      orderNo: order.orderNo, channel, at: new Date(),
+      channel, at: new Date(), receiverPhone: order.receiverPhone,
       items: order.items, note: order.cancelRequestNote,
     })
   }
   if (kind === 'REPEAT' && !settings.repeat.reprint) {
-    return renderReminderTicket({ orderNo: order.orderNo, channel, waitedMin: waitedMin ?? 0, announceNo })
+    return renderReminderTicket({ channel, waitedMin: waitedMin ?? 0, announceNo, receiverPhone: order.receiverPhone })
   }
   // NEW_ORDER / REPRINT / repeat.reprint=true 时的 REPEAT，都是整张全票
   const input = toTicketInput(order)

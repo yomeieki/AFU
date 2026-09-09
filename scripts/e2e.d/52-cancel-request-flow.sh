@@ -72,6 +72,11 @@ D52_TICKET=$(PJOBS "$D52_O2" | jq -r '[.data.list[] | select(.kind=="CANCEL_REQU
 [[ "$D52_TICKET" == *"点错了，想换一份"* ]] && ok "票面带顾客理由（判断退不退的依据）" || fail "票面没有顾客理由" "$D52_TICKET"
 # 单号只留后四位：完整单号不再上票
 [[ "$D52_TICKET" != *"ORD2026"* ]] && ok "票面不含完整单号（只留后四位）" || fail "票面仍打完整单号" "$D52_TICKET"
+# PO 2026-09-09 定：店内认单一律只用手机尾号，票头不再印 #单号——按 D52_O2 建单时实际用的手机号断言
+D52_PHONE=$(sql "SELECT receiver_phone FROM orders WHERE id=$D52_O2;")
+[[ -n "$D52_PHONE" && "$D52_TICKET" == *"<CB>尾号${D52_PHONE: -4}</CB>"* ]] \
+  && ok "票面头部是手机尾号（尾号${D52_PHONE: -4}，认单只用这个）" \
+  || fail "票面头部尾号不对" "$D52_TICKET"
 # 挂着的申请挡住呼叫——这正是必须有「自动回绝」的原因
 R=$(req POST "/api/admin/local/orders/$D52_O2/call" "$AT")
 assert_eq "有待处理退菜申请时呼叫被拦（42204）" "$(code "$R")" "42204"

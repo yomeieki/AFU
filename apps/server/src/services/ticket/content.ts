@@ -290,7 +290,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     // 尾号是全行业通用的取货核对键。放大到和单号同一行，骑手在柜台一眼对上袋子。
     // 厨房联同样印尾号，两联靠它联系（见 buildKitchen）。
     // 头部**只放尾号、不放单号**（PO 2026-09-08 再定）：骑手和店员在柜台对的只有尾号，
-    // 单号在票头上只是干扰。完整单号仍在票尾「单号：#xxxx」小字与工作台里，退款/客诉查得到。
+    // 单号在票头上只是干扰。票面与工作台都不再显示单号（PO 2026-09-09 定）；完整单号在后台订单页可查，退款/客诉查得到。
     `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
     `下单：${fmtDateTime(o.createdAt)}`,
     `付款：${fmtDateTime(o.paidAt)}`,
@@ -336,12 +336,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     `运费：${yuan(o.shippingFee)}`,
     `<B>实付：${yuan(o.actualAmount)}</B>`,
     ...(o.pointsUsed && o.pointsUsed > 0 ? [`赠品抵扣：${o.pointsUsed} 积分`] : []),
-    // PO 2026-09-07 定：**票面一律只印后四位，不印完整单号**。
-    // 这推翻了 09-06 那次「完整单号挪到 footer 小字，客服对单/查退款仍需要」的决定——
-    // 实际店里认单、报单、对账全靠这四位，没人念完整的 20 位；印全串只是把票拉长。
-    // 代价（已与 PO 确认后接受）：后四位取自 6 位随机数，按 20 单/天算，同一天出现两张
-    // 后四位相同的票概率约 2%。真撞上时靠时间与菜品区分；完整单号在后台订单页随时可查。
-    `单号：#${o.orderNo.slice(-4)}`,
+    // PO 2026-09-09 定：票面不印单号，认单只用尾号；完整单号在后台订单页。
     '接单请在工作台操作',
   ]
 
@@ -414,10 +409,10 @@ export function renderOrderTicket(o: TicketOrderInput): string {
 /** 未接单重复播报的精简「催接单」小票（D7；repeat.reprint=false 时用这个，而不是整张全票）。
  *  announceNo 是这一单第几次被催（M12：不是当日流水号，命名与文案上都要跟"今日第N单"分开，
  *  不然店员会把催单次数误读成流水号）。 */
-export function renderReminderTicket(input: { orderNo: string; channel: TicketChannel; waitedMin: number; announceNo: number }): string {
+export function renderReminderTicket(input: { channel: TicketChannel; waitedMin: number; announceNo: number; receiverPhone: string }): string {
   const lines = [
     '<CB>催接单</CB>',
-    `<CB>#${input.orderNo.slice(-4)}</CB>`,
+    `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
     `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单`,
     `<B>已等待 ${input.waitedMin} 分钟未接单（第 ${input.announceNo} 次催单）</B>`,
     '请到工作台接单',
@@ -426,10 +421,10 @@ export function renderReminderTicket(input: { orderNo: string; channel: TicketCh
 }
 
 /** 取消/退款提醒票 */
-export function renderCancelTicket(input: { orderNo: string; channel: TicketChannel; reason: string; at: Date }): string {
+export function renderCancelTicket(input: { channel: TicketChannel; reason: string; at: Date; receiverPhone: string }): string {
   const lines = [
     '<CB>订单取消</CB>',
-    `<CB>#${input.orderNo.slice(-4)}</CB>`,
+    `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
     `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单`,
     `时间：${fmtDateTime(input.at)}`,
     `<BOLD>原因：${input.reason}</BOLD>`,
@@ -449,12 +444,12 @@ export function renderCancelTicket(input: { orderNo: string; channel: TicketChan
  * 也不印地址金额：那些在新单票上已经有了，这张票不负责配送。
  */
 export function renderCancelRequestTicket(input: {
-  orderNo: string; channel: TicketChannel; at: Date
+  channel: TicketChannel; at: Date; receiverPhone: string
   items: TicketItemInput[]; note?: string | null
 }): string {
   const lines = [
     '<CB>顾客申请取消</CB>',
-    `<CB>#${input.orderNo.slice(-4)}</CB>`,
+    `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
     `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单 · ${fmtDateTime(input.at)}`,
     HR,
     // 菜名与份数用厨房联那套放大渲染：这两样是隔着灶台要看清的

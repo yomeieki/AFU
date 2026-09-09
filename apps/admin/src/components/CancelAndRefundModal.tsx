@@ -14,7 +14,8 @@ import { approveExpressCancelRequest, precancelDelivery, cancelDelivery, refundO
 
 interface Props {
   orderId: number
-  orderNo: string
+  /** PO 2026-09-09 定：店内认单一律只用手机尾号，不再显示订单号 */
+  receiverPhone: string
   /** 本次要退的金额（分）——传订单的可退余额 */
   amountFen: number
   /** 卡片渠道，确认按钮取这个颜色（§6） */
@@ -40,7 +41,7 @@ const apiMessage = (e: unknown, fallback: string) =>
 const apiCode = (e: unknown) => (e as { response?: { data?: { code?: number } } })?.response?.data?.code
 
 export default function CancelAndRefundModal({
-  orderId, orderNo, amountFen, channel, deliveryStatusLabel, hasActiveDelivery, expressBookingStatus, onClose, onDone,
+  orderId, receiverPhone, amountFen, channel, deliveryStatusLabel, hasActiveDelivery, expressBookingStatus, onClose, onDone,
 }: Props) {
   const isExpress = channel === 'EXPRESS'
   const isUnknown = isExpress && expressBookingStatus === 'UNKNOWN'
@@ -122,7 +123,7 @@ export default function CancelAndRefundModal({
           </div>
 
           <div className="wb__modal-body">
-            <div className="wb__meta">订单 <b>#{orderNo.slice(-4)}</b></div>
+            <div className="wb__meta">尾号 <b>{receiverPhone.slice(-4)}</b></div>
             <p>
               {hasActiveDelivery
                 ? `这一步会先向快递100 取消当前取件预约${deliveryStatusLabel ? `（当前：${deliveryStatusLabel}）` : ''}，快递员不再来取件，再把货款原路退回顾客微信，订单转为已退款终态。`
@@ -172,8 +173,8 @@ export default function CancelAndRefundModal({
             <span className="wb__step-sep">›</span>
             {stepDot(2, '全额退款')}
           </div>
-          {/* 与卡片、小票同口径：只显示后四位。店员手上是小票，跟整串对不上位 */}
-          <div className="wb__meta">订单 <b>#{orderNo.slice(-4)}</b></div>
+          {/* PO 2026-09-09 定：与卡片、小票同口径，一律只显示手机尾号，不再显示订单号 */}
+          <div className="wb__meta">尾号 <b>{receiverPhone.slice(-4)}</b></div>
 
           {step === 1 ? (
             <>

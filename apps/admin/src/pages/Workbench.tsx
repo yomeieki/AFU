@@ -1026,9 +1026,9 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
-      {/* 尾号与单号同行：骑手/快递员在柜台报的是手机尾号，两个渠道都要 */}
+      {/* PO 2026-09-09 定：只显示手机尾号，不再显示订单号——骑手/快递员在柜台报的是手机尾号，两个渠道都要 */}
       <div className="wb__no">
-        <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
+        <span><span className="wb__shortno">{card.receiver.phone ? `尾号${card.receiver.phone.slice(-4)}` : shortNo(card.orderNo)}</span></span>
         <b>¥{yuan(card.amountFen)}</b>
       </div>
       <div className="wb__items">{itemsSummary(card.items, card.channel)}</div>
@@ -1785,7 +1785,7 @@ export default function Workbench() {
               {local ? <Bike className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
               {local ? '同城配送' : '全国邮寄'}
             </span>
-            <span><span className="wb__shortno">{shortNo(card.orderNo)}</span>{card.receiver.phone && <span className="wb__tail"> 尾号{card.receiver.phone.slice(-4)}</span>}</span>
+            <span><span className="wb__shortno">{card.receiver.phone ? `尾号${card.receiver.phone.slice(-4)}` : shortNo(card.orderNo)}</span></span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
 
@@ -2136,7 +2136,7 @@ export default function Workbench() {
         return (
           <CancelAndRefundModal
             orderId={o.id}
-            orderNo={o.orderNo}
+            receiverPhone={card.receiver.phone}
             amountFen={o.remainingRefundable}
             channel={ch}
             deliveryStatusLabel={ch === 'EXPRESS' ? (card.express?.booking?.statusLabel ?? null) : (card.local?.delivery?.statusLabel ?? null)}
