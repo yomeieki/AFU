@@ -18,7 +18,7 @@ test('validatePauseInput：原因必填；休业日期必填且不早于今天',
 test('pauseStateLines：按休业 > 外送 > 自取列出当前状态', () => {
   assert.deepEqual(pauseStateLines({ paused: null, pickupPaused: null, holiday: null, pickupEnabled: true }), [])
   assert.deepEqual(
-    pauseStateLines({ paused: { reason: '下雨', until: null }, pickupPaused: { reason: '人手不够', until: null }, holiday: { until: '2026-10-07', reason: '国庆' }, pickupEnabled: true }),
+    pauseStateLines({ paused: { reason: '下雨', until: null }, pickupPaused: { reason: '人手不够', until: null }, holiday: { until: '2026-10-07', reason: '国庆' }, pickupEnabled: true }, Date.parse('2026-09-11T04:00:00Z'), '2026-09-11'),
     [
       { key: 'HOLIDAY', text: '休业中：国庆（10-07 后恢复）' },
       { key: 'DELIVERY', text: '外送已暂停：下雨' },
