@@ -129,3 +129,19 @@ test('购物车条组件：自取模式 goCheckout 去自取结算页', async fu
   bar.goCheckout()
   assert.ok(ctx.nav.some((n) => n.indexOf('navigateTo:/pages/local/pickup?cartItemIds=1') === 0), ctx.nav.join(' '))
 })
+
+// F7 之后模式回落只在首次进同城时做：分类页那条路径（reloadForChannel → loadMeta(true)）单独钉住，
+// 否则外送关、自取开时顾客从分类页进来仍会按外送画。
+test('分类页：外送关、自取开 → 首次进入即落到 PICKUP；之后 onShow 不改顾客的选择', async function () {
+  const ctx = makeCtx('LOCAL', 'DELIVERY', META_PICKUP_ONLY)
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settle(); await settle()
+  assert.equal(page.data.mode, 'PICKUP')
+  assert.ok(ctx.nav.indexOf('setLocalMode:PICKUP') !== -1, '要写回 app：' + ctx.nav.join(' '))
+  // 顾客手动切回外送看原因：onShow 重拉 meta 不能把他拨回自取
+  ctx.app.globalData.localMode = 'DELIVERY'
+  page.onShow.call(page)
+  await settle(); await settle()
+  assert.equal(page.data.mode, 'DELIVERY')
+})
