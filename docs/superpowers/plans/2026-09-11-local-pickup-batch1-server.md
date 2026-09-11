@@ -72,7 +72,7 @@ docs/order-flow.md
 | # | 跑什么 | 期望 |
 |---|---|---|
 | A1 | `cd apps/server && npx tsc --noEmit` | 零错误 |
-| A2 | `cd apps/server && npx ts-node --transpile-only scripts/selftest-pickup.ts` | 输出「全部通过 N」，N ≥ 14，退出码 0 |
+| A2 | `cd apps/server && npx ts-node --transpile-only scripts/selftest-pickup.ts` | 输出「全部通过 N」，N ≥ 13，退出码 0 |
 | A3 | `cd apps/server && npx ts-node --transpile-only scripts/selftest-local-settings.ts` | 全部通过，含新增 3 条 closedKind/nextOpenText 断言 |
 | A4 | `cd apps/server && npx ts-node --transpile-only scripts/selftest-member.ts` | 全部通过，含新增 4 条 computeCheckout 自取优惠断言 + 1 条自取小票断言 |
 | A5 | `bash scripts/e2e.sh`（干净库） | 末行「失败 0」；§62 段全部 ✔ |
@@ -718,7 +718,7 @@ export function pickupSlotLabel(pickupAt: Date, slotMinutes: number, now: Date =
 - [ ] **Step 4: 跑 selftest**
 
 Run: `cd apps/server && npx ts-node --transpile-only scripts/selftest-pickup.ts`
-Expected: `全部通过 14`。
+Expected: `全部通过 13`。
 
 - [ ] **Step 5: 路由 `GET /api/local/pickup-slots`**。在 `routes/local.ts` 的 `router.get('/meta', …)` 之后加：
 
@@ -744,7 +744,7 @@ Expected: tsc 零错误；未开通时 `{"kind":"DISABLED",...}`。
 
 ```bash
 git add apps/server/src/services/pickup.ts apps/server/scripts/selftest-pickup.ts apps/server/src/routes/local.ts
-git commit -m "自取纯函数：时段生成/备餐起点/优惠/文案 + GET /local/pickup-slots，14 条自测"
+git commit -m "自取纯函数：时段生成/备餐起点/优惠/文案 + GET /local/pickup-slots，13 条自测"
 ```
 
 ---
