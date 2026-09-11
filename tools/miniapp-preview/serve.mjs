@@ -34,6 +34,11 @@ const PAGE_COMPONENTS = {
   'order-list': ['empty-state', 'order-status-tag'],
   'address-list': ['empty-state'],
   'local-index': ['sku-popup', 'empty-state'],
+  // 同城主页（pages/index 在 LOCAL 渠道）：门店头 + 外送/自取切换栏
+  'index-local': ['empty-state', 'local-store-header', 'local-mode-bar'],
+  'index-local-pickup': ['empty-state', 'local-store-header', 'local-mode-bar'],
+  'local-pickup': ['checkout-benefits'],
+  'local-pickup-picker': ['checkout-benefits'],
   'order-confirm': ['checkout-benefits'],
   'local-confirm': ['checkout-benefits'],
 }
@@ -85,6 +90,7 @@ const PAGE_WXSS = {
   user: 'pages/user/index.wxss',
   'order-list': 'pages/order/list.wxss',
   'order-detail': 'pages/order/detail.wxss',
+  'order-detail-pickup': 'pages/order/detail.wxss',
   'after-sale': 'pages/order/after-sale.wxss',
   'order-confirm': 'pages/order/confirm.wxss',
   'address-list': 'pages/address/list.wxss',
@@ -97,6 +103,12 @@ const PAGE_WXSS = {
   'legal-agreement': 'pages/legal/index.wxss',
   'local-index': 'pages/local/index.wxss',
   'local-confirm': 'pages/local/confirm.wxss',
+  // 同城主页两种模式都是 pages/index/index（LOCAL 渠道），共用主页 wxss
+  'index-local': 'pages/index/index.wxss',
+  'index-local-pickup': 'pages/index/index.wxss',
+  'local-pickup': 'pages/local/pickup.wxss',
+  // 时段弹层打开态与结算页同一份 wxss
+  'local-pickup-picker': 'pages/local/pickup.wxss',
   'member-index': 'pages/member/index.wxss',
   'member-mall': 'pages/member/mall.wxss',
   'member-coupons': 'pages/member/coupons.wxss',

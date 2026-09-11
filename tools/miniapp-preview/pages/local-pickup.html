@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/local-pickup.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page">
+    <!-- 取餐门店 -->
+    <div class="section card store-section"><div class="section-title">取餐门店</div><div class="store-row"><div class="store-body"><span class="store-name">阿福凉菜</span><span class="store-address">自流井区丹桂街道丹桂40栋底楼</span></div><div class="store-acts"><div class="store-act">导航</div><div class="store-act">电话</div></div></div></div>
+
+    <!-- 取餐时间：已选一格 -->
+    <div class="section card slot-section"><div class="section-title">取餐时间</div><div class="slot-value"><span class="slot-text">今天 16:30–17:00</span><span class="arrow icon icon-arrow"></span></div><span class="slot-hint">最早可取时间已含备餐时长；到店凭手机尾号取餐</span></div>
+
+    <!-- 取餐人 -->
+    <div class="section card contact-section"><div class="section-title">取餐人</div><div class="field-row"><span class="row-label">姓名</span><span class="field-input">张三</span></div><div class="field-row"><span class="row-label">手机号</span><span class="field-input">13800001234</span></div></div>
+
+    <!-- 商品明细 -->
+    <div class="section card"><div class="section-title">商品明细</div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">夫妻肺片</span><span class="item-price">¥28.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn disabled">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">凉拌折耳根</span><span class="item-price">¥12.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn disabled">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div></div>
+
+    <!-- 会员优惠（components/checkout-benefits）：券门槛按原小计判 -->
+    <div class="benefits">
+      <div class="row"><span class="row-label">优惠券</span><div class="row-value"><span class="val-strong">−¥5.00</span><span class="val-sub">新客立减券</span><span class="arrow">›</span></div></div>
+      <div class="row row-sum"><div class="sum-left"><span class="sum-item">优惠券 −¥5.00</span></div><span class="earn">预计获得 31 积分</span></div>
+    </div>
+
+    <div class="section card remark-section"><div class="remark-row"><span class="row-label">备注</span><span class="remark-placeholder">20 字以内，如不要辣</span></div></div>
+
+    <!-- 金额明细：商品金额 → 自取优惠 → 优惠券 → 应付 -->
+    <div class="section card amount-section"><div class="section-title">金额明细</div>
+      <div class="sum-row"><span class="sum-k">商品金额</span><span class="sum-v">¥40.00</span></div>
+      <div class="sum-row"><span class="sum-k">自取优惠</span><span class="sum-v sum-cut">−¥4.00</span></div>
+      <div class="sum-row"><span class="sum-k">优惠券</span><span class="sum-v sum-cut">−¥5.00</span></div>
+      <div class="sum-row sum-total"><span class="sum-k">应付金额</span><span class="sum-v sum-pay">¥31.00</span></div>
+    </div>
+
+    <div class="spacer"></div>
+  </div>
+  <div class="bottom-bar"><div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div><div class="bottom-main"><div class="bottom-total-wrap"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">31</span><span class="price-dec">.00</span></div><div class="submit-btn btn-primary">提交订单 ¥31.00</div></div></div>
+</div>
+</body>
+</html>

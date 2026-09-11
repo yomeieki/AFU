@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/index-local-pickup.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page page-local">
+
+    <!-- 自绘导航栏。真机上 statusBarHeight/navContent/navTotal 由 index.js:computeNavBar
+         按胶囊按钮实测值算出；预览台不跑 JS，这里硬编码 iPhone 15 Pro 的一组（54 / 42 / 96）。 -->
+    <div class="navbar" style="height:96px;padding-top:54px">
+      <div class="navbar-inner" style="height:42px">
+        <div class="navbar-back"><div class="navbar-back-icon"></div></div>
+        <span class="navbar-title">阿福凉菜</span>
+        <span class="navbar-channel">同城</span>
+      </div>
+    </div>
+    <div style="height:96px"></div>
+
+    <!-- 同城·自取模式：胶囊与规则行随模式变化；切换栏「自取」选中 -->
+    <div class="store-head">
+      <div class="store-title-row"><div class="store-name-wrap"><div class="store-icon icon icon-shop"></div><span class="store-name">丹桂阿福凉菜</span></div><span class="status-pill status-pill-open">自取开放</span></div>
+      <div class="delivery-rules-row"><span class="delivery-rules">自取享 9 折 · 满 ¥30 起 · 自流井区丹桂街道丹桂40栋底楼</span><span class="delivery-rules-arrow">›</span></div>
+    </div>
+    <div class="mode-bar">
+      <div class="mode-tab"><span class="mode-name">外送</span><span class="mode-sub mode-sub-open">营业中</span></div>
+      <div class="mode-tab active"><span class="mode-name">自取</span><span class="mode-sub mode-sub-open">自取开放</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">同城分类</span>
+        <span class="section-more">全部 <span class="section-more-arrow icon icon-arrow"></span></span>
+      </div>
+      <div class="category-scroll">
+        <div class="category-list">
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">熟</span></div><span class="category-name">熟食</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">卤</span></div><span class="category-name">卤味</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">凉</span></div><span class="category-name">凉菜</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">礼</span></div><span class="category-name">礼盒</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">特</span></div><span class="category-name">特惠</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><span class="section-title">今日现拌</span></div>
+      <div class="product-grid">
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">夫妻肺片</span>
+            <span class="product-subtitle">每日现拌，麻辣鲜香</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">29</span><span class="price-dec">.90</span><span class="price-from">起</span></div>
+              <span class="product-sales">已售262</span>
+            </div>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">冷吃兔</span>
+            <span class="product-subtitle">传统工艺，入口即化</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">49</span><span class="price-dec">.80</span></div>
+              <span class="product-sales">已售128</span>
+            </div>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">凉拌折耳根</span>
+            <span class="product-subtitle">精选8款熟食，送礼佳品</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">298</span><span class="price-dec">.00</span></div>
+              <span class="product-sales">已售45</span>
+            </div>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">蒜泥白肉</span>
+            <span class="product-subtitle">甜咸交融，香而不腻</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">35</span><span class="price-dec">.80</span></div>
+              <span class="product-sales">已售89</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

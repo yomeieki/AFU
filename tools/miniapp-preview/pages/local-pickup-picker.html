@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/local-pickup-picker.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;height:720px;background:#f5f6f7;overflow:hidden}.mp-page{position:relative;height:720px;overflow:hidden}.sheet{max-height:none}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page">
+    <div class="section card store-section"><div class="section-title">取餐门店</div><div class="store-row"><div class="store-body"><span class="store-name">阿福凉菜</span><span class="store-address">自流井区丹桂街道丹桂40栋底楼</span></div><div class="store-acts"><div class="store-act">导航</div><div class="store-act">电话</div></div></div></div>
+    <div class="section card slot-section"><div class="section-title">取餐时间</div><div class="slot-muted">今日已无可取时段，请选择其它日期 ›</div><span class="slot-hint">最早可取时间已含备餐时长；到店凭手机尾号取餐</span></div>
+    <div class="section card contact-section"><div class="section-title">取餐人</div><div class="field-row"><span class="row-label">姓名</span><span class="field-placeholder">可不填</span></div><div class="field-row"><span class="row-label">手机号</span><span class="field-placeholder">到店报尾号取餐</span></div></div>
+    <div class="section card"><div class="section-title">商品明细</div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">夫妻肺片</span><span class="item-price">¥28.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn disabled">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div></div>
+  </div>
+
+  <!-- 时段选择弹层：今天/明天切换 + 三列格子；选中格品牌色 -->
+  <div class="sheet-mask">
+    <div class="sheet">
+      <div class="sheet-head"><span class="sheet-title">选择取餐时间</span><span class="sheet-close">关闭</span></div>
+      <div class="day-tabs"><div class="day-tab"><span>今天</span><span class="day-empty">无可取时段</span></div><div class="day-tab active"><span>明天</span></div></div>
+      <div class="slot-grid-wrap"><div class="slot-grid">
+        <div class="slot-cell">10:00–10:30</div><div class="slot-cell">10:30–11:00</div><div class="slot-cell active">11:00–11:30</div>
+        <div class="slot-cell">11:30–12:00</div><div class="slot-cell">12:00–12:30</div><div class="slot-cell">12:30–13:00</div>
+        <div class="slot-cell">13:00–13:30</div><div class="slot-cell">13:30–14:00</div><div class="slot-cell">17:00–17:30</div>
+        <div class="slot-cell">17:30–18:00</div><div class="slot-cell">18:00–18:30</div><div class="slot-cell">18:30–19:00</div>
+      </div></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
