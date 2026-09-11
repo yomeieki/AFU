@@ -26,6 +26,18 @@ var LOCAL_STATUS_LABEL = Object.assign({}, EXPRESS_STATUS_LABEL, {
   SHIPPED: '配送中',
 })
 
+// 自取单：PAID 是「待接单」，SHIPPED 复用为「待取餐」，COMPLETED 为「已取餐」（spec P8）
+var PICKUP_STATUS_LABEL = Object.assign({}, EXPRESS_STATUS_LABEL, {
+  PAID: '待接单',
+  SHIPPED: '待取餐',
+  COMPLETED: '已取餐',
+})
+var TYPE_META = {
+  LOCAL: { label: '同城', cls: 'local' },
+  PICKUP: { label: '自取', cls: 'pickup' },
+  EXPRESS: { label: '邮寄', cls: 'express' },
+}
+
 var AFTER_SALE_LABEL = {
   PENDING: '售后处理中',
   APPROVED: '售后退款中',
@@ -57,7 +69,7 @@ function coverItem(items) {
 
 function decorate(order) {
   var extra = ''
-  var statusLabels = order.deliveryType === 'LOCAL' ? LOCAL_STATUS_LABEL : EXPRESS_STATUS_LABEL
+  var statusLabels = order.deliveryType === 'LOCAL' ? LOCAL_STATUS_LABEL : order.deliveryType === 'PICKUP' ? PICKUP_STATUS_LABEL : EXPRESS_STATUS_LABEL
   if (order.refundedAmount > 0) extra = '已退 ¥' + formatPrice(order.refundedAmount)
   if (order.afterSale && AFTER_SALE_LABEL[order.afterSale.status]) {
     extra = (extra ? extra + ' · ' : '') + AFTER_SALE_LABEL[order.afterSale.status]
@@ -69,6 +81,8 @@ function decorate(order) {
     moreCount: order.items && order.items.length > 1 ? order.items.length - 1 : 0,
     extraText: extra,
     countdown: countdownText(order.payExpireAt),
+    typeLabel: (TYPE_META[order.deliveryType] || TYPE_META.EXPRESS).label,
+    typeClass: (TYPE_META[order.deliveryType] || TYPE_META.EXPRESS).cls,
   })
 }
 
@@ -149,8 +163,9 @@ Page({
     else this.setData({ loadingMore: true })
     getOrders({
       status: status || undefined,
-      // scope='all' 时**不传**这个参数（传空串服务端会按不过滤处理，但不如不传干净）
-      deliveryType: this.data.scope === 'channel' ? this.data.channel : undefined,
+      // 同城渠道下一次拿外送 + 自取两类（服务端 channel=LOCAL 展开为 LOCAL,PICKUP）；
+      // scope='all' 时不传，两个渠道都回来
+      channel: this.data.scope === 'channel' ? this.data.channel : undefined,
       page: page,
       pageSize: PAGE_SIZE,
     })

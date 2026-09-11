@@ -95,6 +95,10 @@
   background: #eef1fd;
   color: #3b5bdb;
 }
+.delivery-type-tag.pickup {
+  background: #eef8f0;
+  color: #16a34a;
+}
 .order-no {
   font-size: 24rpx;
   color: var(--text-3);

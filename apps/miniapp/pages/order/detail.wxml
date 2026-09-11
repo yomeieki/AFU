@@ -14,7 +14,7 @@
   </view>
 
   <!-- Address -->
-  <view class="card">
+  <view class="card" wx:if="{{!order.isPickup}}">
     <view class="address-row">
       <view class="address-pin icon icon-pin"></view>
       <view class="address-body">
@@ -24,6 +24,27 @@
         </view>
         <text class="receiver-address">{{order.receiverFullAddress}}</text>
       </view>
+    </view>
+  </view>
+
+  <!-- 自取：尾号 + 时段是店员认单的两样东西，放最大；门店卡替代收货地址卡 -->
+  <view class="card pickup-card" wx:if="{{order.isPickup}}">
+    <view class="pickup-head">
+      <text class="pickup-tail">尾号 {{order.phoneTail}}</text>
+      <text class="pickup-slot" wx:if="{{order.pickupSlotLabel}}">{{order.pickupSlotLabel}} 取</text>
+    </view>
+    <text class="pickup-hint" wx:if="{{order.pickupHint}}">{{order.pickupHint}}</text>
+    <view class="info-row" wx:if="{{order.pickupStore}}">
+      <text class="info-label">取餐门店</text>
+      <view class="info-value"><text>{{order.pickupStore.name}}</text><text class="info-sub"> · {{order.pickupStore.address}}</text></view>
+    </view>
+    <view class="info-row">
+      <text class="info-label">取餐人</text>
+      <text class="info-value">{{order.receiverName}} {{order.receiverPhone}}</text>
+    </view>
+    <view class="pickup-acts">
+      <view class="pickup-act" wx:if="{{order.pickupStore && order.pickupStore.latE6 != null}}" bindtap="onOpenStore">导航到店</view>
+      <view class="pickup-act" bindtap="onContactShop">联系商家</view>
     </view>
   </view>
 
@@ -80,17 +101,18 @@
     <text class="courier-route-distance" wx:if="{{courierDistanceText}}">骑手距您约 {{courierDistanceText}} km</text>
   </view>
 
-  <view class="card local-cancel-card" wx:if="{{(order.isLocal || order.isExpress) && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelRejected || order.showLocalCancelUnavailable)}}">
+  <view class="card local-cancel-card" wx:if="{{(order.isLocal || order.isExpress || order.isPickup) && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelRejected || order.showLocalCancelUnavailable)}}">
     <view class="local-cancel-submitted" wx:if="{{order.cancelRequestedAt}}">取消申请已提交，商家会尽快处理</view>
     <!-- 申请被驳回（店员点的或超时自动）。不写明是哪一种：对顾客而言结论一样，
          而「系统自动回绝」听起来比「商家考虑后未同意」更冷。 -->
     <view class="local-cancel-unavailable" wx:elif="{{order.showLocalCancelRejected}}">商家未同意取消，订单继续{{order.isExpress ? '备货' : '制作'}}中。如有问题请联系商家</view>
     <view wx:elif="{{order.canRequestCancel}}">
       <text class="local-cancel-title">可申请取消</text>
-      <text class="local-cancel-copy" wx:if="{{graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.cancelDeadlineText}}）</text>
-      <text class="local-cancel-copy" wx:elif="{{order.cancelDeadlineText}}">可申请取消截止 {{order.cancelDeadlineText}}</text>
+      <text class="local-cancel-copy" wx:if="{{order.isPickup}}">可申请取消，商家确认后全额退款</text>
+      <text class="local-cancel-copy" wx:if="{{!order.isPickup && graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.cancelDeadlineText}}）</text>
+      <text class="local-cancel-copy" wx:elif="{{!order.isPickup && order.cancelDeadlineText}}">可申请取消截止 {{order.cancelDeadlineText}}</text>
     </view>
-    <view class="local-cancel-unavailable" wx:else>订单已开始{{order.isExpress ? '备货' : '制作'}}，如有问题请联系商家</view>
+    <view class="local-cancel-unavailable" wx:else>{{order.isPickup ? '餐品已在准备，如有问题请联系商家' : ('订单已开始' + (order.isExpress ? '备货' : '制作') + '，如有问题请联系商家')}}</view>
   </view>
 
   <!-- Items -->
@@ -121,6 +143,10 @@
       <text class="amount-label">商品金额</text>
       <text class="amount-value">¥{{order.totalAmountText}}</text>
     </view>
+    <view class="amount-row" wx:if="{{order.pickupDiscountAmount > 0}}">
+      <text class="amount-label">自取优惠</text>
+      <text class="amount-value discount">−¥{{order.pickupDiscountAmountText}}</text>
+    </view>
     <view class="amount-row" wx:if="{{order.discountAmount > 0}}">
       <text class="amount-label">优惠券</text>
       <text class="amount-value discount">−¥{{order.discountAmountText}}</text>
@@ -129,7 +155,7 @@
       <text class="amount-label">积分赠品</text>
       <text class="amount-value">{{order.pointsUsed}} 分</text>
     </view>
-    <view class="amount-row">
+    <view class="amount-row" wx:if="{{!order.isPickup}}">
       <text class="amount-label">运费</text>
       <text class="amount-value">{{order.shippingFee === 0 ? '免运费' : '¥' + order.shippingFeeText}}</text>
     </view>
@@ -298,9 +324,9 @@
     <text>联系商家</text>
   </view>
   <view class="cancel-btn" wx:if="{{order.canSelfCancel}}" bindtap="onCancelOrder">
-    <text>{{order.status === 'PENDING_PAYMENT' ? '取消订单' : '申请退款'}}</text>
+    <text>{{order.status === 'PENDING_PAYMENT' || order.isPickup ? '取消订单' : '申请退款'}}</text>
   </view>
-  <view class="cancel-btn" wx:if="{{(order.isLocal || order.isExpress) && order.canRequestCancel}}" bindtap="onRequestCancel">
+  <view class="cancel-btn" wx:if="{{(order.isLocal || order.isExpress || order.isPickup) && order.canRequestCancel}}" bindtap="onRequestCancel">
     <text>申请取消</text>
   </view>
   <view class="cancel-btn" wx:if="{{order.canApplyAfterSale}}" bindtap="onApplyAfterSale">
@@ -310,8 +336,8 @@
     <text>去支付</text>
     <text wx:if="{{countdown}}" class="pay-btn-countdown">{{countdown}}</text>
   </view>
-  <!-- 同城单由骑手送达/店员标记完成，顾客在骑手取货后误点会把订单提前置为已完成 -->
-  <view class="pay-btn btn-primary" wx:if="{{order.status === 'SHIPPED' && !order.isLocal}}" bindtap="onConfirmReceipt">
+  <!-- 同城单由骑手送达/店员标记完成，自取单由顾客到店/店员标记取餐，顾客提前误点会把订单提前置为已完成 -->
+  <view class="pay-btn btn-primary" wx:if="{{order.status === 'SHIPPED' && !order.isLocal && !order.isPickup}}" bindtap="onConfirmReceipt">
     <text>确认收货</text>
   </view>
 </view>

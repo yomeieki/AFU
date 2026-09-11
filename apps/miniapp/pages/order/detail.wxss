@@ -550,3 +550,11 @@
 .track-context { font-size: 26rpx; color: var(--text-3); line-height: 1.5; word-break: break-all; white-space: normal; }
 .track-item.first .track-context { color: var(--text-1); font-weight: 500; }
 .track-time { font-size: 22rpx; color: var(--text-3); margin-top: 4rpx; }
+
+/* ── 自取卡 ───────────────────────────────────────────── */
+.pickup-head { display: flex; align-items: baseline; gap: 20rpx; margin-bottom: 8rpx; }
+.pickup-tail { font-size: 40rpx; font-weight: 700; color: var(--brand); }
+.pickup-slot { font-size: 28rpx; font-weight: 600; color: var(--text-1); }
+.pickup-hint { display: block; margin-bottom: 14rpx; font-size: 24rpx; color: var(--text-2); }
+.pickup-acts { display: flex; gap: 16rpx; margin-top: 14rpx; }
+.pickup-act { padding: 10rpx 22rpx; border: 1rpx solid var(--brand); border-radius: 999rpx; color: var(--brand); font-size: 24rpx; }

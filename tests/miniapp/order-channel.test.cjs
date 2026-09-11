@@ -79,13 +79,13 @@ test('从「我的」的状态快捷入口进列表：渠道与状态一起带',
   assert.ok(url.indexOf('deliveryType=LOCAL') !== -1, '渠道也要带上：' + url)
 })
 
-test('订单列表默认只看当前渠道；请求里必须出现 deliveryType', async function () {
+test('订单列表默认只看当前渠道；请求里必须出现 channel', async function () {
   const ctx = makeCtx('LOCAL')
   const page = loadPage('../../apps/miniapp/pages/order/list.js', ctx)
   page.onLoad.call(page, { deliveryType: 'LOCAL' })
   page.onShow.call(page)
   await settle(); await settle()
-  assert.ok(lastOrdersUrl(ctx.urls).indexOf('deliveryType=LOCAL') !== -1,
+  assert.ok(lastOrdersUrl(ctx.urls).indexOf('channel=LOCAL') !== -1,
     '默认应只查同城：' + ctx.urls.join(' '))
   page.onUnload.call(page)
 })
@@ -99,7 +99,7 @@ test('切到「全部订单」：不再带 deliveryType，两个渠道都回来'
   ctx.urls.length = 0
   page.onScopeChange.call(page, { currentTarget: { dataset: { scope: 'all' } } })
   await settle(); await settle()
-  assert.ok(lastOrdersUrl(ctx.urls).indexOf('deliveryType') === -1,
+  assert.ok(lastOrdersUrl(ctx.urls).indexOf('channel=') === -1,
     '「全部」不该带渠道：' + ctx.urls.join(' '))
   page.onUnload.call(page)
 })
@@ -209,4 +209,56 @@ test('取消申请有防双击，且在弹窗确认后再判一次', function ()
   assert.ok(m, '找不到 onRequestCancel')
   const guards = (m[0].match(/_requestCanceling/g) || []).length
   assert.ok(guards >= 3, '弹窗前、确认后各要判一次并置位，实际出现 ' + guards + ' 次')
+})
+
+test('自取单卡片：标签「自取」、待取餐/已取餐文案', async function () {
+  const ctx = makeCtx('LOCAL', [
+    { id: 11, deliveryType: 'PICKUP', status: 'SHIPPED', items: [], actualAmount: 1200 },
+    { id: 12, deliveryType: 'PICKUP', status: 'COMPLETED', items: [], actualAmount: 1200 },
+    { id: 13, deliveryType: 'LOCAL', status: 'SHIPPED', items: [], actualAmount: 1200 },
+  ])
+  const page = loadPage('../../apps/miniapp/pages/order/list.js', ctx)
+  page.onLoad.call(page, { deliveryType: 'LOCAL' })
+  page.onShow.call(page)
+  await settle(); await settle()
+  const byId = (id) => page.data.orders.find((o) => o.id === id)
+  assert.equal(byId(11).typeLabel, '自取'); assert.equal(byId(11).typeClass, 'pickup')
+  assert.equal(byId(11).statusLabel, '待取餐')
+  assert.equal(byId(12).statusLabel, '已取餐')
+  assert.equal(byId(13).statusLabel, '配送中', '外送文案不变')
+  page.onUnload.call(page)
+})
+
+test('自取单详情：门店卡、尾号+时段、时间线、按钮按服务端 canSelfCancel', async function () {
+  const order = {
+    id: 21, orderNo: 'ORD21', deliveryType: 'PICKUP', status: 'SHIPPED',
+    createdAt: '2026-09-11T02:00:00Z', paidAt: '2026-09-11T02:01:00Z', acceptedAt: '2026-09-11T02:05:00Z',
+    pickupAt: '2026-09-11T04:00:00Z', pickupReadyAt: '2026-09-11T03:40:00Z', pickupDiscountAmount: 60,
+    receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '四川省自贡市自流井区丹桂40栋底楼',
+    totalAmount: 1200, shippingFee: 0, actualAmount: 1140, refundedAmount: 0, discountAmount: 0, pointsUsed: 0,
+    items: [{ id: 1, productName: '凉拌牛肉', productPrice: 1200, quantity: 1, subtotal: 1200 }], refunds: [], afterSale: null,
+    canSelfCancel: false, canRequestCancel: false, subscribeTemplateIds: [],
+    pickup: { pickupAt: '2026-09-11T04:00:00Z', pickupReadyAt: '2026-09-11T03:40:00Z', prepStartAt: '2026-09-11T03:35:00Z', slotLabel: '今天 12:00–12:30', store: { name: '阿福凉菜', phone: '15309003232', address: '自流井区丹桂40栋底楼', latE6: 29341126, lngE6: 104779018 } },
+  }
+  const ctx = makeCtx('LOCAL', [])
+  ctx.wx.request = (r) => {
+    ctx.urls.push(r.url)
+    r.success({ statusCode: 200, data: { code: 0, message: 'ok', data: order } })
+  }
+  Object.assign(ctx.wx, { showLoading() {}, hideLoading() {}, openLocation() {}, makePhoneCall() {} })
+  const page = loadPage('../../apps/miniapp/pages/order/detail.js', ctx)
+  page.startCourierPoll = () => {}
+  page.onLoad.call(page, { id: '21' })
+  await settle(); await settle()
+  const o = page.data.order
+  assert.equal(o.isPickup, true)
+  assert.equal(o.statusLabel, '待取餐')
+  assert.equal(o.phoneTail, '1234')
+  assert.equal(o.pickupSlotLabel, '今天 12:00–12:30')
+  assert.equal(o.pickupStore.name, '阿福凉菜')
+  assert.equal(o.canSelfCancel, false, '以服务端 canSelfCancel 为准')
+  assert.equal(o.pickupDiscountAmountText, '0.60')
+  assert.ok(o.timeline.some((s) => s.label === '已备好 · 请来取餐' && s.done), JSON.stringify(o.timeline))
+  assert.ok(o.timeline.some((s) => s.label === '已取餐' && !s.done))
+  page.onUnload.call(page)
 })

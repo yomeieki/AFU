@@ -9,19 +9,23 @@ const STATUS_LABEL = {
   CANCELLED: '已取消',
   REFUNDED: '已退款',
 }
+// 自取（2026-09-11）：同一套状态、不同说法
+const PICKUP_LABEL = { PAID: '待接单', SHIPPED: '待取餐', COMPLETED: '已取餐' }
 
 Component({
   properties: {
     // 后端订单状态枚举
-    status: {
-      type: String,
-      value: '',
-      observer(val) {
-        this.setData({ label: STATUS_LABEL[val] || val })
-      },
-    },
+    status: { type: String, value: '' },
+    // 'EXPRESS' | 'LOCAL' | 'PICKUP'，只有 PICKUP 会改文案
+    deliveryType: { type: String, value: '' },
   },
   data: {
     label: '',
+  },
+  observers: {
+    'status, deliveryType': function(status, deliveryType) {
+      var label = deliveryType === 'PICKUP' && PICKUP_LABEL[status] ? PICKUP_LABEL[status] : (STATUS_LABEL[status] || status)
+      this.setData({ label: label })
+    },
   },
 })

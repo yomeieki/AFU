@@ -20,6 +20,8 @@ var STATUS_LABEL = {
   REFUNDED: '已退款',
 }
 
+var PICKUP_STATUS_LABEL = Object.assign({}, STATUS_LABEL, { PAID: '待接单', SHIPPED: '待取餐', COMPLETED: '已取餐' })
+
 // 同城配送的异常状态不展示运力侧的内部处理术语，避免顾客误解为订单出错。
 var DELIVERY_CUSTOMER_LABEL = {
   PENDING: '商家正在安排配送', CALLING: '正在为您呼叫骑手',
@@ -214,6 +216,58 @@ function buildLocalTimeline(order) {
   return steps
 }
 
+// 自取单时间线：提交 → 支付 → 商家接单·备餐中 → 已备好·请来取餐 → 已取餐。
+// 取消/退款事实那两行与同城完全同款。
+function buildPickupTimeline(order) {
+  var steps = [{ label: '提交订单', time: t(order.createdAt), done: true }]
+
+  if (order.status === 'CANCELLED') {
+    if (order.paidAt) steps.push({ label: '支付成功', time: t(order.paidAt), done: true })
+    var rejectReasonCancelled = rejectReasonText(order.cancelReason)
+    steps.push({
+      label: rejectReasonCancelled ? ('商家已拒单 · ' + rejectReasonCancelled) : '订单已取消',
+      time: t(order.cancelledAt),
+      done: true,
+      extra: rejectReasonCancelled ? '' : (order.cancelReason || ''),
+    })
+    return steps
+  }
+
+  if (order.status === 'REFUNDING' || order.status === 'REFUNDED') {
+    steps.push({ label: '支付成功', time: t(order.paidAt), done: !!order.paidAt })
+    if (order.acceptedAt) steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: true })
+    if (order.pickupReadyAt) steps.push({ label: '已备好 · 请来取餐', time: t(order.pickupReadyAt), done: true })
+    if (order.completedAt) steps.push({ label: '已取餐', time: t(order.completedAt), done: true })
+    var rejectReason = rejectReasonText(order.cancelReason)
+    var byCustomer = !rejectReason && !!order.cancelReason && order.cancelReason.indexOf('用户') === 0
+    steps.push({
+      label: rejectReason ? ('商家已拒单 · ' + rejectReason) : (byCustomer ? '申请退款' : '商家发起退款'),
+      time: t(order.cancelledAt),
+      done: true,
+      extra: (rejectReason || byCustomer) ? '' : (order.cancelReason || ''),
+    })
+    var refundDone = order.status === 'REFUNDED' && order.refundedAmount > 0
+    var refundFact = refundFactText(order)
+    steps.push({ label: refundFact.label, time: refundDone ? t(order.refundedAt) : '', done: refundDone, extra: refundFact.extra })
+    return steps
+  }
+
+  steps.push({ label: '支付成功', time: t(order.paidAt), done: !!order.paidAt })
+  steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt })
+  steps.push({ label: '已备好 · 请来取餐', time: t(order.pickupReadyAt), done: !!order.pickupReadyAt })
+  steps.push({ label: '已取餐', time: t(order.completedAt), done: !!order.completedAt })
+  return steps
+}
+
+// 自取单顶部那句话：顾客此刻最想知道「我现在该干嘛」
+function pickupHintOf(order, canSelfCancel) {
+  if (order.status === 'PAID') return canSelfCancel ? '商家接单前可直接取消' : '商家即将接单'
+  if (order.status === 'PREPARING') return '备餐中，备好后会通知您'
+  if (order.status === 'SHIPPED') return '已备好，凭手机尾号到店取餐'
+  if (order.status === 'COMPLETED') return '已取餐，感谢惠顾'
+  return ''
+}
+
 
 // 直线距离（km）。展示用：骑手→收货点，不参与计费。
 function getStraightDistanceKm(fromLatE6, fromLngE6, toLatE6, toLngE6) {
@@ -257,6 +311,7 @@ function decorateOrder(order) {
     : null
   var isLocal = order.deliveryType === 'LOCAL'
   var isExpress = order.deliveryType === 'EXPRESS'
+  var isPickup = order.deliveryType === 'PICKUP'
   var expressStageText = expressTrackUtil.expressStageText(order)
   var expressTrack = isExpress ? expressTrackUtil.buildExpressTrack(order.track) : []
 
@@ -264,9 +319,14 @@ function decorateOrder(order) {
   var deliveryStatus = delivery && delivery.status
   var isDeliveryNeutral = !!deliveryStatus && DELIVERY_NEUTRAL.indexOf(deliveryStatus) !== -1
   return Object.assign({}, order, {
-    statusLabel: STATUS_LABEL[order.status] || order.status,
+    statusLabel: (isPickup ? PICKUP_STATUS_LABEL : STATUS_LABEL)[order.status] || order.status,
     isLocal: isLocal,
     isExpress: isExpress,
+    isPickup: isPickup,
+    phoneTail: (order.receiverPhone || '').slice(-4),
+    pickupSlotLabel: order.pickup ? (order.pickup.slotLabel || '') : '',
+    pickupStore: order.pickup ? order.pickup.store : null,
+    pickupDiscountAmountText: formatPrice(order.pickupDiscountAmount || 0),
     expressStageText: expressStageText,
     showExpressStage: !!expressStageText,
     expressTrack: expressTrack,
@@ -288,11 +348,15 @@ function decorateOrder(order) {
     cancelDeadlineText: deadlineText(order.cancelRequestDeadline),
     // 申请被驳回过（人工或超时自动）。顾客上一次看到的是「已提交，商家会尽快处理」，
     // 不给个结论他会一直等——而驳回把 cancelRequestedAt 清空了，只能靠这条痕迹。
-    showLocalCancelRejected: (isLocal || isExpress) && !order.cancelRequestedAt && !!order.cancelRequestRejectedAt
+    showLocalCancelRejected: (isLocal || isExpress || isPickup) && !order.cancelRequestedAt && !!order.cancelRequestRejectedAt
       && ['PAID', 'PREPARING'].indexOf(order.status) !== -1,
-    showLocalCancelUnavailable: (isLocal || isExpress) && order.status === 'PREPARING' && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true,
-    // 自助取消/退款：待付款，或已付款且商家未接单
-    canSelfCancel: order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt),
+    showLocalCancelUnavailable:
+      ((isLocal || isExpress) && order.status === 'PREPARING' && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true)
+      || (isPickup && ['PAID', 'PREPARING'].indexOf(order.status) !== -1 && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true && order.canSelfCancel !== true),
+    // 服务端从 2026-09-11 起下发 canSelfCancel（自取按「开始备餐时刻」判）；老服务端没有就按旧规则算
+    canSelfCancel: typeof order.canSelfCancel === 'boolean'
+      ? order.canSelfCancel
+      : (order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt)),
     totalAmountText: formatPrice(order.totalAmount),
     shippingFeeText: formatPrice(order.shippingFee),
     actualAmountText: formatPrice(order.actualAmount),
@@ -313,9 +377,10 @@ function decorateOrder(order) {
     payDeadlineText: order.status === 'PENDING_PAYMENT' ? deadlineText(order.payExpireAt) : '',
     createdAtText: t(order.createdAt),
     paidAtText: order.paidAt ? t(order.paidAt) : null,
-    timeline: isLocal ? buildLocalTimeline(order) : buildTimeline(order),
+    timeline: isPickup ? buildPickupTimeline(order) : isLocal ? buildLocalTimeline(order) : buildTimeline(order),
     refunds: refunds,
     afterSale: afterSale,
+    pickupHint: isPickup ? pickupHintOf(order, typeof order.canSelfCancel === 'boolean' ? order.canSelfCancel : false) : '',
     items: order.items.map(function(item) {
       // 赠品行的 productPrice / subtotal 服务端恒为 0（积分不进商品行金额）。
       // 照直渲染成 ¥0.00 会被顾客当成 0 元 bug 来投诉，所以价格换成积分价、小计留「—」。
@@ -587,11 +652,14 @@ Page({
   onCancelOrder() {
     var self = this
     var isPaid = this.data.order.status !== 'PENDING_PAYMENT'
+    var isPickup = !!this.data.order.isPickup
     wx.showModal({
-      title: isPaid ? '申请退款' : '取消订单',
-      content: isPaid
-        ? '商家尚未接单，取消后货款会立即原路退回微信，一般几分钟内到账。确认退款？'
-        : '确认取消该订单？取消后需重新下单。',
+      title: isPaid ? (isPickup ? '取消订单' : '申请退款') : '取消订单',
+      content: !isPaid
+        ? '确认取消该订单？取消后需重新下单。'
+        : this.data.order.isPickup
+          ? '取消后货款会立即原路退回微信，一般几分钟内到账。确认取消？'
+          : '商家尚未接单，取消后货款会立即原路退回微信，一般几分钟内到账。确认退款？',
       confirmText: '确认',
       success: function(res) {
         if (!res.confirm) return
@@ -613,7 +681,7 @@ Page({
     var self = this
     wx.showModal({
       title: '申请取消',
-      content: '商家确认后将全额退款，含配送费。确认提交取消申请？',
+      content: this.data.order.isPickup ? '商家确认后将全额退款。确认提交取消申请？' : '商家确认后将全额退款，含配送费。确认提交取消申请？',
       confirmText: '提交申请',
       success: function(res) {
         if (!res.confirm) return
@@ -646,6 +714,12 @@ Page({
 
   onContactShop() {
     callShop()
+  },
+
+  onOpenStore() {
+    var s = this.data.order && this.data.order.pickupStore
+    if (!s || s.latE6 == null || s.lngE6 == null) return
+    wx.openLocation({ latitude: s.latE6 / 1e6, longitude: s.lngE6 / 1e6, name: s.name || '门店', address: s.address || '' })
   },
 
   onApplyAfterSale() {
