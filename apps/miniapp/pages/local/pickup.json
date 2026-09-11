@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "确认自取订单",
+  "usingComponents": {
+    "checkout-benefits": "/components/checkout-benefits/index"
+  }
+}

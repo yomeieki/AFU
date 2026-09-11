@@ -20,6 +20,7 @@
     "pages/legal/index",
     "pages/local/index",
     "pages/local/confirm",
+    "pages/local/pickup",
     "pages/member/index",
     "pages/member/mall",
     "pages/member/coupons",

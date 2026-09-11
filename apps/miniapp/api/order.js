@@ -14,6 +14,7 @@ function getOrders(params) {
     // 渠道过滤由服务端做。客户端拿分页结果再筛会漏单——第一页 20 条里可能一条同城都没有。
     // 只在明确要过滤时才带这个参数；传空串会被服务端按「不过滤」处理，但不如不传干净。
     if (params.deliveryType) parts.push('deliveryType=' + encodeURIComponent(params.deliveryType))
+    if (params.channel) parts.push('channel=' + encodeURIComponent(params.channel))
     if (params.page) parts.push('page=' + params.page)
     if (params.pageSize) parts.push('pageSize=' + params.pageSize)
   }
@@ -85,10 +86,16 @@ function uploadImage(filePath) {
   })
 }
 
+// 自取：最近一张自取单的取餐人（结算页预填），没有则 null。silent：拉不到就留空让顾客填
+function getPickupContact() {
+  return request({ url: '/orders/pickup-contact', silent: true })
+}
+
 module.exports = {
   createOrder,
   getOrders,
   getOrderMeta,
+  getPickupContact,
   getOrderDetail,
   confirmOrder,
   cancelOrder,

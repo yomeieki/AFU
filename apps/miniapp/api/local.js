@@ -24,8 +24,14 @@ function quoteLocalByLocation(latE6, lngE6) {
   })
 }
 
+// 自取时段（公开）。silent：结算页要按 blocked 自己分流，不走统一 toast。
+function getPickupSlots() {
+  return request({ url: '/local/pickup-slots', silent: true })
+}
+
 module.exports = {
   getLocalMeta: getLocalMeta,
   quoteLocal: quoteLocal,
   quoteLocalByLocation: quoteLocalByLocation,
+  getPickupSlots: getPickupSlots,
 }
