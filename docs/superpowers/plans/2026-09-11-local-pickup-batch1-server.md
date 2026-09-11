@@ -32,6 +32,7 @@
 apps/server/prisma/schema.prisma
 apps/server/prisma/migrations/20260915000000_order_pickup/migration.sql   （新建）
 apps/server/src/utils/channel.ts
+apps/server/src/utils/constants.ts                                        （Task 8：ACCEPT_REMIND_AFTER_MIN 挪入）
 apps/server/src/config.ts
 apps/server/src/services/local-settings.ts
 apps/server/src/services/pickup.ts                                        （新建）
