@@ -46,7 +46,7 @@ const COLUMNS: { key: ColKey; title: string }[] = [
 // 两边对不上会出现「手机 DOM 套桌面样式」，比两端都不改更糟。
 // 700 这条线是为了把 iPad 排除在外（iPad mini 竖屏 744、iPad 竖屏 768/810/834）。
 
-/** 渠道徽标：三处（卡片、抽屉头、图例）共用同一份图标与文案 */
+/** 渠道徽标：卡片与抽屉头共用（图例文案是「到店自取」，另写） */
 function ChannelBadge({ channel }: { channel: OrderChannel }) {
   const cls = channel === 'LOCAL' ? 'wb__badge--local' : channel === 'PICKUP' ? 'wb__badge--pickup' : 'wb__badge--express'
   const Icon = channel === 'LOCAL' ? Bike : channel === 'PICKUP' ? Store : Package
@@ -245,6 +245,35 @@ function waitLabel(sinceIso: string, now: number, urgency: Urgency): { text: str
   const min = Math.floor(sec / 60)
   const text = `${min}:${String(sec % 60).padStart(2, '0')}`
   return { text, cls: urgency === 'late' ? 'wb__wait--danger' : urgency === 'warn' ? 'wb__wait--warn' : '' }
+}
+
+/**
+ * 自取单的等待胶囊文案（卡片与抽屉头共用——Task 3 会在抽屉里复用这个函数，签名不要改）。
+ * 返回 null 表示「不归这个函数管，走调用方的原逻辑」：非自取单，或自取单落在已完成列
+ * （已完成不再用会变色的胶囊，统一显示「完成于 HH:mm」，两个渠道同一份逻辑，没必要在这里另写一份）。
+ *
+ * - 明日/后天的单（isFutureDayPickup）：不管落在哪一列都不计时，只写取餐时段——
+ *   以前只在待接单列写了「不计时」，备餐中/待取餐两列漏了，明日单混进这两列时会显示负数倒计时（Important-5）。
+ * - 待接单列：等待锚点可能在未来（下午/明天的单不该从付款那一刻就开始「烧」），
+ *   没到锚点前写「HH:mm 开始备餐」，到点后退回普通等待胶囊。
+ * - 备餐中/待取餐（waitingCourier 服务端从不下发自取单，见 workbench.ts toCard 的分流）：
+ *   必须有 pickup.pickupAt 才敢倒计时——用 card.waitSince 兜底会出现「文字说超时、颜色说正常」
+ *   的矛盾（pickupUrgency 对没有 pickupAt 的单永远返回 ''，Minor-7），没有 pickupAt 就显示占位 --。
+ */
+function pickupCapsule(card: WorkbenchCard, colKey: ColKey, now: number, urg: Urgency): { text: string; cls: string } | null {
+  if (card.channel !== 'PICKUP' || !card.pickup) return null
+  const pickup = card.pickup
+  if (colKey === 'done') return null
+  if (isFutureDayPickup(pickup.pickupAt, now)) return { text: pickup.slotLabel || '明日自取', cls: '' }
+  if (colKey === 'pending') {
+    const anchor = pickupPendingAnchor(card.waitSince, pickup.prepStartAt)
+    if (anchor > now) return { text: `${hhmm(pickup.prepStartAt)} 开始备餐`, cls: '' }
+    return waitLabel(new Date(anchor).toISOString(), now, urg)
+  }
+  // preparing / delivering
+  return pickup.pickupAt
+    ? { text: pickupCountdown(pickup.pickupAt, now).text, cls: urg ? `wb__wait--${urg === 'late' ? 'danger' : 'warn'}` : '' }
+    : { text: '--', cls: '' }
 }
 
 /** ≤2 样列全名；≥3 样给「前两菜名 等 N 样 / M 份」，「等 N 样」用渠道色（§4） */
@@ -1048,15 +1077,10 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
     : d.provider === 'SELF'
       ? `自送${d.courierName ? ` ${d.courierName}` : ''}`
       : `骑手 ${d.courierName ?? d.statusLabel}`
-  // 自取：等待锚点可能在未来（明天/下午的单），那时胶囊写「HH:mm 开始备餐」而不是负数计时
-  const pickupAnchor = pickup && colKey === 'pending' ? pickupPendingAnchor(card.waitSince, pickup.prepStartAt) : null
-  const w = colKey === 'done'
+  // 自取胶囊的规则在 pickupCapsule 里；非自取单、或自取单落在已完成列时它返回 null，退回原逻辑
+  const w = pickupCapsule(card, colKey, now, urg) ?? (colKey === 'done'
     ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' }
-    : pickupAnchor != null && pickupAnchor > now && pickup?.prepStartAt
-      ? { text: `${hhmm(pickup.prepStartAt)} 开始备餐`, cls: '' }
-      : pickup && colKey !== 'pending'
-        ? { text: pickupCountdown(pickup.pickupAt ?? card.waitSince, now).text, cls: urg === 'late' ? 'wb__wait--danger' : urg === 'warn' ? 'wb__wait--warn' : '' }
-        : waitLabel(pickupAnchor != null ? new Date(pickupAnchor).toISOString() : card.waitSince, now, urg)
+    : waitLabel(card.waitSince, now, urg))
   // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
   // 印一行「距离 --」只是在卡片上占一格空话，所以整行不渲染（PO 2026-09-07）。
   const kmText = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : null
@@ -1087,7 +1111,7 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
         {pickup ? (
           <>
             <span>取餐 {pickup.slotLabel || hhmm(pickup.pickupAt)}</span>
-            {colKey === 'delivering' && <span>已备好 {hhmm(pickup.pickupReadyAt)}</span>}
+            {colKey === 'delivering' && pickup.pickupReadyAt && <span>已备好 {hhmm(pickup.pickupReadyAt)}</span>}
             {colKey === 'done' && <span>已取餐</span>}
           </>
         ) : local ? (colKey === 'done' ? (
@@ -2248,9 +2272,12 @@ export default function Workbench() {
         {(isPhone ? COLUMNS.filter((c) => c.key === phoneCol) : COLUMNS).map((col) => {
           // 顺序由服务端排定（同城恒上），前端只按数组顺序渲染，不再排一次
           const list = snap ? snap.columns[col.key] : []
-          // 明天的自取单默认折叠到列底（spec §6.1）；开始备餐时刻一到自然是「今天」，会自动回到正常列
-          const tomorrow = col.key === 'done' ? [] : list.filter((c) => c.channel === 'PICKUP' && isFutureDayPickup(c.pickup?.pickupAt, now))
-          const todayList = tomorrow.length ? list.filter((c) => !tomorrow.includes(c)) : list
+          // 明天的自取单默认折叠到列底（spec §6.1）；开始备餐时刻一到自然是「今天」，会自动回到正常列。
+          // 带取消申请的明日单例外：红框告警卡必须留在正常列，否则顶栏「待处理告警」有数但列里找不到卡（Important-4）。
+          const foldable = (c: WorkbenchCard) =>
+            c.channel === 'PICKUP' && isFutureDayPickup(c.pickup?.pickupAt, now) && !c.pickup?.cancelRequested
+          const tomorrow = col.key === 'done' ? [] : list.filter(foldable)
+          const todayList = col.key === 'done' ? list : list.filter((c) => !foldable(c))
           // 两处 <Card> 的 props 完全相同（正常列表与「明日自取」折叠组），抽成一份共用，别复制两份
           const renderCard = (c: WorkbenchCard) => (
             <Card
