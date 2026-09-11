@@ -17,9 +17,14 @@ const STATUS_TABS: { value: string; label: string }[] = [
   { value: '', label: '全部' },
   { value: 'PAID', label: '待接单' },
   { value: 'PREPARING', label: '备餐中' },
-  { value: 'SHIPPED', label: '配送中' },
+  { value: 'SHIPPED', label: '配送中/待取餐' },
   { value: 'COMPLETED', label: '已完成' },
   { value: 'REFUNDED', label: '已退款' },
+]
+
+// 渠道筛选：全部 = 服务端 channel=LOCAL（外送 + 自取）；外送/自取各用 deliveryType
+const TYPE_TABS: { value: '' | 'LOCAL' | 'PICKUP'; label: string }[] = [
+  { value: '', label: '全部' }, { value: 'LOCAL', label: '外送' }, { value: 'PICKUP', label: '自取' },
 ]
 
 function yuan(fen: number) {
@@ -48,6 +53,7 @@ export default function LocalOrders() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const status = searchParams.get('status') ?? ''
+  const type = (searchParams.get('type') === 'LOCAL' || searchParams.get('type') === 'PICKUP') ? searchParams.get('type') as 'LOCAL' | 'PICKUP' : ''
   const [keyword, setKeyword] = useState('')
   const [list, setList] = useState<Order[]>([])
   const [total, setTotal] = useState(0)
@@ -63,7 +69,13 @@ export default function LocalOrders() {
 
   const load = (p = page) => {
     setLoading(true)
-    getOrders({ page: p, pageSize, status: status || undefined, keyword: keyword.trim() || undefined, deliveryType: 'LOCAL' })
+    getOrders({
+      page: p,
+      pageSize,
+      status: status || undefined,
+      keyword: keyword.trim() || undefined,
+      ...(type ? { deliveryType: type } : { channel: 'LOCAL' }),
+    })
       .then((res) => {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
@@ -72,7 +84,7 @@ export default function LocalOrders() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [page, status]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [page, status, type]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
     setPage(1)
@@ -81,7 +93,12 @@ export default function LocalOrders() {
 
   const handleTabChange = (value: string) => {
     setPage(1)
-    setSearchParams(value ? { status: value } : {}, { replace: true })
+    setSearchParams({ ...(value ? { status: value } : {}), ...(type ? { type } : {}) }, { replace: true })
+  }
+
+  const handleTypeChange = (value: '' | 'LOCAL' | 'PICKUP') => {
+    setPage(1)
+    setSearchParams({ ...(status ? { status } : {}), ...(value ? { type: value } : {}) }, { replace: true })
   }
 
   // 懒加载配送单 + 事件时间线，按订单 id 缓存，展开卡片与打开退款弹窗共用。
@@ -125,6 +142,19 @@ export default function LocalOrders() {
 
       <div className="bg-white rounded-lg shadow-card px-3 py-2 space-y-2">
         <div className="flex items-center gap-2 overflow-x-auto">
+          {TYPE_TABS.map((t) => (
+            <button
+              key={t.value}
+              onClick={() => handleTypeChange(t.value)}
+              className={`px-3 py-1.5 rounded-full text-sm whitespace-nowrap ${
+                type === t.value ? 'bg-brand-50 text-brand-600 font-medium' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 overflow-x-auto">
           {STATUS_TABS.map((t) => (
             <button
               key={t.value}
@@ -165,7 +195,7 @@ export default function LocalOrders() {
             ))}
           </div>
         ) : list.length === 0 ? (
-          <EmptyState text="暂无同城订单" />
+          <EmptyState text={type === 'PICKUP' ? '暂无自取订单' : type === 'LOCAL' ? '暂无外送订单' : '暂无同城订单'} />
         ) : (
           <div className="divide-y divide-gray-100">
             {list.map((o) => {
@@ -174,8 +204,9 @@ export default function LocalOrders() {
               return (
                 <div key={o.id} className="p-4 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge status={o.status} />
+                    <StatusBadge status={o.status} deliveryType={o.deliveryType} />
                     {dc?.delivery && <StatusBadge status={dc.delivery.status} />}
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${o.deliveryType === 'PICKUP' ? 'bg-teal-50 text-teal-700' : 'bg-orange-50 text-orange-700'}`}>{o.deliveryType === 'PICKUP' ? '自取' : '外送'}</span>
                     <span className="font-mono text-xs text-gray-500">{o.orderNo}</span>
                     <span className="ml-auto text-xs text-gray-400">{fmtDateTime(o.createdAt)}</span>
                   </div>
@@ -189,26 +220,38 @@ export default function LocalOrders() {
                     </span>
                     <span>实付 ¥{yuan(o.actualAmount)}</span>
                     {o.refundedAmount > 0 && <span>已退 ¥{yuan(o.refundedAmount)}</span>}
-                    {dc && cost > 0 && <span className="text-gray-500">配送成本 ¥{yuan(cost)}</span>}
-                    {dc?.delivery?.courierName && <span>骑手 {dc.delivery.courierName}</span>}
+                    {o.deliveryType === 'PICKUP' ? (
+                      <>
+                        <span>取餐 {fmtDateTime(o.pickupAt)}</span>
+                        {o.pickupReadyAt && <span>已备好 {fmtDateTime(o.pickupReadyAt)}</span>}
+                        {o.status === 'COMPLETED' && o.completedAt && <span>已取走 {fmtDateTime(o.completedAt)}</span>}
+                      </>
+                    ) : (
+                      <>
+                        {dc && cost > 0 && <span className="text-gray-500">配送成本 ¥{yuan(cost)}</span>}
+                        {dc?.delivery?.courierName && <span>骑手 {dc.delivery.courierName}</span>}
+                      </>
+                    )}
                   </div>
                   <p className="text-xs text-gray-500">
                     {o.items.map((it) => `${it.productName}${it.specText ? `[${it.specText}]` : ''}×${it.quantity}`).join('，')}
                   </p>
                   <div className="flex items-center gap-2 pt-1">
-                    <button
-                      onClick={() => toggleExpand(o)}
-                      className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
-                    >
-                      {deliveryLoading === o.id ? (
-                        <Spinner className="w-3.5 h-3.5" />
-                      ) : expanded === o.id ? (
-                        <ChevronUp className="w-3.5 h-3.5" />
-                      ) : (
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      )}
-                      配送时间线
-                    </button>
+                    {o.deliveryType !== 'PICKUP' && (
+                      <button
+                        onClick={() => toggleExpand(o)}
+                        className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                      >
+                        {deliveryLoading === o.id ? (
+                          <Spinner className="w-3.5 h-3.5" />
+                        ) : expanded === o.id ? (
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        )}
+                        配送时间线
+                      </button>
+                    )}
                     {o.remainingRefundable > 0 && (
                       <Button size="sm" variant="danger" onClick={() => openRefund(o)}>
                         {o.refundedAmount > 0 ? '再退款' : '退款'}

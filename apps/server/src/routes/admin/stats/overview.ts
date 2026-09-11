@@ -7,8 +7,8 @@ import { localDayPartsSql, LOCAL_DAY_GROUP_BY, localDayKey, localDayKeyFromParts
 import { parseRange, paidOrdersWhere, localHourFromParts, rangeOut, type Range } from './shared'
 
 const router = Router()
-type Channel = 'LOCAL' | 'EXPRESS'
-const channelSchema = z.object({ channel: z.enum(['ALL', 'LOCAL', 'EXPRESS']).optional() })
+type Channel = 'LOCAL' | 'EXPRESS' | 'PICKUP'
+const channelSchema = z.object({ channel: z.enum(['ALL', 'LOCAL', 'EXPRESS', 'PICKUP']).optional() })
 
 async function kpiOf(r: Range) {
   const agg = await prisma.order.aggregate({
@@ -26,7 +26,7 @@ async function kpiOf(r: Range) {
   }
 }
 
-// GET /api/admin/stats/overview?startDate&endDate&channel=ALL|LOCAL|EXPRESS
+// GET /api/admin/stats/overview?startDate&endDate&channel=ALL|LOCAL|EXPRESS|PICKUP
 router.get('/overview', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { cur, prev } = parseRange(req.query)

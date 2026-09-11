@@ -4,7 +4,7 @@ export interface BarSeries { name: string; color: string; values: number[] }
 
 interface Props {
   labels: string[]
-  series: BarSeries[]            // 1–2 个；values 长度 = labels 长度
+  series: BarSeries[]            // 1–3 个；values 长度 = labels 长度
   height?: number
   valueFormatter?: (v: number) => string
   /** x 轴标签最多显示几个（多了会挤），均匀抽样 */

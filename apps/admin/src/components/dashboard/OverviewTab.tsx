@@ -9,9 +9,12 @@ import type { DateRange } from './RangePicker'
 
 const LOCAL_COLOR = '#f97316'   // 同城：橙（与工作台同城语义一致）
 const EXPRESS_COLOR = '#3b82f6' // 邮寄：蓝
+const PICKUP_COLOR = '#0d9488'   // 自取：青（与工作台 --pickup 同一语义）
+
+type HotChannel = 'ALL' | 'LOCAL' | 'PICKUP' | 'EXPRESS'
 
 export default function OverviewTab({ range }: { range: DateRange }) {
-  const [hotChannel, setHotChannel] = useState<'ALL' | 'LOCAL' | 'EXPRESS'>('ALL')
+  const [hotChannel, setHotChannel] = useState<HotChannel>('ALL')
   const { data, loading, failed, reload } = useStats<OverviewStats>(
     () => getOverviewStats({ ...range, channel: hotChannel }),
     [range.startDate, range.endDate, hotChannel],
@@ -23,10 +26,11 @@ export default function OverviewTab({ range }: { range: DateRange }) {
   )
 }
 
-function Body({ d, hotChannel, setHotChannel }: { d: OverviewStats; hotChannel: 'ALL' | 'LOCAL' | 'EXPRESS'; setHotChannel: (c: 'ALL' | 'LOCAL' | 'EXPRESS') => void }) {
+function Body({ d, hotChannel, setHotChannel }: { d: OverviewStats; hotChannel: HotChannel; setHotChannel: (c: HotChannel) => void }) {
   const k = d.kpi
-  const total = d.channels.LOCAL.revenueFen + d.channels.EXPRESS.revenueFen
+  const total = d.channels.LOCAL.revenueFen + d.channels.PICKUP.revenueFen + d.channels.EXPRESS.revenueFen
   const localShare = total ? d.channels.LOCAL.revenueFen / total : 0
+  const pickupShare = total ? d.channels.PICKUP.revenueFen / total : 0
   const labels = d.trend.map((t) => t.date.slice(5))
   return (
     <div className="space-y-4">
@@ -42,10 +46,12 @@ function Body({ d, hotChannel, setHotChannel }: { d: OverviewStats; hotChannel: 
         <div className="h-3 rounded-full overflow-hidden bg-gray-100 flex">
           {/* 没有实收时留灰底：不然 flex:1 那段会把整条涂成邮寄色，看着像「全是邮寄」 */}
           {total > 0 && <div style={{ width: `${localShare * 100}%`, background: LOCAL_COLOR }} />}
+          {total > 0 && <div style={{ width: `${pickupShare * 100}%`, background: PICKUP_COLOR }} />}
           {total > 0 && <div style={{ flex: 1, background: EXPRESS_COLOR }} />}
         </div>
         <div className="mt-2 flex flex-wrap justify-between text-sm text-gray-700">
           <span><i className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: LOCAL_COLOR }} />同城 {d.channels.LOCAL.orderCount} 单 · {fen(d.channels.LOCAL.revenueFen)}</span>
+          <span><i className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: PICKUP_COLOR }} />自取 {d.channels.PICKUP.orderCount} 单 · {fen(d.channels.PICKUP.revenueFen)}</span>
           <span><i className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: EXPRESS_COLOR }} />邮寄 {d.channels.EXPRESS.orderCount} 单 · {fen(d.channels.EXPRESS.revenueFen)}</span>
         </div>
       </div>
@@ -55,6 +61,7 @@ function Body({ d, hotChannel, setHotChannel }: { d: OverviewStats; hotChannel: 
         <StackedBars labels={labels} valueFormatter={(v) => fen(v, 0)}
           series={[
             { name: '同城', color: LOCAL_COLOR, values: d.trend.map((t) => t.LOCAL.revenueFen) },
+            { name: '自取', color: PICKUP_COLOR, values: d.trend.map((t) => t.PICKUP.revenueFen) },
             { name: '邮寄', color: EXPRESS_COLOR, values: d.trend.map((t) => t.EXPRESS.revenueFen) },
           ]} />
       </div>
@@ -68,9 +75,9 @@ function Body({ d, hotChannel, setHotChannel }: { d: OverviewStats; hotChannel: 
           <div className="flex items-center justify-between px-4 pt-4 pb-2">
             <p className="text-sm text-gray-500">本期热销 Top 5</p>
             <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
-              {(['ALL', 'LOCAL', 'EXPRESS'] as const).map((c) => (
+              {(['ALL', 'LOCAL', 'PICKUP', 'EXPRESS'] as const).map((c) => (
                 <button key={c} onClick={() => setHotChannel(c)} className={`px-2 py-1 ${hotChannel === c ? 'bg-brand-500 text-white' : 'text-gray-600'}`}>
-                  {c === 'ALL' ? '全部' : c === 'LOCAL' ? '同城' : '邮寄'}
+                  {c === 'ALL' ? '全部' : c === 'LOCAL' ? '同城' : c === 'PICKUP' ? '自取' : '邮寄'}
                 </button>
               ))}
             </div>

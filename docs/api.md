@@ -1799,6 +1799,7 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 | `GET /api/admin/orders` | `deliveryType=PICKUP`；`channel=LOCAL` 一次看外送 + 自取。`pending-count.localPendingCount` 含自取。 |
 | `GET /api/admin/workbench/snapshot` | 卡片多 `pickup: { pickupAt, pickupReadyAt, prepStartAt, slotLabel, cancelRequested, cancelRejected, acceptedAt } \| null`；排序同城 < 自取 < 邮寄；顶层多 `pickupEnabled/pickupPaused/holiday`。 |
 | `POST /api/admin/system/run-scheduler` | 覆盖键新增 pickupUnpickedMin、pickupAutoCompleteMin（非生产环境，e2e 用）。 |
+| `GET /api/admin/stats/overview` | `channel` 接受 `PICKUP`（热销榜按自取过滤）；`channels`/`trend` 含 `PICKUP` 桶（批次一已加）。 |
 
 ### 定时任务（`scheduler.ts`）
 

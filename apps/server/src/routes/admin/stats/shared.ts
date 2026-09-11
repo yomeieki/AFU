@@ -65,7 +65,7 @@ export const rangeOut = (cur: Range, prev: Range) => ({
 })
 
 /** 参与统计的订单：真实单 + 付款时间落在区间内；状态不限（退款单也算单数，退款额另计） */
-export function paidOrdersWhere(r: Range, channel?: 'LOCAL' | 'EXPRESS'): Prisma.OrderWhereInput {
+export function paidOrdersWhere(r: Range, channel?: 'LOCAL' | 'EXPRESS' | 'PICKUP'): Prisma.OrderWhereInput {
   return {
     ...REAL_ORDERS,
     paidAt: { gte: r.start, lt: r.endExclusive },
