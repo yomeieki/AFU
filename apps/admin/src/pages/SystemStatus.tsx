@@ -45,6 +45,7 @@ interface SystemStatusData {
     shipTemplateSet: boolean
     refundTemplateSet: boolean
     deliverTemplateSet: boolean
+    pickupTemplateSet: boolean
   }
   kd100: {
     keySet: boolean
@@ -183,6 +184,7 @@ export default function SystemStatus() {
         { ok: data.subscribe.refundTemplateSet, label: '退款通知', hint: 'WECHAT_TMPL_REFUND / WECHAT_TMPL_REFUND_FIELDS（公共模板库「退款通知」类）' },
         // 同城专用：缺这项时「配送中」推送会静默不发，页面上看不出异常，只能靠这一行
         { ok: data.subscribe.deliverTemplateSet, label: '同城「配送中」通知', hint: 'WECHAT_TMPL_DELIVER / WECHAT_TMPL_DELIVER_FIELDS（公共模板 584「订单配送通知」，值见 docs/wechat-platform-local-delivery-setup.md）', optional: !localReady },
+        { ok: data.subscribe.pickupTemplateSet, label: '自取「取餐提醒」通知', hint: 'WECHAT_TMPL_PICKUP / WECHAT_TMPL_PICKUP_FIELDS（公共模板 250「取餐提醒」，key 见 .env.example）', optional: true },
       ],
     },
     {
