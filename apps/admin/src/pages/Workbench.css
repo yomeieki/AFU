@@ -2,6 +2,7 @@
    这里刻意不用 Tailwind 的灰阶：日夜双主题必须走同一套 CSS 变量，
    混用 Tailwind 固定色会在深色下留下一块白。 */
 .wb { --local:#e5441e; --local-soft:#fdf0ec; --express:#3b5bdb; --express-soft:#eef1fd;
+  --pickup:#0e7c6b; --pickup-soft:#e3f3ef;
   --ok:#15803d; --warn:#a15c07; --danger:#b3261e;
   --bg:#f6f5f3; --surface:#fff; --text-1:#1b1918; --text-2:#6b6461; --line:#e8e4e1;
   --note-bg:#fdf6e3; --note-line:#d9b23a;
@@ -18,6 +19,7 @@
   background:var(--bg); color:var(--text-1); font-size:14px;
   -webkit-tap-highlight-color:transparent; }
 .wb[data-theme="dark"] { --local:#ff7a54; --local-soft:#33191180; --express:#8fa5ff; --express-soft:#1a1f3d80;
+  --pickup:#5fd3bd; --pickup-soft:#0f2f2b80;
   --ok:#4ade80; --warn:#fbbf24; --danger:#f87171;
   --bg:#171412; --surface:#211d1a; --text-1:#f0ece9; --text-2:#a39c96; --line:#37312d;
   --note-bg:#332b12; --note-line:#a1802a;
@@ -26,6 +28,7 @@
 @media (prefers-color-scheme: dark) {
   /* 默认跟随系统：未点过日夜切换时不写 data-theme（规格 §8） */
   .wb:not([data-theme="light"]) { --local:#ff7a54; --local-soft:#33191180; --express:#8fa5ff; --express-soft:#1a1f3d80;
+    --pickup:#5fd3bd; --pickup-soft:#0f2f2b80;
     --ok:#4ade80; --warn:#fbbf24; --danger:#f87171;
     --bg:#171412; --surface:#211d1a; --text-1:#f0ece9; --text-2:#a39c96; --line:#37312d;
     --note-bg:#332b12; --note-line:#a1802a;
@@ -109,6 +112,7 @@
   border-radius:10px 0 0 10px; z-index:1; }
 .wb__card--local::before { background:var(--local); }
 .wb__card--express::before { background:var(--express); }
+.wb__card--pickup::before { background:var(--pickup); }
 /* 紧急度：**一根线**，不是两根（PO 2026-09-07）。
    第一版把光晕画在轮廓之外，于是卡片左边出现两条平行竖线——外面一条紧急色、
    里面一条渠道色，挤在一起很难看。改成 inset：紧急色沿着卡片内缘走一圈，
@@ -128,6 +132,7 @@
   font-size:12px; font-weight:600; }
 .wb__badge--local { background:var(--local-soft); color:var(--local); }
 .wb__badge--express { background:var(--express-soft); color:var(--express); }
+.wb__badge--pickup { background:var(--pickup-soft); color:var(--pickup); }
 .wb__wait { font-variant-numeric:tabular-nums; border-radius:999px; padding:1px 8px; font-size:12px;
   background:var(--line); }
 .wb__wait--warn { background:var(--warn-soft); color:var(--warn); }
@@ -371,3 +376,9 @@
   .wb__sheet-row:last-child { border-bottom:none; }
   .wb__sheet-row b { font-variant-numeric:tabular-nums; }
 }
+
+/* 「明日自取」折叠组：列底部一条可点开的分割，收起时只占一行（spec §6.1） */
+.wb__fold { margin-top:8px; border-top:1px dashed var(--line); padding-top:6px; }
+.wb__fold-t { display:flex; align-items:center; justify-content:space-between; width:100%;
+  background:none; border:0; padding:4px 2px; font:inherit; font-size:12px; color:var(--text-2); cursor:pointer; }
+.wb__fold-t b { color:var(--pickup); font-variant-numeric:tabular-nums; }

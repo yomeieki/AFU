@@ -8,12 +8,13 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bike, CircleAlert, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
+import { Bell, Bike, CircleAlert, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Store, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
   CourierLive, DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView,
   LocalDeliverySettings, Order, OrderChannel, OrderItem, QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
 } from '../types'
+import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor } from '../utils/pickup'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
   callRider, cancelDelivery, cancelExpressBooking, getExpressBooking,
@@ -45,12 +46,39 @@ const COLUMNS: { key: ColKey; title: string }[] = [
 // 两边对不上会出现「手机 DOM 套桌面样式」，比两端都不改更糟。
 // 700 这条线是为了把 iPad 排除在外（iPad mini 竖屏 744、iPad 竖屏 768/810/834）。
 
+/** 渠道徽标：三处（卡片、抽屉头、图例）共用同一份图标与文案 */
+function ChannelBadge({ channel }: { channel: OrderChannel }) {
+  const cls = channel === 'LOCAL' ? 'wb__badge--local' : channel === 'PICKUP' ? 'wb__badge--pickup' : 'wb__badge--express'
+  const Icon = channel === 'LOCAL' ? Bike : channel === 'PICKUP' ? Store : Package
+  return (
+    <span className={`wb__badge ${cls}`}>
+      <Icon className="w-3.5 h-3.5" />
+      {channel === 'LOCAL' ? '同城配送' : channel === 'PICKUP' ? '自取' : '全国邮寄'}
+    </span>
+  )
+}
+
+/** 看板上自取单张数（五列合计）——顶栏「自取 N」用 */
+function pickupOnBoard(snap: WorkbenchSnapshot | null): number {
+  if (!snap) return 0
+  return COLUMNS.reduce((n, c) => n + snap.columns[c.key].filter((x) => x.channel === 'PICKUP').length, 0)
+}
+
 /** 顶栏营业状态：桌面顶栏与手机顶栏共用，措辞只此一处 */
 function openStateOf(snap: WorkbenchSnapshot | null): { text: string; cls: string } {
   if (!snap) return { text: '加载中', cls: '' }
-  if (snap.paused) return { text: `已暂停：${snap.paused.reason || '手动暂停'}`, cls: 'wb__dot--danger' }
+  if (snap.holiday) return { text: `休业中${snap.holiday.until ? `，${snap.holiday.until.slice(5)} 后恢复` : ''}`, cls: 'wb__dot--danger' }
+  if (snap.paused) return { text: `外送已暂停：${snap.paused.reason || '手动暂停'}`, cls: 'wb__dot--danger' }
   if (!snap.localEnabled) return { text: '同城已关闭', cls: '' }
   return snap.localOpenNow ? { text: '营业中', cls: 'wb__dot--ok' } : { text: '非营业时间', cls: 'wb__dot--warn' }
+}
+
+/** 顶栏第二盏灯：自取开放/暂停。没开通就不显示（返回 null） */
+function pickupStateOf(snap: WorkbenchSnapshot | null): { text: string; cls: string } | null {
+  if (!snap || !snap.pickupEnabled) return null
+  if (snap.holiday) return { text: '自取休业', cls: 'wb__dot--danger' }
+  if (snap.pickupPaused) return { text: `自取已暂停：${snap.pickupPaused.reason || '手动暂停'}`, cls: 'wb__dot--warn' }
+  return { text: '自取开放', cls: 'wb__dot--ok' }
 }
 
 /** 配送单已结束（不再是「在途」）的三个终态 */
@@ -161,6 +189,7 @@ type Urgency = '' | 'warn' | 'late'
  * 返回 null = 这一列不看停留时长（配送中在路上多久取决于距离，只看承诺送达）。
  */
 function dwellBudget(colKey: ColKey, channel: OrderChannel, prepMin: number): [number, number] | null {
+  if (channel === 'PICKUP') return colKey === 'pending' ? [2, 5] : null
   if (channel === 'EXPRESS') return [60, 240]
   switch (colKey) {
     case 'pending': return [2, 5]
@@ -185,10 +214,14 @@ function prepMinutesNow(s: LocalDeliverySettings | null, now: number): number {
 /** 「已完成」列永不参与：给已经做完的事上色只会稀释红色（I7）。 */
 function urgencyOf(card: WorkbenchCard, colKey: ColKey, now: number, prepMin: number): Urgency {
   if (colKey === 'done') return ''
+  // 明天的自取单在哪一列都不点亮：它的所有时限都在明天
+  if (card.channel === 'PICKUP' && isFutureDayPickup(card.pickup?.pickupAt, now)) return ''
   let u: Urgency = ''
   const budget = dwellBudget(colKey, card.channel, prepMin)
   if (budget) {
-    const min = (now - Date.parse(card.waitSince)) / 60_000
+    // 自取待接单从「开始备餐 −15 分」起算（下午的单不该从付款起就烧红）
+    const since = card.channel === 'PICKUP' && card.pickup ? pickupPendingAnchor(card.waitSince, card.pickup.prepStartAt) : Date.parse(card.waitSince)
+    const min = (now - since) / 60_000
     if (min >= budget[1]) u = 'late'
     else if (min >= budget[0]) u = 'warn'
   }
@@ -197,6 +230,11 @@ function urgencyOf(card: WorkbenchCard, colKey: ColKey, now: number, prepMin: nu
     const left = (Date.parse(est) - now) / 60_000
     if (left <= DEADLINE_LATE_MIN) u = 'late'
     else if (left <= DEADLINE_WARN_MIN && u !== 'late') u = 'warn'
+  }
+  if (card.channel === 'PICKUP' && card.pickup) {
+    const pu = pickupUrgency(colKey, card.pickup, now)
+    if (pu === 'late') u = 'late'
+    else if (pu === 'warn' && u !== 'late') u = 'warn'
   }
   return u
 }
@@ -887,6 +925,8 @@ function LegendContent() {
         <span>骑手送，恒排在邮寄单上面</span>
         <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
         <span>可以稍后处理</span>
+        <span className="wb__badge wb__badge--pickup"><Store className="w-3.5 h-3.5" />到店自取</span>
+        <span>顾客来店取，排在同城之下、邮寄之上</span>
       </span>
       <span className="wb__legend-sep" />
       <span className="wb__legend-g">
@@ -906,6 +946,7 @@ function HintContent({ prepMin }: { prepMin: number }) {
       等待时长从进入本列时算起，每列的「正常」不一样：待接单 2/5 分钟，备餐中 {prepMin}/{prepMin + 8} 分钟，
       等待配送员 6/12 分钟；配送中不看等待时长，只看离预计送达还剩多久（≤15 分转琥珀、≤5 分或已过点转红）。
       邮寄单可以稍后处理，60/240 分钟才变色。红框最急 = 顾客申请退菜或配送异常，先处理它。
+      自取单：备餐中看离取餐时间（≤15 分转琥珀、≤5 分转红），待取餐过了取餐时间转琥珀；明天的单收在「明日自取」里不计时。
     </>
   )
 }
@@ -988,13 +1029,14 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
   onReject: () => void
 }) {
   const local = card.channel === 'LOCAL'
+  const pickup = card.channel === 'PICKUP' ? card.pickup : null
   const d = card.local?.delivery ?? null
   const badFlow = !!d && ['ABNORMAL', 'UNKNOWN', 'FAILED'].includes(d.status)
   // 呼叫失败是「立即处理」级别（§5 红框）：不重呼或改自送，这单就一直停在备餐中没人送
   const callFailed = !!d?.callFailed
-  // 取消申请/驳回痕迹两个渠道共用同一套字段形状（cancelRequested/cancelRejected/acceptedAt），
-  // 卡片这里不用关心是哪个渠道——哪个非空就用哪个（同一张卡两者不会同时非空）
-  const cancelState = card.local ?? card.express
+  // 取消申请/驳回痕迹三个渠道共用同一套字段形状（cancelRequested/cancelRejected/acceptedAt），
+  // 卡片这里不用关心是哪个渠道——哪个非空就用哪个（同一张卡不会有两个以上非空）
+  const cancelState = card.local ?? card.express ?? card.pickup
   const alert = !!cancelState?.cancelRequested || badFlow || callFailed
   // 已完成列不再用等待胶囊的琥珀/红底：红是本页面最稀缺的信号（§0/§5「红框=立即处理」），
   // 用它标注「已经做完的事」会稀释这个信号——到下午最后一列全红，等于没有红（I7）。
@@ -1006,23 +1048,28 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
     : d.provider === 'SELF'
       ? `自送${d.courierName ? ` ${d.courierName}` : ''}`
       : `骑手 ${d.courierName ?? d.statusLabel}`
-  const w = colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg)
+  // 自取：等待锚点可能在未来（明天/下午的单），那时胶囊写「HH:mm 开始备餐」而不是负数计时
+  const pickupAnchor = pickup && colKey === 'pending' ? pickupPendingAnchor(card.waitSince, pickup.prepStartAt) : null
+  const w = colKey === 'done'
+    ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' }
+    : pickupAnchor != null && pickupAnchor > now && pickup?.prepStartAt
+      ? { text: `${hhmm(pickup.prepStartAt)} 开始备餐`, cls: '' }
+      : pickup && colKey !== 'pending'
+        ? { text: pickupCountdown(pickup.pickupAt ?? card.waitSince, now).text, cls: urg === 'late' ? 'wb__wait--danger' : urg === 'warn' ? 'wb__wait--warn' : '' }
+        : waitLabel(pickupAnchor != null ? new Date(pickupAnchor).toISOString() : card.waitSince, now, urg)
   // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
   // 印一行「距离 --」只是在卡片上占一格空话，所以整行不渲染（PO 2026-09-07）。
   const kmText = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : null
   return (
     <div
-      className={`wb__card ${local ? 'wb__card--local' : 'wb__card--express'} ${alert ? 'wb__card--alert' : urg ? `wb__card--${urg}` : ''}`}
+      className={`wb__card ${local ? 'wb__card--local' : pickup ? 'wb__card--pickup' : 'wb__card--express'} ${alert ? 'wb__card--alert' : urg ? `wb__card--${urg}` : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }}
     >
       <div className="wb__card-top">
-        <span className={`wb__badge ${local ? 'wb__badge--local' : 'wb__badge--express'}`}>
-          {local ? <Bike className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
-          {local ? '同城配送' : '全国邮寄'}
-        </span>
+        <ChannelBadge channel={card.channel} />
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
@@ -1037,7 +1084,13 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
       {card.note ? <div className="wb__note">{card.note}</div> : <div className="wb__nonote">无备注</div>}
 
       <div className="wb__fields">
-        {local ? (colKey === 'done' ? (
+        {pickup ? (
+          <>
+            <span>取餐 {pickup.slotLabel || hhmm(pickup.pickupAt)}</span>
+            {colKey === 'delivering' && <span>已备好 {hhmm(pickup.pickupReadyAt)}</span>}
+            {colKey === 'done' && <span>已取餐</span>}
+          </>
+        ) : local ? (colKey === 'done' ? (
           /* 已完成的单只回答一件事：**最后是谁送的**。
              这里原来照抄了在途卡片的两行，于是显示成「骑手 未呼叫 · 预计送达 15:06」——
              送到了却说没呼叫骑手，还配一个未来时刻的预计送达，两条都是假的
@@ -1080,11 +1133,12 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
           倒计时归零后本条会随下一次快照刷新自然消失（变成下面那条「已驳回」）。 */}
       {cancelState?.cancelRequested && (
         <div className="wb__strip wb__strip--warn">
-          <span>顾客要退菜{autoRejectLeft(cancelState.acceptedAt, graceMin, now) ?? ''}</span>
+          <span>顾客要退菜{card.channel === 'PICKUP' ? '' : (autoRejectLeft(cancelState.acceptedAt, graceMin, now) ?? '')}</span>
           <span style={{ display: 'flex', gap: 4 }}>
-            {/* 同城 LOCAL 在 main 上从来没有手动驳回按钮，只有超时自动驳回——批次二「同城零行为变化」
-                的硬约束，这里只加邮寄，不动同城。产品后续想给同城也开这个口子，去掉这个 channel 判断即可。 */}
-            {card.channel === 'EXPRESS' && <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onReject() }}>驳回</button>}
+            {/* 同城 LOCAL 在 main 上从来没有手动驳回按钮，只有超时自动驳回；邮寄与自取（P10：自取不自动驳回，
+                店员必须决定）都有——批次二「同城零行为变化」的硬约束，这里只加邮寄和自取，不动同城。
+                产品后续想给同城也开这个口子，去掉这个 channel 判断即可。 */}
+            {card.channel !== 'LOCAL' && <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onReject() }}>驳回</button>}
             <button className="wb__iconbtn" onClick={(e) => { e.stopPropagation(); onHandleCancel() }}>同意退款</button>
           </span>
         </div>
@@ -1124,6 +1178,7 @@ function TopBar({
           <span className="wb__shop">{shopName}</span>
           <span className="wb__meta">{fmtMonthDayCn(today)}</span>
           <span className="wb__meta"><i className={`wb__dot ${openState.cls}`} />{openState.text}</span>
+          {(() => { const ps = pickupStateOf(snap); return ps ? <span className="wb__meta"><i className={`wb__dot ${ps.cls}`} />{ps.text}</span> : null })()}
           {/* 打印机状态灯：接飞鹅后 snap.printer.status 是真实健康检测结果，四态归并口径见服务端
               workbench.ts 的 summarizePrinterStatus——多台打印机取「最差」。NOT_CONNECTED（未启用/
               未绑定任何打印机）沿用旧灰点 + 「未接入」文案，不算异常，不用告警色。 */}
@@ -1143,6 +1198,7 @@ function TopBar({
             <span>今日单数<b>{snap?.stats.todayOrders ?? '--'}</b></span>
             <span>营业额<b>¥{snap ? yuan(snap.stats.todayRevenueFen) : '--'}</b></span>
             <span>平均送达<b>{snap?.stats.avgDeliverMinutes != null ? `${snap.stats.avgDeliverMinutes} 分` : '--'}</b></span>
+            <span>自取<b>{snap ? pickupOnBoard(snap) : '--'}</b></span>
           </div>
           {/* 图标与文案统一描述「点击后会变成什么」，不描述当前状态——否则跟随系统时会出现图标指向和实际切换方向相反（§8） */}
           <button className="wb__iconbtn" onClick={onToggleTheme}>
@@ -1188,7 +1244,7 @@ function TopAlerts({ snap, staleMinutes, onResetCircuit, circuitBusy }: {
       )}
       {snap?.circuit.tripped && (
         <div className="wb__banner">
-          <span>快递100 余额不足已暂停呼叫。充值后点「恢复」，或改用「自己送」。</span>
+          <span>快递100 余额不足，外送呼叫已暂停。充值后点「恢复」，或改用「自己送」；自取单不受影响。</span>
           <button className="wb__iconbtn" onClick={onResetCircuit} disabled={circuitBusy}>{circuitBusy ? '处理中…' : '恢复'}</button>
         </div>
       )}
@@ -1266,6 +1322,8 @@ export default function Workbench() {
   const [courier, setCourier] = useState<CourierLive | null>(null)
   // 已完成列默认收起（见下面渲染处的注释）。刻意不持久化：每天开工都是干净的四列。
   const [doneOpen, setDoneOpen] = useState(false)
+  // 「明日自取」折叠组的展开状态，按列各记各的（spec §6.1）；不持久化，默认收起
+  const [tomorrowOpen, setTomorrowOpen] = useState<Record<string, boolean>>({})
   // ── 手机模式（规格 §9.1）。isPhone 只在 ≤700px 为真，iPad 与电脑走原来那套。
   const isPhone = useIsPhone()
   /** 手机上当前显示哪一列。默认「待接单」——规格 §9 本来就是这么定的 */
@@ -2190,6 +2248,21 @@ export default function Workbench() {
         {(isPhone ? COLUMNS.filter((c) => c.key === phoneCol) : COLUMNS).map((col) => {
           // 顺序由服务端排定（同城恒上），前端只按数组顺序渲染，不再排一次
           const list = snap ? snap.columns[col.key] : []
+          // 明天的自取单默认折叠到列底（spec §6.1）；开始备餐时刻一到自然是「今天」，会自动回到正常列
+          const tomorrow = col.key === 'done' ? [] : list.filter((c) => c.channel === 'PICKUP' && isFutureDayPickup(c.pickup?.pickupAt, now))
+          const todayList = tomorrow.length ? list.filter((c) => !tomorrow.includes(c)) : list
+          // 两处 <Card> 的 props 完全相同（正常列表与「明日自取」折叠组），抽成一份共用，别复制两份
+          const renderCard = (c: WorkbenchCard) => (
+            <Card
+              key={c.orderId} card={c} colKey={col.key} now={now}
+              onOpen={() => openCard(c, col.key)}
+              // PICKUP 落在 else 分支，取 acceptGraceMin——自取不显示倒计时（P10 不自动驳回），这个值只是占位
+              graceMin={c.channel === 'EXPRESS' ? (snap?.expressAcceptGraceMin ?? 0) : (snap?.acceptGraceMin ?? 0)}
+              prepMin={prepMin}
+              onHandleCancel={() => openCard(c, col.key, true)}
+              onReject={() => setModal({ kind: 'confirm', spec: rejectCancelSpec(c) })}
+            />
+          )
           // 「已完成」默认折叠成一条窄边栏（PO 2026-09-07 定）：这一列里没有任何待办，
           // 却常年占着和前四列一样的宽度。收起来之后干活的四列各自变宽约 25%，
           // 卡片上的地址、备注、骑手电话少折一行。默认每次进页面都是收起的——
@@ -2221,18 +2294,19 @@ export default function Workbench() {
                   整页滚的话，滑到备餐中的第 12 张，待接单那一列就被推出屏幕了——
                   而「有没有新单等着接」恰恰是这一屏最不能丢的信息。 */}
               <div className="wb__col-body">
-                {list.length === 0
+                {todayList.length === 0 && tomorrow.length === 0
                   ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
-                  : list.map((c) => (
-                    <Card
-                      key={c.orderId} card={c} colKey={col.key} now={now}
-                      onOpen={() => openCard(c, col.key)}
-                      graceMin={c.channel === 'EXPRESS' ? (snap?.expressAcceptGraceMin ?? 0) : (snap?.acceptGraceMin ?? 0)}
-                      prepMin={prepMin}
-                      onHandleCancel={() => openCard(c, col.key, true)}
-                      onReject={() => setModal({ kind: 'confirm', spec: rejectCancelSpec(c) })}
-                    />
-                  ))}
+                  : todayList.map(renderCard)}
+                {tomorrow.length > 0 && (
+                  <div className="wb__fold">
+                    <button type="button" className="wb__fold-t"
+                      onClick={() => setTomorrowOpen((m) => ({ ...m, [col.key]: !m[col.key] }))}>
+                      <span>明日自取 <b>{tomorrow.length}</b></span>
+                      <span>{tomorrowOpen[col.key] ? '收起' : '展开'}</span>
+                    </button>
+                    {tomorrowOpen[col.key] && tomorrow.map(renderCard)}
+                  </div>
+                )}
               </div>
             </section>
           )
@@ -2263,6 +2337,7 @@ export default function Workbench() {
             <span>平均送达</span>
             <b>{snap?.stats.avgDeliverMinutes != null ? `${snap.stats.avgDeliverMinutes} 分` : '--'}</b>
           </div>
+          <div className="wb__sheet-row"><span>自取</span><b>{snap ? pickupOnBoard(snap) : '--'}</b></div>
           <div className="wb__actions" style={{ paddingTop: 12 }}>
             {/* 文案说的是「点了会变成什么」，与桌面顶栏同一套口径（§8） */}
             <button className="wb__btn wb__btn--ghost" onClick={toggleTheme}>
