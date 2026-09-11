@@ -11,7 +11,7 @@ import { getMemberSettings, setMemberSettings } from '../../services/member/sett
 import { AppError } from '../../middlewares/error'
 import {
   getLocalSettings, setLocalSettings, patchLocalSettings, sanitizeLocalSettings,
-  validateLocalSettings, validateForEnable, validateRawLocalSettings,
+  validateLocalSettings, validateForEnable, validateForPickupEnable, validateRawLocalSettings,
 } from '../../services/local-settings'
 import { getDeliveryProvider } from '../../services/delivery/provider'
 import {
@@ -99,7 +99,11 @@ router.put('/local-delivery', async (req, res, next) => {
     // sanitize 会把不合法的营业时段整条丢掉，之后就再也看不出「丢了几条」了。
     const rawErrs = validateRawLocalSettings(req.body)
     const next_ = sanitizeLocalSettings(req.body)
-    const errs = [...rawErrs, ...(next_.enabled ? validateForEnable(next_) : validateLocalSettings(next_))]
+    const errs = Array.from(new Set([
+      ...rawErrs,
+      ...(next_.enabled ? validateForEnable(next_) : validateLocalSettings(next_)),
+      ...(next_.pickup.enabled ? validateForPickupEnable(next_) : []),
+    ]))
     if (errs.length) throw new AppError(40001, errs.join('；'))
     res.json({ code: 0, message: 'ok', data: await setLocalSettings(next_) })
   } catch (e) {

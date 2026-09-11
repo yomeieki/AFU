@@ -20,6 +20,12 @@ import {
   signQuote,
   verifyQuote,
   quoteExpiresAt,
+  closedKind,
+  isHolidayOn,
+  isHolidayNow,
+  isPickupPaused,
+  shanghaiDateStr,
+  minutesInPeak,
 } from '../src/services/local-settings'
 
 let pass = 0
@@ -107,13 +113,14 @@ t('阶梯运费：2km→基础费；4.2km→基础+2km 加价；满额免；超�
   assert.strictEqual(calcLocalFee(base, 5001, 3000).inRange, false)
   assert.strictEqual(calcLocalFee(base, 1000, 1999).belowMin, true)
 })
-t('estimateMinutes = prep + 距离/速度', () => {
-  // prep 15, 15km/h → 3.75km = 15 分钟 → 30
-  assert.strictEqual(estimateMinutes({ ...base, prepMinutes: 15, riderSpeedKmh: 15 }, 3750), 30)
+t('estimateMinutes = prep + 呼叫取货 + 距离/速度', () => {
+  // prep 15, 15km/h → 3.75km = 15 分钟路上；pickupMinutes 串行加 callToPickupMin（默认 12）→ 15+12+15 = 42
+  // （此条断言随 e21f4dd「预计送达补上呼叫→取货那一段」的 30 失效，之前一直未同步更新，这里补上）
+  assert.strictEqual(estimateMinutes({ ...base, prepMinutes: 15, riderSpeedKmh: 15 }, 3750), 42)
 })
 t('quoteToken 往返、篡改失败、过期失败', () => {
   const P = {
-    fee: 500, distanceM: 4200, addressId: 7,
+    fee: 500, baseFee: 250, feeSource: 'QUOTE' as const, distanceM: 4200, addressId: 7,
     latE6: 29350000, lngE6: 104790000, storeLatE6: 29339500, storeLngE6: 104778500,
     distanceSource: 'MEASURED' as const,
   }
@@ -191,7 +198,7 @@ t('quoteExpiresAt 与 token 里的 e 是同一个时刻，客户端不必再硬�
 
   // 同一个 issuedAt 签出来的 token，在过期时刻前一毫秒仍可兑付、到点即失效。
   const payload = {
-    fee: 600, distanceM: 2400, addressId: 7, latE6: 29350000, lngE6: 104790000,
+    fee: 600, baseFee: 350, feeSource: 'QUOTE' as const, distanceM: 2400, addressId: 7, latE6: 29350000, lngE6: 104790000,
     storeLatE6: 29339500, storeLngE6: 104778500, distanceSource: 'MEASURED' as const,
   }
   const token = signQuote(payload, issuedAt)
@@ -202,6 +209,53 @@ t('quoteExpiresAt 与 token 里的 e 是同一个时刻，客户端不必再硬�
   assert.ok(verifyQuote(token, new Date(exp - 1)) !== null, '过期前一毫秒应当有效')
   assert.ok(verifyQuote(token, new Date(exp)) !== null, '过期时刻当毫秒仍然有效')
   assert.strictEqual(verifyQuote(token, new Date(exp + 1)), null, '过期时刻之后即失效')
+})
+
+// ── 2026-09-11：开门前不是「午间休息」；自取/休业节 ──────────────────────────
+const TWO_SHIFTS = sanitizeLocalSettings({ ...base, businessHours: [{ start: '10:00', end: '14:00' }, { start: '17:00', end: '20:00' }] })
+t('开门前（09:00）closedKind=CLOSED、nextOpenText=今天 10:00 营业', () => {
+  const early = new Date('2026-09-03T01:00:00Z') // 09:00 上海
+  assert.strictEqual(closedKind(TWO_SHIFTS, early), 'CLOSED')
+  assert.strictEqual(nextOpenText(TWO_SHIFTS, early), '今天 10:00 营业')
+})
+t('两段之间（15:00）closedKind=BREAK、文案「午间休息，17:00 继续营业」', () => {
+  const mid = new Date('2026-09-03T07:00:00Z') // 15:00 上海
+  assert.strictEqual(closedKind(TWO_SHIFTS, mid), 'BREAK')
+  assert.strictEqual(nextOpenText(TWO_SHIFTS, mid), '午间休息，17:00 继续营业')
+})
+t('打烊后（21:00）closedKind=CLOSED、文案「明天 10:00 营业」', () => {
+  const late = new Date('2026-09-03T13:00:00Z') // 21:00 上海
+  assert.strictEqual(closedKind(TWO_SHIFTS, late), 'CLOSED')
+  assert.strictEqual(nextOpenText(TWO_SHIFTS, late), '明天 10:00 营业')
+})
+t('sanitize 缺 pickup/holiday 时补默认值：自取默认关、无休业', () => {
+  const s = sanitizeLocalSettings({})
+  assert.strictEqual(s.pickup.enabled, false)
+  assert.strictEqual(s.pickup.slotMinutes, 30)
+  assert.strictEqual(s.pickup.daysAhead, 1)
+  assert.deepStrictEqual(s.pickup.discount, { type: 'NONE', value: 0 })
+  assert.strictEqual(s.holiday, null)
+})
+t('sanitize：折扣类型只认三个字面量，PERCENT 的 value 夹到 1–100', () => {
+  assert.deepStrictEqual(sanitizeLocalSettings({ pickup: { discount: { type: 'PERCENT', value: 250 } } }).pickup.discount, { type: 'PERCENT', value: 100 })
+  assert.deepStrictEqual(sanitizeLocalSettings({ pickup: { discount: { type: 'HALF', value: 5 } } }).pickup.discount, { type: 'NONE', value: 0 })
+})
+t('休业：until 含当天，过了 until 自动恢复；until=null 一直休', () => {
+  const h = { ...base, holiday: { until: '2026-10-08', reason: '国庆' } }
+  assert.strictEqual(isHolidayOn(h, '2026-10-08'), true)
+  assert.strictEqual(isHolidayOn(h, '2026-10-09'), false)
+  assert.strictEqual(isHolidayOn({ ...base, holiday: { until: null, reason: '装修' } }, '2027-01-01'), true)
+  assert.strictEqual(isHolidayNow(base, NOON), false)
+})
+t('shanghaiDateStr 按上海日期取值（UTC 17:00 = 次日 01:00）', () => {
+  assert.strictEqual(shanghaiDateStr(new Date('2026-09-03T17:00:00Z')), '2026-09-04')
+})
+t('isPickupPaused 与 minutesInPeak', () => {
+  assert.strictEqual(isPickupPaused({ ...base, pickup: { ...base.pickup, paused: { until: null, reason: '忙' } } }, NOON), true)
+  assert.strictEqual(isPickupPaused(base, NOON), false)
+  const peak = { ...base, peak: { ...base.peak, windows: [{ start: '12:00', end: '13:00' }] } }
+  assert.strictEqual(minutesInPeak(peak, 12 * 60 + 30), true)
+  assert.strictEqual(minutesInPeak(peak, 11 * 60), false)
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

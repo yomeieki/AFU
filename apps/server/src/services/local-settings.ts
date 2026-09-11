@@ -20,6 +20,26 @@ const QUOTE_TTL_MS = 15 * 60 * 1000
 
 export interface BusinessHour { start: string; end: string }
 
+export interface PickupSettings {
+  /** 自取开关。与 enabled（外送开关）各自独立；同城入口只要任一开着就显示 */
+  enabled: boolean
+  paused: { until: string | null; reason: string } | null
+  /** 时段粒度（分钟） */
+  slotMinutes: number
+  /** 接单缓冲：最早可取 = 现在 + 它 + 备餐时长 */
+  acceptBufferMin: number
+  /** 0 = 只当天，1 = 当天 + 明天 */
+  daysAhead: number
+  /** 自取起送门槛（分），0 = 不限 */
+  minOrderAmountFen: number
+  /** PERCENT: value=95 即按 95% 收（9.5 折）；FIXED: value 为立减分 */
+  discount: { type: 'NONE' | 'PERCENT' | 'FIXED'; value: number }
+  /** 取餐时间过后多久没点「已取走」就自动完成 */
+  autoCompleteAfterMin: number
+  /** 取餐时间过后多久提醒店员「有单未取」 */
+  unpickedRemindAfterMin: number
+}
+
 export interface LocalDeliverySettings {
   version: number
   enabled: boolean
@@ -85,6 +105,13 @@ export interface LocalDeliverySettings {
     /** 向上取整到这个粒度（分）。50 = 五毛；0 = 不取整（¥8.33 这种零头会原样出现在结算页） */
     roundToFen: number
   }
+  /**
+   * 休业总开关（spec 2026-09-11 P12）：节假日/装修整店停，外送与自取一起停；邮寄不受影响。
+   * until 是恢复营业日期 `YYYY-MM-DD`（含当天仍休业，次日恢复）；null = 手动恢复。
+   * 与 paused 的区别：paused 是「今天临时停一下」，按时刻；holiday 是「这几天不开门」，按日。
+   */
+  holiday: { until: string | null; reason: string } | null
+  pickup: PickupSettings
   businessHours: BusinessHour[]
   /**
    * 平时的备餐时长（分钟）。**这段时间是从店员点「接单」开始算的**，不是从顾客下单开始——
@@ -212,6 +239,12 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     freeShipTiers: [{ minAmountFen: 9900, maxKm: 5 }],
     mode: 'QUOTE', quoteMarkupFen: 250, quoteNearKm: 2, quoteNearMarkupFen: 150, roundToFen: 50,
   },
+  holiday: null,
+  pickup: {
+    enabled: false, paused: null, slotMinutes: 30, acceptBufferMin: 5, daysAhead: 1,
+    minOrderAmountFen: 0, discount: { type: 'NONE', value: 0 },
+    autoCompleteAfterMin: 120, unpickedRemindAfterMin: 30,
+  },
   businessHours: [{ start: '09:00', end: '20:00' }],
   // 15 → 20（PO 2026-09-07）：15 是拍脑袋的初值。首单实测接单→取货 10.4 分钟，看着够，
   // 但那是晚上 8 点的单；而且原来的预计送达从**下单**起算，把「下单→付款→接单」那一段
@@ -284,6 +317,24 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
   const providers = Array.isArray(kd.providers)
     ? kd.providers.filter((p): p is string => typeof p === 'string' && (KD100_PROVIDERS as readonly string[]).includes(p))
     : D.kd100.providers
+  const pk = asObj(o.pickup), pkd = asObj(pk.discount)
+  const DATE = /^\d{4}-\d{2}-\d{2}$/
+  const holiday = o.holiday && typeof o.holiday === 'object'
+    ? (() => {
+        const h = asObj(o.holiday)
+        const until = str(h.until, '', 10)
+        return { until: DATE.test(until) ? until : null, reason: str(h.reason, '', 60) }
+      })()
+    : null
+  const pickupPaused = pk.paused && typeof pk.paused === 'object'
+    ? { until: str(asObj(pk.paused).until, '', 40) || null, reason: str(asObj(pk.paused).reason, '', 60) }
+    : null
+  const discountType = pkd.type === 'PERCENT' || pkd.type === 'FIXED' ? pkd.type : 'NONE'
+  const discount = discountType === 'PERCENT'
+    ? { type: 'PERCENT' as const, value: int(pkd.value, 100, 1, 100) }
+    : discountType === 'FIXED'
+      ? { type: 'FIXED' as const, value: int(pkd.value, 0, 0, 10_000_000) }
+      : { type: 'NONE' as const, value: 0 }
   return {
     version: int(o.version, 0),
     enabled: bool(o.enabled, false),
@@ -325,6 +376,18 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       quoteNearMarkupFen: int(fee.quoteNearMarkupFen, D.fee.quoteNearMarkupFen, 0, 5_000),
       // 0 = 不取整；上限 500 分（¥5），再粗顾客会觉得在乱收
       roundToFen: int(fee.roundToFen, D.fee.roundToFen, 0, 500),
+    },
+    holiday,
+    pickup: {
+      enabled: bool(pk.enabled, false),
+      paused: pickupPaused,
+      slotMinutes: int(pk.slotMinutes, D.pickup.slotMinutes, 5, 120),
+      acceptBufferMin: int(pk.acceptBufferMin, D.pickup.acceptBufferMin, 0, 60),
+      daysAhead: int(pk.daysAhead, D.pickup.daysAhead, 0, 7),
+      minOrderAmountFen: int(pk.minOrderAmountFen, D.pickup.minOrderAmountFen, 0, 10_000_000),
+      discount,
+      autoCompleteAfterMin: int(pk.autoCompleteAfterMin, D.pickup.autoCompleteAfterMin, 10, 1440),
+      unpickedRemindAfterMin: int(pk.unpickedRemindAfterMin, D.pickup.unpickedRemindAfterMin, 5, 1440),
     },
     businessHours: hours,
     prepMinutes: int(o.prepMinutes, D.prepMinutes, 0, 180),
@@ -393,6 +456,9 @@ export function validateLocalSettings(s: LocalDeliverySettings): string[] {
     errs.push(`自动呼叫延迟须为 0（手动）或介于顾客可取消窗口 ${s.acceptGraceMin} 分钟与 15 分钟之间`)
   }
   if (s.tip.maxPerCall > s.tip.maxPerOrder) errs.push('单次小费上限不能大于单笔订单累计上限')
+  if (s.pickup.unpickedRemindAfterMin >= s.pickup.autoCompleteAfterMin) {
+    errs.push(`「过时未取提醒」(${s.pickup.unpickedRemindAfterMin} 分钟) 须早于「自动完成」(${s.pickup.autoCompleteAfterMin} 分钟)`)
+  }
   return errs
 }
 
@@ -433,6 +499,15 @@ export function validateForEnable(s: LocalDeliverySettings): string[] {
   if (!s.store.address) errs.push('请填写门店地址')
   if (s.businessHours.length === 0) errs.push('至少设置一个营业时段')
   if (s.radiusKm <= 0) errs.push('配送半径须大于 0')
+  return errs
+}
+
+/** 打开自取开关前的完整性校验：不要求门店坐标（自取不算距离），但要有地址/电话/营业时段 */
+export function validateForPickupEnable(s: LocalDeliverySettings): string[] {
+  const errs = validateLocalSettings(s)
+  if (!s.store.phone) errs.push('请填写门店电话（自取单顾客要联系店里）')
+  if (!s.store.address) errs.push('请填写门店地址（自取单要显示取餐地点）')
+  if (s.businessHours.length === 0) errs.push('至少设置一个营业时段（自取时段只落在营业时间内）')
   return errs
 }
 
@@ -510,7 +585,7 @@ function inHours(s: LocalDeliverySettings, now: Date): boolean {
 }
 
 export function isOpenNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
-  return s.enabled && !isPaused(s, now) && inHours(s, now)
+  return s.enabled && !isHolidayNow(s, now) && !isPaused(s, now) && inHours(s, now)
 }
 
 /**
@@ -528,18 +603,20 @@ export function isOpenNow(s: LocalDeliverySettings, now: Date = new Date()): boo
  * 改了一处忘了另一处就会出怪事。PO 2026-09-06 定：复用这一套。
  */
 export function isShopOpenNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
-  return !isPaused(s, now) && inHours(s, now)
+  return !isHolidayNow(s, now) && !isPaused(s, now) && inHours(s, now)
 }
 
 /**
- * 现在不营业时，是「午间休息」还是「今天打烊了」（PO 2026-09-08）：
- * 一天配了两段营业时间（如 09:00–14:00、17:00–20:00），中间那段顾客看到「已打烊」会以为
- * 今天不做了。今天还有下一段就是 BREAK，否则 CLOSED；营业中 OPEN。
+ * 现在不营业时，是「午间休息」还是「今天打烊了/还没开门」。
+ * BREAK 当且仅当**已经过了一段**且**还有一段没开始**——2026-09-11 之前只看后半句，
+ * 早上 9 点还没开门也被判成「午间休息」（店主实测发现）。
  */
 export function closedKind(s: LocalDeliverySettings, now: Date = new Date()): 'OPEN' | 'BREAK' | 'CLOSED' {
   if (inHours(s, now)) return 'OPEN'
   const cur = shanghaiMinutes(now)
-  return s.businessHours.some((h) => toMin(h.start) > cur) ? 'BREAK' : 'CLOSED'
+  const passedOne = s.businessHours.some((h) => toMin(h.end) <= cur)
+  const hasNext = s.businessHours.some((h) => toMin(h.start) > cur)
+  return passedOne && hasNext ? 'BREAK' : 'CLOSED'
 }
 
 export function nextOpenText(s: LocalDeliverySettings, now: Date = new Date()): string {
@@ -547,8 +624,38 @@ export function nextOpenText(s: LocalDeliverySettings, now: Date = new Date()): 
   const cur = shanghaiMinutes(now)
   const sorted = [...s.businessHours].sort((a, b) => toMin(a.start) - toMin(b.start))
   const today = sorted.find((h) => toMin(h.start) > cur)
-  // 中间休息时说「继续营业」而不是「营业」——「今天 17:00 营业」读起来像今天才开门
-  return today ? `午间休息，${today.start} 继续营业` : `明天 ${sorted[0].start} 营业`
+  if (!today) return `明天 ${sorted[0].start} 营业`
+  // 中间休息时说「继续营业」；开门前说「今天 X 营业」（两者靠 closedKind 分开）
+  return closedKind(s, now) === 'BREAK' ? `午间休息，${today.start} 继续营业` : `今天 ${today.start} 营业`
+}
+
+// ── 休业 / 自取暂停 / 高峰（按分钟）────────────────────────────
+const SH_DATE_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+/** 上海日期 `YYYY-MM-DD`（en-CA 的输出天然就是这个格式） */
+export function shanghaiDateStr(now: Date = new Date()): string {
+  return SH_DATE_FMT.format(now)
+}
+export function isHolidayOn(s: LocalDeliverySettings, dateStr: string): boolean {
+  if (!s.holiday) return false
+  return s.holiday.until === null ? true : dateStr <= s.holiday.until
+}
+export function isHolidayNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
+  return isHolidayOn(s, shanghaiDateStr(now))
+}
+export function isPickupPaused(s: LocalDeliverySettings, now: Date = new Date()): boolean {
+  const p = s.pickup.paused
+  if (!p) return false
+  if (!p.until) return true
+  const until = Date.parse(p.until)
+  return Number.isFinite(until) ? until > now.getTime() : true
+}
+/** 自取此刻能不能下单：开通 && 非休业 && 非自取暂停。**不看营业时段**（营业外可订明天） */
+export function pickupAvailableNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
+  return s.pickup.enabled && !isHolidayNow(s, now) && !isPickupPaused(s, now)
+}
+/** 某个「一天中的分钟数」是否落在高峰窗口。给自取时段用：备餐时长按取餐时刻判，不按现在 */
+export function minutesInPeak(s: LocalDeliverySettings, minutes: number): boolean {
+  return s.peak.windows.some((h) => minutes >= toMin(h.start) && minutes < toMin(h.end))
 }
 
 // ── 距离与运费 ───────────────────────────────────────────────
@@ -839,5 +946,26 @@ export function publicLocalMeta(s: LocalDeliverySettings, now: Date = new Date()
     prepMinutes: s.prepMinutes,
     acceptGraceMin: s.acceptGraceMin,
     limits: s.limits,
+    // ── 2026-09-11 起按履约方式分节；上面的老字段保留给老客户端 ──
+    delivery: {
+      enabled: s.enabled, isOpen: isOpenNow(s, now),
+      paused: isPaused(s, now) ? { reason: s.paused?.reason ?? '', until: s.paused?.until ?? null } : null,
+      closedKind: closedKind(s, now), nextOpenText: nextOpenText(s, now),
+    },
+    pickup: {
+      enabled: s.pickup.enabled,
+      paused: isPickupPaused(s, now) ? { reason: s.pickup.paused?.reason ?? '', until: s.pickup.paused?.until ?? null } : null,
+      available: pickupAvailableNow(s, now),
+      minOrderAmountFen: s.pickup.minOrderAmountFen,
+      discount: s.pickup.discount,
+      discountText: s.pickup.discount.type === 'PERCENT' && s.pickup.discount.value < 100
+        ? `自取享 ${(s.pickup.discount.value / 10).toFixed(1).replace(/\.0$/, '')} 折`
+        : s.pickup.discount.type === 'FIXED' && s.pickup.discount.value > 0
+          ? `自取立减 ¥${(s.pickup.discount.value / 100).toFixed(2)}`
+          : '',
+      slotMinutes: s.pickup.slotMinutes,
+      daysAhead: s.pickup.daysAhead,
+    },
+    holiday: isHolidayNow(s, now) ? { until: s.holiday?.until ?? null, reason: s.holiday?.reason ?? '' } : null,
   }
 }
