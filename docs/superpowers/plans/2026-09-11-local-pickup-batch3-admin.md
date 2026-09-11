@@ -1501,7 +1501,7 @@ git commit -m "docs: 店员手册增加到店自取一节"
 
 ## 手工验收（三批合并，最后统一做；需要 3109 服务端 + 后台 dev server 指向它）
 
-后台：`cd apps/admin && VITE_API_BASE=http://localhost:3109/api npm run dev`（若 `vite.config.ts` 用的是代理而非环境变量，按其实际配置把目标改到 3109；不要提交这个改动）。
+后台：`cd apps/admin && VITE_PROXY_TARGET=http://localhost:3109 npm run dev`（`vite.config.ts` 的代理目标读这个环境变量，默认 3000）。
 
 1. 同城配送设置 →「到店自取」：开通、粒度 30、缓冲 5、可预订今天和明天、起送 ¥20、九折 → 保存 → 刷新后各值保留，右上角状态条无变化，门店坐标未被清空。
 2. 店铺设置 →「营业时间」：改成 10:00–14:00、17:00–21:00 → 保存 → 同城配送设置页营业时段只读显示同样的段；小程序「关于」页同步。
