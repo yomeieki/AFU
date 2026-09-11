@@ -1515,4 +1515,6 @@ git commit -m "docs: 店员手册增加到店自取一节"
 
 ## 勘误与验收记录（执行时追加）
 
-（空）
+- 2026-09-11 执行完成：14 提交 `d59b09e..cfa012d`。02 复核（opus）无阻断；03 回判采纳 #1（暂停/休业到期后台自动消失，新增 `pauseActive/holidayActive`）、#2（同城 SHIPPED 徽标回滚「已发货」，`orderStatusLabel` 只保留 PICKUP 映射——C3 相应修正）、#3 取 (b) 改手册（明日折叠按上海日历日，零点回列）、#4（顶栏「自取」不含已完成列）、#5（抽屉取消条补「驳回」）、#6（自取拒单不列「超出配送范围」）、#7 日期格式统一；04 机械核对 C1–C10/W/C 全 PASS。
+- 延后项：休业 `until=null`（手动恢复）在 UI 无法设置；`applyPauseScope('ALL_TODAY')` 第二步失败时弹窗不刷新状态行；`pausePickup/setHoliday` 走带全量校验的 PUT（历史设置校验不过会挡住从工作台暂停自取——服务端不在白名单）；`handleSave` payload 未抽纯函数无单测；`pickupCapsule` 未移入 utils 无单测；折叠条 aria-expanded/触摸高度；`openRefund` 对自取多一次 delivery 请求；两页时段文案重复。
+- 计划文本勘误：Task 1 Step 2 原写「同时传时服务端以 deliveryType 为准」实为 channel 覆盖 deliveryType（已改）。
