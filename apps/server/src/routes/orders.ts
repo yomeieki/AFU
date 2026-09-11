@@ -257,7 +257,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     if (deliveryType === 'PICKUP') {
       const s = await getLocalSettings()
       if (!s.pickup.enabled) throw new AppError(42280, '到店自取暂未开通')
-      if (isHolidayNow(s)) throw new AppError(42280, `休息中${s.holiday?.until ? `，${s.holiday.until.slice(5).replace('-', '月')}日恢复` : ''}`)
+      if (isHolidayNow(s)) throw new AppError(42280, `休息中${s.holiday?.until ? `，${s.holiday.until.slice(5).replace('-', '月')}日后恢复` : ''}`)
       if (isPickupPaused(s)) throw new AppError(42280, `自取暂停接单${s.pickup.paused?.reason ? `：${s.pickup.paused.reason}` : ''}`)
       const at = new Date(pickupAt!)
       // 必须精确命中此刻算出的某一格：顾客在页面磨蹭到那格过期了就拒，让他重选

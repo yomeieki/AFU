@@ -637,7 +637,7 @@ export function nextOpenText(s: LocalDeliverySettings, now: Date = new Date()): 
   if (s.businessHours.length === 0) return '暂未设置营业时间'
   if (isHolidayNow(s, now)) {
     const until = s.holiday?.until
-    return `休息中${until ? `，${until.slice(5).replace('-', '月')}日恢复` : ''}`
+    return `休息中${until ? `，${until.slice(5).replace('-', '月')}日后恢复` : ''}`
   }
   const cur = shanghaiMinutes(now)
   const sorted = [...s.businessHours].sort((a, b) => toMin(a.start) - toMin(b.start))

@@ -16,11 +16,11 @@ function pickupMeta(meta) {
   return meta && meta.pickup ? meta.pickup : null
 }
 
-/** 「休息中，10月08日恢复」；until 为空只说「休息中」；无休业返回 '' */
+/** 「休息中，10月08日后恢复」；until 为空只说「休息中」；无休业返回 '' */
 function holidayText(meta) {
   var h = meta && meta.holiday
   if (!h) return ''
-  return '休息中' + (h.until ? '，' + String(h.until).slice(5).replace('-', '月') + '日恢复' : '')
+  return '休息中' + (h.until ? '，' + String(h.until).slice(5).replace('-', '月') + '日后恢复' : '')
 }
 
 /**

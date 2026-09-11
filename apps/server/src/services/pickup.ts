@@ -81,7 +81,7 @@ export function buildPickupSlots(s: LocalDeliverySettings, now: Date = new Date(
   }
   if (days.length === 0) {
     const until = s.holiday?.until
-    return { days: [], earliestAt: null, slotMinutes, blocked: { kind: 'HOLIDAY', text: `休息中${until ? `，${until.slice(5).replace('-', '月')}日恢复` : ''}` } }
+    return { days: [], earliestAt: null, slotMinutes, blocked: { kind: 'HOLIDAY', text: `休息中${until ? `，${until.slice(5).replace('-', '月')}日后恢复` : ''}` } }
   }
   const earliest = days.flatMap((d) => d.slots)[0] ?? null
   return { days, earliestAt: earliest?.startAt ?? null, slotMinutes, blocked: null }
