@@ -157,7 +157,7 @@ actualAmount = subtotal − pickupDiscount − 券 + 0
 | 接单 | 复用 `POST /admin/orders/:id/accept` | PAID | → PREPARING，写 `acceptedAt`。不走 `/admin/delivery/:id/accept`（那条会查骑手报价） |
 | 已备好 | 新 `POST /admin/orders/:id/pickup-ready` | PREPARING 且 PICKUP | → SHIPPED，写 `pickupReadyAt`；发「取餐提醒」订阅消息；若有未处理取消申请，视同驳回（`cancelRequestRejectedBy='MANUAL'`）并告知顾客 |
 | 已取走 | 新 `POST /admin/orders/:id/picked-up` | SHIPPED 且 PICKUP | → COMPLETED，写 `completedAt`；积分结算照旧 |
-| 填单号发货 `/ship`、标记完成 `/complete`、同城 `/delivery/:id/accept`、`/call`、`/self-deliver`、`/delivered` | 现有 | — | 对 PICKUP 一律 42284 拒绝 |
+| 填单号发货 `/ship`、标记完成 `/complete`、同城 `/delivery/:id/accept`、`/call`、`/self-deliver`、`/delivered` | 现有 | — | `/ship`、`/complete` 为 42284；同城看板四条路由沿用既有 42204 |
 
 条件更新（`updateMany where {id, status, deliveryType:'PICKUP'}`）沿用仓库既有的状态流转写法。
 
@@ -196,7 +196,7 @@ actualAmount = subtotal − pickupDiscount − 券 + 0
 | 42280 | 到店自取不可用（未开通 / 休业 / 暂停，文案区分） |
 | 42281 | 取餐时段不可选 |
 | 42282 | 未达自取起送门槛 |
-| 42283 | 取餐人手机号无效 |
+| 42283 | （预留）取餐人手机号无效——当前由 zod 校验以 40001 报，码值保留不占用 |
 | 42284 | 操作与自取订单状态不符（发货/完成/呼叫等误操作） |
 
 ### 4.10 营业时间修复与统一

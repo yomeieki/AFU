@@ -166,9 +166,10 @@ const createOrderSchema = z
   .refine((v) => !v.gifts || new Set(v.gifts.map((g) => g.pointsGoodId)).size === v.gifts.length, {
     message: '同一种赠品请合并数量，不要重复提交',
   })
-  .refine((v) => (v.deliveryType === 'PICKUP' ? v.addressId === undefined : v.addressId !== undefined), {
-    message: '自取订单不需要收货地址；外送/邮寄订单请选择收货地址',
-  })
+  // F14：拆成两条独立的 refine，而不是一条二选一的合并文案——老渠道（LOCAL/EXPRESS）漏传
+  // addressId 时的报错文案必须与改动前逐字节一致，客户端可能已经按这句话做过匹配。
+  .refine((v) => v.deliveryType === 'PICKUP' || v.addressId !== undefined, { message: '请选择收货地址' })
+  .refine((v) => v.deliveryType !== 'PICKUP' || v.addressId === undefined, { message: '自取订单不需要收货地址' })
   .refine((v) => v.deliveryType !== 'PICKUP' || (!!v.pickupAt && !!v.pickupContact), { message: '请选择取餐时间并填写取餐人手机号' })
 
 /**
@@ -324,6 +325,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       const s = await getLocalSettings()
       if (!s.enabled) throw new AppError(42226, '同城配送暂未开通')
       if (isPaused(s)) throw new AppError(42226, `同城配送暂停接单${s.paused?.reason ? `：${s.paused.reason}` : ''}`)
+      // F4：休业（holiday）与临时停业（paused）是两套独立开关，isOpenNow 不看 holiday——
+      // 不先判这一条，休业期间的同城下单会被 isOpenNow 判成「非营业时间」，文案对不上真实原因。
+      if (isHolidayNow(s)) throw new AppError(42226, nextOpenText(s))
       if (!isOpenNow(s)) throw new AppError(42222, `当前非营业时间，${nextOpenText(s)}`)
       if (address!.latE6 === null || address!.lngE6 === null) throw new AppError(42223, '该地址缺少定位，请编辑地址并在地图上选点')
       if (s.store.latE6 === null || s.store.lngE6 === null) throw new AppError(42226, '门店尚未设置坐标，暂不能配送')
@@ -467,7 +471,14 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee, pickupDiscount })
     // 0 元订单走不了微信支付，会掉进「没有支付回调」的死角（spec §5.1 与 §10 风险表第一行）。
     // 这一步必须在这里拒——computeCheckout 是纯函数，它只负责算对，拒不拒是业务判断。
-    if (actualAmount === 0) throw new AppError(42251, '该券金额已超过本单可抵扣范围')
+    // F10：自取单没用券也能被自取优惠单独抵到 0（老文案「该券金额已超过本单可抵扣范围」在
+    // 没有券的场景下文不对题，会让顾客以为自己选错了券）。错误码维持 42251 不变。
+    if (actualAmount === 0) {
+      throw new AppError(
+        42251,
+        deliveryType === 'PICKUP' && !coupon ? '本单金额已被自取优惠抵完，请加购或联系商家' : '该券金额已超过本单可抵扣范围'
+      )
+    }
 
     // 赠品行：不进小计（productPrice/subtotal 恒为 0），但**照常扣真实库存、加真实销量**——
     // 它是真的从货架上拿走的一份货（spec §5.3）。
@@ -1092,8 +1103,19 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
       })
       prisma.orderItem
         .findMany({ where: { orderId }, select: { productName: true, specText: true, quantity: true, isGift: true } })
-        .then((items) => {
-          notifyOrderPaid({ ...order, paidAt }, items)
+        .then(async (items) => {
+          // F3：来单推送要带取餐时间，否则店员只看到「自取新订单」不知道几点来取。
+          // 失败不影响支付主流程——外层 .catch(() => undefined) 已经兜底，这里再套一层
+          // try/catch 是为了让 getLocalSettings/pickupSlotLabel 出错时仍能发不带取餐时间的推送。
+          let slotLabel: string | undefined
+          if (order.deliveryType === 'PICKUP' && order.pickupAt) {
+            try {
+              slotLabel = pickupSlotLabel(order.pickupAt, (await getLocalSettings()).pickup.slotMinutes)
+            } catch (e) {
+              console.error('[orders] 计算取餐时段文案失败（mock 支付）:', (e as Error).message)
+            }
+          }
+          notifyOrderPaid({ ...order, paidAt, pickupSlotLabel: slotLabel }, items)
           if (req.openid) sendPaidSubscribeMessage(req.openid, { ...order, paidAt }, items[0]?.productName)
         })
         .catch(() => undefined)

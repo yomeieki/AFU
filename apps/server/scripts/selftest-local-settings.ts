@@ -247,6 +247,12 @@ t('休业：until 含当天，过了 until 自动恢复；until=null 一直休',
   assert.strictEqual(isHolidayOn({ ...base, holiday: { until: null, reason: '装修' } }, '2027-01-01'), true)
   assert.strictEqual(isHolidayNow(base, NOON), false)
 })
+t('F4/F11：休业中 closedKind=CLOSED、nextOpenText 含「休息中」；营业时段内 isOpenNow=false', () => {
+  const h = { ...base, holiday: { until: '2026-10-08', reason: '国庆' } }
+  assert.strictEqual(closedKind(h, NOON), 'CLOSED')
+  assert.ok(nextOpenText(h, NOON).includes('休息中'), nextOpenText(h, NOON))
+  assert.strictEqual(isOpenNow(h, NOON), false)
+})
 t('shanghaiDateStr 按上海日期取值（UTC 17:00 = 次日 01:00）', () => {
   assert.strictEqual(shanghaiDateStr(new Date('2026-09-03T17:00:00Z')), '2026-09-04')
 })

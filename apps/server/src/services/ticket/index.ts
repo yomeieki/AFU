@@ -26,8 +26,8 @@ import {
   renderOrderTicket, renderReminderTicket, renderCancelTicket, renderCancelRequestTicket,
   renderTestTicket, TicketOrderInput, TicketChannel,
 } from './content'
-import { getLocalSettings, isShopOpenNow } from '../local-settings'
-import { pickupSlotLabel } from '../pickup'
+import { getLocalSettings, isShopOpenNow, LocalDeliverySettings } from '../local-settings'
+import { pickupSlotLabel, prepStartAt } from '../pickup'
 
 const BATCH = 100
 /**
@@ -635,7 +635,7 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
 
   const candidates = await prisma.order.findMany({
     where: { status: 'PAID', paidAt: { not: null } },
-    select: { id: true, deliveryType: true, paidAt: true, announceCount: true, lastAnnouncedAt: true },
+    select: { id: true, deliveryType: true, paidAt: true, announceCount: true, lastAnnouncedAt: true, pickupAt: true },
     orderBy: { paidAt: 'asc' },
     take: BATCH,
   })
@@ -649,8 +649,10 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
   // 催单绑营业时间（PO 2026-09-06 定）。只读一次，循环里复用。
   // 读失败不阻断催单——催不该因为读不到营业时间就停摆（同城单本来也不受门控）。
   let shopOpen = true
+  let localSettings: LocalDeliverySettings | null = null
   try {
-    shopOpen = isShopOpenNow(await getLocalSettings())
+    localSettings = await getLocalSettings()
+    shopOpen = isShopOpenNow(localSettings)
   } catch (e) {
     console.warn('[ticket] repeatAnnounce 读营业时间失败，本轮按「营业中」处理:', (e as Error).message)
   }
@@ -658,6 +660,12 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
   for (const order of candidates) {
     if (Date.now() - announceStartedAt > PROCESS_QUEUE_BUDGET_MS) break
     if (!order.paidAt) continue
+    // 自取预约单：催单基准是「开始备餐时刻 − 15 分钟」，不是付款时刻——明天中午取的单今天不该响一整天
+    // （与 services/pickup-tasks.ts 的企微催单同一口径）。设置读不到时退回按付款时刻，不因此停催。
+    if (order.deliveryType === 'PICKUP' && localSettings) {
+      if (!order.pickupAt) continue
+      if (now < prepStartAt(localSettings, order.pickupAt).getTime() - 15 * 60_000) continue
+    }
     // 邮寄单：非营业时间一律不催（深夜没人在店里，催了也没人看）。
     // 同城单：不受门控，打烊后继续催 —— 钱已经收了，19:58 进来的单不能因为 20:00 一到
     // 就没人提醒；同城单本来也只能在营业时间下单，催单最多延续到打烊后一小段。

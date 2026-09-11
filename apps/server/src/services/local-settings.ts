@@ -488,6 +488,14 @@ export function validateRawLocalSettings(raw: unknown): string[] {
       }
     })
   }
+  // F13：休业恢复日期填错（如打成 2026/10/08 或 26-10-08）会被 sanitize 静默丢成 null =
+  // 手动恢复，等同「永久休业」直到店主自己发现——必须在原始请求体上拦，sanitize 之后已经看不出来。
+  if (o.holiday && typeof o.holiday === 'object') {
+    const until = asObj(o.holiday).until
+    if (typeof until === 'string' && until.trim() !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(until.trim())) {
+      errs.push(`休业恢复日期「${until}」格式不正确，应形如 2026-10-08；留空表示手动恢复`)
+    }
+  }
   return errs
 }
 
@@ -601,9 +609,12 @@ export function isOpenNow(s: LocalDeliverySettings, now: Date = new Date()): boo
  * 因为店就一个、开门时间就一套。这在概念上有点别扭——「同城设置」里的时间
  * 影响到了邮寄单的催单——但另存一份的代价是两处时间要分别维护，
  * 改了一处忘了另一处就会出怪事。PO 2026-09-06 定：复用这一套。
+ *
+ * 休业（holiday）**不**进这里——它只停外送与自取的下单，邮寄单在休业期间照常进来、照常播报
+ * （spec 2026-09-11 P12）。
  */
 export function isShopOpenNow(s: LocalDeliverySettings, now: Date = new Date()): boolean {
-  return !isHolidayNow(s, now) && !isPaused(s, now) && inHours(s, now)
+  return !isPaused(s, now) && inHours(s, now)
 }
 
 /**
@@ -612,6 +623,9 @@ export function isShopOpenNow(s: LocalDeliverySettings, now: Date = new Date()):
  * 早上 9 点还没开门也被判成「午间休息」（店主实测发现）。
  */
 export function closedKind(s: LocalDeliverySettings, now: Date = new Date()): 'OPEN' | 'BREAK' | 'CLOSED' {
+  // 休业（holiday）整天不开门，优先于时段判断——哪怕此刻的钟点落在 businessHours 里，
+  // 休业期间也不算「营业中」（F4）。
+  if (isHolidayNow(s, now)) return 'CLOSED'
   if (inHours(s, now)) return 'OPEN'
   const cur = shanghaiMinutes(now)
   const passedOne = s.businessHours.some((h) => toMin(h.end) <= cur)
@@ -621,6 +635,10 @@ export function closedKind(s: LocalDeliverySettings, now: Date = new Date()): 'O
 
 export function nextOpenText(s: LocalDeliverySettings, now: Date = new Date()): string {
   if (s.businessHours.length === 0) return '暂未设置营业时间'
+  if (isHolidayNow(s, now)) {
+    const until = s.holiday?.until
+    return `休息中${until ? `，${until.slice(5).replace('-', '月')}日恢复` : ''}`
+  }
   const cur = shanghaiMinutes(now)
   const sorted = [...s.businessHours].sort((a, b) => toMin(a.start) - toMin(b.start))
   const today = sorted.find((h) => toMin(h.start) > cur)

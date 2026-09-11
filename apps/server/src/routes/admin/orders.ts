@@ -82,10 +82,15 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const keyword = ((req.query.keyword as string | undefined) ?? (req.query.orderNo as string | undefined))?.trim()
     // 邮寄订单页默认只看 EXPRESS；同城看板传 LOCAL / PICKUP；channel=LOCAL 一次看外送 + 自取；ALL 不过滤
     const dt = (req.query.deliveryType as string | undefined) ?? 'EXPRESS'
-    const ch = req.query.channel as string | undefined
+    // F16：非法 channel（拼写错误/前端传了个新值）曾经被 `ch === 'LOCAL'` 悄悄当成「未传」处理，
+    // 落回 deliveryType 的默认分支，店员看到的列表跟预期渠道对不上却没有任何报错。改成显式
+    // 白名单校验，非法值直接 400，而不是静默退化。
+    const ch = req.query.channel ? z.enum(['EXPRESS', 'LOCAL']).parse(req.query.channel) : undefined
     const dtWhere: Prisma.OrderWhereInput = ch === 'LOCAL'
       ? { deliveryType: { in: ['LOCAL', 'PICKUP'] } }
-      : dt === 'ALL' ? {} : { deliveryType: dt === 'LOCAL' ? 'LOCAL' : dt === 'PICKUP' ? 'PICKUP' : 'EXPRESS' }
+      : ch === 'EXPRESS'
+        ? { deliveryType: 'EXPRESS' }
+        : dt === 'ALL' ? {} : { deliveryType: dt === 'LOCAL' ? 'LOCAL' : dt === 'PICKUP' ? 'PICKUP' : 'EXPRESS' }
 
     const where = {
       ...(status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}),

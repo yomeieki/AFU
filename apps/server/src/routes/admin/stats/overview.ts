@@ -52,28 +52,39 @@ router.get('/overview', async (req: Request, res: Response, next: NextFunction) 
       prisma.order.groupBy({ by: ['userId'], where: paidOrdersWhere(cur) }),
     ])
 
-    const channels = { LOCAL: { orderCount: 0, revenueFen: 0 }, EXPRESS: { orderCount: 0, revenueFen: 0 } }
+    // F1：自取单单列，不并入同城（后台前端批次三消费）
+    const channels = {
+      LOCAL: { orderCount: 0, revenueFen: 0 },
+      EXPRESS: { orderCount: 0, revenueFen: 0 },
+      PICKUP: { orderCount: 0, revenueFen: 0 },
+    }
     for (const g of byChannel) {
-      if (g.deliveryType === 'LOCAL' || g.deliveryType === 'EXPRESS') {
+      if (g.deliveryType === 'LOCAL' || g.deliveryType === 'EXPRESS' || g.deliveryType === 'PICKUP') {
         channels[g.deliveryType] = { orderCount: g._count._all, revenueFen: g._sum.actualAmount ?? 0 }
       }
     }
 
-    const byDay = new Map<string, { LOCAL: { orderCount: number; revenueFen: number }; EXPRESS: { orderCount: number; revenueFen: number } }>()
+    type ChannelCounts = { LOCAL: { orderCount: number; revenueFen: number }; EXPRESS: { orderCount: number; revenueFen: number }; PICKUP: { orderCount: number; revenueFen: number } }
+    const zeroChannelCounts = (): ChannelCounts => ({
+      LOCAL: { orderCount: 0, revenueFen: 0 },
+      EXPRESS: { orderCount: 0, revenueFen: 0 },
+      PICKUP: { orderCount: 0, revenueFen: 0 },
+    })
+    const byDay = new Map<string, ChannelCounts>()
     const hourly = new Array<number>(24).fill(0)
     for (const r of rows) {
       const key = localDayKeyFromParts(r)
-      const acc = byDay.get(key) ?? { LOCAL: { orderCount: 0, revenueFen: 0 }, EXPRESS: { orderCount: 0, revenueFen: 0 } }
-      const c = r.dt === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
+      const acc = byDay.get(key) ?? zeroChannelCounts()
+      const c = r.dt === 'LOCAL' ? 'LOCAL' : r.dt === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
       acc[c].orderCount += Number(r.cnt)
       acc[c].revenueFen += Number(r.amt ?? 0)
       byDay.set(key, acc)
       hourly[localHourFromParts(r)] += Number(r.cnt)
     }
-    const trend: { date: string; LOCAL: { orderCount: number; revenueFen: number }; EXPRESS: { orderCount: number; revenueFen: number } }[] = []
+    const trend: ({ date: string } & ChannelCounts)[] = []
     for (const d = new Date(cur.start); d < cur.endExclusive; d.setDate(d.getDate() + 1)) {
       const key = localDayKey(d)
-      trend.push({ date: key, ...(byDay.get(key) ?? { LOCAL: { orderCount: 0, revenueFen: 0 }, EXPRESS: { orderCount: 0, revenueFen: 0 } }) })
+      trend.push({ date: key, ...(byDay.get(key) ?? zeroChannelCounts()) })
     }
 
     // 新客 = 该用户历史第一张已付单落在本期

@@ -8,6 +8,8 @@ import { finalizeRefundSuccess, initiateRefund, markRefundAbnormal, markRefundCl
 import { config } from '../config'
 import { sendPaidSubscribeMessage } from '../services/subscribe-message'
 import { enqueueOrderTicket } from '../services/ticket'
+import { getLocalSettings } from '../services/local-settings'
+import { pickupSlotLabel } from '../services/pickup'
 
 interface NotifyBody {
   event_type?: string
@@ -258,12 +260,23 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
         where: { id: orderId },
         include: { items: { select: { productName: true, specText: true, quantity: true, isGift: true } }, user: { select: { openid: true } } },
       })
-      .then((paid) => {
+      .then(async (paid) => {
         if (paid && paid.status === 'PAID') {
           try {
             sendPaidSubscribeMessage(paid.user.openid, paid, paid.items[0]?.productName)
           } catch (err) {
             console.error('[wechat-notify] sendPaidSubscribeMessage 失败:', (err as Error).message)
+          }
+          // F3：来单推送要带取餐时段文案，与 orders.ts mock 支付路径同一口径。
+          // 失败不影响支付回调主流程——外层 .catch 兜住，这里再单独 try/catch 是为了让
+          // getLocalSettings/pickupSlotLabel 出错时仍能发一条不带取餐时间的推送。
+          let slotLabel: string | undefined
+          if (paid.deliveryType === 'PICKUP' && paid.pickupAt) {
+            try {
+              slotLabel = pickupSlotLabel(paid.pickupAt, (await getLocalSettings()).pickup.slotMinutes)
+            } catch (err) {
+              console.error('[wechat-notify] 计算取餐时段文案失败:', (err as Error).message)
+            }
           }
           try {
             notifyOrderPaid(
@@ -279,6 +292,7 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
                 // 2026-09-11：推送标题按渠道分（自取/同城/邮寄）。mock 支付路径传的是整行 order 自带此列，
                 // 这条真实回调路径是手拼字面量，漏了它生产上自取单的推送标题就永远是「新订单待发货」。
                 deliveryType: paid.deliveryType,
+                pickupSlotLabel: slotLabel,
               },
               paid.items
             )

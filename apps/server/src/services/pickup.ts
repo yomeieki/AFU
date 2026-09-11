@@ -38,7 +38,9 @@ export function pickupPrepMinutes(s: LocalDeliverySettings, at: Date): number {
   return minutesInPeak(s, shanghaiMinutesOf(at)) ? s.peak.prepMaxMinutes : s.prepMinutes
 }
 
-/** 开始备餐时刻 = 取餐 − 备餐 − 接单缓冲。取消窗口、催单、工作台倒计时都用它 */
+/** 开始备餐时刻 = 取餐 − 备餐 − 接单缓冲。取消窗口、催单、工作台倒计时都用它。
+ *  用**实时**设置而不是下单时快照（spec §2 有意）：店主调备餐时长会连带移动已付款单的
+ *  自助退窗口与催单时刻。与 `pickupDiscountAmount` 快照的处理不对称是知情选择。 */
 export function prepStartAt(s: LocalDeliverySettings, pickupAt: Date): Date {
   return new Date(pickupAt.getTime() - (pickupPrepMinutes(s, pickupAt) + s.pickup.acceptBufferMin) * MIN)
 }
