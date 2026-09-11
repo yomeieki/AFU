@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { MapPin, PauseCircle, Store } from 'lucide-react'
 import { getLocalSettings, updateLocalSettings } from '../api/admin'
 import Button from '../components/ui/Button'
@@ -167,20 +168,13 @@ export default function LocalSettings() {
     if (km > s.radiusKm) return '超出配送范围'
     return `¥${toYuan(baseFee + Math.max(0, Math.ceil(km - s.fee.baseKm)) * perKm)}`
   }
-  // 三处分段列表的校验：任一处有错，保存键置灰并提示。错误就地标红在那一行。
-  const hoursErrs = validateRanges(s.businessHours)
+  // 两处分段列表的校验：任一处有错，保存键置灰并提示。错误就地标红在那一行。
+  // 营业时段自 Task 5 起在独立页编辑，这里不再校验。
   const peakErrs = validateRanges(s.peak.windows)
   const tierErrs = tiers.map((t) => (t.minAmountFen < 0 || !Number.isFinite(t.minAmountFen)) ? '满额要填' : (!(t.maxKm > 0)) ? '公里数要大于 0' : undefined)
-  const formErrors = hoursErrs.some(Boolean) ? '营业时段有错误，请先改正' : peakErrs.some(Boolean) ? '高峰时段有错误，请先改正' : tierErrs.some(Boolean) ? '阶梯免运费有错误，请先改正'
+  const formErrors = peakErrs.some(Boolean) ? '高峰时段有错误，请先改正' : tierErrs.some(Boolean) ? '阶梯免运费有错误，请先改正'
     : s.pickup.unpickedRemindAfterMin >= s.pickup.autoCompleteAfterMin ? '「过时未取提醒」须早于「超时自动完成」' : ''
   const fmtRanges = (rows: { start: string; end: string }[]) => sortRanges(rows).map((h) => `${h.start}–${h.end}`).join('、')
-  const breakText = (() => {
-    // 有错误时不算：拿着重叠/未填完的行算出的「23:59–10:00 午间休息」只会误导
-    if (hoursErrs.some(Boolean)) return ''
-    const r = sortRanges(s.businessHours)
-    if (r.length < 2) return ''
-    return r.slice(1).map((h, i) => `${r[i].end}–${h.start}`).join('、') + ' 顾客端显示「午间休息」'
-  })()
 
   return (
     <div className="space-y-4 max-w-3xl" onChangeCapture={() => setDirty(true)}>
@@ -329,12 +323,11 @@ export default function LocalSettings() {
       <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="font-medium text-gray-800">营业与履约</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="营业时段" hint={breakText || '首期不支持跨零点；多段不可重叠'}>
-            <RowList rows={s.businessHours} onChange={(rows) => patch({ businessHours: rows })}
-              blank={() => ({ start: '', end: '' })} errors={hoursErrs} addLabel="再加一段"
-              emptyHint="一段都没有 = 全天不营业"
-              render={(row, set) => <TimeRangeRow row={row} set={set} cls={inputCls} />} />
-            {s.businessHours.length > 0 && !hoursErrs.some(Boolean) && <p className="mt-1 text-xs text-gray-500">今天 {fmtRanges(s.businessHours)} 营业</p>}
+          <Field label="营业时段（全店统一）" hint="外送、自取、来单催单、小程序「关于」页共用">
+            <p className="text-sm text-gray-800 py-2">
+              {s.businessHours.length ? fmtRanges(s.businessHours) : '未设置（全天不营业）'}
+            </p>
+            <Link to="/settings/hours" className="text-xs text-blue-600 underline">去「营业时间」页修改</Link>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="备餐时长（分）" hint="从点「接单」开始算，不含顾客下单到接单那一段"><input className={inputCls} type="number" min={0} value={s.prepMinutes} onChange={(e) => patch({ prepMinutes: Number(e.target.value) })} /></Field>
@@ -382,6 +375,9 @@ export default function LocalSettings() {
               onChange={(e) => {
                 const type = e.target.value as 'NONE' | 'PERCENT' | 'FIXED'
                 patchPickup({ discount: type === 'PERCENT' ? { type, value: s.pickup.discount.type === 'PERCENT' ? s.pickup.discount.value : 90 } : type === 'FIXED' ? { type, value: 0 } : { type: 'NONE', value: 0 } })
+                // 离开 FIXED 时把隐藏字段清零：否则残留的半截小数会在整页保存时被
+                // 「金额格式不正确」拦下，店主却看不出是哪个字段出的问题。
+                if (type !== 'FIXED') setMoney({ ...money, pickupFixed: '0.00' })
               }}>
               <option value="NONE">不打折</option><option value="PERCENT">按折扣</option><option value="FIXED">立减固定金额</option>
             </select>

@@ -58,6 +58,7 @@ export const centerTabs: Record<
   settings: [
     { to: '/settings/express', label: '全国邮寄设置' },
     { to: '/settings/local', label: '同城配送设置' },
+    { to: '/settings/hours', label: '营业时间' },
   ],
   promotion: [
     { to: '/promotion/banners', label: '轮播图' },

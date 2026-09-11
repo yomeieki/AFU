@@ -18,7 +18,7 @@ export default function SettingsCenter() {
   return (
     <BusinessCenter
       title="店铺设置"
-      description="按配送方式分别维护规则，保存只作用于当前设置页。"
+      description="按配送方式分别维护规则；营业时间全店统一。保存只作用于当前设置页。"
       tabs={centerTabs.settings}
       onTabClick={(to) => void leave(to)}
     />

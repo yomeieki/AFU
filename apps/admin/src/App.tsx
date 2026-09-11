@@ -13,6 +13,7 @@ import Banners from './pages/Banners'
 import SystemStatus from './pages/SystemStatus'
 import ShopSettings from './pages/ShopSettings'
 import LocalSettings from './pages/LocalSettings'
+import BusinessHoursSettings from './pages/BusinessHoursSettings'
 import LocalOrders from './pages/LocalOrders'
 import PrinterSettings from './pages/PrinterSettings'
 import Coupons from './pages/Coupons'
@@ -84,6 +85,7 @@ export default function App() {
             <Route index element={<LegacyRedirect />} />
             <Route path="express" element={<ShopSettings />} />
             <Route path="local" element={<LocalSettings />} />
+            <Route path="hours" element={<BusinessHoursSettings />} />
           </Route>
           <Route path="products" element={<LegacyRedirect />} />
           <Route path="categories" element={<LegacyRedirect />} />
