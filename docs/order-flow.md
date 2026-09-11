@@ -96,6 +96,17 @@ SHIPPED（已发货）
     ├──── 用户确认收货 ──────────────────────────────────────► COMPLETED（已完成）
     │
     └──── 系统自动完成（发货 7 天后定时任务）───────────────► COMPLETED（已完成）
+```
+
+**到店自取（deliveryType=PICKUP，2026-09-11）**：复用同一套状态，只改语义——
+
+    PAID（待接单）→ 店员接单 → PREPARING（备餐中）→ 店员「已备好」→ SHIPPED（待取餐，发取餐提醒）
+    → 店员「已取走」→ COMPLETED；取餐时间 + autoCompleteAfterMin 仍未点则系统自动完成并推送。
+
+    取消：PAID 且未到「开始备餐时刻」（取餐时间 − 备餐 − 接单缓冲）→ 顾客自助秒退；
+          之后（含 PREPARING）只能「申请取消」，店员同意 = 全额退，**不自动驳回**；
+          点「已备好」时若有未处理申请视同驳回；SHIPPED/COMPLETED 走售后。
+    自取单没有 Shipment 行，「发货 7 天自动完成」天然不碰它；填单号发货、标记完成、顾客确认收货一律 42284。
 
 部分退款（不改变订单状态）：PAID / PREPARING / SHIPPED / COMPLETED 任一状态下，商家可发起 amount < 可退余额 的退款，
 成功后 order.refundedAmount 累加，订单继续履约；退完全部余额即视为全额退款，走 REFUNDING → REFUNDED。

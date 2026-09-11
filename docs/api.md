@@ -65,6 +65,7 @@
 | 42204 | 支付金额不匹配（另见附录 B：该码值已被复用于其他场景） |
 | 50001 | 服务器内部错误 |
 | 50002 | 第三方服务错误（微信/COS） |
+| 4228x | 到店自取（见附录 H） |
 
 ### 1.5 金额说明
 
@@ -1763,3 +1764,62 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 
 - `EXPRESS_PROVIDER_MOCK`（沿用批次一）：`true` 时预约的下单/取消/改约/查单/结算通知全部走内存 mock，且挂载 `apps/server/src/routes/admin/express-mock.ts`（`/api/admin/system/express-mock/{reset,queue,calls,salt/:bookingNo}`）。`POST queue` 的 `op` 现可传 `book/cancel/modify/detail/synPay`（原 `batchPrice` 之外新增五个）；`GET salt/:bookingNo` 供 e2e/联调构造合法签名的回调请求；生产环境禁止开启。
 - `SCHEDULER_DISABLED=true` 时上面四条定时任务与其余全部 scheduler 任务一起停跑（多实例部署时只留一个实例跑 scheduler）。
+
+## 附录 H：到店自取（批次一，2026-09-11）
+
+设计依据 `docs/superpowers/specs/2026-09-11-local-pickup-design.md`。自取是同城渠道下的第二种履约方式：`deliveryType='PICKUP'`，商品/购物车/券按 `LOCAL` 渠道校验。
+
+### 小程序端
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/local/meta` | 新增 `delivery`、`pickup`、`holiday` 三节（老字段保留）。`pickup: { enabled, paused, available, minOrderAmountFen, discount, discountText, slotMinutes, daysAhead }`；`holiday` 休业中才非 null。 |
+| `GET /api/local/pickup-slots` | 公开。`{ days: [{ date, label('今天'/'明天'/'MM-DD'), slots: [{ startAt, endAt, label }] }], earliestAt, slotMinutes, blocked: null \| { kind: 'HOLIDAY'\|'PAUSED'\|'DISABLED', text } }`。不可选的格子不返回；今天为空时 `days[0].slots=[]`。 |
+| `POST /api/orders` | `deliveryType:'PICKUP'` 时 **不传** `addressId`，必传 `pickupAt`（须精确等于某格 `startAt`）与 `pickupContact: { name?, phone }`。计价：小计 → 自取优惠 → 券（门槛看原小计，面额封顶到小计−自取优惠）→ 实付；运费 0。响应多 `pickupAt`、`pickupDiscountAmount`、`subscribeTemplates`。 |
+| `GET /api/orders` | `deliveryType` 接受 `PICKUP`；新增 `channel=LOCAL`（外送 + 自取）/ `channel=EXPRESS`。 |
+| `GET /api/orders/:id` | 自取单多 `pickup: { pickupAt, pickupReadyAt, prepStartAt, slotLabel, store }`；所有单多 `canSelfCancel`、`subscribeTemplates`。自取的 `canRequestCancel`：PAID 且已到开始备餐时刻、或 PREPARING；SHIPPED 后 false。 |
+| `GET /api/orders/pickup-contact` | 最近一张自取单的 `{ name, phone }`，无则 `null`。 |
+| `GET /api/orders/meta` | 多 `subscribeTemplates: { express, local, pickup }`（各 ≤ 3 个模板 ID）。 |
+| `PUT /api/orders/:id/cancel` | 自取：PAID 且 `now < 开始备餐时刻` 才能自助秒退，否则 `42229`。 |
+| `POST /api/orders/:id/cancel-request` | 自取：PAID/PREPARING 都可申请。 |
+| `PUT /api/orders/:id/confirm` | 自取 `42284`。 |
+
+开始备餐时刻 = `pickupAt − 备餐时长(按 pickupAt 是否在高峰) − pickup.acceptBufferMin`（`services/pickup.ts` 的 `prepStartAt`）。
+
+### 管理端
+
+| 接口 | 说明 |
+|---|---|
+| `GET/PUT /api/admin/settings/local-delivery` | 新增 `pickup` 节与 `holiday`；`enabled` 语义收窄为外送开关。`pickup.enabled=true` 时额外校验门店电话/地址/营业时段。 |
+| `POST /api/admin/orders/:id/accept` | 自取单也走这条（同城外送仍走 `/admin/local/orders/:id/accept`）。 |
+| `POST /api/admin/orders/:id/pickup-ready` | PREPARING → SHIPPED（待取餐），写 `pickupReadyAt`，发取餐提醒；有未处理取消申请视同驳回（MANUAL）。 |
+| `POST /api/admin/orders/:id/picked-up` | SHIPPED → COMPLETED。 |
+| `POST /api/admin/orders/:id/cancel-request/approve` / `reject` | 仅自取。同意 = 全额退并清标记。 |
+| `POST /api/admin/orders/:id/ship` / `complete` | 自取 `42284`。 |
+| `GET /api/admin/orders` | `deliveryType=PICKUP`；`channel=LOCAL` 一次看外送 + 自取。`pending-count.localPendingCount` 含自取。 |
+| `GET /api/admin/workbench/snapshot` | 卡片多 `pickup: { pickupAt, pickupReadyAt, prepStartAt, slotLabel, cancelRequested, cancelRejected, acceptedAt } \| null`；排序同城 < 自取 < 邮寄；顶层多 `pickupEnabled/pickupPaused/holiday`。 |
+| `POST /api/admin/system/run-scheduler` | 覆盖键新增 pickupUnpickedMin、pickupAutoCompleteMin（非生产环境，e2e 用）。 |
+
+### 定时任务（`scheduler.ts`）
+
+| 任务 | 函数 | 阈值 | override 键 |
+|---|---|---|---|
+| 自取未接单催单 | `remindPickupUnaccepted` | max(付款+15 分钟, 开始备餐−15 分钟) | `remindAfterMin` |
+| 过时未取提醒 | `remindPickupUnpicked` | `pickup.unpickedRemindAfterMin` | `pickupUnpickedMin` |
+| 超时自动完成 | `autoCompletePickup` | `pickup.autoCompleteAfterMin` | `pickupAutoCompleteMin` |
+
+通用 `remindUnacceptedOrders` 排除自取；`autoRejectStaleCancelRequests` 不碰自取。
+
+### 错误码
+
+| 码 | 含义 |
+|---|---|
+| 42280 | 到店自取不可用（未开通 / 休业 / 自取暂停，文案区分） |
+| 42281 | 取餐时段不可选（非整格或已过期） |
+| 42282 | 未达自取起送门槛 |
+| 42283 | （预留：取餐人手机号无效。当前由 zod 以 40001 报，保留码值不占用） |
+| 42284 | 操作与自取订单状态不符（发货/标记完成/确认收货/同城接单等误操作） |
+
+### 环境变量
+
+`WECHAT_TMPL_PICKUP` / `WECHAT_TMPL_PICKUP_FIELDS`（取餐提醒模板；留空只 warn 不阻塞）。
