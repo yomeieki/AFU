@@ -144,6 +144,8 @@ App({
   //   不问许可就进 → 顾客一路选完菜、到地图选点才被拦，前面全白填。
   // 用两参数 then 而不是 .catch：否则 switchTab 的失败也会掉进「拒绝许可」那条分支，
   // 顾客看到一句莫名其妙的「需要同意位置许可」。
+  // 拒绝许可不再挡在门外：自取不需要定位，仍放行进同城，子模式落到自取；
+  // 外送在结算页选地址时会再问一次许可。
   enterLocalChannel() {
     var self = this
     return this.ensurePrivacyAuthorize().then(
@@ -158,7 +160,17 @@ App({
         })
       },
       function() {
-        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+        // 自取不需要定位：拒绝许可也放行进同城，子模式落到自取；外送在结算页选地址时会再问一次
+        self.setShoppingChannel('LOCAL')
+        self.setLocalMode('PICKUP')
+        wx.showToast({ title: '未同意位置许可，同城只能使用到店自取', icon: 'none', duration: 2500 })
+        wx.switchTab({
+          url: '/pages/index/index',
+          fail: function(err) {
+            console.error('[channel] 进入同城失败', err)
+            wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
+          },
+        })
       }
     )
   },

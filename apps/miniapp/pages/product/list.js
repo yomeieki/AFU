@@ -90,14 +90,16 @@ Page({
     this.resetRightScroll()
     this.loadCategories()
     this.loadProducts(true)
-    if (channel === 'LOCAL') this.loadMeta()
+    // 进分类页这一次要做模式回落；onShow 里的刷新（loadMeta() 不传参）不改顾客已选的模式
+    if (channel === 'LOCAL') this.loadMeta(true)
   },
 
-  loadMeta() {
+  // resolve 为 true 时才做外送/自取回落（只在进本页那一次做，onShow 的刷新不改顾客的选择）
+  loadMeta(resolve) {
     var self = this
     getLocalMeta()
       .then(function(meta) {
-        var mode = app.setLocalMode(resolveLocalMode(meta, app.getLocalMode()))
+        var mode = resolve ? app.setLocalMode(resolveLocalMode(meta, app.getLocalMode())) : app.getLocalMode()
         self.setData({ meta: meta, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
       })
       .catch(function() {

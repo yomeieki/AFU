@@ -91,8 +91,8 @@ test('自取模式的店头状态与通知：未开通 / 暂停 / 可预约；�
 test('休业：两种模式都灰、都阻塞、文案带恢复日期', function () {
   const h = Object.assign({}, PK, { holiday: { until: '2026-10-08', reason: '国庆' } })
   assert.equal(holidayText(h), '休息中，10月08日恢复')
-  assert.deepEqual(storeStatusOf(h, 'DELIVERY'), { tone: 'closed', label: '休息中' })
-  assert.deepEqual(storeStatusOf(h, 'PICKUP'), { tone: 'closed', label: '休息中' })
+  assert.deepEqual(storeStatusOf(h, 'DELIVERY'), { tone: 'closed', label: '休息中，10月08日恢复' })
+  assert.deepEqual(storeStatusOf(h, 'PICKUP'), { tone: 'closed', label: '休息中，10月08日恢复' })
   assert.deepEqual(headNoticeOf(h, 'PICKUP'), { text: '休息中，10月08日恢复', blocking: true })
   assert.deepEqual(headNoticeOf(h, 'DELIVERY'), { text: '休息中，10月08日恢复', blocking: true })
   assert.equal(holidayText(Object.assign({}, PK, { holiday: { until: null, reason: '' } })), '休息中')

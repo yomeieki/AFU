@@ -86,7 +86,7 @@ Page({
   onShow: function() {
     if (!this._loadedOnce) return
     this.loadMeta()
-    this.loadSlots(true)
+    this.loadSlots()
   },
 
   loadAll: function() {
@@ -107,7 +107,7 @@ Page({
       })
       self.applyMeta(results[1])
       self._loadedOnce = true
-      self.loadSlots(false)
+      self.loadSlots()
     }).catch(function() {
       self.setData({ blockReason: '商品信息加载失败，请返回同城菜单重试', payAmount: null })
       self.recompute()
@@ -130,7 +130,8 @@ Page({
     this.recompute()
   },
 
-  loadSlots: function(keepSelection) {
+  // 已有选择就只判它还在不在（不覆盖），没有选择才自动选第一格
+  loadSlots: function() {
     var self = this
     var seq = (this._slotSeq = (this._slotSeq || 0) + 1)
     this.setData({ slotsLoading: true, slotsError: '' })
@@ -149,7 +150,7 @@ Page({
           patch.blockReason = view.blocked.text || '暂不可自取'
           patch.headNotice = view.blocked.text || ''
         } else if (self.data.selected) {
-          // 已选的格子还在就留着（无论是不是 keepSelection——别覆盖顾客在请求在途时刚点的格）；
+          // 已有选择就只判它还在不在，不覆盖——别盖掉顾客在请求在途时刚点的格；
           // 不在了标 stale，按钮变成「重新选择时间」
           patch.slotStale = !st.slotOffered(view, self.data.selected.startAt)
           patch.blockReason = ''
@@ -210,7 +211,7 @@ Page({
   },
   noop: function() {},
   onRetrySlots: function() {
-    this.loadSlots(false)
+    this.loadSlots()
   },
   selectDay: function(e) {
     this.setData({ activeDay: Number(e.currentTarget.dataset.idx) || 0 })
@@ -221,6 +222,8 @@ Page({
     var slot = day && day.slots[idx]
     if (!slot) return
     this.setData({ selected: decorateSlot(slot, day.label), slotStale: false, pickerOpen: false })
+    // 换了时段就是另一张单：超时重试的幂等只该在同一时段内成立
+    this._clientRequestId = newClientRequestId()
     this.recompute()
   },
 
@@ -330,7 +333,7 @@ Page({
     if (act.action === 'reslot') {
       this.setData({ selected: null, slotStale: false, pickerOpen: true })
       this.recompute()
-      this.loadSlots(false)
+      this.loadSlots()
       return
     }
     if (act.disabled || act.action !== 'submit') return
@@ -338,7 +341,7 @@ Page({
   },
 
   doSubmit: function() {
-    if (this.data.submitting || !this.data.selected || this.data.slotStale || !this.data.action || this.data.action.action !== 'submit') return
+    if (this.data.submitting || !this.data.selected || this.data.slotStale || !this.data.action || this.data.action.action !== 'submit' || this.data.action.disabled) return
     this.setData({ submitting: true })
     this.recompute()
     var self = this
@@ -388,7 +391,7 @@ Page({
       wx.showToast({ title: err.message || '该时段已不可选，请重新选择', icon: 'none', duration: 2500 })
       this.setData({ selected: null, slotStale: false })
       this.recompute()
-      this.loadSlots(false)
+      this.loadSlots()
       this.setData({ pickerOpen: true })
       return
     }

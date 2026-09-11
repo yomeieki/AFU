@@ -175,11 +175,12 @@ Page({
     })
   },
 
+  // 模式回落只在进同城（loadLocal）那一次做；onShow 触发的刷新不改顾客已经选定的模式
   loadMeta() {
     var self = this
     getLocalMeta()
       .then(function(meta) {
-        var mode = app.setLocalMode(resolveLocalMode(meta, app.getLocalMode()))
+        var mode = app.getLocalMode()
         self.setData({ meta: meta, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
       })
       .catch(function() {

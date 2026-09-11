@@ -353,10 +353,10 @@ function decorateOrder(order) {
     // 申请被驳回过（人工或超时自动）。顾客上一次看到的是「已提交，商家会尽快处理」，
     // 不给个结论他会一直等——而驳回把 cancelRequestedAt 清空了，只能靠这条痕迹。
     showLocalCancelRejected: (isLocal || isExpress || isPickup) && !order.cancelRequestedAt && !!order.cancelRequestRejectedAt
-      && ['PAID', 'PREPARING'].indexOf(order.status) !== -1,
+      && (isPickup ? ['PAID', 'PREPARING', 'SHIPPED'] : ['PAID', 'PREPARING']).indexOf(order.status) !== -1,
     showLocalCancelUnavailable:
       ((isLocal || isExpress) && order.status === 'PREPARING' && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true)
-      || (isPickup && ['PAID', 'PREPARING'].indexOf(order.status) !== -1 && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true && order.canSelfCancel !== true),
+      || (isPickup && ['PAID', 'PREPARING'].indexOf(order.status) !== -1 && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true && !selfCancel),
     // 服务端从 2026-09-11 起下发 canSelfCancel（自取按「开始备餐时刻」判）；老服务端没有就按旧规则算
     canSelfCancel: selfCancel,
     totalAmountText: formatPrice(order.totalAmount),

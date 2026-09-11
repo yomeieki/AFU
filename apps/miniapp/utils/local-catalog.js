@@ -30,7 +30,7 @@ function holidayText(meta) {
  */
 function storeStatusOf(meta, mode) {
   if (!meta) return { tone: 'closed', label: '暂未营业' }
-  if (meta.holiday) return { tone: 'closed', label: '休息中' }
+  if (meta.holiday) return { tone: 'closed', label: holidayText(meta) }
   if (normMode(mode) === 'PICKUP') {
     var pk = pickupMeta(meta)
     if (!pk || !pk.enabled) return { tone: 'closed', label: '暂未开通' }

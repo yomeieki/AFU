@@ -238,12 +238,19 @@ test('enterLocalChannel：位置许可 → 定渠道 LOCAL → 刷角标 → swi
   ])
 })
 
-test('enterLocalChannel：拒绝许可时不定渠道、不跳转，只给可见反馈', async function () {
+test('enterLocalChannel：拒绝许可时仍进同城、子模式落到自取', async function () {
   const { app, calls } = loadApp({ privacyDenied: true })
   app.globalData.shoppingChannel = 'EXPRESS'
   await app.enterLocalChannel()
-  assert.deepEqual(calls, ['privacy', 'toast:需要同意位置许可才能使用同城配送'])
-  assert.equal(app.globalData.shoppingChannel, 'EXPRESS', '被拒时渠道不能被改掉')
+  // 用 indexOf 比顺序，不 deepEqual 整个数组——storage 桩还会记录 localMode 的写入
+  assert.ok(calls.indexOf('privacy') !== -1, calls.join(','))
+  assert.ok(calls.indexOf('storage:shoppingChannel=LOCAL') !== -1, calls.join(','))
+  assert.ok(calls.indexOf('storage:shoppingChannel=LOCAL') < calls.indexOf('toast:未同意位置许可，同城只能使用到店自取'),
+    calls.join(','))
+  assert.ok(calls.indexOf('toast:未同意位置许可，同城只能使用到店自取') < calls.indexOf('switchTab:/pages/index/index'),
+    calls.join(','))
+  assert.equal(app.globalData.shoppingChannel, 'LOCAL')
+  assert.equal(app.globalData.localMode, 'PICKUP')
 })
 
 // 用两参数 then 而不是 .catch 的理由：否则 switchTab 的失败会掉进「拒绝许可」那条分支，
