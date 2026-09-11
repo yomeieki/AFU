@@ -23,7 +23,9 @@ import {
   precancelDelivery, rejectCancelRequest, rejectExpressCancelRequest, rejectOrder, rejectPickupCancelRequest, reprintOrder,
   resetKd100Circuit, selfDeliverOrder, shipOrder, voidExpressBooking, voidUnknownDelivery,
   refreshOrderQuote, getCourierLive,
+  applyPauseScope, resumeLocal, resumePickup, clearHoliday,
 } from '../api/admin'
+import { PAUSE_SCOPES, validatePauseInput, pauseStateLines, type PauseScope, type PauseState } from '../utils/pause-scope'
 import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
@@ -587,6 +589,69 @@ function CancelDeliveryModal({ orderId, channel, title, onClose, onDone }: {
         cost={costText}
       />
       {fee !== 0 && <div className="wb__amber">{costText}</div>}
+    </WbModal>
+  )
+}
+
+/** 「暂停接单」四选一（spec §6.1）。与 components/PauseScopeDialog 同逻辑、不同皮：工作台必须走 wb__ 变量（深色） */
+function PauseScopeModal({ state, onClose, onDone }: { state: PauseState; onClose: () => void; onDone: (msg: string) => void }) {
+  const [scope, setScope] = useState<PauseScope>('DELIVERY')
+  const [reason, setReason] = useState('临时暂停接单')
+  const [until, setUntil] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const lines = pauseStateLines(state)
+  const pick = (s: PauseScope) => { setScope(s); setReason(s === 'HOLIDAY' ? '节假日休业' : '临时暂停接单'); setError('') }
+  const submit = async () => {
+    const err = validatePauseInput(scope, { reason, until }, todayKey())
+    if (err) { setError(err); return }
+    setBusy(true); setError('')
+    try {
+      await applyPauseScope(scope, { reason, until })
+      onDone(scope === 'HOLIDAY' ? `已休业至 ${until}` : scope === 'DELIVERY' ? '已暂停外送' : scope === 'PICKUP' ? '已暂停自取' : '已暂停外送与自取，今天 24:00 自动恢复')
+    } catch (e) { setError(apiMessage(e, '操作失败，请重试')) } finally { setBusy(false) }
+  }
+  const resume = async (key: 'HOLIDAY' | 'DELIVERY' | 'PICKUP') => {
+    setBusy(true); setError('')
+    try {
+      if (key === 'HOLIDAY') await clearHoliday(); else if (key === 'DELIVERY') await resumeLocal(); else await resumePickup()
+      onDone(key === 'HOLIDAY' ? '已结束休业' : key === 'DELIVERY' ? '已恢复外送' : '已恢复自取')
+    } catch (e) { setError(apiMessage(e, '恢复失败，请重试')) } finally { setBusy(false) }
+  }
+  return (
+    <WbModal title="暂停接单 / 休业" onClose={onClose} error={error}
+      footer={<>
+        <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>关闭</button>
+        <button className="wb__btn wb__btn--fill" style={{ background: 'var(--danger)' }} disabled={busy} onClick={() => void submit()}>
+          {busy ? '处理中…' : PAUSE_SCOPES.find((s) => s.key === scope)!.label}
+        </button>
+      </>}>
+      {lines.length > 0 && (
+        <div className="wb__amber">
+          {lines.map((l) => (
+            <div key={l.key} className="wb__line">
+              <span>{l.text}</span>
+              <button className="wb__iconbtn" disabled={busy} onClick={() => void resume(l.key)}>
+                {l.key === 'HOLIDAY' ? '结束休业' : l.key === 'DELIVERY' ? '恢复外送' : '恢复自取'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {PAUSE_SCOPES.map((s) => (
+        <label key={s.key} className="wb__line" style={{ cursor: 'pointer', alignItems: 'flex-start', gap: 8 }}>
+          <input type="radio" name="wb-pause-scope" checked={scope === s.key} onChange={() => pick(s.key)} disabled={busy} />
+          <span style={{ flex: 1, textAlign: 'left' }}>
+            <b>{s.label}</b><br /><span className="wb__muted">{s.hint}</span>
+          </span>
+        </label>
+      ))}
+      {scope === 'HOLIDAY' && (
+        <label className="wb__line"><span>恢复日期</span>
+          <input className="wb__input" type="date" value={until} min={todayKey()} onChange={(e) => setUntil(e.target.value)} disabled={busy} /></label>
+      )}
+      <label className="wb__line"><span>原因（顾客可见）</span>
+        <input className="wb__input" value={reason} maxLength={60} onChange={(e) => setReason(e.target.value)} disabled={busy} /></label>
     </WbModal>
   )
 }
@@ -1188,10 +1253,10 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
 // 顶栏（§8）
 // ─────────────────────────────────────────────────────────
 function TopBar({
-  snap, shopName, targetTheme, onToggleTheme, focus, isFullscreen, onFullscreen, onExit,
+  snap, shopName, targetTheme, onToggleTheme, focus, isFullscreen, onFullscreen, onExit, onPause,
 }: {
   snap: WorkbenchSnapshot | null; shopName: string; targetTheme: 'light' | 'dark'
-  onToggleTheme: () => void; focus: boolean; isFullscreen: boolean; onFullscreen: () => void; onExit: () => void
+  onToggleTheme: () => void; focus: boolean; isFullscreen: boolean; onFullscreen: () => void; onExit: () => void; onPause: () => void
 }) {
   const today = new Date()
   const openState = openStateOf(snap)
@@ -1235,6 +1300,7 @@ function TopBar({
           <button className="wb__iconbtn" onClick={onFullscreen}>
             <Maximize className="w-4 h-4" />{isFullscreen ? '退出全屏' : focus ? '退出专注' : '全屏'}
           </button>
+          <button className="wb__iconbtn" onClick={onPause}><CircleAlert className="w-4 h-4" />暂停/休业</button>
           <button className="wb__iconbtn" onClick={onExit}><LogOut className="w-4 h-4" />退出工作台</button>
         </div>
       </div>
@@ -1288,6 +1354,7 @@ type ModalState =
   | { kind: 'exit' }
   | { kind: 'book' }
   | { kind: 'modifySlot' }
+  | { kind: 'pause' }
   | null
 
 /** 点日夜按钮后会切到的目标主题——按钮图标/文案要描述这个，不是当前主题（§8） */
@@ -2250,6 +2317,15 @@ export default function Workbench() {
         </WbModal>
       )
     }
+    if (modal.kind === 'pause') {
+      return (
+        <PauseScopeModal
+          state={{ paused: snap?.paused ?? null, pickupPaused: snap?.pickupPaused ?? null, holiday: snap?.holiday ?? null, pickupEnabled: !!snap?.pickupEnabled }}
+          onClose={close}
+          onDone={async (m) => { await afterAction(m) }}
+        />
+      )
+    }
     if (!o || !card) return null
     switch (modal.kind) {
       case 'cancelDelivery':
@@ -2306,6 +2382,7 @@ export default function Workbench() {
         <TopBar
           snap={snap} shopName={settings?.store.name || '接单工作台'} targetTheme={nextTheme(theme)} onToggleTheme={toggleTheme}
           focus={focus} isFullscreen={isFullscreen} onFullscreen={toggleFullscreen} onExit={exitWorkbench}
+          onPause={() => setModal({ kind: 'pause' })}
         />
       )}
 
@@ -2428,6 +2505,9 @@ export default function Workbench() {
             </button>
             <button className="wb__btn wb__btn--ghost" onClick={toggleFullscreen}>
               <Maximize className="w-4 h-4" />{isFullscreen ? '退出全屏' : focus ? '退出专注' : '全屏'}
+            </button>
+            <button className="wb__btn wb__btn--ghost" onClick={() => { setSheet(null); setModal({ kind: 'pause' }) }}>
+              <CircleAlert className="w-4 h-4" />暂停/休业
             </button>
             {/* 先收起本层再走退出确认，避免弹层叠弹层 */}
             <button className="wb__btn wb__btn--ghost" onClick={() => { setSheet(null); exitWorkbench() }}>
