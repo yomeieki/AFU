@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { MapPin, PauseCircle, Store } from 'lucide-react'
+import { MapPin, PauseCircle } from 'lucide-react'
 import { getLocalSettings, updateLocalSettings } from '../api/admin'
 import Button from '../components/ui/Button'
 import { toast } from '../components/ui/Toast'
@@ -34,7 +34,7 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
 export default function LocalSettings() {
   const { setDirty } = useUnsavedSettings()
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
-  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '', pickupMinOrder: '', pickupFixed: '' })
+  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
   const [pauseOpen, setPauseOpen] = useState(false)
   const [tiers, setTiers] = useState<{ minAmountFen: number; maxKm: number }[]>([])
@@ -52,8 +52,6 @@ export default function LocalSettings() {
       quoteMarkup: toYuan(v.fee.quoteMarkupFen), roundTo: toYuan(v.fee.roundToFen),
       quoteNearMarkup: toYuan(v.fee.quoteNearMarkupFen),
       minOrderAmount: toYuan(v.fee.minOrderAmount), maxPerCall: toYuan(v.tip.maxPerCall), maxPerOrder: toYuan(v.tip.maxPerOrder),
-      pickupMinOrder: toYuan(v.pickup.minOrderAmountFen),
-      pickupFixed: v.pickup.discount.type === 'FIXED' ? toYuan(v.pickup.discount.value) : '0.00',
     })
     setTiers([...(v.fee.freeShipTiers ?? [])])
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
@@ -75,7 +73,6 @@ export default function LocalSettings() {
 
   const patch = (p: Partial<LocalDeliverySettings>) => setS({ ...s, ...p })
   const patchStore = (p: Partial<LocalDeliverySettings['store']>) => setS({ ...s, store: { ...s.store, ...p } })
-  const patchPickup = (p: Partial<LocalDeliverySettings['pickup']>) => setS({ ...s, pickup: { ...s.pickup, ...p } })
 
   const handleSave = async (enabledOverride?: boolean) => {
     const fen = Object.fromEntries(Object.entries(money).map(([k, v]) => [k, toFen(v)])) as Record<keyof typeof money, number | null>
@@ -119,14 +116,7 @@ export default function LocalSettings() {
           quoteMarkupFen: fen.quoteMarkup ?? s.fee.quoteMarkupFen, roundToFen: fen.roundTo ?? s.fee.roundToFen,
           quoteNearMarkupFen: fen.quoteNearMarkup ?? s.fee.quoteNearMarkupFen },
         tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
-        pickup: {
-          ...s.pickup,
-          paused: fresh.pickup.paused,
-          minOrderAmountFen: fen.pickupMinOrder!,
-          discount: s.pickup.discount.type === 'FIXED'
-            ? { type: 'FIXED', value: fen.pickupFixed! }
-            : s.pickup.discount,
-        },
+        pickup: fresh.pickup,   // 自取在「到店自取设置」页单独编辑（PO 2026-09-11），这里同样不能用页面缓存覆盖
       }
       // 保存后的提示按「这次是否动了门店坐标」分叉，因为两种情况对顾客的影响完全不同：
       //  - 动了坐标：在途报价凭证里签的是旧门店坐标，那段道路距离量的是另一条路，只能整张作废
@@ -174,7 +164,7 @@ export default function LocalSettings() {
   const peakErrs = validateRanges(s.peak.windows)
   const tierErrs = tiers.map((t) => (t.minAmountFen < 0 || !Number.isFinite(t.minAmountFen)) ? '满额要填' : (!(t.maxKm > 0)) ? '公里数要大于 0' : undefined)
   const formErrors = peakErrs.some(Boolean) ? '高峰时段有错误，请先改正' : tierErrs.some(Boolean) ? '阶梯免运费有错误，请先改正'
-    : s.pickup.unpickedRemindAfterMin >= s.pickup.autoCompleteAfterMin ? '「过时未取提醒」须早于「超时自动完成」' : ''
+    : ''
   const fmtRanges = (rows: { start: string; end: string }[]) => sortRanges(rows).map((h) => `${h.start}–${h.end}`).join('、')
 
   return (
@@ -344,58 +334,6 @@ export default function LocalSettings() {
             <Field label="单次最多件数"><input className={inputCls} type="number" min={1} value={s.limits.maxItems} onChange={(e) => patch({ limits: { ...s.limits, maxItems: Number(e.target.value) } })} /></Field>
             <Field label="单次最大重量（kg）"><input className={inputCls} type="number" step="0.5" min={0.5} value={s.limits.maxWeightKg} onChange={(e) => patch({ limits: { ...s.limits, maxWeightKg: Number(e.target.value) } })} /></Field>
           </div>
-        </div>
-      </section>
-
-      <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
-        <h3 className="font-medium text-gray-800 flex items-center gap-1"><Store className="w-4 h-4" />到店自取</h3>
-        <p className="text-xs text-gray-500">
-          自取与外送共用菜单和营业时间；运费为 0，可另设自取优惠与起送门槛。休业会同时停外送与自取，邮寄不受影响。
-        </p>
-        <label className="flex items-center gap-2 text-sm text-gray-800">
-          <input type="checkbox" checked={s.pickup.enabled} onChange={(e) => patchPickup({ enabled: e.target.checked })} />
-          开通到店自取（开通需已填门店电话、地址与营业时段）
-        </label>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <Field label="取餐时段粒度（分）" hint="顾客按格选时间，如 30 = 12:00–12:30">
-            <select className={inputCls} value={s.pickup.slotMinutes} onChange={(e) => patchPickup({ slotMinutes: Number(e.target.value) })}>
-              {[15, 20, 30, 60].map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </Field>
-          <Field label="接单缓冲（分）" hint="最早可取 = 现在 + 缓冲 + 备餐时长，向上取整到粒度">
-            <input className={inputCls} type="number" min={0} max={60} value={s.pickup.acceptBufferMin} onChange={(e) => patchPickup({ acceptBufferMin: Number(e.target.value) })} /></Field>
-          <Field label="可预订">
-            <select className={inputCls} value={s.pickup.daysAhead} onChange={(e) => patchPickup({ daysAhead: Number(e.target.value) })}>
-              <option value={0}>仅今天</option><option value={1}>今天和明天</option>
-            </select>
-          </Field>
-          <Field label="自取起送金额（元）" hint="0 = 无门槛；与外送起送分开设">
-            <input className={inputCls} inputMode="decimal" value={money.pickupMinOrder} onChange={(e) => setMoney({ ...money, pickupMinOrder: e.target.value })} /></Field>
-          <Field label="自取优惠" hint="先扣自取优惠再算券；券门槛看原小计，券面额封顶到小计−自取优惠">
-            <select className={inputCls} value={s.pickup.discount.type}
-              onChange={(e) => {
-                const type = e.target.value as 'NONE' | 'PERCENT' | 'FIXED'
-                patchPickup({ discount: type === 'PERCENT' ? { type, value: s.pickup.discount.type === 'PERCENT' ? s.pickup.discount.value : 90 } : type === 'FIXED' ? { type, value: 0 } : { type: 'NONE', value: 0 } })
-                // 离开 FIXED 时把隐藏字段清零：否则残留的半截小数会在整页保存时被
-                // 「金额格式不正确」拦下，店主却看不出是哪个字段出的问题。
-                if (type !== 'FIXED') setMoney({ ...money, pickupFixed: '0.00' })
-              }}>
-              <option value="NONE">不打折</option><option value="PERCENT">按折扣</option><option value="FIXED">立减固定金额</option>
-            </select>
-          </Field>
-          {s.pickup.discount.type === 'PERCENT' && (
-            <Field label="按几折收（%）" hint="90 = 九折（减 10%）；1–100">
-              <input className={inputCls} type="number" min={1} max={100} value={s.pickup.discount.value}
-                onChange={(e) => patchPickup({ discount: { type: 'PERCENT', value: Number(e.target.value) } })} /></Field>
-          )}
-          {s.pickup.discount.type === 'FIXED' && (
-            <Field label="立减（元）" hint="超过小计时按小计减">
-              <input className={inputCls} inputMode="decimal" value={money.pickupFixed} onChange={(e) => setMoney({ ...money, pickupFixed: e.target.value })} /></Field>
-          )}
-          <Field label="过时未取提醒（分）" hint="取餐时间过后这么久推一次提醒给顾客与店员">
-            <input className={inputCls} type="number" min={5} max={1440} value={s.pickup.unpickedRemindAfterMin} onChange={(e) => patchPickup({ unpickedRemindAfterMin: Number(e.target.value) })} /></Field>
-          <Field label="超时自动完成（分）" hint="取餐时间过后这么久仍未点「已取走」则自动完成；须大于上一项">
-            <input className={inputCls} type="number" min={10} max={1440} value={s.pickup.autoCompleteAfterMin} onChange={(e) => patchPickup({ autoCompleteAfterMin: Number(e.target.value) })} /></Field>
         </div>
       </section>
 
