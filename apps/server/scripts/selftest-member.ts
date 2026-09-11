@@ -219,6 +219,20 @@ t('computeCheckout discount > subtotal 是调用方的 bug，直接抛', () => {
   assert.throws(() => computeCheckout({ subtotal: 1000, discount: 1001, shippingFee: 0 }))
 })
 
+// ── computeCheckout：自取优惠（spec 2026-09-11 P6：小计 → 自取优惠 → 券 → 实付）──
+t('computeCheckout 自取优惠先扣，再扣券', () => {
+  assert.deepStrictEqual(computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 0, pickupDiscount: 250 }), { actualAmount: 4250 })
+})
+t('computeCheckout 不传 pickupDiscount 与传 0 逐字节一致', () => {
+  assert.deepStrictEqual(computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 600 }), computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 600, pickupDiscount: 0 }))
+})
+t('computeCheckout 自取优惠 + 券 超过小计 → 抛（调用方没封顶）', () => {
+  assert.throws(() => computeCheckout({ subtotal: 1000, discount: 900, shippingFee: 0, pickupDiscount: 200 }))
+})
+t('computeCheckout 自取优惠为负 → 抛', () => {
+  assert.throws(() => computeCheckout({ subtotal: 1000, discount: 0, shippingFee: 0, pickupDiscount: -1 }))
+})
+
 // ── 票面：优惠与赠品的两联分工（M2 Task 9）────────────────────────────────
 //
 // 这个项目**没有任何小票的自动化测试**——apps/server/scripts/ 下没有 ticket selftest，

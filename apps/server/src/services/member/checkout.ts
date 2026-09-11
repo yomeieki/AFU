@@ -202,7 +202,9 @@ export async function loadCouponForOrder(
   userId: number,
   couponId: number,
   channel: CheckoutChannel,
-  subtotal: number
+  subtotal: number,
+  /** 自取单：券面额封顶到「小计 − 自取优惠」（门槛仍按原小计判，见 checkCouponUsable 的 ctx.subtotal） */
+  opts: { maxDiscount?: number } = {}
 ): Promise<ValidatedCoupon> {
   const c = await prisma.userCoupon.findFirst({
     where: { id: couponId, userId },
@@ -215,7 +217,8 @@ export async function loadCouponForOrder(
     { userId, channel, subtotal }
   )
   if (!r.usable) throw new AppError(42251, r.message)
-  return { id: c.id, name: c.name, amount: c.amount, threshold: c.threshold, channel: c.channel, expiresAt: c.expiresAt, discount: r.discount }
+  const discount = opts.maxDiscount !== undefined ? Math.min(r.discount, Math.max(0, opts.maxDiscount)) : r.discount
+  return { id: c.id, name: c.name, amount: c.amount, threshold: c.threshold, channel: c.channel, expiresAt: c.expiresAt, discount }
 }
 
 /**

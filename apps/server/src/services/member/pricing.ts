@@ -111,9 +111,13 @@ export function computeCheckout(i: {
   subtotal: number
   discount: number
   shippingFee: number
+  /** 自取优惠（分），只有 PICKUP 单非 0。顺序：小计 → 自取优惠 → 券 → 运费（spec 2026-09-11 P6） */
+  pickupDiscount?: number
 }): { actualAmount: number } {
-  if (i.discount > i.subtotal) {
-    throw new Error(`折扣 ${i.discount} 超过商品小计 ${i.subtotal}：调用方未按 checkCouponUsable 的结果封顶`)
+  const pickupDiscount = i.pickupDiscount ?? 0
+  if (pickupDiscount < 0) throw new Error(`自取优惠 ${pickupDiscount} 为负：调用方传错`)
+  if (pickupDiscount + i.discount > i.subtotal) {
+    throw new Error(`自取优惠 ${pickupDiscount} + 折扣 ${i.discount} 超过商品小计 ${i.subtotal}：调用方未按封顶逻辑算券`)
   }
-  return { actualAmount: i.subtotal - i.discount + i.shippingFee }
+  return { actualAmount: i.subtotal - pickupDiscount - i.discount + i.shippingFee }
 }
