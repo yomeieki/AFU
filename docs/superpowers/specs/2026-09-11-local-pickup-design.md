@@ -176,7 +176,7 @@ actualAmount = subtotal − pickupDiscount − 券 + 0
 | 过时未取提醒（新） | SHIPPED 且 PICKUP 且 `now ≥ pickupAt + unpickedRemindAfterMin` 且 `pickupRemindedAt` 空 | 推送一次，写 `pickupRemindedAt` |
 | 自动完成（新） | SHIPPED 且 PICKUP 且 `now ≥ pickupAt + autoCompleteAfterMin` | → COMPLETED，推送「按超时自动完成」 |
 | 发货 7 天自动完成（不变） | 按 `Shipment.shippedAt` | PICKUP 无 Shipment 行，天然不碰 |
-| 未接单重复播报（不变） | — | 店员接单即停 |
+| 未接单重复播报（改） | PICKUP：`now ≥ prepStartAt − 15min` 才开始播报（明天的单不在今天响） | 店员接单即停 |
 
 ### 4.7 订单列表过滤
 
