@@ -305,7 +305,8 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     // 头部**只放尾号、不放单号**（PO 2026-09-08 再定）：骑手和店员在柜台对的只有尾号，
     // 单号在票头上只是干扰。票面与工作台都不再显示单号（PO 2026-09-09 定）；完整单号在后台订单页可查，退款/客诉查得到。
     `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
-    `下单：${fmtDateTime(o.createdAt)}`,
+    // 只印付款时刻（PO 2026-09-12）：下单与付款几乎总是同一分钟，两行只是重复；订单成立的时刻是付款。
+    // 顾客拖到临期才付的个别单，下单时间在后台订单详情仍可查。三种票统一。
     `付款：${fmtDateTime(o.paidAt)}`,
   ]
 
