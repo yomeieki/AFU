@@ -124,3 +124,60 @@ assert_eq "地址快照：省" "$(sql "SELECT receiver_province FROM orders WHER
 assert_eq "地址快照：同城坐标列为空" "$(sql "SELECT receiver_lat_e6 IS NULL AND distance_m IS NULL FROM orders WHERE id=$P62_O7;")" "1"
 assert_eq "无 Shipment 行" "$(sql "SELECT COUNT(*) FROM shipments WHERE order_id=$P62_O7;")" "0"
 req PUT "/api/orders/$P62_O7/cancel" "$UT" >/dev/null
+
+echo "-- ⑧ 状态流：接单（通用 accept）→ 已备好（视同驳回取消申请）→ 已取走；同城 accept 拒 --"
+R=$(req POST "/api/admin/local/orders/$P62_O1/accept" "$AT")
+assert_eq "同城看板 accept 拒自取 42204" "$(code "$R")" "42204"
+R=$(req POST "/api/admin/orders/$P62_O1/picked-up" "$AT")
+assert_eq "PAID 点已取走 42204" "$(code "$R")" "42204"
+R=$(req POST "/api/admin/orders/$P62_O1/accept" "$AT")
+assert_eq "接单 code 0" "$(code "$R")" "0"
+assert_eq "→ PREPARING" "$(p62_ord "$P62_O1" | jq -r .data.status)" "PREPARING"
+R=$(req POST "/api/admin/orders/$P62_O1/ship" "$AT" '{"expressCompany":"顺丰","expressNo":"SF1"}')
+assert_eq "自取单填单号发货 42284" "$(code "$R")" "42284"
+R=$(req POST "/api/admin/orders/$P62_O1/pickup-ready" "$AT")
+assert_eq "已备好 code 0" "$(code "$R")" "0"
+assert_eq "→ SHIPPED（待取餐）" "$(p62_ord "$P62_O1" | jq -r .data.status)" "SHIPPED"
+assert_eq "pickup_ready_at 已写" "$(sql "SELECT pickup_ready_at IS NOT NULL FROM orders WHERE id=$P62_O1;")" "1"
+assert_eq "备好视同驳回：cancel_requested_at 清空" "$(sql "SELECT cancel_requested_at IS NULL FROM orders WHERE id=$P62_O1;")" "1"
+assert_eq "驳回痕迹 MANUAL" "$(sql "SELECT cancel_request_rejected_by FROM orders WHERE id=$P62_O1;")" "MANUAL"
+R=$(req POST "/api/admin/orders/$P62_O1/complete" "$AT")
+assert_eq "自取单「标记完成」42284" "$(code "$R")" "42284"
+R=$(req PUT "/api/orders/$P62_O1/confirm" "$UT")
+assert_eq "顾客确认收货对自取 42284" "$(code "$R")" "42284"
+assert_eq "待取餐后 canRequestCancel=false" "$(req GET "/api/orders/$P62_O1" "$UT" | jq -r '.data.canRequestCancel')" "false"
+R=$(req POST "/api/admin/orders/$P62_O1/picked-up" "$AT")
+assert_eq "已取走 code 0" "$(code "$R")" "0"
+assert_eq "→ COMPLETED" "$(p62_ord "$P62_O1" | jq -r .data.status)" "COMPLETED"
+
+echo "-- ⑨ 工作台快照：自取卡带 pickup 节且排在同城之后、邮寄之前 --"
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_SLOT2\",\"pickupContact\":{\"phone\":\"13800005678\"}}")
+P62_O3=$(jq -r .data.orderId <<<"$R"); req POST "/api/orders/$P62_O3/pay" "$UT" >/dev/null
+R=$(req GET "/api/admin/workbench/snapshot?fresh=1" "$AT")
+P62_CARD=$(jq -c ".data.columns.pending[] | select(.orderId==$P62_O3)" <<<"$R")
+[[ -n "$P62_CARD" ]] && ok "自取单在 pending 列" || fail "自取单不在 pending 列" "$R"
+assert_eq "卡片 channel=PICKUP" "$(jq -r .channel <<<"$P62_CARD")" "PICKUP"
+assert_eq "卡片 pickup.slotLabel 非空" "$(jq -r '.pickup.slotLabel | length > 0' <<<"$P62_CARD")" "true"
+assert_eq "卡片 pickup.prepStartAt 非空" "$(jq -r '.pickup.prepStartAt != null' <<<"$P62_CARD")" "true"
+assert_eq "卡片 local=null、express=null" "$(jq -r '[.local,.express] | map(. == null) | all' <<<"$P62_CARD")" "true"
+assert_eq "快照顶层 pickupEnabled=true" "$(jq -r '.data.pickupEnabled' <<<"$R")" "true"
+P62_RANKS=$(jq -r '.data.columns.pending | map(.channel) | map(if .=="LOCAL" then 0 elif .=="PICKUP" then 1 else 2 end) | . == sort' <<<"$R")
+assert_eq "pending 列排序 同城 < 自取 < 邮寄" "$P62_RANKS" "true"
+
+echo "-- ⑩ 取消申请：同意 = 全额退并清标记；驳回留痕；admin 列表 channel=LOCAL 含自取 --"
+req POST "/api/admin/orders/$P62_O3/accept" "$AT" >/dev/null
+R=$(req POST "/api/orders/$P62_O3/cancel-request" "$UT" '{"note":"不要了"}')
+assert_eq "接单后申请取消 code 0" "$(code "$R")" "0"
+R=$(req POST "/api/admin/orders/$P62_O3/cancel-request/reject" "$AT")
+assert_eq "驳回 code 0" "$(code "$R")" "0"
+assert_eq "驳回后 cancelRequestRejectedBy=MANUAL" "$(jq -r .data.cancelRequestRejectedBy <<<"$R")" "MANUAL"
+R=$(req POST "/api/orders/$P62_O3/cancel-request" "$UT" '{"note":"再申请一次"}')
+assert_eq "驳回后可再申请 code 0" "$(code "$R")" "0"
+R=$(req POST "/api/admin/orders/$P62_O3/cancel-request/approve" "$AT")
+assert_eq "同意 code 0" "$(code "$R")" "0"
+assert_eq "同意 isFull=true" "$(jq -r .data.isFull <<<"$R")" "true"
+assert_eq "O3 → REFUNDED" "$(p62_ord "$P62_O3" | jq -r .data.status)" "REFUNDED"
+assert_eq "同意后标记清空" "$(sql "SELECT cancel_requested_at IS NULL FROM orders WHERE id=$P62_O3;")" "1"
+R=$(req GET "/api/admin/orders?channel=LOCAL&pageSize=50" "$AT")
+[[ "$(jq -r "[.data.list[] | select(.id==$P62_O3)] | length" <<<"$R")" == "1" ]] && ok "admin 列表 channel=LOCAL 含自取" || fail "admin 列表 channel=LOCAL 不含自取"
+[[ "$(req GET /api/admin/orders/pending-count "$AT" | jq -r '.data.localPendingCount')" -ge 0 ]] && ok "pending-count 仍可用" || fail "pending-count 挂了"

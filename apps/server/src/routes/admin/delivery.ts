@@ -36,6 +36,8 @@ const ADMIN_DELIVERY_SELECT = {
 async function doAccept(id: number) {
   const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true, distanceM: true } })
   if (!target) throw new AppError(40401, '订单不存在', 404)
+  // 自取（PICKUP）与邮寄（EXPRESS）都被这里拒掉：自取单走通用的 POST /admin/orders/:id/accept
+  // （routes/admin/orders.ts），只有同城才需要下面这段「算预计送达」的额外逻辑。
   if (target.deliveryType !== 'LOCAL') throw new AppError(42204, '仅同城订单可在此接单')
   // 预计送达在**这一刻**才算（PO 2026-09-07）：备餐是从接单开始的，把「顾客下单→付款→
   // 店员接单」那一段算进去只会让承诺系统性偏早，而且恰恰在最忙的时候偏得最多。

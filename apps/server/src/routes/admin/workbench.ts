@@ -11,6 +11,7 @@ import { getCircuitState } from '../../services/delivery/circuit'
 import { getLocalSettings, isOpenNow } from '../../services/local-settings'
 import { getExpressSettings } from '../../services/express-settings'
 import { bookingView } from '../../services/delivery/express-booking'
+import { prepStartAt, pickupSlotLabel } from '../../services/pickup'
 import { REAL_ORDERS } from '../../utils/stats-scope'
 import { getWorkbenchPrinterHealth, PrinterHealthEntry } from '../../services/ticket'
 
@@ -72,7 +73,7 @@ async function loadOrders() {
   })
 }
 
-function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: BookingRow | null): Record<string, unknown> {
+function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: BookingRow | null, pk: { prepStartAt: string; slotLabel: string } | null = null): Record<string, unknown> {
   const units = o.items.reduce((n, it) => n + it.quantity, 0)
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
@@ -109,13 +110,27 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
           delivery: d ? { status: d.status, provider: d.provider ?? null, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
         }
       : null,
+    pickup: o.deliveryType === 'PICKUP'
+      ? {
+          pickupAt: o.pickupAt?.toISOString() ?? null,
+          pickupReadyAt: o.pickupReadyAt?.toISOString() ?? null,
+          prepStartAt: pk?.prepStartAt ?? null,
+          slotLabel: pk?.slotLabel ?? '',
+          cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
+          cancelRejected: !!o.cancelRequestRejectedAt && ['PAID', 'PREPARING'].includes(o.status)
+            ? (o.cancelRequestRejectedBy === 'AUTO' ? 'AUTO' : 'MANUAL')
+            : null,
+          acceptedAt: o.acceptedAt?.toISOString() ?? null,
+        }
+      : null,
   }
 }
 
-/** 规格 §2：同城恒排邮寄之上；同渠道内等待久的在上（done 列新在上） */
+/** 规格 §2：同城恒排自取之上、自取恒排邮寄之上；同渠道内等待久的在上（done 列新在上） */
+const CHANNEL_RANK: Record<string, number> = { LOCAL: 0, PICKUP: 1, EXPRESS: 2 }
 function sortColumn(cards: { channel: string; waitSince: string }[], newestFirst = false) {
   cards.sort((a, b) => {
-    if (a.channel !== b.channel) return a.channel === 'LOCAL' ? -1 : 1
+    if (a.channel !== b.channel) return (CHANNEL_RANK[a.channel] ?? 9) - (CHANNEL_RANK[b.channel] ?? 9)
     return newestFirst ? b.waitSince.localeCompare(a.waitSince) : a.waitSince.localeCompare(b.waitSince)
   })
 }
@@ -155,17 +170,20 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
 
     const cols: Record<string, ReturnType<typeof toCard>[]> = { pending: [], preparing: [], waitingCourier: [], delivering: [], done: [] }
     for (const o of orders) {
+      const pk = o.deliveryType === 'PICKUP' && o.pickupAt
+        ? { prepStartAt: prepStartAt(settings, o.pickupAt).toISOString(), slotLabel: pickupSlotLabel(o.pickupAt, settings.pickup.slotMinutes) }
+        : null
       const d = byOrder.get(o.id) ?? null
-      if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d, bookingByOrder.get(o.id) ?? null))
+      if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d, bookingByOrder.get(o.id) ?? null, pk))
       else if (o.status === 'PREPARING') {
         const b = bookingByOrder.get(o.id) ?? null
-        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d, null))
-        else if (o.deliveryType === 'EXPRESS' && b && b.activeOrderId === o.id) cols.waitingCourier.push(toCard(o, b.bookedAt ?? b.createdAt, null, b))
-        else cols.preparing.push(toCard(o, o.acceptedAt, d, b))
+        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d, null, null))
+        else if (o.deliveryType === 'EXPRESS' && b && b.activeOrderId === o.id) cols.waitingCourier.push(toCard(o, b.bookedAt ?? b.createdAt, null, b, null))
+        else cols.preparing.push(toCard(o, o.acceptedAt, d, b, pk))
       }
       // Order 没有 shippedAt 列——同城取配送单的取货时间，邮寄取运单的发货时间，都缺则退回接单时间
-      else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, d?.pickedUpAt ?? o.shipment?.shippedAt ?? o.acceptedAt, d, bookingByOrder.get(o.id) ?? null))
-      else if (o.status === 'COMPLETED') cols.done.push(toCard(o, o.completedAt, d, bookingByOrder.get(o.id) ?? null))
+      else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, d?.pickedUpAt ?? o.shipment?.shippedAt ?? o.acceptedAt, d, bookingByOrder.get(o.id) ?? null, pk))
+      else if (o.status === 'COMPLETED') cols.done.push(toCard(o, o.completedAt, d, bookingByOrder.get(o.id) ?? null, pk))
     }
     for (const k of ['pending', 'preparing', 'waitingCourier', 'delivering'] as const) sortColumn(cols[k] as never)
     sortColumn(cols.done as never, true)
@@ -196,6 +214,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       },
       circuit: { tripped: circuit.tripped },
       localEnabled: settings.enabled, localOpenNow: isOpenNow(settings),
+      pickupEnabled: settings.pickup.enabled, pickupPaused: settings.pickup.paused, holiday: settings.holiday,
       // 「甲」口径：顾客可申请取消的窗口 = 店员可处理的窗口 = 接单后这么多分钟。
       // 卡片用它 + acceptedAt 自己算倒计时（每秒重渲染，不能让服务端算好再传）。
       acceptGraceMin: settings.acceptGraceMin,

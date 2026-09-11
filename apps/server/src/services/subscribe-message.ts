@@ -251,3 +251,12 @@ export function getSubscribeTemplateGroups(): { express: string[]; local: string
     pickup: [c.pickupTemplateId, c.refundTemplateId].filter(Boolean),
   }
 }
+
+/** 「已备好，请来取餐」（Task 7 实现字段映射；先留空壳保证编译） */
+export function sendPickupReadySubscribeMessage(
+  openid: string,
+  order: { id: number; orderNo: string; pickupAt: Date | null; receiverName: string },
+  productName?: string
+): void {
+  void openid; void order; void productName
+}

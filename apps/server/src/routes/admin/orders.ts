@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
@@ -7,12 +8,16 @@ import { rollbackOrderStock } from '../../utils/order-stock'
 import { releaseOrderBenefits } from '../../services/member/checkout'
 import { ACTIVE_REFUND_STATUSES, finalizeRefundSuccess, initiateRefund, remainingRefundable } from '../../services/refund'
 import { deductPointsOnRefund } from '../../services/member/points'
-import { sendShipSubscribeMessage } from '../../services/subscribe-message'
+import { sendShipSubscribeMessage, sendPickupReadySubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
 import { enqueueOrderTicket } from '../../services/ticket'
 import { LOW_STOCK_THRESHOLD } from '../../utils/constants'
 import { displayAddress } from '../../utils/address'
 import { BOOKING_STATUS_LABEL } from '../../services/delivery/express-booking-state'
+import { getLocalSettings } from '../../services/local-settings'
+import { prepStartAt, pickupSlotLabel } from '../../services/pickup'
+import { rejectCancelRequest } from '../../services/cancel-request'
+import { settlePoints } from '../../services/member/points'
 
 const router = Router()
 
@@ -39,6 +44,9 @@ const orderListSelect = {
   distanceM: true,
   cancelRequestedAt: true,
   estimatedDeliveryAt: true,
+  pickupAt: true,
+  pickupReadyAt: true,
+  pickupDiscountAmount: true,
   // 会员优惠（M2）。userId 是 M3「发赔偿券」要用的——发券端点按用户维度，列表里没有它
   // 就得先点进详情再回来，店员在售后场景下最不需要的就是多两次跳转。
   userId: true,
@@ -74,12 +82,16 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const status = statuses.length === 1 ? statuses[0] : undefined
     // keyword 新参数；orderNo 旧参数兼容
     const keyword = ((req.query.keyword as string | undefined) ?? (req.query.orderNo as string | undefined))?.trim()
-    // 邮寄订单页默认只看 EXPRESS；同城看板传 LOCAL；ALL 不过滤
+    // 邮寄订单页默认只看 EXPRESS；同城看板传 LOCAL / PICKUP；channel=LOCAL 一次看外送 + 自取；ALL 不过滤
     const dt = (req.query.deliveryType as string | undefined) ?? 'EXPRESS'
+    const ch = req.query.channel as string | undefined
+    const dtWhere: Prisma.OrderWhereInput = ch === 'LOCAL'
+      ? { deliveryType: { in: ['LOCAL', 'PICKUP'] } }
+      : dt === 'ALL' ? {} : { deliveryType: dt === 'LOCAL' ? 'LOCAL' : dt === 'PICKUP' ? 'PICKUP' : 'EXPRESS' }
 
     const where = {
       ...(status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}),
-      ...(dt === 'ALL' ? {} : { deliveryType: dt === 'LOCAL' ? 'LOCAL' : 'EXPRESS' }),
+      ...dtWhere,
       ...(keyword
         ? {
             OR: [
@@ -109,7 +121,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         // 同城单展示用短地址（省市恒为门店所在地，是噪音）。规则只在服务端实现一处，
         // 前端直接显示，避免前后端各写一遍后慢慢漂移。receiverFullAddress 保留原样——
         // 「复制收件信息」要粘到别处用，必须完整。
-        receiverDisplayAddress: displayAddress(o, o.deliveryType === 'LOCAL'),
+        receiverDisplayAddress: displayAddress(o, o.deliveryType === 'LOCAL' || o.deliveryType === 'PICKUP'),
         latestRefund: refunds[0] ?? null,
         afterSale: afterSales[0] ?? null,
         remainingRefundable: remainingRefundable(o),
@@ -144,7 +156,7 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       prisma.afterSale.count({ where: { status: 'PENDING' } }),
       prisma.order.count({
         where: {
-          deliveryType: 'LOCAL',
+          deliveryType: { in: ['LOCAL', 'PICKUP'] },
           OR: [
             { status: { in: ['PAID', 'PREPARING'] } },
             // 取消申请徽标只数还没走完流程的单：终态单的 cancelRequestedAt 是历史痕迹，不该永久占一个红点
@@ -212,7 +224,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   }
 })
 
-// POST /api/admin/orders/:id/accept — 接单（PAID → PREPARING 备餐中）
+// POST /api/admin/orders/:id/accept — 接单（PAID → PREPARING 备餐中）；自取单也走这里（同城单被下面拒掉，去同城看板专用接单）
 router.post('/:id/accept', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
@@ -252,6 +264,7 @@ router.post('/:id/ship', async (req: Request, res: Response, next: NextFunction)
     })
     if (!order) throw new AppError(40401, '订单不存在', 404)
     if (order.deliveryType === 'LOCAL') throw new AppError(42204, '同城订单请在同城看板操作')
+    if (order.deliveryType === 'PICKUP') throw new AppError(42284, '自取订单没有快递：备好后点「已备好」，顾客取走后点「已取走」')
     if (!['PAID', 'PREPARING'].includes(order.status)) {
       throw new AppError(42204, `订单状态为 ${order.status}，仅待接单/备餐中订单可发货`)
     }
@@ -303,6 +316,7 @@ router.post('/:id/complete', async (req: Request, res: Response, next: NextFunct
     const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true } })
     if (!target) throw new AppError(40401, '订单不存在', 404)
     if (target.deliveryType === 'LOCAL') throw new AppError(42204, '同城订单请在同城看板操作')
+    if (target.deliveryType === 'PICKUP') throw new AppError(42284, '自取订单请点「已取走」完成')
     const moved = await prisma.order.updateMany({
       where: { id, status: 'SHIPPED' },
       data: { status: 'COMPLETED', completedAt: new Date() },
@@ -313,6 +327,89 @@ router.post('/:id/complete', async (req: Request, res: Response, next: NextFunct
       throw new AppError(42204, `订单状态为 ${order.status}，仅已发货订单可标记完成`)
     }
     success(res, await prisma.order.findUnique({ where: { id } }))
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/orders/:id/pickup-ready — 自取「已备好」（PREPARING → SHIPPED，顾客收到取餐提醒）
+router.post('/:id/pickup-ready', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { user: { select: { openid: true } }, items: { select: { productName: true }, take: 1 } },
+    })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+    if (order.deliveryType !== 'PICKUP') throw new AppError(42284, '仅自取订单可标记「已备好」')
+    const pickupReadyAt = new Date()
+    const moved = await prisma.order.updateMany({
+      where: { id, status: 'PREPARING', deliveryType: 'PICKUP' },
+      data: { status: 'SHIPPED', pickupReadyAt },
+    })
+    if (moved.count === 0) {
+      const cur = await prisma.order.findUnique({ where: { id }, select: { status: true } })
+      throw new AppError(42204, `订单状态为 ${cur?.status ?? '未知'}，仅备餐中的自取订单可标记已备好`)
+    }
+    // 有未处理的取消申请：菜已经做好了，视同驳回（spec §4.4）。rejectCancelRequest 对 SHIPPED 允许（只拒终态）
+    if (order.cancelRequestedAt) await rejectCancelRequest(id, 'MANUAL', { returnOrder: false })
+    sendPickupReadySubscribeMessage(order.user.openid, { ...order, pickupAt: order.pickupAt }, order.items[0]?.productName)
+    success(res, await prisma.order.findUnique({ where: { id } }))
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/orders/:id/picked-up — 自取「已取走」（SHIPPED → COMPLETED）
+router.post('/:id/picked-up', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true } })
+    if (!target) throw new AppError(40401, '订单不存在', 404)
+    if (target.deliveryType !== 'PICKUP') throw new AppError(42284, '仅自取订单可标记「已取走」')
+    const moved = await prisma.order.updateMany({
+      where: { id, status: 'SHIPPED', deliveryType: 'PICKUP' },
+      data: { status: 'COMPLETED', completedAt: new Date() },
+    })
+    if (moved.count === 0) {
+      const cur = await prisma.order.findUnique({ where: { id }, select: { status: true } })
+      throw new AppError(42204, `订单状态为 ${cur?.status ?? '未知'}，仅「待取餐」的自取订单可标记已取走`)
+    }
+    void settlePoints(id) // 与顾客确认收货同款：失败由 settleMissedPoints 兜底
+    success(res, await prisma.order.findUnique({ where: { id } }))
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/orders/:id/cancel-request/approve — 自取：同意取消 = 全额退（没有配送单/预约要撤）
+router.post('/:id/cancel-request/approve', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const order = await prisma.order.findUnique({ where: { id } })
+    if (!order) throw new AppError(40401, '订单不存在', 404)
+    if (order.deliveryType !== 'PICKUP') throw new AppError(42284, '同城/邮寄订单的取消申请请到各自看板处理')
+    if (!order.cancelRequestedAt) throw new AppError(42204, '该订单没有待处理的取消申请')
+    const result = await initiateRefund({ orderId: id, amount: remainingRefundable(order), reason: '顾客申请取消', operator: req.adminUsername ?? 'admin' })
+    // 与邮寄 approveExpressCancelRequest 同款：退款已发起就清标记，免得工作台同时显示「退款中」和「待处理申请」
+    await prisma.order.updateMany({
+      where: { id, cancelRequestedAt: { not: null } },
+      data: { cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null },
+    })
+    success(res, result)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/orders/:id/cancel-request/reject — 自取：驳回（同城/邮寄各有自己的路由）
+router.post('/:id/cancel-request/reject', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true } })
+    if (!target) throw new AppError(40401, '订单不存在', 404)
+    if (target.deliveryType !== 'PICKUP') throw new AppError(42284, '同城/邮寄订单的取消申请请到各自看板处理')
+    success(res, await rejectCancelRequest(id, 'MANUAL'))
   } catch (e) {
     next(e)
   }
