@@ -20,7 +20,6 @@
 
   <!-- 同城：门店头（营业状态 / 配送规则 / 阻塞通知）取代 Banner 的位置 -->
   <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" />
-  <local-mode-bar wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:change="onModeChange" />
 
   <!-- 邮寄 Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
   <swiper
@@ -52,6 +51,10 @@
       <text class="banner-sub">每日现做 · 品质保证</text>
     </view>
   </view>
+
+  <!-- 同城「外送 / 自取」切换栏：页头之下、分类区之上（spec P2）。
+       必须放在上面那条 wx:if / wx:elif 链**之外**——插在链中间会让 banner 的 wx:elif 绑到它身上。 -->
+  <local-mode-bar wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:change="onModeChange" />
 
   <!-- Categories -->
   <view class="section" wx:if="{{categories.length > 0}}">
