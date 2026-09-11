@@ -148,8 +148,18 @@ function resolveLocalMode(meta, current) {
   return mode
 }
 
+// 切换栏「自取」下的小字（PO 2026-09-11）：顶部胶囊已经说了营业状态，切换栏不再常驻状态字；
+// 只在店铺休息（打烊/午间休息，非休业）而自取仍可预约时补一句「可预约」，其它情况为空。
+function pickupModeHint(meta) {
+  if (!meta || meta.holiday) return ''
+  var d = storeStatusOf(meta, 'DELIVERY')
+  var p = storeStatusOf(meta, 'PICKUP')
+  return d.tone === 'closed' && p.tone === 'open' ? '可预约' : ''
+}
+
 module.exports = {
   storeStatusOf: storeStatusOf,
+  pickupModeHint: pickupModeHint,
   headNoticeOf: headNoticeOf,
   summarizeCart: summarizeCart,
   checkoutStateOf: checkoutStateOf,

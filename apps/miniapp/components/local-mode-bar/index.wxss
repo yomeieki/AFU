@@ -1,9 +1,8 @@
-/* 独立一栏，但不通栏（PO 2026-09-11：通栏太宽像两块大按钮）：宽 460rpx 居中的分段控件，
-   两格等宽，选中格用品牌底色。休业时两格都灰。 */
+/* 通栏独立一栏，两格等宽，选中格用品牌底色；上下压扁（PO 2026-09-11）：
+   状态小字不再常驻——顶部胶囊已经说了营业状态，只在店休而自取仍可预约时给「自取」补一行「可预约」。 */
 .mode-bar {
   display: flex;
-  width: 460rpx;
-  margin: 12rpx auto 16rpx;
+  margin: 12rpx 24rpx 16rpx;
   padding: 6rpx;
   background: var(--card, #fff);
   border-radius: var(--radius-md, 12rpx);
@@ -15,8 +14,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4rpx;
-  padding: 10rpx 0 8rpx;
+  gap: 2rpx;
+  padding: 12rpx 0;
   border-radius: 10rpx;
 }
 .mode-tab-hover { background: var(--bg, #f5f6f7); }
