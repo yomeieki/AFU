@@ -14,8 +14,6 @@ import { enqueueOrderTicket } from '../../services/ticket'
 import { LOW_STOCK_THRESHOLD } from '../../utils/constants'
 import { displayAddress } from '../../utils/address'
 import { BOOKING_STATUS_LABEL } from '../../services/delivery/express-booking-state'
-import { getLocalSettings } from '../../services/local-settings'
-import { prepStartAt, pickupSlotLabel } from '../../services/pickup'
 import { rejectCancelRequest } from '../../services/cancel-request'
 import { settlePoints } from '../../services/member/points'
 
@@ -216,7 +214,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     success(res, {
       ...order,
       coupon,
-      receiverDisplayAddress: displayAddress(order, order.deliveryType === 'LOCAL'),
+      receiverDisplayAddress: displayAddress(order, order.deliveryType === 'LOCAL' || order.deliveryType === 'PICKUP'),
       remainingRefundable: remainingRefundable(order),
     })
   } catch (e) {
@@ -343,17 +341,26 @@ router.post('/:id/pickup-ready', async (req: Request, res: Response, next: NextF
     if (!order) throw new AppError(40401, '订单不存在', 404)
     if (order.deliveryType !== 'PICKUP') throw new AppError(42284, '仅自取订单可标记「已备好」')
     const pickupReadyAt = new Date()
+    // 状态推进与「视同驳回取消申请」合成一次原子写：分两步的话，中间抛错会留下
+    // 「已 SHIPPED 但申请还挂着、重试又被守卫挡住」的半截状态。驳回痕迹字段与
+    // services/cancel-request.ts 的 rejectCancelRequest 完全同款（那边是给独立的驳回端点用的）。
     const moved = await prisma.order.updateMany({
       where: { id, status: 'PREPARING', deliveryType: 'PICKUP' },
-      data: { status: 'SHIPPED', pickupReadyAt },
+      data: {
+        status: 'SHIPPED', pickupReadyAt,
+        ...(order.cancelRequestedAt
+          ? {
+              cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
+              cancelRequestRejectedAt: pickupReadyAt, cancelRequestRejectedBy: 'MANUAL',
+            }
+          : {}),
+      },
     })
     if (moved.count === 0) {
       const cur = await prisma.order.findUnique({ where: { id }, select: { status: true } })
       throw new AppError(42204, `订单状态为 ${cur?.status ?? '未知'}，仅备餐中的自取订单可标记已备好`)
     }
-    // 有未处理的取消申请：菜已经做好了，视同驳回（spec §4.4）。rejectCancelRequest 对 SHIPPED 允许（只拒终态）
-    if (order.cancelRequestedAt) await rejectCancelRequest(id, 'MANUAL', { returnOrder: false })
-    sendPickupReadySubscribeMessage(order.user.openid, { ...order, pickupAt: order.pickupAt }, order.items[0]?.productName)
+    sendPickupReadySubscribeMessage(order.user.openid, order, order.items[0]?.productName)
     success(res, await prisma.order.findUnique({ where: { id } }))
   } catch (e) {
     next(e)
