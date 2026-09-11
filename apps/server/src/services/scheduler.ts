@@ -16,7 +16,7 @@ import { releaseOrderBenefits } from './member/checkout'
 import { closeOrder } from './wechat-pay'
 import { notifySystemAlert } from './notify'
 import { notifyAcceptReminder, notifyLowStock } from './order-notify'
-import { LOW_STOCK_THRESHOLD } from '../utils/constants'
+import { LOW_STOCK_THRESHOLD, ACCEPT_REMIND_AFTER_MIN } from '../utils/constants'
 import {
   remindCallTimeout, remindAcceptedStuck, remindDeliveringTimeout, remindUnknownGhost,
   remindLocalUncalled, remindCancelRequestPending, autoRejectStaleCancelRequests, autoCallRiders, autoCompleteLocalDelivered,
@@ -26,6 +26,7 @@ import { remindExpressUnaccepted, remindExpressUnpicked, reconcileExpressUnknown
 import {
   processQueue as printQueueSweep, repeatAnnounce as printRepeatAnnounce, printerHealthTask,
 } from './ticket'
+import { remindPickupUnaccepted, remindPickupUnpicked, autoCompletePickup } from './pickup-tasks'
 import { settlePoints, expirePointsBatch } from './member/points'
 import { expireCouponsBatch } from './member/coupons'
 import { getMemberSettings } from './member/settings'
@@ -86,6 +87,9 @@ export interface SchedulerOverrides {
   /** 批次三对账任务：查单间隔（分钟）、取件后多少天算超期 */
   expressStaleIntervalMin?: number
   expressPickedStaleDays?: number
+  /** 自取：过时未取提醒 / 自动完成的分钟阈值（不传读同城设置的 pickup.*） */
+  pickupUnpickedMin?: number
+  pickupAutoCompleteMin?: number
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -97,6 +101,9 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['cancelExpired', () => cancelExpiredOrders(overrides.payTimeoutMin)],
     ['autoComplete', () => autoCompleteShippedOrders(overrides.autoCompleteDays)],
     ['remindUnaccepted', () => remindUnacceptedOrders(overrides.remindAfterMin)],
+    ['pickupUnaccepted', () => remindPickupUnaccepted(overrides.remindAfterMin)],
+    ['pickupUnpicked', () => remindPickupUnpicked(overrides.pickupUnpickedMin)],
+    ['pickupAutoComplete', () => autoCompletePickup(overrides.pickupAutoCompleteMin)],
     ['lowStock', pushLowStock],
     ['localCallTimeout', () => remindCallTimeout(overrides.callTimeoutMin)],
     // 只呼最低价的单等太久 → 取消重呼并呼。排在 localAutoCall 之前：升级会先撤单再建新单，
@@ -199,12 +206,13 @@ export async function autoCompleteShippedOrders(days = config.order.autoComplete
   return count
 }
 
-/** 已付款超时未接单 → 企微群催单（每单只催一次，acceptRemindedAt 记录） */
-export const ACCEPT_REMIND_AFTER_MIN = 15
+/** 已付款超时未接单 → 企微群催单（每单只催一次，acceptRemindedAt 记录）。自取单走 pickup-tasks.ts
+ * 的 remindPickupUnaccepted（催单基准是「开始备餐时刻」而不是单纯付款后 N 分钟），这里排除掉。 */
+export { ACCEPT_REMIND_AFTER_MIN } from '../utils/constants'
 export async function remindUnacceptedOrders(afterMin = ACCEPT_REMIND_AFTER_MIN): Promise<number> {
   const deadline = new Date(Date.now() - afterMin * 60 * 1000)
   const stale = await prisma.order.findMany({
-    where: { status: 'PAID', acceptRemindedAt: null, paidAt: { lt: deadline } },
+    where: { status: 'PAID', acceptRemindedAt: null, paidAt: { lt: deadline }, deliveryType: { not: 'PICKUP' } },
     select: { id: true, orderNo: true, actualAmount: true, receiverName: true, receiverPhone: true, paidAt: true },
     take: BATCH,
     orderBy: { paidAt: 'asc' },

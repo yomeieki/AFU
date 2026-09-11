@@ -51,6 +51,7 @@ apps/server/src/routes/admin/orders.ts
 apps/server/src/routes/admin/delivery.ts
 apps/server/src/routes/admin/settings.ts
 apps/server/src/routes/admin/workbench.ts
+apps/server/src/routes/admin/system.ts                                    （Task 8：run-scheduler 覆盖键白名单补两个 pickup 键）
 apps/server/scripts/selftest-local-settings.ts
 apps/server/scripts/selftest-pickup.ts                                    （新建）
 apps/server/scripts/selftest-member.ts

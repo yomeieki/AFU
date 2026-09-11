@@ -195,3 +195,48 @@ P62_T=$(PJOBS "$P62_O4" | jq -r '[.data.list[] | select(.kind=="NEW_ORDER")] | l
 [[ "$P62_T" != *"运费："* ]] && ok "不印运费" || fail "自取票印了运费" "$P62_T"
 [[ "$P62_T" == *"尾号9999"* ]] && ok "尾号正确" || fail "尾号不对" "$P62_T"
 [[ "$P62_T" == *"厨房联"* ]] && ok "有厨房联" || fail "没有厨房联" "$P62_T"
+
+echo "-- ⑫ 催单基准：明天的自取单付款 15 分钟后不催；开始备餐前 15 分钟才催 --"
+P62_TOMORROW=$(req GET /api/local/pickup-slots | jq -r '[.data.days[] | select(.label=="明天") | .slots[]][0].startAt')
+[[ -n "$P62_TOMORROW" && "$P62_TOMORROW" != "null" ]] && ok "拿到明天的格" || fail "明天没有格"
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_TOMORROW\",\"pickupContact\":{\"phone\":\"13800002222\"}}")
+P62_O5=$(jq -r .data.orderId <<<"$R"); req POST "/api/orders/$P62_O5/pay" "$UT" >/dev/null
+sql "UPDATE orders SET paid_at=DATE_SUB(NOW(3), INTERVAL 20 MINUTE) WHERE id=$P62_O5;"
+sched '{}' >/dev/null
+assert_eq "明天的单付款 20 分钟未催" "$(sql "SELECT accept_reminded_at IS NULL FROM orders WHERE id=$P62_O5;")" "1"
+sql "UPDATE orders SET pickup_at=DATE_ADD(NOW(3), INTERVAL 30 MINUTE) WHERE id=$P62_O5;"   # 开始备餐 = 30−25 = 5 分钟后，−15 已过
+R=$(sched '{}')
+[[ "$(jq -r '.data.pickupUnaccepted // -1' <<<"$R")" -ge 1 ]] && ok "到点催单 pickupUnaccepted≥1" || fail "没催" "$R"
+assert_eq "accept_reminded_at 已写" "$(sql "SELECT accept_reminded_at IS NOT NULL FROM orders WHERE id=$P62_O5;")" "1"
+assert_eq "通用催单任务没重复催自取单（仍只有一次标记）" "$(sql "SELECT COUNT(*) FROM orders WHERE id=$P62_O5 AND accept_reminded_at IS NOT NULL;")" "1"
+
+echo "-- ⑬ 过时未取提醒一次 → 自动完成；自取单不被取消申请自动驳回任务碰 --"
+req POST "/api/admin/orders/$P62_O5/accept" "$AT" >/dev/null
+req POST "/api/admin/orders/$P62_O5/pickup-ready" "$AT" >/dev/null
+assert_eq "O5 待取餐" "$(p62_ord "$P62_O5" | jq -r .data.status)" "SHIPPED"
+sql "UPDATE orders SET pickup_at=DATE_SUB(NOW(3), INTERVAL 40 MINUTE) WHERE id=$P62_O5;"
+R=$(sched '{"pickupUnpickedMin":30,"pickupAutoCompleteMin":120}')
+[[ "$(jq -r '.data.pickupUnpicked // -1' <<<"$R")" -ge 1 ]] && ok "过时未取提醒 ≥1" || fail "未提醒" "$R"
+assert_eq "仍是 SHIPPED（120 分钟未到）" "$(p62_ord "$P62_O5" | jq -r .data.status)" "SHIPPED"
+R=$(sched '{"pickupUnpickedMin":30,"pickupAutoCompleteMin":120}')
+assert_eq "第二轮不重复提醒" "$(jq -r '.data.pickupUnpicked // -1' <<<"$R")" "0"
+R=$(sched '{"pickupUnpickedMin":30,"pickupAutoCompleteMin":30}')
+[[ "$(jq -r '.data.pickupAutoComplete // -1' <<<"$R")" -ge 1 ]] && ok "自动完成 ≥1" || fail "未自动完成" "$R"
+assert_eq "O5 → COMPLETED" "$(p62_ord "$P62_O5" | jq -r .data.status)" "COMPLETED"
+# 自动驳回任务：造一张 PREPARING 且申请取消、接单已超 10 分钟的自取单，跑一轮，申请必须还在
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_TOMORROW\",\"pickupContact\":{\"phone\":\"13800003333\"}}")
+P62_O6=$(jq -r .data.orderId <<<"$R"); req POST "/api/orders/$P62_O6/pay" "$UT" >/dev/null
+req POST "/api/admin/orders/$P62_O6/accept" "$AT" >/dev/null
+req POST "/api/orders/$P62_O6/cancel-request" "$UT" '{"note":"不要了"}' >/dev/null
+sql "UPDATE orders SET accepted_at=DATE_SUB(NOW(3), INTERVAL 10 MINUTE) WHERE id=$P62_O6;"
+sched '{"cancelAutoRejectMin":1}' >/dev/null
+assert_eq "自取单的取消申请不被自动驳回" "$(sql "SELECT cancel_requested_at IS NOT NULL FROM orders WHERE id=$P62_O6;")" "1"
+req POST "/api/admin/orders/$P62_O6/cancel-request/approve" "$AT" >/dev/null
+
+echo "-- 收尾：恢复同城设置、停用本段券模板、清本段打印作业 --"
+req PUT /api/admin/settings/local-delivery "$AT" "$P62_ORIG" >/dev/null
+for t in ${P62_TID:-} ${P62_TID2:-}; do req PUT "/api/admin/coupon-templates/$t" "$AT" '{"status":"OFF"}' >/dev/null 2>&1 || true; done
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+sql "DELETE FROM print_jobs WHERE order_id IN ($P62_O1,$P62_O3,$P62_O4,$P62_O5,$P62_O6);"
+# O4 只用来验小票，仍是 PAID：取消掉，免得下一轮的「未接单重复播报」一直催它
+sql "UPDATE orders SET status='CANCELLED', cancelled_at=NOW(3), cancel_reason='e2e 收尾' WHERE id=$P62_O4 AND status='PAID';"

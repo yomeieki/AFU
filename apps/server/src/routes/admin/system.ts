@@ -125,6 +125,9 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         expressUnknownMin: num(body.expressUnknownMin),
         expressStaleIntervalMin: num(body.expressStaleIntervalMin),
         expressPickedStaleDays: num(body.expressPickedStaleDays),
+        // 到店自取（批次一）：过时未取提醒 / 自动完成的分钟阈值
+        pickupUnpickedMin: num(body.pickupUnpickedMin),
+        pickupAutoCompleteMin: num(body.pickupAutoCompleteMin),
       })
     )
   } catch (e) {
