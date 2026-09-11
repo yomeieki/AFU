@@ -103,9 +103,9 @@
       <text class="sum-k">自取优惠</text>
       <text class="sum-v sum-cut">−¥{{pricefmt.fen(pickupDiscount)}}</text>
     </view>
-    <view wx:if="{{discount > 0}}" class="sum-row">
+    <view wx:if="{{couponDiscount > 0}}" class="sum-row">
       <text class="sum-k">优惠券</text>
-      <text class="sum-v sum-cut">−¥{{pricefmt.fen(discount)}}</text>
+      <text class="sum-v sum-cut">−¥{{pricefmt.fen(couponDiscount)}}</text>
     </view>
     <view wx:if="{{pointsUsed > 0}}" class="sum-row">
       <text class="sum-k">积分赠品</text>

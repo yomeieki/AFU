@@ -68,3 +68,13 @@ test('时段：默认选第一个可选格；今天为空时落到明天；已�
   assert.equal(st.firstSlot({ days: [] }), null)
   assert.equal(st.firstSlot(null), null)
 })
+test('优先级：阻塞 > 未选时段 > 时段失效 > 手机号 > 起送 > 优惠重算 > 提交中', function () {
+  const all = { blockReason: 'x', hasSlot: false, slotStale: true, phoneValid: false, belowMinGap: 500, benefitsLoading: true, submitting: true, payAmount: 100 }
+  assert.equal(st.pickupCheckoutAction(all).text, '暂不可自取')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).text, '请选择取餐时间')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true })).action, 'reslot')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false })).text, '请填写手机号')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true })).text, '还差 ¥5.00 起')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0 })).text, '提交订单')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, benefitsLoading: false })).text, '提交中')
+})

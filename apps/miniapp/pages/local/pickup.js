@@ -51,6 +51,7 @@ Page({
     couponId: null,
     gifts: [],
     discount: 0,
+    couponDiscount: 0,
     pointsUsed: 0,
     benefitsLoading: false,
     // 金额
@@ -140,23 +141,30 @@ Page({
           return { date: d.date, label: d.label, slots: d.slots || [], empty: !(d.slots && d.slots.length) }
         })
         var patch = { days: days, slotsLoading: false }
-        if (view.blocked) {
+        var blocked = !!view.blocked
+        if (blocked) {
           // 服务端说这会儿不能自取（休业/暂停/未开通）：清选择、阻塞提交，文案用它给的
           patch.selected = null
           patch.slotStale = false
           patch.blockReason = view.blocked.text || '暂不可自取'
           patch.headNotice = view.blocked.text || ''
-        } else if (keepSelection && self.data.selected) {
-          // 已选的格子还在就留着；不在了标 stale，按钮变成「重新选择时间」
+        } else if (self.data.selected) {
+          // 已选的格子还在就留着（无论是不是 keepSelection——别覆盖顾客在请求在途时刚点的格）；
+          // 不在了标 stale，按钮变成「重新选择时间」
           patch.slotStale = !st.slotOffered(view, self.data.selected.startAt)
+          patch.blockReason = ''
+          patch.activeDay = Math.min(self.data.activeDay || 0, Math.max(0, days.length - 1))
         } else {
           var first = st.firstSlot(view)
           patch.selected = first ? decorateSlot(first.slot, days[first.dayIndex].label) : null
           patch.activeDay = first ? first.dayIndex : 0
           patch.slotStale = false
+          patch.blockReason = ''
         }
         self.setData(patch)
         self.recompute()
+        // 从 blocked 恢复为可用：让页头通知按最新 meta 重算（applyMeta 若仍阻塞会重新写回 blockReason）
+        if (!blocked) self.loadMeta()
       })
       .catch(function(err) {
         if (seq !== self._slotSeq) return
@@ -176,6 +184,7 @@ Page({
     var payAmount = d.items.length ? amounts.payAmount : null
     this.setData({
       pickupDiscount: amounts.pickupDiscount,
+      couponDiscount: amounts.couponDiscount,
       payAmount: payAmount,
       belowMinGap: gap,
       action: st.pickupCheckoutAction({
@@ -319,8 +328,9 @@ Page({
     var act = this.data.action || {}
     var self = this
     if (act.action === 'reslot') {
+      this.setData({ selected: null, slotStale: false, pickerOpen: true })
+      this.recompute()
       this.loadSlots(false)
-      this.setData({ pickerOpen: true })
       return
     }
     if (act.disabled || act.action !== 'submit') return
@@ -328,7 +338,7 @@ Page({
   },
 
   doSubmit: function() {
-    if (this.data.submitting || !this.data.selected) return
+    if (this.data.submitting || !this.data.selected || this.data.slotStale || !this.data.action || this.data.action.action !== 'submit') return
     this.setData({ submitting: true })
     this.recompute()
     var self = this
@@ -377,6 +387,7 @@ Page({
     if (code === 42281) {
       wx.showToast({ title: err.message || '该时段已不可选，请重新选择', icon: 'none', duration: 2500 })
       this.setData({ selected: null, slotStale: false })
+      this.recompute()
       this.loadSlots(false)
       this.setData({ pickerOpen: true })
       return
