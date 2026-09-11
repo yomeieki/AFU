@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import '../pages/Workbench.css'
 import type { OrderChannel } from '../types'
-import { approveExpressCancelRequest, precancelDelivery, cancelDelivery, refundOrder } from '../api/admin'
+import { approveExpressCancelRequest, approvePickupCancelRequest, precancelDelivery, cancelDelivery, refundOrder } from '../api/admin'
 
 interface Props {
   orderId: number
@@ -44,6 +44,7 @@ export default function CancelAndRefundModal({
   orderId, receiverPhone, amountFen, channel, deliveryStatusLabel, hasActiveDelivery, expressBookingStatus, onClose, onDone,
 }: Props) {
   const isExpress = channel === 'EXPRESS'
+  const isPickup = channel === 'PICKUP'
   const isUnknown = isExpress && expressBookingStatus === 'UNKNOWN'
   const [step, setStep] = useState<1 | 2>(hasActiveDelivery ? 1 : 2)
   const [cancelFee, setCancelFee] = useState<number | null | undefined>(undefined) // undefined=还没问到
@@ -106,12 +107,51 @@ export default function CancelAndRefundModal({
     }
   }
 
+  // 自取一步走：服务端 approve = 全额退并清标记（没有配送单/预约要取消）
+  const doApprovePickup = async () => {
+    setBusy(true); setError('')
+    try { await approvePickupCancelRequest(orderId); onDone() }
+    catch (e) { setError(apiMessage(e, '处理失败，请重试')) }
+    finally { setBusy(false) }
+  }
+
   const stepDot = (n: 1 | 2, text: string) => (
     <span className="wb__step" style={step === n ? { color: 'var(--text-1)', fontWeight: 600 } : undefined}>
       <span className="wb__step-dot" style={step === n ? { background: chColor(channel), color: '#fff' } : undefined}>{n}</span>
       {text}
     </span>
   )
+
+  if (isPickup) {
+    return (
+      <div className="wb__modal-mask" role="dialog" aria-modal="true">
+        <div className="wb__modal">
+          <div className="wb__modal-head">
+            <span>处理取消申请</span>
+            <button className="wb__iconbtn" onClick={onClose} disabled={busy} aria-label="关闭"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="wb__modal-body">
+            <div className="wb__meta">尾号 <b>{receiverPhone.slice(-4)}</b></div>
+            <p>同意顾客的取消申请：把货款原路退回顾客微信，订单转为已退款终态；已经做了的菜由门店自行处理。</p>
+            <p className="wb__meta">顾客会看到：退款通知，1-3 个工作日到账。不同意请关闭本窗，在卡片上点「驳回」。</p>
+            <div className="wb__redbar">
+              {amountFen > 0
+                ? `确认后退款 ¥${yuan(amountFen)} 原路退回，此操作不可撤销。`
+                : '本单已无可退余额，无需再退款，可直接关闭。'}
+            </div>
+          </div>
+          {error && <div className="wb__redbar wb__modal-error">{error}</div>}
+          <div className="wb__modal-foot">
+            <button className="wb__btn wb__btn--ghost" onClick={onClose} disabled={busy}>暂不处理</button>
+            <button className="wb__btn wb__btn--fill" style={{ background: chColor(channel) }}
+              disabled={busy || amountFen <= 0} onClick={() => void doApprovePickup()}>
+              {busy ? '处理中…' : '同意取消并退款'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (isExpress) {
     return (

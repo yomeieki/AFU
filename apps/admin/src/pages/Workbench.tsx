@@ -19,7 +19,8 @@ import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
   callRider, cancelDelivery, cancelExpressBooking, getExpressBooking,
   getLocalSettings, getOrder, getOrderDelivery, getWorkbenchSnapshot, markOrderDelivered, modifyExpressBooking,
-  precancelDelivery, rejectCancelRequest, rejectExpressCancelRequest, rejectOrder, reprintOrder,
+  pickedUpOrder, pickupReadyOrder,
+  precancelDelivery, rejectCancelRequest, rejectExpressCancelRequest, rejectOrder, rejectPickupCancelRequest, reprintOrder,
   resetKd100Circuit, selfDeliverOrder, shipOrder, voidExpressBooking, voidUnknownDelivery,
   refreshOrderQuote, getCourierLive,
 } from '../api/admin'
@@ -1626,7 +1627,9 @@ export default function Workbench() {
     what: '顾客的取消申请被驳回，订单继续制作/备货；顾客端显示「商家未同意取消」。',
     customer: '顾客看到「商家未同意取消」。',
     cost: '不产生费用。',
-    run: () => (card.channel === 'EXPRESS' ? rejectExpressCancelRequest(card.orderId) : rejectCancelRequest(card.orderId)),
+    run: () => (card.channel === 'EXPRESS' ? rejectExpressCancelRequest(card.orderId)
+      : card.channel === 'PICKUP' ? rejectPickupCancelRequest(card.orderId)
+        : rejectCancelRequest(card.orderId)),
   })
 
   // ── 操作区（§6 分级确认：改状态或花钱的全弹；打给骑手/看进度/查物流不弹）──
@@ -1744,6 +1747,42 @@ export default function Workbench() {
       run: () => voidExpressBooking(order.id),
     }
 
+    // ── 自取（spec §6.1）：只有三颗状态键 + 打给顾客。没有骑手、自送、小费、进度。──
+    if (ch === 'PICKUP') {
+      const pk = card.pickup
+      const cancelPending = !!pk?.cancelRequested
+      if (colKey === 'pending') {
+        btns.push(fill('accept', '接单', () => confirm({
+          title: '接单', channel: ch, confirmText: '确认接单', okMsg: '已接单',
+          what: `订单转入「备餐中」。${pk?.prepStartAt ? `建议 ${hhmm(pk.prepStartAt)} 开始备餐，` : ''}做好后点「已备好」通知顾客来取。`,
+          customer: '顾客小程序显示「商家已接单」。',
+          cost: '不产生任何费用。',
+          run: () => acceptOrder(order.id),
+        })))
+      }
+      if (colKey === 'preparing') {
+        btns.push(fill('ready', '已备好', () => confirm({
+          title: '已备好', channel: ch, confirmText: '确认已备好', okMsg: '已通知顾客取餐',
+          what: '订单转「待取餐」，给顾客发取餐提醒。',
+          customer: '顾客收到「可以来取餐了」的提醒，小程序显示「待取餐」。',
+          cost: '不产生费用。',
+          amber: cancelPending ? '这单有未处理的取消申请：点「已备好」视同驳回申请，顾客端会显示「商家未同意取消」。' : undefined,
+          run: () => pickupReadyOrder(order.id),
+        })))
+      }
+      if (colKey === 'delivering') {
+        btns.push(fill('picked', '已取走', () => confirm({
+          title: '已取走', channel: ch, confirmText: '确认已取走', okMsg: '已完成',
+          what: '顾客已把餐取走，订单转「已完成」。',
+          customer: '顾客小程序显示「已取餐」，之后可以评价或申请售后。',
+          cost: '不产生费用。',
+          run: () => pickedUpOrder(order.id),
+        })))
+      }
+      if (order.receiverPhone) btns.push(tel('call-customer', '打给顾客', order.receiverPhone))
+      return btns
+    }
+
     if (colKey === 'pending') {
       btns.push(fill('accept', '接单', () => confirm({
         title: '接单', channel: ch, confirmText: '确认接单', okMsg: '已接单',
@@ -1850,23 +1889,23 @@ export default function Workbench() {
     if (!drawer) return null
     const { card, colKey } = drawer
     const local = card.channel === 'LOCAL'
+    const pickup = card.channel === 'PICKUP' ? card.pickup : null
     const o = detail?.order
     const d = detail?.delivery ?? null
     // 与卡片同规则：已完成不再用会变色的等待胶囊（I7）；紧急度也走同一个函数，
-    // 否则抽屉里的胶囊会和它背后那张卡片显示不同的颜色
-    const w = colKey === 'done'
+    // 否则抽屉里的胶囊会和它背后那张卡片显示不同的颜色——自取单与 Card 共用 pickupCapsule，
+    // 不然抽屉和它背后那张卡片会显示不一致的等待文案/颜色（见 pickupCapsule 顶部注释）
+    const urg = urgencyOf(card, colKey, now, prepMin)
+    const w = pickupCapsule(card, colKey, now, urg) ?? (colKey === 'done'
       ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' }
-      : waitLabel(card.waitSince, now, urgencyOf(card, colKey, now, prepMin))
+      : waitLabel(card.waitSince, now, urg))
     const canReject = !!o && ['PENDING_PAYMENT', 'PAID', 'PREPARING'].includes(o.status)
     return (
       <>
         <div className="wb__mask" onClick={closeDrawer} />
         <aside className="wb__drawer" role="dialog" aria-modal="true">
           <div className="wb__drawer-head">
-            <span className={`wb__badge ${local ? 'wb__badge--local' : 'wb__badge--express'}`}>
-              {local ? <Bike className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
-              {local ? '同城配送' : '全国邮寄'}
-            </span>
+            <ChannelBadge channel={card.channel} />
             <span><span className="wb__shortno">{card.receiver.phone ? `尾号${card.receiver.phone.slice(-4)}` : shortNo(card.orderNo)}</span></span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
@@ -1886,7 +1925,7 @@ export default function Workbench() {
 
             <div className="wb__block">
               <div className="wb__actions" style={{ alignItems: 'center' }}>
-                <StatusBadge status={o?.status ?? card.status} />
+                <StatusBadge status={o?.status ?? card.status} deliveryType={o?.deliveryType ?? card.channel} />
                 {local && d && <StatusBadge status={d.status} />}
                 <span className={`wb__wait ${w.cls}`}>{w.text}</span>
                 {local && d?.provider === 'SELF' && <span className="wb__meta">店内自送</span>}
@@ -1911,35 +1950,46 @@ export default function Workbench() {
             </div>
 
             <div className="wb__block">
-              <div className="wb__block-t">收货信息</div>
-              <div className="wb__line"><span>收货人</span><span>{o?.receiverName ?? card.receiver.name}</span></div>
+              <div className="wb__block-t">{pickup ? '取餐信息' : '收货信息'}</div>
+              <div className="wb__line"><span>{pickup ? '取餐人' : '收货人'}</span><span>{o?.receiverName ?? card.receiver.name}</span></div>
               <div className="wb__line">
                 <span>电话</span>
                 <a className="wb__tel" style={{ color: chColor(card.channel) }} href={`tel:${o?.receiverPhone ?? card.receiver.phone}`}>{o?.receiverPhone ?? card.receiver.phone}</a>
               </div>
-              <div className="wb__line"><span>地址</span><span style={{ textAlign: 'right' }}>{o?.receiverDisplayAddress ?? o?.receiverFullAddress ?? '--'}</span></div>
-              {local ? (
+              {pickup ? (
                 <>
-                  {card.local?.distanceM != null && (
-                    <div className="wb__line"><span>距离</span><span>{(card.local.distanceM / 1000).toFixed(1)} km</span></div>
-                  )}
-                  <div className="wb__line"><span>预计送达</span><span>{hhmm(o?.estimatedDeliveryAt)}</span></div>
+                  <div className="wb__line"><span>取餐时段</span><span>{pickup.slotLabel || hhmm(pickup.pickupAt)}</span></div>
+                  <div className="wb__line"><span>开始备餐</span><span>{hhmm(pickup.prepStartAt)}</span></div>
+                  {pickup.pickupReadyAt && <div className="wb__line"><span>已备好</span><span>{dateTime(pickup.pickupReadyAt)}</span></div>}
+                  {!!o?.completedAt && <div className="wb__line"><span>已取走</span><span>{dateTime(o.completedAt)}</span></div>}
                 </>
               ) : (
                 <>
-                  <div className="wb__line"><span>快递公司</span><span>{o?.shipment?.expressCompany ?? card.express?.expressCompany ?? '未发货'}</span></div>
-                  <div className="wb__line">
-                    <span>运单号</span>
-                    <span>
-                      {o?.shipment?.expressNo ?? card.express?.expressNo ?? '--'}
-                      {(o?.shipment?.expressNo ?? card.express?.expressNo) && (
-                        <button className="wb__iconbtn" style={{ marginLeft: 6 }}
-                          onClick={() => copyText((o?.shipment?.expressNo ?? card.express?.expressNo)!)}>
-                          <Copy className="w-3 h-3" />复制
-                        </button>
+                  <div className="wb__line"><span>地址</span><span style={{ textAlign: 'right' }}>{o?.receiverDisplayAddress ?? o?.receiverFullAddress ?? '--'}</span></div>
+                  {local ? (
+                    <>
+                      {card.local?.distanceM != null && (
+                        <div className="wb__line"><span>距离</span><span>{(card.local.distanceM / 1000).toFixed(1)} km</span></div>
                       )}
-                    </span>
-                  </div>
+                      <div className="wb__line"><span>预计送达</span><span>{hhmm(o?.estimatedDeliveryAt)}</span></div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="wb__line"><span>快递公司</span><span>{o?.shipment?.expressCompany ?? card.express?.expressCompany ?? '未发货'}</span></div>
+                      <div className="wb__line">
+                        <span>运单号</span>
+                        <span>
+                          {o?.shipment?.expressNo ?? card.express?.expressNo ?? '--'}
+                          {(o?.shipment?.expressNo ?? card.express?.expressNo) && (
+                            <button className="wb__iconbtn" style={{ marginLeft: 6 }}
+                              onClick={() => copyText((o?.shipment?.expressNo ?? card.express?.expressNo)!)}>
+                              <Copy className="w-3 h-3" />复制
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -2071,7 +2121,9 @@ export default function Workbench() {
               <div className="wb__block-t">金额明细</div>
               <div className="wb__line"><span>商品小计</span><span className="wb__amt">¥{yuan(o?.totalAmount ?? 0)}</span></div>
               {/* 券在「小计」与「运费」之间——顺序与顾客在结算页看到的一致（小计→券→运费→实付），
-                  也与小票上那三行一致。店员三处对账时能逐行对上，不用换算 */}
+                  也与小票上那三行一致。店员三处对账时能逐行对上，不用换算。自取优惠在券之前——
+                  与小程序结算页一致（小计 → 自取优惠 → 券） */}
+              {!!o?.pickupDiscountAmount && <div className="wb__line"><span>自取优惠</span><span className="wb__amt">-¥{yuan(o.pickupDiscountAmount)}</span></div>}
               {!!o?.discountAmount && <div className="wb__line"><span>优惠券</span><span className="wb__amt">-¥{yuan(o.discountAmount)}</span></div>}
               <div className="wb__line"><span>配送费/运费</span><span className="wb__amt">¥{yuan(o?.shippingFee ?? 0)}</span></div>
               <div className="wb__line"><span>顾客实付</span><span className="wb__amt">¥{yuan(o?.actualAmount ?? card.amountFen)}</span></div>
@@ -2221,13 +2273,16 @@ export default function Workbench() {
             receiverPhone={card.receiver.phone}
             amountFen={o.remainingRefundable}
             channel={ch}
-            deliveryStatusLabel={ch === 'EXPRESS' ? (card.express?.booking?.statusLabel ?? null) : (card.local?.delivery?.statusLabel ?? null)}
+            deliveryStatusLabel={ch === 'EXPRESS' ? (card.express?.booking?.statusLabel ?? null)
+              : ch === 'PICKUP' ? null
+                : (card.local?.delivery?.statusLabel ?? null)}
             hasActiveDelivery={ch === 'EXPRESS'
               ? !!card.express?.booking && ['BOOKED', 'ACCEPTED', 'UNKNOWN'].includes(card.express.booking.status)
-              : !!d && d.activeOrderId === o.id && !TERMINAL_DELIVERY.includes(d.status)}
+              : ch === 'PICKUP' ? false
+                : !!d && d.activeOrderId === o.id && !TERMINAL_DELIVERY.includes(d.status)}
             expressBookingStatus={ch === 'EXPRESS' ? (card.express?.booking?.status ?? null) : null}
             onClose={close}
-            onDone={async () => { await afterAction(ch === 'EXPRESS' ? '已取消预约并退款' : '已取消配送并退款'); closeDrawer() }}
+            onDone={async () => { await afterAction(ch === 'EXPRESS' ? '已取消预约并退款' : ch === 'PICKUP' ? '已同意取消并退款' : '已取消配送并退款'); closeDrawer() }}
           />
         )
       default:
