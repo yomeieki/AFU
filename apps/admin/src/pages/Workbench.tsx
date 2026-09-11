@@ -11,8 +11,8 @@ import { useNavigate } from 'react-router-dom'
 import { Bell, Bike, CircleAlert, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
-  Channel, CourierLive, DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView,
-  LocalDeliverySettings, Order, OrderItem, QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
+  CourierLive, DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView,
+  LocalDeliverySettings, Order, OrderChannel, OrderItem, QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
 } from '../types'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
@@ -126,7 +126,7 @@ const shortNo = (no: string | null | undefined) => (no ? `#${no.slice(-4)}` : '-
 /** 米 → 给人读的距离。1 km 以内用米（「800 m」比「0.8 km」好判断要不要等） */
 const km = (m: number | null | undefined) =>
   m == null ? '--' : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`
-const chColor = (c: Channel) => (c === 'LOCAL' ? 'var(--local)' : 'var(--express)')
+const chColor = (c: OrderChannel) => (c === 'LOCAL' ? 'var(--local)' : c === 'PICKUP' ? 'var(--pickup)' : 'var(--express)')
 /** 服务端错误码 42221/42225/42228/42232-42238 的 message 是写给店员看的，不能吞掉换成「操作失败」 */
 const apiMessage = (e: unknown, fallback: string) =>
   (e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback
@@ -160,7 +160,7 @@ type Urgency = '' | 'warn' | 'late'
  * 邮寄单图例写明「可以稍后处理」，给一套宽得多的阈值：只有真被忘了才亮。
  * 返回 null = 这一列不看停留时长（配送中在路上多久取决于距离，只看承诺送达）。
  */
-function dwellBudget(colKey: ColKey, channel: Channel, prepMin: number): [number, number] | null {
+function dwellBudget(colKey: ColKey, channel: OrderChannel, prepMin: number): [number, number] | null {
   if (channel === 'EXPRESS') return [60, 240]
   switch (colKey) {
     case 'pending': return [2, 5]
@@ -210,7 +210,7 @@ function waitLabel(sinceIso: string, now: number, urgency: Urgency): { text: str
 }
 
 /** ≤2 样列全名；≥3 样给「前两菜名 等 N 样 / M 份」，「等 N 样」用渠道色（§4） */
-function itemsSummary(items: WorkbenchCard['items'], channel: Channel): ReactNode {
+function itemsSummary(items: WorkbenchCard['items'], channel: OrderChannel): ReactNode {
   if (items.kinds <= 2) return items.first.join(' · ')
   return (
     <>
@@ -263,7 +263,7 @@ function WhatBlock({ what, customer, cost }: { what: string; customer: string; c
 }
 
 function FillButton({ channel, onClick, disabled, children }: {
-  channel: Channel; onClick: () => void; disabled?: boolean; children: ReactNode
+  channel: OrderChannel; onClick: () => void; disabled?: boolean; children: ReactNode
 }) {
   return (
     <button className="wb__btn wb__btn--fill" style={{ background: chColor(channel) }} disabled={disabled} onClick={onClick}>
@@ -274,7 +274,7 @@ function FillButton({ channel, onClick, disabled, children }: {
 
 interface ConfirmSpec {
   title: string
-  channel: Channel
+  channel: OrderChannel
   what: string
   customer: string
   cost: string
@@ -466,7 +466,7 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
 
 /** 取消配送 / 取消呼叫（同城）或取消取件预约（邮寄）：先问运力方取消费，把钱写进确认文案再让人点（§6） */
 function CancelDeliveryModal({ orderId, channel, title, onClose, onDone }: {
-  orderId: number; channel: Channel; title: string; onClose: () => void; onDone: (msg: string) => void
+  orderId: number; channel: OrderChannel; title: string; onClose: () => void; onDone: (msg: string) => void
 }) {
   const isExpress = channel === 'EXPRESS'
   // 邮寄不查 precancel 费：快递100 没有这个接口，规则是「上门前取消不收费；已取件要联系快递公司」，
@@ -752,7 +752,7 @@ const REJECT_REASONS: { value: RejectReason; label: string }[] = [
 
 /** 拒单（§7）：必须选原因；售罄联动下架；其他原因强制说明 ≤40 字；红条写明退款金额 */
 function RejectModal({ order, channel, onClose, onDone }: {
-  order: Order; channel: Channel; onClose: () => void; onDone: (msg: string) => void
+  order: Order; channel: OrderChannel; onClose: () => void; onDone: (msg: string) => void
 }) {
   const [reason, setReason] = useState<RejectReason | null>(null)
   const [note, setNote] = useState('')
@@ -1379,7 +1379,7 @@ export default function Workbench() {
     return () => document.removeEventListener('fullscreenchange', onFsChange)
   }, [])
 
-  const loadDetail = useCallback(async (orderId: number, channel: Channel) => {
+  const loadDetail = useCallback(async (orderId: number, channel: OrderChannel) => {
     const seq = ++detailSeqRef.current
     setDetailLoading(true)
     try {
@@ -2093,7 +2093,7 @@ export default function Workbench() {
     const card = drawer?.card
     const o = detail?.order
     const d = detail?.delivery ?? null
-    const ch: Channel = card?.channel ?? 'LOCAL'
+    const ch: OrderChannel = card?.channel ?? 'LOCAL'
     const close = () => setModal(null)
     if (modal.kind === 'confirm') return <ConfirmModal spec={modal.spec} onClose={close} onDone={afterAction} />
     // 退出不依赖抽屉里的订单详情，必须在 !o || !card 的早退之前处理——顶栏随时可能点「退出工作台」

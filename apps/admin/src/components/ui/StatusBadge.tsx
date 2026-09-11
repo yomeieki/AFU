@@ -26,17 +26,30 @@ const STATUS_MAP: Record<string, { label: string; className: string }> = {
   UNKNOWN: { label: '状态未确认', className: 'bg-red-50 text-red-600' },
 }
 
+/** 自取单复用 PAID/SHIPPED/COMPLETED 三个状态，但店员看到的词不同（spec P8） */
+const PICKUP_STATUS_LABEL: Record<string, string> = { PAID: '待接单', SHIPPED: '待取餐', COMPLETED: '已取餐' }
+/** 同城外送的 SHIPPED 是「配送中」——StatusBadge 默认是邮寄的「已发货」 */
+const LOCAL_STATUS_LABEL: Record<string, string> = { SHIPPED: '配送中' }
+
+export function orderStatusLabel(status: string, deliveryType?: string | null): string {
+  const base = STATUS_MAP[status]?.label ?? status
+  if (deliveryType === 'PICKUP') return PICKUP_STATUS_LABEL[status] ?? base
+  if (deliveryType === 'LOCAL') return LOCAL_STATUS_LABEL[status] ?? base
+  return base
+}
+
 interface StatusBadgeProps {
   status: string
   /** 覆盖默认文案（如二维码「已生成/未生成」等临时场景请直接用 label+tone） */
   label?: string
+  deliveryType?: string | null
 }
 
-export default function StatusBadge({ status, label }: StatusBadgeProps) {
+export default function StatusBadge({ status, label, deliveryType }: StatusBadgeProps) {
   const conf = STATUS_MAP[status] ?? { label: status, className: 'bg-gray-100 text-gray-500' }
   return (
     <span className={`inline-block px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${conf.className}`}>
-      {label ?? conf.label}
+      {label ?? orderStatusLabel(status, deliveryType)}
     </span>
   )
 }

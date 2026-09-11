@@ -42,6 +42,9 @@ import type {
   ExpressBookingEventInfo,
   ExpressBookingQuotes,
 } from '../types'
+import type { PauseScope } from '../utils/pause-scope'
+import { endOfTodayIso } from '../utils/pause-scope'
+import { todayKey } from '../utils/time'
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -96,7 +99,9 @@ export const getOrders = (params?: {
   status?: string
   /** 订单号 / 收货人 / 手机号 模糊 */
   keyword?: string
-  deliveryType?: 'EXPRESS' | 'LOCAL' | 'ALL'
+  deliveryType?: 'EXPRESS' | 'LOCAL' | 'PICKUP' | 'ALL'
+  /** channel=LOCAL 一次看外送 + 自取；与 deliveryType 二选一，同时传时服务端以 deliveryType 为准 */
+  channel?: 'LOCAL' | 'EXPRESS'
 }) => client.get<ApiResponse<PaginatedData<Order>>>('/admin/orders', { params })
 
 export const getOrder = (id: number) =>
@@ -236,6 +241,35 @@ export const pauseLocal = (reason: string, until?: string) =>
 export const resumeLocal = () =>
   client.delete<ApiResponse<LocalDeliverySettings>>('/admin/settings/local-delivery/pause').then((r) => r.data.data)
 
+/** 读最新设置再整包写回一个补丁——服务端只有 paused 有专用端点，pickup.paused 与 holiday 走整包 PUT */
+async function patchLocalSettingsMerged(mutate: (fresh: LocalDeliverySettings) => LocalDeliverySettings) {
+  const fresh = await getLocalSettings()
+  return updateLocalSettings(mutate(fresh))
+}
+export const pausePickup = (reason: string, until: string | null = null) =>
+  patchLocalSettingsMerged((f) => ({ ...f, pickup: { ...f.pickup, paused: { reason, until } } }))
+export const resumePickup = () =>
+  patchLocalSettingsMerged((f) => ({ ...f, pickup: { ...f.pickup, paused: null } }))
+/** until = 'YYYY-MM-DD'（含当天仍休业，次日恢复），null = 手动恢复 */
+export const setHoliday = (until: string | null, reason: string) =>
+  patchLocalSettingsMerged((f) => ({ ...f, holiday: { until, reason } }))
+export const clearHoliday = () => patchLocalSettingsMerged((f) => ({ ...f, holiday: null }))
+
+/** 四选一落地。ALL_TODAY 两个开关都写同一个 until（上海当天 23:59:59），服务端 isPaused/isPickupPaused 按 until 自动失效 */
+export async function applyPauseScope(scope: PauseScope, input: { reason: string; until: string }) {
+  const reason = input.reason.trim()
+  switch (scope) {
+    case 'DELIVERY': return pauseLocal(reason)
+    case 'PICKUP': return pausePickup(reason)
+    case 'ALL_TODAY': {
+      const until = endOfTodayIso(todayKey())
+      await pauseLocal(reason, until)
+      return pausePickup(reason, until)
+    }
+    case 'HOLIDAY': return setHoliday(input.until, reason)
+  }
+}
+
 // 接单工作台
 export const getWorkbenchSnapshot = (fresh = false) =>
   client.get<ApiResponse<WorkbenchSnapshot>>('/admin/workbench/snapshot', { params: fresh ? { fresh: 1 } : undefined })
@@ -293,6 +327,18 @@ export const cancelDelivery = (id: number, reason?: string) =>
 // 驳回顾客的取消申请（同城）——邮寄单用上面的 rejectExpressCancelRequest
 export const rejectCancelRequest = (id: number) =>
   client.post<ApiResponse<Order>>(`/admin/local/orders/${id}/cancel-request/reject`)
+
+// ── 到店自取（spec 2026-09-11 §4.4；服务端 routes/admin/orders.ts）──
+/** PREPARING → SHIPPED（待取餐），发取餐提醒；有未处理取消申请视同驳回 */
+export const pickupReadyOrder = (id: number) => client.post<ApiResponse<Order>>(`/admin/orders/${id}/pickup-ready`)
+/** SHIPPED（待取餐）→ COMPLETED */
+export const pickedUpOrder = (id: number) => client.post<ApiResponse<Order>>(`/admin/orders/${id}/picked-up`)
+/** 同意自取单的取消申请 = 全额退并清标记 */
+export const approvePickupCancelRequest = (id: number) =>
+  client.post<ApiResponse<unknown>>(`/admin/orders/${id}/cancel-request/approve`)
+export const rejectPickupCancelRequest = (id: number) =>
+  client.post<ApiResponse<Order>>(`/admin/orders/${id}/cancel-request/reject`)
+
 export const addDeliveryTip = (id: number, amount: number) =>
   client.post<ApiResponse<{ tipFeeFen: number }>>(`/admin/local/orders/${id}/delivery/tip`, { amount })
 export const selfDeliverOrder = (id: number, data: { name: string; phone: string }) =>
@@ -391,7 +437,7 @@ export const issueUserCoupon = (userId: number, data: { templateId: number; rema
   client.post<ApiResponse<UserCouponRow>>(`/admin/users/${userId}/coupons`, data).then((r) => r.data.data)
 
 // 经营概览（三 tab 各一个接口）
-export const getOverviewStats = (params: StatsRangeParams & { channel?: 'ALL' | 'LOCAL' | 'EXPRESS' }) =>
+export const getOverviewStats = (params: StatsRangeParams & { channel?: 'ALL' | 'LOCAL' | 'EXPRESS' | 'PICKUP' }) =>
   client.get<ApiResponse<OverviewStats>>('/admin/stats/overview', { params })
 export const getLocalStats = (params: StatsRangeParams) =>
   client.get<ApiResponse<LocalStats>>('/admin/stats/local', { params })

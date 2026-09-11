@@ -1,6 +1,9 @@
 export type Channel = 'EXPRESS' | 'LOCAL'
 export const CHANNEL_LABEL: Record<Channel, string> = { EXPRESS: '全国邮寄', LOCAL: '同城配送' }
 
+/** 订单履约渠道：在销售渠道之上多一个「到店自取」（商品/购物车仍按 LOCAL 渠道，见 spec P14） */
+export type OrderChannel = Channel | 'PICKUP'
+
 export interface ApiResponse<T = unknown> {
   code: number
   message: string
@@ -179,6 +182,10 @@ export interface Order {
   distanceM?: number | null
   cancelRequestedAt?: string | null
   cancelRequestNote?: string | null
+  /** 自取单：取餐时段起点 / 备好时刻 / 自取优惠（分）。非自取单为 null/0 */
+  pickupAt?: string | null
+  pickupReadyAt?: string | null
+  pickupDiscountAmount?: number
   createdAt: string
   items: OrderItem[]
   shipment?: Shipment | null
@@ -315,11 +322,29 @@ export interface ExpressSettings {
   costAlertRatio: number
 }
 
+export interface PickupSettings {
+  enabled: boolean
+  paused: { until: string | null; reason: string } | null
+  /** 取餐时段粒度（分） */
+  slotMinutes: number
+  /** 接单缓冲（分）：最早可取 = 现在 + 缓冲 + 备餐，向上取整到粒度 */
+  acceptBufferMin: number
+  /** 可预订天数：0=仅今天，1=今天+明天 */
+  daysAhead: number
+  minOrderAmountFen: number
+  /** PERCENT 的 value 是「按几折收」（90 = 九折，减 10%）；FIXED 的 value 是立减分数 */
+  discount: { type: 'NONE' | 'PERCENT' | 'FIXED'; value: number }
+  autoCompleteAfterMin: number
+  unpickedRemindAfterMin: number
+}
+
 /** 同城配送设置（与服务端 services/local-settings.ts 同构；金额分、坐标微度） */
 export interface LocalDeliverySettings {
   version: number
   enabled: boolean
   paused: { until: string | null; reason: string } | null
+  pickup: PickupSettings
+  holiday: { until: string | null; reason: string } | null
   store: { name: string; phone: string; province: string; city: string; district: string; address: string; latE6: number | null; lngE6: number | null }
   radiusKm: number
   detourFactor: number
@@ -501,7 +526,7 @@ export interface ExpressBookingQuotes {
 export interface WorkbenchCard {
   orderId: number
   orderNo: string
-  channel: Channel
+  channel: OrderChannel
   status: string
   /** 本列计时锚点 ISO：pending=paidAt / preparing=acceptedAt / waitingCourier=delivery.calledAt / delivering=同城取货或邮寄发货 / done=completedAt */
   waitSince: string
@@ -541,6 +566,18 @@ export interface WorkbenchCard {
       callFailed?: boolean
     } | null
   } | null
+  /** 自取单（deliveryType=PICKUP）。与服务端 workbench.ts toCard 的 pickup 同构 */
+  pickup: {
+    pickupAt: string | null
+    pickupReadyAt: string | null
+    /** 开始备餐时刻 = pickupAt − 备餐时长 − acceptBufferMin（服务端 prepStartAt） */
+    prepStartAt: string | null
+    /** 「今天 12:00–12:30」，服务端按快照时刻算好 */
+    slotLabel: string
+    cancelRequested: boolean
+    cancelRejected: 'AUTO' | 'MANUAL' | null
+    acceptedAt: string | null
+  } | null
 }
 
 /** 工作台看板快照。与服务端 GET /admin/workbench/snapshot 响应同构 */
@@ -561,6 +598,10 @@ export interface WorkbenchSnapshot {
   /** 邮寄版本的「甲」口径宽限分钟数，与 acceptGraceMin 各自可调，不能混用 */
   expressAcceptGraceMin: number
   paused: { reason: string; until: string | null } | null
+  pickupEnabled: boolean
+  pickupPaused: { reason: string; until: string | null } | null
+  /** 休业总开关（P12）：外送与自取一起停，邮寄不受影响。until 为 'YYYY-MM-DD' 或 null */
+  holiday: { until: string | null; reason: string } | null
   /** 多台打印机取「最差」状态归并（见服务端 workbench.ts 的 summarizePrinterStatus） */
   printer: {
     status: 'NOT_CONNECTED' | 'ONLINE' | 'ABNORMAL' | 'OFFLINE'
@@ -830,8 +871,8 @@ export interface ChannelAgg { orderCount: number; revenueFen: number }
 export interface OverviewStats {
   range: StatsRangeOut
   kpi: { revenueFen: number; refundFen: number; orderCount: number; avgOrderFen: number; prev: { revenueFen: number; refundFen: number; orderCount: number; avgOrderFen: number } }
-  channels: { LOCAL: ChannelAgg; EXPRESS: ChannelAgg }
-  trend: { date: string; LOCAL: ChannelAgg; EXPRESS: ChannelAgg }[]
+  channels: { LOCAL: ChannelAgg; EXPRESS: ChannelAgg; PICKUP: ChannelAgg }
+  trend: { date: string; LOCAL: ChannelAgg; EXPRESS: ChannelAgg; PICKUP: ChannelAgg }[]
   hourly: number[]
   customers: { users: number; newUsers: number; returningUsers: number; repeatRate: number | null }
   hotProducts: { productId: number; name: string; qty: number; revenueFen: number }[]

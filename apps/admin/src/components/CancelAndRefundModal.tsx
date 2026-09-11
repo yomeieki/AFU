@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import '../pages/Workbench.css'
-import type { Channel } from '../types'
+import type { OrderChannel } from '../types'
 import { approveExpressCancelRequest, precancelDelivery, cancelDelivery, refundOrder } from '../api/admin'
 
 interface Props {
@@ -19,7 +19,7 @@ interface Props {
   /** 本次要退的金额（分）——传订单的可退余额 */
   amountFen: number
   /** 卡片渠道，确认按钮取这个颜色（§6） */
-  channel: Channel
+  channel: OrderChannel
   /** 在途配送单/取件预约状态文案，用于第一步的说明 */
   deliveryStatusLabel?: string | null
   /** 无在途配送单/无活跃取件预约时，同城直接从第二步（退款）起；邮寄仍是一步走，但说明文案会不一样 */
@@ -35,7 +35,7 @@ interface Props {
 }
 
 const yuan = (fen: number) => (fen / 100).toFixed(2)
-const chColor = (c: Channel) => (c === 'LOCAL' ? 'var(--local)' : 'var(--express)')
+const chColor = (c: OrderChannel) => (c === 'LOCAL' ? 'var(--local)' : c === 'PICKUP' ? 'var(--pickup)' : 'var(--express)')
 const apiMessage = (e: unknown, fallback: string) =>
   (e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback
 const apiCode = (e: unknown) => (e as { response?: { data?: { code?: number } } })?.response?.data?.code
