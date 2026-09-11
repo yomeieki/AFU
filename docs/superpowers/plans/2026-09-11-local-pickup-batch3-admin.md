@@ -167,7 +167,7 @@ export const getOrders = (params?: {
   /** 订单号 / 收货人 / 手机号 模糊 */
   keyword?: string
   deliveryType?: 'EXPRESS' | 'LOCAL' | 'PICKUP' | 'ALL'
-  /** channel=LOCAL 一次看外送 + 自取；与 deliveryType 二选一，同时传时服务端以 deliveryType 为准 */
+  /** channel=LOCAL 一次看外送 + 自取；与 deliveryType 二选一；同时传时服务端以 channel 为准（routes/admin/orders.ts），所以调用方只传其一 */
   channel?: 'LOCAL' | 'EXPRESS'
 }) => client.get<ApiResponse<PaginatedData<Order>>>('/admin/orders', { params })
 ```
