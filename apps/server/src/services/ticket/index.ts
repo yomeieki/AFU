@@ -214,8 +214,7 @@ function renderForKind(
   kind: PrintJobKind, order: OrderForTicket, settings: PrinterSettings,
   announceNo: number, slotMinutes: number, waitedMin?: number
 ): string {
-  // 自取单用 LOCAL 渠道的打印机（同一台店内机，未决歧义 2）；票面文案由 TicketChannel 区分
-  const channel: PrinterChannel = order.deliveryType === 'LOCAL' || order.deliveryType === 'PICKUP' ? 'LOCAL' : 'EXPRESS'
+  // 票面文案按三值 TicketChannel 区分（选哪台打印机是 enqueueOrderTicket 的事，与这里无关）
   const ticketChannel: TicketChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : order.deliveryType === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
   if (kind === 'CANCEL') {
     return renderCancelTicket({ channel: ticketChannel, reason: '订单取消/退款', at: new Date(), receiverPhone: order.receiverPhone })

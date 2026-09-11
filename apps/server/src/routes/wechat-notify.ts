@@ -276,6 +276,9 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
                 // M2：券抵扣额。这里是**真实微信支付回调**的推送路径，与 orders.ts 的 mock 支付
                 // 路径并列——两条都要带，只改一条的话生产环境的打包员永远看不到「已用券」。
                 discountAmount: paid.discountAmount,
+                // 2026-09-11：推送标题按渠道分（自取/同城/邮寄）。mock 支付路径传的是整行 order 自带此列，
+                // 这条真实回调路径是手拼字面量，漏了它生产上自取单的推送标题就永远是「新订单待发货」。
+                deliveryType: paid.deliveryType,
               },
               paid.items
             )

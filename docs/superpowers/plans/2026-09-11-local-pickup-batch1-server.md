@@ -45,6 +45,7 @@ apps/server/src/services/scheduler.ts
 apps/server/src/services/ticket/content.ts
 apps/server/src/services/ticket/index.ts
 apps/server/src/routes/local.ts
+apps/server/src/routes/wechat-notify.ts                                   （Task 7 复核补：notifyOrderPaid 字面量补 deliveryType，一行）
 apps/server/src/routes/orders.ts
 apps/server/src/routes/admin/orders.ts
 apps/server/src/routes/admin/delivery.ts
