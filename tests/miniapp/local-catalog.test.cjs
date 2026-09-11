@@ -60,3 +60,66 @@ test('结算态：空车、meta 未到都不放行', function () {
   assert.equal(checkoutStateOf(OPEN, 0, 0, false).disabled, true)
   assert.equal(checkoutStateOf(null, 2, 9900, false).disabled, true)
 })
+
+const { minOrderOf, pickupRulesText, resolveLocalMode, altModeOf, modeAvailable, holidayText } =
+  require('../../apps/miniapp/utils/local-catalog')
+const PK = Object.assign({}, OPEN, {
+  closedKind: 'OPEN',
+  pickup: { enabled: true, paused: null, minOrderAmountFen: 1500, discountText: '自取享 9.5 折', slotMinutes: 30 },
+  store: { name: '阿福凉菜', district: '自流井区', address: '丹桂40栋底楼', latE6: 1, lngE6: 2 },
+})
+
+test('不传 mode 时三段判断与改前逐字节一致', function () {
+  assert.deepEqual(storeStatusOf(OPEN), { tone: 'open', label: '营业中' })
+  assert.deepEqual(headNoticeOf({ enabled: false }), { text: '同城配送即将开通', blocking: true })
+  assert.deepEqual(checkoutStateOf(OPEN, 1, 3000, false), { gap: 1000, disabled: true, text: '还差 ¥10.00 起送' })
+})
+
+test('自取模式的店头状态与通知：未开通 / 暂停 / 可预约；营业时间外不阻塞', function () {
+  assert.deepEqual(storeStatusOf(PK, 'PICKUP'), { tone: 'open', label: '可预约' })
+  assert.deepEqual(headNoticeOf(PK, 'PICKUP'), { text: '', blocking: false })
+  assert.deepEqual(headNoticeOf(Object.assign({}, PK, { closedKind: 'CLOSED' }), 'PICKUP'),
+    { text: '当前非营业时间，可预约后续时段', blocking: false })
+  const off = Object.assign({}, PK, { pickup: Object.assign({}, PK.pickup, { enabled: false }) })
+  assert.deepEqual(storeStatusOf(off, 'PICKUP'), { tone: 'closed', label: '暂未开通' })
+  assert.deepEqual(headNoticeOf(off, 'PICKUP'), { text: '到店自取暂未开通', blocking: true })
+  const paused = Object.assign({}, PK, { pickup: Object.assign({}, PK.pickup, { paused: { reason: '后厨忙' } }) })
+  assert.deepEqual(storeStatusOf(paused, 'PICKUP'), { tone: 'paused', label: '暂停接单' })
+  assert.deepEqual(headNoticeOf(paused, 'PICKUP'), { text: '自取暂停接单：后厨忙', blocking: true })
+})
+
+test('休业：两种模式都灰、都阻塞、文案带恢复日期', function () {
+  const h = Object.assign({}, PK, { holiday: { until: '2026-10-08', reason: '国庆' } })
+  assert.equal(holidayText(h), '休息中，10月08日恢复')
+  assert.deepEqual(storeStatusOf(h, 'DELIVERY'), { tone: 'closed', label: '休息中' })
+  assert.deepEqual(storeStatusOf(h, 'PICKUP'), { tone: 'closed', label: '休息中' })
+  assert.deepEqual(headNoticeOf(h, 'PICKUP'), { text: '休息中，10月08日恢复', blocking: true })
+  assert.deepEqual(headNoticeOf(h, 'DELIVERY'), { text: '休息中，10月08日恢复', blocking: true })
+  assert.equal(holidayText(Object.assign({}, PK, { holiday: { until: null, reason: '' } })), '休息中')
+})
+
+test('起送线按模式取：自取看 pickup.minOrderAmountFen，外送看 fee.minOrderAmount', function () {
+  assert.equal(minOrderOf(PK, 'PICKUP'), 1500)
+  assert.equal(minOrderOf(PK, 'DELIVERY'), 4000)
+  assert.deepEqual(checkoutStateOf(PK, 1, 1000, false, 'PICKUP'), { gap: 500, disabled: true, text: '还差 ¥5.00 起送' })
+  assert.deepEqual(checkoutStateOf(PK, 1, 1500, false, 'PICKUP'), { gap: 0, disabled: false, text: '去结算' })
+})
+
+test('自取规则行：折扣 · 起送 · 门店地址；缺 pickup 节为空串', function () {
+  assert.equal(pickupRulesText(PK), '自取享 9.5 折 · 满 ¥15 起 · 自流井区丹桂40栋底楼')
+  assert.equal(pickupRulesText(OPEN), '')
+})
+
+test('模式回落：外送关自取开 → PICKUP；自取关外送开 → DELIVERY；都开尊重当前值', function () {
+  assert.equal(resolveLocalMode(Object.assign({}, PK, { enabled: false }), 'DELIVERY'), 'PICKUP')
+  assert.equal(resolveLocalMode(Object.assign({}, PK, { pickup: Object.assign({}, PK.pickup, { enabled: false }) }), 'PICKUP'), 'DELIVERY')
+  assert.equal(resolveLocalMode(PK, 'PICKUP'), 'PICKUP')
+  assert.equal(resolveLocalMode(null, 'PICKUP'), 'PICKUP')
+})
+
+test('替代出路：本侧阻塞时给另一侧，另一侧也不可用时给 null', function () {
+  assert.equal(modeAvailable(PK, 'PICKUP'), true)
+  assert.equal(altModeOf(Object.assign({}, PK, { paused: { reason: '骑手不够' } }), 'DELIVERY'), 'PICKUP')
+  assert.equal(altModeOf(Object.assign({}, PK, { holiday: { until: null, reason: '' } }), 'DELIVERY'), null)
+  assert.equal(altModeOf(Object.assign({}, PK, { pickup: Object.assign({}, PK.pickup, { enabled: false }) }), 'PICKUP'), 'DELIVERY')
+})

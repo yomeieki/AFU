@@ -65,3 +65,17 @@ test('normalizeChannel 只认这两个值', function () {
   assert.equal(channel.normalizeChannel(undefined), 'EXPRESS')
   assert.equal(channel.normalizeChannel(null), 'EXPRESS')
 })
+test('同城子模式：只认 PICKUP，其余一律 DELIVERY；落盘失败不抛', function () {
+  const channel = load({
+    getStorageSync: function () { return 'PICKUP' },
+    setStorageSync: function () { throw new Error('quota') },
+  })
+  assert.equal(channel.getLocalMode(), 'PICKUP')
+  assert.equal(channel.normalizeLocalMode('WHATEVER'), 'DELIVERY')
+  assert.equal(channel.setLocalMode('PICKUP'), 'PICKUP')
+  assert.equal(channel.MODE_STORAGE_KEY, 'localMode')
+})
+test('storage 读模式抛错时回落 DELIVERY', function () {
+  const channel = load({ getStorageSync: function () { throw new Error('boom') } })
+  assert.equal(channel.getLocalMode(), 'DELIVERY')
+})

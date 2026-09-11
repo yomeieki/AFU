@@ -15,6 +15,8 @@ App({
     // 当前购物渠道 'EXPRESS' | 'LOCAL'。四个 tabBar 页共用同一套壳，靠它决定加载哪边的内容。
     // **内存里这一份是权威值**；storage 只在冷启动/热重载时把它补回来（见 utils/channel.js）。
     shoppingChannel: 'EXPRESS',
+    // 同城子模式 'DELIVERY' | 'PICKUP'。只对 LOCAL 渠道有意义；切到邮寄不清它，切回来还在。
+    localMode: 'DELIVERY',
     // Stores a pending categoryId when navigating from homepage to product list via switchTab
     pendingCategoryId: null,
     pendingCategoryName: null,
@@ -28,6 +30,7 @@ App({
   onLaunch() {
     // 渠道要在任何一次 getCart / 拉商品之前恢复好，否则冷启动第一屏会按错的渠道拉一轮。
     this.globalData.shoppingChannel = channelUtil.getShoppingChannel()
+    this.globalData.localMode = channelUtil.getLocalMode()
     const token = wx.getStorageSync('token')
     if (token) {
       this.globalData.token = token
@@ -109,6 +112,16 @@ App({
   // ── 渠道上下文 ──────────────────────────────────────────────
   getShoppingChannel() {
     return channelUtil.normalizeChannel(this.globalData.shoppingChannel)
+  },
+
+  getLocalMode() {
+    return channelUtil.normalizeLocalMode(this.globalData.localMode)
+  },
+  // 定子模式：写内存 + 落盘。不动渠道、不清分类意图、不刷角标——两种模式共用同一个购物车。
+  setLocalMode(value) {
+    var mode = channelUtil.setLocalMode(value)
+    this.globalData.localMode = mode
+    return mode
   },
 
   // 定渠道。除了写内存与落盘，还要做两件收尾，漏了都会表现成「切了渠道但页面没跟上」：

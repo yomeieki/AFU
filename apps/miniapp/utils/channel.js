@@ -46,10 +46,43 @@ function channelQuery(value) {
   return 'channel=' + normalizeChannel(value)
 }
 
+// ── 同城子模式：外送 / 自取 ─────────────────────────────────
+// 与 shoppingChannel 同一套约定：内存里 app.globalData.localMode 是权威值，
+// storage 只在冷启动/热重载时补回来；读写失败都不抛（隐私模式、清缓存）。
+var MODE_STORAGE_KEY = 'localMode'
+
+function normalizeLocalMode(value) {
+  return value === 'PICKUP' ? 'PICKUP' : 'DELIVERY'
+}
+
+function getLocalMode() {
+  var raw = ''
+  try {
+    raw = wx.getStorageSync(MODE_STORAGE_KEY)
+  } catch (err) {
+    raw = ''
+  }
+  return normalizeLocalMode(raw)
+}
+
+function setLocalMode(value) {
+  var mode = normalizeLocalMode(value)
+  try {
+    wx.setStorageSync(MODE_STORAGE_KEY, mode)
+  } catch (err) {
+    // 落盘失败不影响本次会话
+  }
+  return mode
+}
+
 module.exports = {
   STORAGE_KEY: STORAGE_KEY,
   normalizeChannel: normalizeChannel,
   getShoppingChannel: getShoppingChannel,
   setShoppingChannel: setShoppingChannel,
   channelQuery: channelQuery,
+  MODE_STORAGE_KEY: MODE_STORAGE_KEY,
+  normalizeLocalMode: normalizeLocalMode,
+  getLocalMode: getLocalMode,
+  setLocalMode: setLocalMode,
 }
