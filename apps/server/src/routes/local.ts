@@ -14,12 +14,22 @@ import {
   billableDistanceM, haversineM, calcLocalFee, tableBaseFee, quoteBaseFee, estimateMinutesRange, signQuote, quoteExpiresAt,
 } from '../services/local-settings'
 import { measureRoadQuote } from '../services/delivery/quote'
+import { buildPickupSlots } from '../services/pickup'
 
 const router = Router()
 
 router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     success(res, publicLocalMeta(await getLocalSettings()))
+  } catch (e) {
+    next(e)
+  }
+})
+
+// 自取时段（公开；不登录也能看）。全部计算在 services/pickup.ts，这里只是读设置 + 出参
+router.get('/pickup-slots', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    success(res, buildPickupSlots(await getLocalSettings(), new Date()))
   } catch (e) {
     next(e)
   }
