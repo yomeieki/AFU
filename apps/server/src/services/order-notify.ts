@@ -16,6 +16,8 @@ interface NotifyOrderInfo {
   paidAt: Date
   /** 券抵扣额（分），M2 起有值 */
   discountAmount?: number
+  deliveryType?: string
+  pickupSlotLabel?: string | null
 }
 
 interface NotifyItemInfo {
@@ -46,7 +48,8 @@ function buildContent(order: NotifyOrderInfo, items: NotifyItemInfo[]) {
     ? [`已用券 −¥${fmtYuan(order.discountAmount)}`]
     : []
   return [
-    `**🔔 新订单待发货**`,
+    order.deliveryType === 'PICKUP' ? `**🏪 自取新订单${order.pickupSlotLabel ? ` · ${order.pickupSlotLabel} 取` : ''}**`
+      : order.deliveryType === 'LOCAL' ? `**🛵 同城新订单**` : `**🔔 新订单待发货**`,
     `订单号：${order.orderNo}`,
     ...discountLine,
     `金额：**¥${fmtYuan(order.actualAmount)}**`,
@@ -296,4 +299,31 @@ export function notifyLowStock(products: { name: string; stock: number }[], thre
   ].join('\n')
   if (wecom) sendWecomMarkdown(wecom, content)
   if (pushplusToken) sendPushPlus(pushplusToken, `库存预警 ${products.length} 项`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
+/** 自取：取餐时间过后仍没人点「已取走」（每单一次，pickupRemindedAt 记录） */
+export function notifyPickupUnpicked(orders: { orderNo: string; receiverPhone: string; slotLabel: string }[]): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const content = [
+    `**🏪 ${orders.length} 单自取已过取餐时间仍未取走**`,
+    ...orders.slice(0, 10).map((o) => `- 尾号${o.receiverPhone.slice(-4)} · ${o.slotLabel}`),
+    '顾客来取请在工作台点「已取走」；确认不来取可退款',
+  ].join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, '自取单未取', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+/** 自取：超时自动完成（店员没点「已取走」，系统按取餐时间 + N 分钟收尾） */
+export function notifyPickupAutoCompleted(orders: { orderNo: string; receiverPhone: string; slotLabel: string }[]): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const content = [
+    `**🏪 ${orders.length} 单自取按超时自动完成**`,
+    ...orders.slice(0, 10).map((o) => `- 尾号${o.receiverPhone.slice(-4)} · ${o.slotLabel}`),
+    '如果顾客确实没来取，请到后台按售后/退款处理',
+  ].join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, '自取单自动完成', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }

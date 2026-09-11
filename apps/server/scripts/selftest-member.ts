@@ -304,4 +304,21 @@ t('两联用同一个赠品标记（不一致会让店员对着两张写法不�
   assert.ok(s.delivery.includes(mark) && s.kitchen.includes(mark))
 })
 
+t('自取小票：票头「到店自取」、取餐时间放大、不印地址/距离/运费、印自取优惠、有厨房联', () => {
+  const s = renderOrderTicket({
+    channel: 'PICKUP', orderNo: 'ORD1', createdAt: new Date('2026-09-11T02:00:00Z'), paidAt: new Date('2026-09-11T02:01:00Z'),
+    items: [{ productName: '凉拌牛肉', specText: null, quantity: 2, subtotal: 5000 }],
+    totalAmount: 5000, shippingFee: 0, actualAmount: 4750, remark: null, discountAmount: 0, pointsUsed: 0, pickupDiscountAmount: 250,
+    receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '四川省自贡市自流井区丹桂40栋底楼',
+    pickupAt: new Date('2026-09-11T04:00:00Z'), pickupSlotLabel: '今天 12:00–12:30',
+  })
+  assert.ok(s.includes('<CB>到店自取</CB>'))
+  assert.ok(s.includes('<B>取餐 今天 12:00–12:30</B>'))
+  assert.ok(s.includes('尾号1234'))
+  assert.ok(!s.includes('地址'))
+  assert.ok(!s.includes('运费'))
+  assert.ok(s.includes('自取优惠：−¥2.50'))
+  assert.ok(s.includes('<CB>厨房联</CB>'))
+})
+
 console.log(`\n${pass} passed${process.exitCode ? ', 有失败' : ''}`)

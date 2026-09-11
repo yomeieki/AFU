@@ -252,11 +252,34 @@ export function getSubscribeTemplateGroups(): { express: string[]; local: string
   }
 }
 
-/** 「已备好，请来取餐」（Task 7 实现字段映射；先留空壳保证编译） */
+/**
+ * 「已备好，请来取餐」（spec §4.8）。模板由店主在公众平台选「取餐/订单备好」类公共模板，
+ * 字段映射走 WECHAT_TMPL_PICKUP_FIELDS，可用字段：orderNo / productName / pickupTime / shopName / address / name / note
+ */
 export function sendPickupReadySubscribeMessage(
   openid: string,
   order: { id: number; orderNo: string; pickupAt: Date | null; receiverName: string },
   productName?: string
 ): void {
-  void openid; void order; void productName
+  const { pickupTemplateId, pickupFields } = config.subscribe
+  if (!pickupTemplateId || !pickupFields) {
+    console.warn('[subscribe] 取餐提醒未配置模板（WECHAT_TMPL_PICKUP），本条未发出')
+    return
+  }
+  void import('./local-settings').then(({ getLocalSettings }) => getLocalSettings()).then((s) => {
+    const data = buildData(
+      {
+        orderNo: order.orderNo,
+        productName: productName ?? '',
+        pickupTime: order.pickupAt ? fmtTime(order.pickupAt) : fmtTime(new Date()),
+        shopName: s.store.name,
+        address: `${s.store.district}${s.store.address}`,
+        name: order.receiverName,
+        note: '您的餐品已备好，凭手机尾号到店取餐',
+      },
+      parseFieldMap(pickupFields)
+    )
+    if (!data) return
+    void send(openid, pickupTemplateId, `pages/order/detail?id=${order.id}`, data, '取餐提醒')
+  }).catch((e) => console.warn('[subscribe] 取餐提醒读门店信息失败，本条未发出:', (e as Error)?.message ?? e))
 }

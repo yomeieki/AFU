@@ -181,3 +181,17 @@ assert_eq "同意后标记清空" "$(sql "SELECT cancel_requested_at IS NULL FRO
 R=$(req GET "/api/admin/orders?channel=LOCAL&pageSize=50" "$AT")
 [[ "$(jq -r "[.data.list[] | select(.id==$P62_O3)] | length" <<<"$R")" == "1" ]] && ok "admin 列表 channel=LOCAL 含自取" || fail "admin 列表 channel=LOCAL 不含自取"
 [[ "$(req GET /api/admin/orders/pending-count "$AT" | jq -r '.data.localPendingCount')" -ge 0 ]] && ok "pending-count 仍可用" || fail "pending-count 挂了"
+
+echo "-- ⑪ 小票：自取单出票票头「到店自取」、印取餐时间与自取优惠、不印运费 --"
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"P62-P","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_SLOT2\",\"pickupContact\":{\"phone\":\"13800009999\"}}")
+P62_O4=$(jq -r .data.orderId <<<"$R"); req POST "/api/orders/$P62_O4/pay" "$UT" >/dev/null
+sleep 0.5
+P62_T=$(PJOBS "$P62_O4" | jq -r '[.data.list[] | select(.kind=="NEW_ORDER")] | last | .content')
+[[ "$P62_T" == *"到店自取"* ]] && ok "票头 到店自取" || fail "票头不对" "$P62_T"
+[[ "$P62_T" == *"<B>取餐 "* ]] && ok "印取餐时间" || fail "没印取餐时间" "$P62_T"
+[[ "$P62_T" == *"自取优惠：−"* ]] && ok "印自取优惠" || fail "没印自取优惠" "$P62_T"
+[[ "$P62_T" != *"运费："* ]] && ok "不印运费" || fail "自取票印了运费" "$P62_T"
+[[ "$P62_T" == *"尾号9999"* ]] && ok "尾号正确" || fail "尾号不对" "$P62_T"
+[[ "$P62_T" == *"厨房联"* ]] && ok "有厨房联" || fail "没有厨房联" "$P62_T"

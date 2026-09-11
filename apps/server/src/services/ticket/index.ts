@@ -24,9 +24,10 @@ import { feieProvider } from './feie'
 import { mockPrinterProvider } from './mock'
 import {
   renderOrderTicket, renderReminderTicket, renderCancelTicket, renderCancelRequestTicket,
-  renderTestTicket, TicketOrderInput,
+  renderTestTicket, TicketOrderInput, TicketChannel,
 } from './content'
 import { getLocalSettings, isShopOpenNow } from '../local-settings'
+import { pickupSlotLabel } from '../pickup'
 
 const BATCH = 100
 /**
@@ -161,6 +162,9 @@ type OrderForTicket = {
   items: { productName: string; specText: string | null; quantity: number; subtotal: number; isGift: boolean; pointsCost: number }[]
   /** 顾客申请取消时自己写的理由。只有 CANCEL_REQUEST 票用它——它是店员判断退不退的主要依据 */
   cancelRequestNote: string | null
+  // ── 自取（PICKUP）专属──
+  pickupAt: Date | null
+  pickupDiscountAmount: number
 }
 
 const ORDER_SELECT = {
@@ -170,12 +174,14 @@ const ORDER_SELECT = {
   receiverDistrict: true, receiverDetail: true,
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
   discountAmount: true, pointsUsed: true, cancelRequestNote: true,
+  pickupAt: true, pickupDiscountAmount: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
 
-function toTicketInput(order: OrderForTicket): TicketOrderInput {
+function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderInput {
+  const channel: TicketChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : order.deliveryType === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
   return {
-    channel: order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS',
+    channel,
     orderNo: order.orderNo,
     createdAt: order.createdAt,
     paidAt: order.paidAt,
@@ -194,6 +200,9 @@ function toTicketInput(order: OrderForTicket): TicketOrderInput {
     estimatedDeliveryAt: order.estimatedDeliveryAt,
     discountAmount: order.discountAmount,
     pointsUsed: order.pointsUsed,
+    pickupAt: order.pickupAt,
+    pickupSlotLabel: order.pickupAt ? pickupSlotLabel(order.pickupAt, slotMinutes) : null,
+    pickupDiscountAmount: order.pickupDiscountAmount,
   }
 }
 
@@ -203,23 +212,25 @@ function toTicketInput(order: OrderForTicket): TicketOrderInput {
  */
 function renderForKind(
   kind: PrintJobKind, order: OrderForTicket, settings: PrinterSettings,
-  announceNo: number, waitedMin?: number
+  announceNo: number, slotMinutes: number, waitedMin?: number
 ): string {
-  const channel: PrinterChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
+  // 自取单用 LOCAL 渠道的打印机（同一台店内机，未决歧义 2）；票面文案由 TicketChannel 区分
+  const channel: PrinterChannel = order.deliveryType === 'LOCAL' || order.deliveryType === 'PICKUP' ? 'LOCAL' : 'EXPRESS'
+  const ticketChannel: TicketChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : order.deliveryType === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
   if (kind === 'CANCEL') {
-    return renderCancelTicket({ channel, reason: '订单取消/退款', at: new Date(), receiverPhone: order.receiverPhone })
+    return renderCancelTicket({ channel: ticketChannel, reason: '订单取消/退款', at: new Date(), receiverPhone: order.receiverPhone })
   }
   if (kind === 'CANCEL_REQUEST') {
     return renderCancelRequestTicket({
-      channel, at: new Date(), receiverPhone: order.receiverPhone,
+      channel: ticketChannel, at: new Date(), receiverPhone: order.receiverPhone,
       items: order.items, note: order.cancelRequestNote,
     })
   }
   if (kind === 'REPEAT' && !settings.repeat.reprint) {
-    return renderReminderTicket({ channel, waitedMin: waitedMin ?? 0, announceNo, receiverPhone: order.receiverPhone })
+    return renderReminderTicket({ channel: ticketChannel, waitedMin: waitedMin ?? 0, announceNo, receiverPhone: order.receiverPhone })
   }
   // NEW_ORDER / REPRINT / repeat.reprint=true 时的 REPEAT，都是整张全票
-  const input = toTicketInput(order)
+  const input = toTicketInput(order, slotMinutes)
   if (kind === 'REPEAT') input.announceNo = announceNo
   return renderOrderTicket(input)
 }
@@ -278,10 +289,12 @@ export async function enqueueOrderTicket(
   const order = await prisma.order.findUnique({ where: { id: orderId }, select: ORDER_SELECT })
   if (!order) return { enqueued: false, reason: 'ORDER_NOT_FOUND' }
 
-  const channel: PrinterChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
+  // 自取单用 LOCAL 渠道的打印机（同一台店内机，未决歧义 2）；票面文案由 TicketChannel 区分
+  const channel: PrinterChannel = order.deliveryType === 'LOCAL' || order.deliveryType === 'PICKUP' ? 'LOCAL' : 'EXPRESS'
   const printers = printersForChannel(settings, channel)
   const providerName = activeProviderName(settings)
   const baseSeq = opts.seq ?? (kind === 'NEW_ORDER' || kind === 'CANCEL' ? 0 : Date.now())
+  const slotMinutes = (await getLocalSettings()).pickup.slotMinutes
 
   const jobIds: number[] = []
 
@@ -293,7 +306,7 @@ export async function enqueueOrderTicket(
       const row = await prisma.printJob.create({
         data: {
           orderId: order.id, orderNo: order.orderNo, kind, provider: providerName, printerSn: '',
-          status: 'SKIPPED', content: renderForKind(kind, order, settings, baseSeq, opts.waitedMin),
+          status: 'SKIPPED', content: renderForKind(kind, order, settings, baseSeq, slotMinutes, opts.waitedMin),
           lastError: '未配置该渠道的打印机', dedupeKey,
         },
       })
@@ -305,7 +318,7 @@ export async function enqueueOrderTicket(
   }
 
   for (const printer of printers) {
-    const content = renderForKind(kind, order, settings, baseSeq, opts.waitedMin)
+    const content = renderForKind(kind, order, settings, baseSeq, slotMinutes, opts.waitedMin)
     const dedupeKey = buildDedupeKey(orderId, kind, baseSeq, printer.sn)
     let row
     try {
@@ -654,7 +667,7 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
     // 否则打烊那几个小时会把 maxTimes 空烧完，第二天开门时次数已经耗尽，反而一次都不催 ——
     // 那正好是这个门控要避免的相反效果。
     if (order.deliveryType !== 'LOCAL' && !shopOpen) continue
-    const afterMin = order.deliveryType === 'LOCAL' ? settings.repeat.localAfterMin : settings.repeat.expressAfterMin
+    const afterMin = order.deliveryType === 'EXPRESS' ? settings.repeat.expressAfterMin : settings.repeat.localAfterMin
     const waitedMs = now - order.paidAt.getTime()
     const waitedMin = waitedMs / 60_000
     if (waitedMs < (testMinWaitMsOverride ?? afterMin * 60_000)) continue

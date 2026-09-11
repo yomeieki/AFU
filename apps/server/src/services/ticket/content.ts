@@ -14,7 +14,8 @@
 
 import { localShortAddress } from '../../utils/address'
 
-export type TicketChannel = 'LOCAL' | 'EXPRESS'
+export type TicketChannel = 'LOCAL' | 'EXPRESS' | 'PICKUP'
+const CHANNEL_WORD: Record<TicketChannel, string> = { LOCAL: '同城', EXPRESS: '邮寄', PICKUP: '自取' }
 
 export interface TicketItemInput {
   productName: string
@@ -59,6 +60,12 @@ export interface TicketOrderInput {
    *  ⚠️ 曾经跟「今日第 N 单」并排显示，M12 修过一次「把播报次数当流水号」的误读；
    *  PO 2026-09-06 决定票面不再显示今日订单数，那一行连同 dailyOrderSeq 查询一起删了，
    *  所以现在这里不会再有混淆对象——但字段名仍然刻意叫 announceNo，别改回 seq。 */
+  // ── 自取专属（channel==='PICKUP'）──
+  pickupAt?: Date | null
+  /** 「今天 12:00–12:30」，由调用方用 services/pickup 的 pickupSlotLabel 算好传进来（本文件不算时区） */
+  pickupSlotLabel?: string | null
+  /** 自取优惠（分）。>0 时取餐联在合计与券之间打一行；厨房联不打 */
+  pickupDiscountAmount?: number
   announceNo?: number | null
 }
 
@@ -279,8 +286,10 @@ const HR = '-'.repeat(LINE_WIDTH)
  */
 export function renderOrderTicket(o: TicketOrderInput): string {
   const isLocal = o.channel === 'LOCAL'
+  const isPickup = o.channel === 'PICKUP'
+  const hasKitchen = isLocal || isPickup // 自取也是后厨现拌 + 柜台装袋，两联
   const header: string[] = [
-    `<CB>${isLocal ? '同城配送' : '全国邮寄'}</CB>`,
+    `<CB>${isPickup ? '到店自取' : isLocal ? '同城配送' : '全国邮寄'}</CB>`,
     ...(o.announceNo !== null && o.announceNo !== undefined ? [`<C>第 ${o.announceNo} 次催单</C>`] : []),
     // PO 2026-09-06 定：顶部只放**加大的后 4 位**。完整单号 20 字符在 32 列纸上占大半行，
     // 而店里认单靠这 4 位，没人逐位核对前缀。完整单号挪到 footer 小字——客服对单、查退款仍需要。
@@ -296,27 +305,34 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     `付款：${fmtDateTime(o.paidAt)}`,
   ]
 
-  const receiverBlock: string[] = isLocal
+  const receiverBlock: string[] = isPickup
     ? [
-        // PO 2026-09-06 定：**姓名与地址放大、各占一行**——送货的人在袋子堆里认单、找门牌，
-        // 靠的就是这两样，挤在一行小字里最容易看错。
-        // **电话不放大**：已经脱敏了，放大也拨不出去，它只剩「跟后台核对是不是同一单」这一个用途。
-        // ⚠️ `<B>` 行只有 16 列（真机标尺实测，见 BIG_LINE_WIDTH），所以标签用空格不用「：」。
-        `<B>收货人 ${esc(o.receiverName)}</B>`,
-        // 同城单省市恒为门店所在地，对厨房是纯噪音；区不能省——配送范围可能跨区。
-        // 放大后会折成 2–3 行，这是有意的：地址是送货时唯一真正要看清的东西。
-        `<B>地址 ${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}</B>`,
-        `电话 ${maskPhone(esc(o.receiverPhone))}`,
-        ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
-        ...(o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
-      ]
-    : [
-        `<B>收件人 ${esc(o.receiverName)}</B>`,
-        // 邮寄地址比同城长（含省市），放大后能折到 5–6 行。仍然放大：这串字要被抄到快递单上，
-        // 抄错一位就是一件退回来的货，多费几厘米纸换少一次抄错值得。
-        `<B>地址 ${esc(o.receiverFullAddress)}</B>`,
+        // 取餐联：时间放大（顾客几点来是店员要看的第一眼），姓名与脱敏电话普通字号；不印地址——地址是店自己
+        `<B>取餐 ${esc(o.pickupSlotLabel ?? '')}</B>`,
+        `取餐人 ${esc(o.receiverName)}`,
         `电话 ${maskPhone(esc(o.receiverPhone))}`,
       ]
+    : isLocal
+      ? [
+          // PO 2026-09-06 定：**姓名与地址放大、各占一行**——送货的人在袋子堆里认单、找门牌，
+          // 靠的就是这两样，挤在一行小字里最容易看错。
+          // **电话不放大**：已经脱敏了，放大也拨不出去，它只剩「跟后台核对是不是同一单」这一个用途。
+          // ⚠️ `<B>` 行只有 16 列（真机标尺实测，见 BIG_LINE_WIDTH），所以标签用空格不用「：」。
+          `<B>收货人 ${esc(o.receiverName)}</B>`,
+          // 同城单省市恒为门店所在地，对厨房是纯噪音；区不能省——配送范围可能跨区。
+          // 放大后会折成 2–3 行，这是有意的：地址是送货时唯一真正要看清的东西。
+          `<B>地址 ${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}</B>`,
+          `电话 ${maskPhone(esc(o.receiverPhone))}`,
+          ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
+          ...(o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
+        ]
+      : [
+          `<B>收件人 ${esc(o.receiverName)}</B>`,
+          // 邮寄地址比同城长（含省市），放大后能折到 5–6 行。仍然放大：这串字要被抄到快递单上，
+          // 抄错一位就是一件退回来的货，多费几厘米纸换少一次抄错值得。
+          `<B>地址 ${esc(o.receiverFullAddress)}</B>`,
+          `电话 ${maskPhone(esc(o.receiverPhone))}`,
+        ]
 
   // 备注要突出：<CB> 居中放大加粗。规格 §8b 提到的「餐具标记」目前 Order 无对应字段
   // （精细餐具选项是 §12 明确的二期项），先不渲染，等那个字段落地后在这里补一行。
@@ -332,8 +348,9 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   // 混进上面那三行会让人以为实付里减过它。
   const footer: string[] = [
     `合计：${yuan(o.totalAmount)}`,
+    ...(o.pickupDiscountAmount && o.pickupDiscountAmount > 0 ? [`自取优惠：−${yuan(o.pickupDiscountAmount)}`] : []),
     ...(o.discountAmount && o.discountAmount > 0 ? [`优惠券：−${yuan(o.discountAmount)}`] : []),
-    `运费：${yuan(o.shippingFee)}`,
+    ...(isPickup ? [] : [`运费：${yuan(o.shippingFee)}`]),
     `<B>实付：${yuan(o.actualAmount)}</B>`,
     ...(o.pointsUsed && o.pointsUsed > 0 ? [`赠品抵扣：${o.pointsUsed} 积分`] : []),
     // PO 2026-09-09 定：票面不印单号，认单只用尾号；完整单号在后台订单页。
@@ -369,11 +386,11 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     (kitchen ? Buffer.byteLength(assemble(kitchen), 'utf8') : 0)
 
   let itemLines = buildItemLines(o.items, 0)
-  let kitchen: string[] | null = isLocal ? buildKitchen(0, null) : null
+  let kitchen: string[] | null = hasKitchen ? buildKitchen(0, null) : null
 
   if (totalBytes(itemLines, kitchen) > TICKET_BYTE_LIMIT) {
     // ①②③ 先降级厨房联（PO：保全配送联）
-    if (isLocal) {
+    if (hasKitchen) {
       kitchen = buildKitchen(1, null)
       if (totalBytes(itemLines, kitchen) > TICKET_BYTE_LIMIT) {
         let keep = o.items.length
@@ -398,7 +415,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
         const over = totalBytes(itemLines, kitchen) - TICKET_BYTE_LIMIT
         const shrink = Math.max(0, o.remark.length - Math.ceil(over / 2))
         remarkBlock[0] = `<CB>备注：${truncWidth(esc(o.remark), shrink)}…</CB>`
-        if (isLocal) kitchen = buildKitchen(1, 0)
+        if (hasKitchen) kitchen = buildKitchen(1, 0)
       }
     }
   }
@@ -413,7 +430,7 @@ export function renderReminderTicket(input: { channel: TicketChannel; waitedMin:
   const lines = [
     '<CB>催接单</CB>',
     `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
-    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单`,
+    `${CHANNEL_WORD[input.channel]}订单`,
     `<B>已等待 ${input.waitedMin} 分钟未接单（第 ${input.announceNo} 次催单）</B>`,
     '请到工作台接单',
   ]
@@ -425,7 +442,7 @@ export function renderCancelTicket(input: { channel: TicketChannel; reason: stri
   const lines = [
     '<CB>订单取消</CB>',
     `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
-    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单`,
+    `${CHANNEL_WORD[input.channel]}订单`,
     `时间：${fmtDateTime(input.at)}`,
     `<BOLD>原因：${input.reason}</BOLD>`,
   ]
@@ -450,7 +467,7 @@ export function renderCancelRequestTicket(input: {
   const lines = [
     '<CB>顾客申请取消</CB>',
     `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
-    `${input.channel === 'LOCAL' ? '同城' : '邮寄'}订单 · ${fmtDateTime(input.at)}`,
+    `${CHANNEL_WORD[input.channel]}订单 · ${fmtDateTime(input.at)}`,
     HR,
     // 菜名与份数用厨房联那套放大渲染：这两样是隔着灶台要看清的
     ...input.items.flatMap((it) => kitchenItemLines(it, 0)),
