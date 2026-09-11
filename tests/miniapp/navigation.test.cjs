@@ -44,6 +44,8 @@ function makeCtx(opts) {
     },
     setShoppingChannel(v) { calls.push('setChannel:' + v); app.globalData.shoppingChannel = v; return v },
     getShoppingChannel() { return app.globalData.shoppingChannel },
+    getLocalMode: () => app.globalData.localMode || 'DELIVERY',
+    setLocalMode: (v) => { app.globalData.localMode = v; return v },
     enterLocalChannel() {
       // 真实实现在 app.js；这里的桩只记录「页面确实走了这条统一出口」
       calls.push('enterLocal')

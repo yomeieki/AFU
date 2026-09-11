@@ -32,6 +32,8 @@ function makeCtx(channel) {
     globalData: { shoppingChannel: channel, pendingCategoryId: null, pendingCategoryName: null, pendingCategoryAll: false },
     getShoppingChannel: () => app.globalData.shoppingChannel,
     setShoppingChannel: (v) => { app.globalData.shoppingChannel = v; return v },
+    getLocalMode: () => app.globalData.localMode || 'DELIVERY',
+    setLocalMode: (v) => { app.globalData.localMode = v; return v },
     applyCartBadge() {}, updateCartCount() {},
   }
   const wx = {

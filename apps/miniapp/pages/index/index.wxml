@@ -19,7 +19,8 @@
   <view style="height:{{navTotal}}px"></view>
 
   <!-- 同城：门店头（营业状态 / 配送规则 / 阻塞通知）取代 Banner 的位置 -->
-  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" bind:goexpress="onGoExpress" />
+  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" />
+  <local-mode-bar wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:change="onModeChange" />
 
   <!-- 邮寄 Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
   <swiper
@@ -158,6 +159,7 @@
   id="local-cart-bar"
   meta="{{meta}}"
   blocking="{{headBlocking}}"
+  mode="{{mode}}"
   bind:change="onCartChange"
 />
 

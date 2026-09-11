@@ -71,3 +71,10 @@
   white-space: nowrap;
   text-decoration: underline;
 }
+
+.delivery-rules-row { display: flex; align-items: center; gap: 8rpx; margin-top: 12rpx; }
+.delivery-rules-row .delivery-rules { margin-top: 0; flex: 1; min-width: 0; }
+.delivery-rules-arrow { flex-shrink: 0; color: var(--text-3, #999); font-size: 28rpx; }
+/* 非阻塞的软提示（自取在营业时间外仍可预约）：灰底，不用橙色告警底 */
+.head-notice-soft { background: var(--gray-bg, #f3f4f6); }
+.head-notice-soft .head-notice-text { color: var(--text-2, #666); }

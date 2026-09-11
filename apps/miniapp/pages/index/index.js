@@ -12,7 +12,7 @@ const { request } = require('../../utils/request')
 const { formatPrice } = require('../../utils/format')
 const catalogApi = require('../../api/catalog')
 const { getLocalMeta } = require('../../api/local')
-const { headNoticeOf } = require('../../utils/local-catalog')
+const { headNoticeOf, resolveLocalMode } = require('../../utils/local-catalog')
 const app = getApp()
 
 Page({
@@ -25,6 +25,7 @@ Page({
     channelLabel: '全国邮寄',
     // LOCAL 专用
     meta: null,
+    mode: 'DELIVERY',
     headBlocking: false,
     // 两个渠道共用
     banners: [],
@@ -78,6 +79,7 @@ Page({
       return
     }
     if (this.data.channel === 'LOCAL') {
+      if (app.getLocalMode() !== this.data.mode) this.applyMode(app.getLocalMode())
       this.loadMeta()
       this.refreshCartBar()
     }
@@ -110,6 +112,7 @@ Page({
       categories: [],
       products: [],
       meta: channel === 'LOCAL' ? this.data.meta : null,
+      mode: channel === 'LOCAL' ? app.getLocalMode() : 'DELIVERY',
       headBlocking: false,
     })
     return channel === 'LOCAL' ? this.loadLocal() : this.loadExpress()
@@ -147,11 +150,14 @@ Page({
       getLocalMeta().catch(function() { return null }),
     ])
       .then(([categories, productData, meta]) => {
+        // 外送关了、自取开着（或反过来）时自动落到开着的那一侧；两边都开尊重顾客上次的选择
+        var mode = app.setLocalMode(resolveLocalMode(meta, app.getLocalMode()))
         this.setData({
           categories: categories || [],
           products: this.decorate(productData),
           meta: meta,
-          headBlocking: headNoticeOf(meta).blocking,
+          mode: mode,
+          headBlocking: headNoticeOf(meta, mode).blocking,
           loading: false,
         })
         this.refreshCartBar()
@@ -173,7 +179,8 @@ Page({
     var self = this
     getLocalMeta()
       .then(function(meta) {
-        self.setData({ meta: meta, headBlocking: headNoticeOf(meta).blocking })
+        var mode = app.setLocalMode(resolveLocalMode(meta, app.getLocalMode()))
+        self.setData({ meta: meta, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
       })
       .catch(function() {
         // 保留上一次的 meta：拉不到店铺状态时，把营业中的店显示成打烊比不刷新更糟
@@ -188,6 +195,19 @@ Page({
   // 购物车条报告车变了 → 刷新当前渠道的 tabBar 角标
   onCartChange() {
     app.updateCartCount()
+  },
+
+  // 子模式变了：阻塞态按新模式重算，购物车条的按钮跟着变（去向与起送线都不一样）
+  applyMode(mode) {
+    this.setData({ mode: mode, headBlocking: headNoticeOf(this.data.meta, mode).blocking })
+    this.refreshCartBar()
+  },
+  onModeChange(e) {
+    this.applyMode(app.setLocalMode(e.detail.mode))
+  },
+  // 页头通知里的「改用自取 / 改用外送」
+  onSwitchMode(e) {
+    this.applyMode(app.setLocalMode(e.detail.mode))
   },
 
   // 同城被暂停/打烊时，页头那条通知里的「去全国邮寄」。

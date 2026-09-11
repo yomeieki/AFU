@@ -1,0 +1,10 @@
+<view class="mode-bar {{holiday ? 'mode-bar-holiday' : ''}}">
+  <view class="mode-tab {{mode === 'DELIVERY' ? 'active' : ''}}" hover-class="mode-tab-hover" bindtap="onTap" data-mode="DELIVERY">
+    <text class="mode-name">外送</text>
+    <text class="mode-sub mode-sub-{{delivery.tone}}">{{delivery.label}}</text>
+  </view>
+  <view class="mode-tab {{mode === 'PICKUP' ? 'active' : ''}}" hover-class="mode-tab-hover" bindtap="onTap" data-mode="PICKUP">
+    <text class="mode-name">自取</text>
+    <text class="mode-sub mode-sub-{{pickup.tone}}">{{pickup.label}}</text>
+  </view>
+</view>

@@ -32,6 +32,8 @@ function makeCtx(channel, carts) {
     globalData: { shoppingChannel: channel },
     getShoppingChannel: () => app.globalData.shoppingChannel,
     setShoppingChannel: (v) => { app.globalData.shoppingChannel = v; return v },
+    getLocalMode: () => app.globalData.localMode || 'DELIVERY',
+    setLocalMode: (v) => { app.globalData.localMode = v; return v },
     applyCartBadge() {}, updateCartCount() { nav.push('updateCartCount') },
     enterLocalChannel() { nav.push('enterLocal'); return Promise.resolve() },
   }

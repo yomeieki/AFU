@@ -17,6 +17,7 @@ Component({
     meta: { type: null, value: null },
     // 业务阻塞（未开通/暂停/打烊）。由页面从 headNoticeOf 拿，避免组件重复请求 meta。
     blocking: { type: Boolean, value: false },
+    mode: { type: String, value: 'DELIVERY' },
   },
   data: {
     items: [],
@@ -29,7 +30,7 @@ Component({
   observers: {
     // meta 或阻塞态变了要重算结算按钮：店主中途按下「暂停接单」时，
     // 顾客那一屏的按钮必须当场变灰，而不是等他点下去才被服务端拒绝。
-    'meta, blocking': function() { this.recompute() },
+    'meta, blocking, mode': function() { this.recompute() },
   },
   lifetimes: {
     attached: function() { this.refresh() },
@@ -59,8 +60,11 @@ Component({
     },
 
     recompute: function() {
-      var s = localCatalog.checkoutStateOf(this.properties.meta, this.data.count, this.data.amount, this.properties.blocking)
-      this.setData({ disabled: s.disabled, actionText: s.text })
+      var mode = this.properties.mode
+      var s = localCatalog.checkoutStateOf(this.properties.meta, this.data.count, this.data.amount, this.properties.blocking, mode)
+      // 可结算时把去向写在按钮上：两种模式共用一个车，顾客要知道按下去是外送还是自取
+      var text = (!s.disabled && !this.properties.blocking && s.gap === 0) ? ('去结算 · ' + (mode === 'PICKUP' ? '自取' : '外送')) : s.text
+      this.setData({ disabled: s.disabled, actionText: text })
     },
 
     toggle: function() {
@@ -118,8 +122,10 @@ Component({
       if (this.data.disabled) return
       var ids = this.data.items.map(function(item) { return item.id })
       if (!ids.length) return
-      // 结算页不是 tabBar 页，用 navigateTo：顾客从结算返回时应当回到这份菜单
-      wx.navigateTo({ url: '/pages/local/confirm?cartItemIds=' + ids.join(',') })
+      // 结算页不是 tabBar 页，用 navigateTo：顾客从结算返回时应当回到这份菜单。
+      // 自取与外送各自一个结算页——两套状态机（时段/手机号 vs 地址/报价）硬塞进一个页面只会互相绊。
+      var page = this.properties.mode === 'PICKUP' ? '/pages/local/pickup' : '/pages/local/confirm'
+      wx.navigateTo({ url: page + '?cartItemIds=' + ids.join(',') })
     },
   },
 })

@@ -3,7 +3,7 @@
 
   <!-- 同城：紧凑门店头（只留店名 + 营业状态）。配送规则与阻塞通知在主页给过，
        这一页寸土寸金，右侧商品列表要尽量高。 -->
-  <local-store-header wx:if="{{channel === 'LOCAL'}}" compact="{{true}}" meta="{{meta}}" bind:goexpress="onGoExpress" />
+  <local-store-header wx:if="{{channel === 'LOCAL'}}" compact="{{true}}" meta="{{meta}}" mode="{{mode}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" />
 
   <!-- 邮寄：搜索框。同城菜单只有几十件、左侧分类一眼看完，不需要搜索。 -->
   <view wx:else class="search-bar">
@@ -31,6 +31,8 @@
       <text class="category-tag-close" bindtap="clearSearch">×</text>
     </view>
   </view>
+
+  <local-mode-bar wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:change="onModeChange" />
 
   <!-- Two-column body -->
   <view class="body">
@@ -131,5 +133,6 @@
   id="local-cart-bar"
   meta="{{meta}}"
   blocking="{{headBlocking}}"
+  mode="{{mode}}"
   bind:change="onCartChange"
 />

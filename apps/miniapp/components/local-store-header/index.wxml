@@ -10,10 +10,13 @@
   </view>
 
   <block wx:if="{{!compact}}">
-    <text wx:if="{{rulesText}}" class="delivery-rules">{{rulesText}}</text>
-    <view wx:if="{{notice}}" class="head-notice">
+    <view wx:if="{{rulesText}}" class="delivery-rules-row" bindtap="onOpenStore">
+      <text class="delivery-rules">{{rulesText}}</text>
+      <text wx:if="{{canNavigate}}" class="delivery-rules-arrow">›</text>
+    </view>
+    <view wx:if="{{notice}}" class="head-notice {{noticeBlocking ? '' : 'head-notice-soft'}}">
       <text class="head-notice-text">{{notice}}</text>
-      <view class="head-notice-action" bindtap="onGoExpress">去全国邮寄</view>
+      <view wx:if="{{noticeBlocking}}" class="head-notice-action" bindtap="onAction">{{altLabel}}</view>
     </view>
   </block>
 </view>

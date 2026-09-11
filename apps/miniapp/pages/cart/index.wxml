@@ -18,6 +18,8 @@
   <view wx:else>
     <!-- 同城独有：营业状态阻塞时的通知。邮寄没有这一条。 -->
     <view wx:if="{{channel === 'LOCAL' && headNotice}}" class="cart-notice">{{headNotice}}</view>
+    <!-- 两种模式共用一个车：告诉顾客这一单按哪种方式结算，切换在主页顶部那一栏 -->
+    <view wx:if="{{channel === 'LOCAL'}}" class="cart-notice cart-mode-note">结算方式：{{mode === 'PICKUP' ? '到店自取' : '同城外送'}}（可在主页顶部切换）</view>
 
     <!-- Cart items -->
     <view class="cart-list">

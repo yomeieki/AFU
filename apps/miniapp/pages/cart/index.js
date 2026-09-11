@@ -23,6 +23,7 @@ Page({
     loading: true,
     // 同城专用
     meta: null,
+    mode: 'DELIVERY',
     headNotice: '',
     headBlocking: false,
     // 底部按钮
@@ -35,6 +36,7 @@ Page({
 
   onShow() {
     var channel = getApp().getShoppingChannel()
+    var mode = channel === 'LOCAL' ? getApp().getLocalMode() : 'DELIVERY'
     if (channel !== this.data.channel) {
       // 切渠道：**先清空再拉**。不清的话，新车回来之前屏幕上还是上一个渠道的
       // 商品与合计，顾客可能对着邮寄的合计按下同城的结算。
@@ -47,10 +49,12 @@ Page({
         otherChannelCount: 0,
         otherChannelLabel: '',
         meta: null,
+        mode: mode,
         headNotice: '',
         headBlocking: false,
       })
     }
+    if (mode !== this.data.mode) this.setData({ mode: mode })
     if (channel === 'LOCAL') this.loadMeta()
     this.loadCart()
   },
@@ -59,7 +63,7 @@ Page({
     var self = this
     getLocalMeta()
       .then(function(meta) {
-        var notice = headNoticeOf(meta)
+        var notice = headNoticeOf(meta, self.data.mode)
         self.setData({ meta: meta, headNotice: notice.text, headBlocking: notice.blocking })
         self.refreshCheckout()
       })
@@ -125,8 +129,10 @@ Page({
     }
     // 起送线按**勾选的**小计判（totalAmount 就是勾选项之和，见 routes/cart.ts:57-58），
     // 与下单时服务端的判定口径一致——按全车判会出现「页面说够了、提交被拒」。
-    var s = checkoutStateOf(this.data.meta, this.data.selectedCount, this.data.totalAmount, this.data.headBlocking)
-    this.setData({ checkoutDisabled: s.disabled, checkoutText: s.text })
+    var mode = this.data.mode
+    var s = checkoutStateOf(this.data.meta, this.data.selectedCount, this.data.totalAmount, this.data.headBlocking, mode)
+    var text = (!s.disabled && !this.data.headBlocking && s.gap === 0) ? ('去结算 · ' + (mode === 'PICKUP' ? '自取' : '外送')) : s.text
+    this.setData({ checkoutDisabled: s.disabled, checkoutText: text })
   },
 
   onToggleSelect(e) {
@@ -188,7 +194,7 @@ Page({
       .map(function(i) { return i.id })
       .join(',')
     if (!ids) return
-    var page = this.data.channel === 'LOCAL' ? '/pages/local/confirm' : '/pages/order/confirm'
+    var page = this.data.channel !== 'LOCAL' ? '/pages/order/confirm' : this.data.mode === 'PICKUP' ? '/pages/local/pickup' : '/pages/local/confirm'
     wx.navigateTo({ url: page + '?cartItemIds=' + ids })
   },
 

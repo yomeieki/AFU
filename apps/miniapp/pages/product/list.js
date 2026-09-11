@@ -7,7 +7,7 @@
 const { formatPrice, formatStock } = require('../../utils/format')
 const catalogApi = require('../../api/catalog')
 const { getLocalMeta } = require('../../api/local')
-const { headNoticeOf } = require('../../utils/local-catalog')
+const { headNoticeOf, resolveLocalMode } = require('../../utils/local-catalog')
 const app = getApp()
 
 // 左侧分类栏首项：「全部」（id 为 null → 请求时不带 categoryId）
@@ -18,6 +18,7 @@ Page({
     channel: 'EXPRESS',
     // 同城专用
     meta: null,
+    mode: 'DELIVERY',
     headBlocking: false,
     // 搜索（仅邮寄）
     keyword: '',          // 输入框实时值
@@ -47,6 +48,7 @@ Page({
       return
     }
     if (this.data.channel === 'LOCAL') {
+      if (app.getLocalMode() !== this.data.mode) this.applyMode(app.getLocalMode())
       this.loadMeta()
       this.refreshCartBar()
     }
@@ -82,6 +84,7 @@ Page({
       total: 0,
       hasMore: true,
       meta: channel === 'LOCAL' ? this.data.meta : null,
+      mode: channel === 'LOCAL' ? app.getLocalMode() : 'DELIVERY',
       headBlocking: false,
     })
     this.resetRightScroll()
@@ -94,7 +97,8 @@ Page({
     var self = this
     getLocalMeta()
       .then(function(meta) {
-        self.setData({ meta: meta, headBlocking: headNoticeOf(meta).blocking })
+        var mode = app.setLocalMode(resolveLocalMode(meta, app.getLocalMode()))
+        self.setData({ meta: meta, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
       })
       .catch(function() {
         // 保留上一次的 meta：拉不到状态时，把营业中的店显示成打烊比不刷新更糟
@@ -273,5 +277,18 @@ Page({
   onGoExpress() {
     app.setShoppingChannel('EXPRESS')
     this.reloadForChannel()
+  },
+
+  // 子模式变了：阻塞态按新模式重算，购物车条的按钮跟着变（去向与起送线都不一样）
+  applyMode(mode) {
+    this.setData({ mode: mode, headBlocking: headNoticeOf(this.data.meta, mode).blocking })
+    this.refreshCartBar()
+  },
+  onModeChange(e) {
+    this.applyMode(app.setLocalMode(e.detail.mode))
+  },
+  // 页头通知里的「改用自取 / 改用外送」
+  onSwitchMode(e) {
+    this.applyMode(app.setLocalMode(e.detail.mode))
   },
 })
