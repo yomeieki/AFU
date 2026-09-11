@@ -25,7 +25,7 @@ import {
   refreshOrderQuote, getCourierLive,
   applyPauseScope, resumeLocal, resumePickup, clearHoliday,
 } from '../api/admin'
-import { PAUSE_SCOPES, validatePauseInput, pauseStateLines, type PauseScope, type PauseState } from '../utils/pause-scope'
+import { PAUSE_SCOPES, validatePauseInput, pauseStateLines, pauseActive, holidayActive, type PauseScope, type PauseState } from '../utils/pause-scope'
 import StatusBadge from '../components/ui/StatusBadge'
 import { toast } from '../components/ui/Toast'
 import CancelAndRefundModal from '../components/CancelAndRefundModal'
@@ -61,17 +61,18 @@ function ChannelBadge({ channel }: { channel: OrderChannel }) {
   )
 }
 
-/** 看板上自取单张数（五列合计）——顶栏「自取 N」用 */
+/** 看板上未完成的自取单张数——顶栏「自取 N」用（不含 done：服务端 done 列截断 30 条会少算） */
 function pickupOnBoard(snap: WorkbenchSnapshot | null): number {
   if (!snap) return 0
-  return COLUMNS.reduce((n, c) => n + snap.columns[c.key].filter((x) => x.channel === 'PICKUP').length, 0)
+  const cols: ColKey[] = ['pending', 'preparing', 'waitingCourier', 'delivering']
+  return cols.reduce((n, c) => n + snap.columns[c].filter((x) => x.channel === 'PICKUP').length, 0)
 }
 
 /** 顶栏营业状态：桌面顶栏与手机顶栏共用，措辞只此一处 */
 function openStateOf(snap: WorkbenchSnapshot | null): { text: string; cls: string } {
   if (!snap) return { text: '加载中', cls: '' }
-  if (snap.holiday) return { text: `休业中${snap.holiday.until ? `，${snap.holiday.until.slice(5)} 后恢复` : ''}`, cls: 'wb__dot--danger' }
-  if (snap.paused) return { text: `外送已暂停：${snap.paused.reason || '手动暂停'}`, cls: 'wb__dot--danger' }
+  if (holidayActive(snap.holiday, todayKey())) return { text: `休业中${snap.holiday!.until ? `，${snap.holiday!.until.slice(5)} 后恢复` : ''}`, cls: 'wb__dot--danger' }
+  if (pauseActive(snap.paused)) return { text: `外送已暂停：${snap.paused!.reason || '手动暂停'}`, cls: 'wb__dot--danger' }
   if (!snap.localEnabled) return { text: '同城已关闭', cls: '' }
   return snap.localOpenNow ? { text: '营业中', cls: 'wb__dot--ok' } : { text: '非营业时间', cls: 'wb__dot--warn' }
 }
@@ -79,8 +80,8 @@ function openStateOf(snap: WorkbenchSnapshot | null): { text: string; cls: strin
 /** 顶栏第二盏灯：自取开放/暂停。没开通就不显示（返回 null） */
 function pickupStateOf(snap: WorkbenchSnapshot | null): { text: string; cls: string } | null {
   if (!snap || !snap.pickupEnabled) return null
-  if (snap.holiday) return { text: '自取休业', cls: 'wb__dot--danger' }
-  if (snap.pickupPaused) return { text: `自取已暂停：${snap.pickupPaused.reason || '手动暂停'}`, cls: 'wb__dot--warn' }
+  if (holidayActive(snap.holiday, todayKey())) return { text: '自取休业', cls: 'wb__dot--danger' }
+  if (pauseActive(snap.pickupPaused)) return { text: `自取已暂停：${snap.pickupPaused!.reason || '手动暂停'}`, cls: 'wb__dot--warn' }
   return { text: '自取开放', cls: 'wb__dot--ok' }
 }
 
@@ -959,7 +960,7 @@ function RejectModal({ order, channel, onClose, onDone }: {
         cost={`退回顾客 ¥${yuan(refundFen)}，门店这单不产生收入。`}
       />
       <div className="wb__block-t">拒单原因（顾客原样可见，必选）</div>
-      {REJECT_REASONS.map((r) => (
+      {REJECT_REASONS.filter((r) => !(channel === 'PICKUP' && r.value === 'OUT_OF_RANGE')).map((r) => (
         <label key={r.value} className={`wb__opt ${reason === r.value ? 'wb__opt--on' : ''}`}>
           <input type="radio" name="wb-reject" checked={reason === r.value} onChange={() => setReason(r.value)} />
           <span>{r.label}</span>
@@ -1983,7 +1984,12 @@ export default function Workbench() {
                 <span>顾客申请取消{o?.cancelRequestNote ? `：${o.cancelRequestNote}` : ''}</span>
                 {/* 详情刷新中/订单已离开看板时置灰：退款引导要用可退余额，这两种情况下
                     detail 要么还没落地要么已经是废弃的旧快照，点了要么弹不出、要么金额是错的 */}
-                <button className="wb__iconbtn" disabled={!detail || detailRefreshing || gone} onClick={() => setModal({ kind: 'cancelRefund' })}>去处理</button>
+                <span style={{ display: 'flex', gap: 4 }}>
+                  {card.channel !== 'LOCAL' && (
+                    <button className="wb__iconbtn" disabled={detailRefreshing || gone} onClick={() => setModal({ kind: 'confirm', spec: rejectCancelSpec(card) })}>驳回</button>
+                  )}
+                  <button className="wb__iconbtn" disabled={!detail || detailRefreshing || gone} onClick={() => setModal({ kind: 'cancelRefund' })}>去处理</button>
+                </span>
               </div>
             )}
 

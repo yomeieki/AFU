@@ -28,13 +28,10 @@ const STATUS_MAP: Record<string, { label: string; className: string }> = {
 
 /** 自取单复用 PAID/SHIPPED/COMPLETED 三个状态，但店员看到的词不同（spec P8） */
 const PICKUP_STATUS_LABEL: Record<string, string> = { PAID: '待接单', SHIPPED: '待取餐', COMPLETED: '已取餐' }
-/** 同城外送的 SHIPPED 是「配送中」——StatusBadge 默认是邮寄的「已发货」 */
-const LOCAL_STATUS_LABEL: Record<string, string> = { SHIPPED: '配送中' }
 
 export function orderStatusLabel(status: string, deliveryType?: string | null): string {
   const base = STATUS_MAP[status]?.label ?? status
   if (deliveryType === 'PICKUP') return PICKUP_STATUS_LABEL[status] ?? base
-  if (deliveryType === 'LOCAL') return LOCAL_STATUS_LABEL[status] ?? base
   return base
 }
 

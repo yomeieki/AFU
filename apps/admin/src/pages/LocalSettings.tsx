@@ -9,7 +9,8 @@ import type { LocalDeliverySettings } from '../types'
 import { RowList, TimeRangeRow, validateRanges, sortRanges } from '../components/ui/RowList'
 import { useUnsavedSettings } from '../components/UnsavedSettings'
 import PauseScopeDialog from '../components/PauseScopeDialog'
-import { pauseStateLines } from '../utils/pause-scope'
+import { pauseStateLines, holidayActive } from '../utils/pause-scope'
+import { todayKey } from '../utils/time'
 
 const toYuan = (fen: number) => (fen / 100).toFixed(2)
 function toFen(input: string): number | null {
@@ -401,8 +402,8 @@ export default function LocalSettings() {
       <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-2">
         <h3 className="font-medium text-gray-800">休业</h3>
         <p className="text-xs text-gray-500">节假日/装修整店停：外送与自取一起停，邮寄不受影响。到日期自动恢复，也可提前结束。</p>
-        {s.holiday
-          ? <p className="text-sm text-amber-800">休业中：{s.holiday.reason || '休业'}（{s.holiday.until ? `${s.holiday.until} 后恢复` : '手动恢复'}）——在右上角「暂停 / 休业」里结束。</p>
+        {holidayActive(s.holiday, todayKey())
+          ? <p className="text-sm text-amber-800">休业中：{s.holiday!.reason || '休业'}（{s.holiday!.until ? `${s.holiday!.until.slice(5)} 后恢复` : '手动恢复'}）——在右上角「暂停 / 休业」里结束。</p>
           : <p className="text-sm text-gray-600">当前正常营业。要休业请点右上角「暂停 / 休业」→「休业至某日」。</p>}
       </section>
 
