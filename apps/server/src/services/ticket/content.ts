@@ -62,8 +62,10 @@ export interface TicketOrderInput {
    *  所以现在这里不会再有混淆对象——但字段名仍然刻意叫 announceNo，别改回 seq。 */
   // ── 自取专属（channel==='PICKUP'）──
   pickupAt?: Date | null
-  /** 「今天 12:00–12:30」，由调用方用 services/pickup 的 pickupSlotLabel 算好传进来（本文件不算时区） */
+  /** 「9月12日（周六）12:00–12:30」，由调用方用 services/pickup 的 pickupTicketLabel 算好传进来（本文件不算时区） */
   pickupSlotLabel?: string | null
+  /** 票头戳：'' = 今天取（不盖），'明日单' / '9月13日单' = 不是今天取，提醒别今天做 */
+  pickupDayStamp?: string | null
   /** 自取优惠（分）。>0 时取餐联在合计与券之间打一行；厨房联不打 */
   pickupDiscountAmount?: number
   announceNo?: number | null
@@ -290,6 +292,8 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   const hasKitchen = isLocal || isPickup // 自取也是后厨现拌 + 柜台装袋，两联
   const header: string[] = [
     `<CB>${isPickup ? '到店自取' : isLocal ? '同城配送' : '全国邮寄'}</CB>`,
+    // 非今日取的自取单盖一枚大字戳：票面日期已是绝对日期，这枚戳只负责「今天先别做」
+    ...(isPickup && o.pickupDayStamp ? [`<CB>【${esc(o.pickupDayStamp)}】</CB>`] : []),
     ...(o.announceNo !== null && o.announceNo !== undefined ? [`<C>第 ${o.announceNo} 次催单</C>`] : []),
     // PO 2026-09-06 定：顶部只放**加大的后 4 位**。完整单号 20 字符在 32 列纸上占大半行，
     // 而店里认单靠这 4 位，没人逐位核对前缀。完整单号挪到 footer 小字——客服对单、查退款仍需要。

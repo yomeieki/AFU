@@ -4,7 +4,7 @@
  */
 import assert from 'assert'
 import { DEFAULT_LOCAL_SETTINGS, sanitizeLocalSettings } from '../src/services/local-settings'
-import { buildPickupSlots, prepStartAt, pickupPrepMinutes, isValidPickupSlot, pickupDiscountOf, pickupSlotLabel } from '../src/services/pickup'
+import { buildPickupSlots, prepStartAt, pickupPrepMinutes, isValidPickupSlot, pickupDiscountOf, pickupSlotLabel, pickupTicketLabel } from '../src/services/pickup'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -94,6 +94,13 @@ t('时段文案：今天/明天/日期', () => {
   assert.strictEqual(pickupSlotLabel(sh('2026-09-11T12:00:00'), 30, now), '今天 12:00–12:30')
   assert.strictEqual(pickupSlotLabel(sh('2026-09-12T12:00:00'), 30, now), '明天 12:00–12:30')
   assert.strictEqual(pickupSlotLabel(sh('2026-09-13T12:00:00'), 30, now), '09-13 12:00–12:30')
+})
+
+t('小票取餐文案：绝对日期 + 星期；今天不盖戳、明天「明日单」、更远印日期', () => {
+  const now = sh('2026-09-11T09:00:00')
+  assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-11T12:00:00'), 30, now), { text: '9月11日（周五）12:00–12:30', stamp: '' })
+  assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-12T12:00:00'), 30, now), { text: '9月12日（周六）12:00–12:30', stamp: '明日单' })
+  assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-13T18:00:00'), 20, now), { text: '9月13日（周日）18:00–18:20', stamp: '9月13日单' })
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

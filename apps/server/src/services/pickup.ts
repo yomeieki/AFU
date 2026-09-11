@@ -107,3 +107,23 @@ export function pickupSlotLabel(pickupAt: Date, slotMinutes: number, now: Date =
   const m = shanghaiMinutesOf(pickupAt)
   return `${dayLabel(date, shanghaiDateStr(now))} ${hhmm(m)}–${hhmm(m + slotMinutes)}`
 }
+
+const WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+/** 'YYYY-MM-DD' → '9月12日（周六）'（按上海日历日取星期：正午 +08:00 的 UTC 日期与上海同日） */
+function cnDate(dateStr: string): string {
+  const d = new Date(`${dateStr}T12:00:00+08:00`)
+  return `${Number(dateStr.slice(5, 7))}月${Number(dateStr.slice(8, 10))}日（${WEEKDAY[d.getUTCDay()]}）`
+}
+
+/**
+ * 小票专用取餐文案（PO 2026-09-11 方案一）：纸票是付款那一刻打的，印「明天」到了第二天就成了假话，
+ * 所以票面一律印绝对日期 + 星期；相对关系只放在票头的戳里（今天不盖戳，明天「明日单」，更远印日期）。
+ * 工作台/通知仍用 pickupSlotLabel——它们每次刷新都按当时重算，不会过期。
+ */
+export function pickupTicketLabel(pickupAt: Date, slotMinutes: number, now: Date = new Date()): { text: string; stamp: string } {
+  const date = shanghaiDateStr(pickupAt)
+  const today = shanghaiDateStr(now)
+  const m = shanghaiMinutesOf(pickupAt)
+  const stamp = date === today ? '' : date === addDays(today, 1) ? '明日单' : `${cnDate(date).replace(/（.*）/, '')}单`
+  return { text: `${cnDate(date)}${hhmm(m)}–${hhmm(m + slotMinutes)}`, stamp }
+}

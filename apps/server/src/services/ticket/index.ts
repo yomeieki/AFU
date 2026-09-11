@@ -27,7 +27,7 @@ import {
   renderTestTicket, TicketOrderInput, TicketChannel,
 } from './content'
 import { getLocalSettings, isShopOpenNow, LocalDeliverySettings } from '../local-settings'
-import { pickupSlotLabel, prepStartAt } from '../pickup'
+import { pickupTicketLabel, prepStartAt } from '../pickup'
 
 const BATCH = 100
 /**
@@ -201,7 +201,9 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderI
     discountAmount: order.discountAmount,
     pointsUsed: order.pointsUsed,
     pickupAt: order.pickupAt,
-    pickupSlotLabel: order.pickupAt ? pickupSlotLabel(order.pickupAt, slotMinutes) : null,
+    // 票面印绝对日期（方案一）：付款时打的票第二天还在夹子上，「明天」会变成假话
+    pickupSlotLabel: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).text : null,
+    pickupDayStamp: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).stamp : null,
     pickupDiscountAmount: order.pickupDiscountAmount,
   }
 }

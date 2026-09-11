@@ -310,10 +310,11 @@ t('自取小票：票头「到店自取」、取餐时间放大、不印地址/�
     items: [{ productName: '凉拌牛肉', specText: null, quantity: 2, subtotal: 5000 }],
     totalAmount: 5000, shippingFee: 0, actualAmount: 4750, remark: null, discountAmount: 0, pointsUsed: 0, pickupDiscountAmount: 250,
     receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '四川省自贡市自流井区丹桂40栋底楼',
-    pickupAt: new Date('2026-09-11T04:00:00Z'), pickupSlotLabel: '今天 12:00–12:30',
+    pickupAt: new Date('2026-09-12T04:00:00Z'), pickupSlotLabel: '9月12日（周六）12:00–12:30', pickupDayStamp: '明日单',
   })
   assert.ok(s.includes('<CB>到店自取</CB>'))
-  assert.ok(s.includes('<B>取餐 今天 12:00–12:30</B>'))
+  assert.ok(s.includes('<CB>【明日单】</CB>'))
+  assert.ok(s.includes('<B>取餐 9月12日（周六）12:00–12:30</B>'))
   assert.ok(s.includes('尾号1234'))
   assert.ok(!s.includes('地址'))
   assert.ok(!s.includes('运费'))
