@@ -1,7 +1,9 @@
-/* 通栏独立一栏：上下各留间距，两格等宽，选中格用品牌色下划线。休业时两格都灰。 */
+/* 独立一栏，但不通栏（PO 2026-09-11：通栏太宽像两块大按钮）：宽 460rpx 居中的分段控件，
+   两格等宽，选中格用品牌底色。休业时两格都灰。 */
 .mode-bar {
   display: flex;
-  margin: 12rpx 24rpx 16rpx;
+  width: 460rpx;
+  margin: 12rpx auto 16rpx;
   padding: 6rpx;
   background: var(--card, #fff);
   border-radius: var(--radius-md, 12rpx);
@@ -14,12 +16,12 @@
   align-items: center;
   justify-content: center;
   gap: 4rpx;
-  padding: 14rpx 0 12rpx;
+  padding: 10rpx 0 8rpx;
   border-radius: 10rpx;
 }
 .mode-tab-hover { background: var(--bg, #f5f6f7); }
 .mode-tab.active { background: var(--brand-bg, #fef4f0); }
-.mode-name { font-size: 30rpx; font-weight: 600; color: var(--text-2, #666); }
+.mode-name { font-size: 28rpx; font-weight: 600; color: var(--text-2, #666); }
 .mode-tab.active .mode-name { color: var(--brand, #e5441e); }
 .mode-sub { font-size: 21rpx; line-height: 1; }
 .mode-sub-open { color: var(--success, #16a34a); }

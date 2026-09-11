@@ -43,7 +43,7 @@
     <view class="section-title">取餐人</view>
     <view class="field-row">
       <text class="row-label">姓名</text>
-      <input class="field-input" value="{{contactName}}" maxlength="32" placeholder="可不填" placeholder-class="field-placeholder" bindinput="onNameInput" />
+      <input class="field-input" value="{{contactName}}" maxlength="32" placeholder="选填" placeholder-class="field-placeholder" bindinput="onNameInput" />
     </view>
     <view class="field-row">
       <text class="row-label">手机号</text>
