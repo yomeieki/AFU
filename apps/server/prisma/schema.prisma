@@ -307,6 +307,15 @@ model Order {
   expressRegionGroup          String?   @map("express_region_group") @db.VarChar(32)
   // 报价重量（克）。用克不用 Decimal：Prisma 的 Decimal 在应用层是对象，比较/序列化都要转，Int 最省事
   expressWeightG              Int?      @map("express_weight_g")
+  // ── 到店自取（deliveryType=PICKUP 时写入；spec 2026-09-11-local-pickup-design §3.1）──
+  // 顾客选的取餐时段起点。取消窗口/催单/过时未取/自动完成全部以它为基准，不看 paidAt
+  pickupAt                    DateTime? @map("pickup_at")
+  // 自取优惠（分）。小票与统计直接读它，不从设置反推——设置会变，这单当时优惠了多少不该跟着变
+  pickupDiscountAmount        Int       @default(0) @map("pickup_discount_amount")
+  // 店员点「已备好」的时刻（PREPARING → SHIPPED）
+  pickupReadyAt               DateTime? @map("pickup_ready_at")
+  // 「过时未取」提醒只发一次的标记，与 acceptRemindedAt 同款
+  pickupRemindedAt            DateTime? @map("pickup_reminded_at")
   // 客户端下单幂等键（UUID）。治的是「服务端已创建、客户端超时没收到响应」这一类重复下单：
   // 顾客点一次、网络卡住、他再点一次，库里就是两张单、库存扣两次、券核销两次。
   // 客户端每进一次结算页生成一个，重试沿用同一个；服务端见到重复的就把原单原样返回。
