@@ -9,10 +9,8 @@
 // 自取读的是 /local/meta 的 pickup 节与 holiday 节；营业时间外自取**不阻塞**（可预约后续时段）。
 
 var formatPrice = require('./format').formatPrice
-
-function normMode(mode) {
-  return mode === 'PICKUP' ? 'PICKUP' : 'DELIVERY'
-}
+// 归一化只在 utils/channel.js 一处（Global Constraint）；这里只是取个短名
+var normMode = require('./channel').normalizeLocalMode
 
 function pickupMeta(meta) {
   return meta && meta.pickup ? meta.pickup : null
