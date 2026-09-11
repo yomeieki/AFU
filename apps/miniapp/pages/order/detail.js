@@ -312,6 +312,10 @@ function decorateOrder(order) {
   var isLocal = order.deliveryType === 'LOCAL'
   var isExpress = order.deliveryType === 'EXPRESS'
   var isPickup = order.deliveryType === 'PICKUP'
+  // 服务端从 2026-09-11 起下发 canSelfCancel（自取按「开始备餐时刻」判）；老服务端没有就按旧规则算
+  var selfCancel = typeof order.canSelfCancel === 'boolean'
+    ? order.canSelfCancel
+    : (order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt))
   var expressStageText = expressTrackUtil.expressStageText(order)
   var expressTrack = isExpress ? expressTrackUtil.buildExpressTrack(order.track) : []
 
@@ -354,9 +358,7 @@ function decorateOrder(order) {
       ((isLocal || isExpress) && order.status === 'PREPARING' && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true)
       || (isPickup && ['PAID', 'PREPARING'].indexOf(order.status) !== -1 && !order.cancelRequestedAt && !order.cancelRequestRejectedAt && order.canRequestCancel !== true && order.canSelfCancel !== true),
     // 服务端从 2026-09-11 起下发 canSelfCancel（自取按「开始备餐时刻」判）；老服务端没有就按旧规则算
-    canSelfCancel: typeof order.canSelfCancel === 'boolean'
-      ? order.canSelfCancel
-      : (order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt)),
+    canSelfCancel: selfCancel,
     totalAmountText: formatPrice(order.totalAmount),
     shippingFeeText: formatPrice(order.shippingFee),
     actualAmountText: formatPrice(order.actualAmount),
@@ -380,7 +382,8 @@ function decorateOrder(order) {
     timeline: isPickup ? buildPickupTimeline(order) : isLocal ? buildLocalTimeline(order) : buildTimeline(order),
     refunds: refunds,
     afterSale: afterSale,
-    pickupHint: isPickup ? pickupHintOf(order, typeof order.canSelfCancel === 'boolean' ? order.canSelfCancel : false) : '',
+    // 提示文案与按钮必须看同一个判定，否则会出现「按钮能点、文案说不能」
+    pickupHint: isPickup ? pickupHintOf(order, selfCancel) : '',
     items: order.items.map(function(item) {
       // 赠品行的 productPrice / subtotal 服务端恒为 0（积分不进商品行金额）。
       // 照直渲染成 ¥0.00 会被顾客当成 0 元 bug 来投诉，所以价格换成积分价、小计留「—」。
