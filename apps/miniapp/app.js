@@ -160,17 +160,9 @@ App({
         })
       },
       function() {
-        // 自取不需要定位：拒绝许可也放行进同城，子模式落到自取；外送在结算页选地址时会再问一次
-        self.setShoppingChannel('LOCAL')
-        self.setLocalMode('PICKUP')
-        wx.showToast({ title: '未同意位置许可，同城只能使用到店自取', icon: 'none', duration: 2500 })
-        wx.switchTab({
-          url: '/pages/index/index',
-          fail: function(err) {
-            console.error('[channel] 进入同城失败', err)
-            wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
-          },
-        })
+        // PO 2026-09-11 定：进同城（含自取）一律要先同意位置许可，不同意就不放行——
+        // 同城入口只有一个门，门口只问一次，比「自取免定位、外送到结算页再问」少一种状态
+        wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
       }
     )
   },
