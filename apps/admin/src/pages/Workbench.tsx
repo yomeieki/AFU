@@ -1978,7 +1978,7 @@ export default function Workbench() {
           </div>
 
           <div className="wb__drawer-body">
-            {(card.local ?? card.express)?.cancelRequested && (
+            {(card.local ?? card.express ?? card.pickup)?.cancelRequested && (
               <div className="wb__strip wb__strip--warn">
                 <span>顾客申请取消{o?.cancelRequestNote ? `：${o.cancelRequestNote}` : ''}</span>
                 {/* 详情刷新中/订单已离开看板时置灰：退款引导要用可退余额，这两种情况下
@@ -2132,7 +2132,7 @@ export default function Workbench() {
               </div>
             )}
 
-            {!local && detail?.expressBooking?.booking && (() => {
+            {card.channel === 'EXPRESS' && detail?.expressBooking?.booking && (() => {
               const b = detail.expressBooking!.booking!
               return (
                 <div className="wb__block">
@@ -2216,7 +2216,7 @@ export default function Workbench() {
                   )}
                 </>
               )}
-              {!local && detail?.expressBooking?.booking && (() => {
+              {card.channel === 'EXPRESS' && detail?.expressBooking?.booking && (() => {
                 const b = detail.expressBooking!.booking!
                 return (
                   <div className="wb__line">

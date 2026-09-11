@@ -63,9 +63,9 @@ export default function CancelAndRefundModal({
   }, [orderId])
 
   useEffect(() => {
-    // 邮寄没有 precancel 接口（快递100 不支持提前问取消费），只有同城的两步流程要问
-    if (!isExpress && step === 1) void loadFee()
-  }, [isExpress, step, loadFee])
+    // 邮寄没有 precancel 接口（快递100 不支持提前问取消费），自取没有配送单，只有同城的两步流程要问
+    if (!isExpress && !isPickup && step === 1) void loadFee()
+  }, [isExpress, isPickup, step, loadFee])
 
   const doCancel = async () => {
     setBusy(true); setError('')
