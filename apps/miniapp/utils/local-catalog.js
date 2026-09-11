@@ -154,7 +154,7 @@ function pickupModeHint(meta) {
   if (!meta || meta.holiday) return ''
   var d = storeStatusOf(meta, 'DELIVERY')
   var p = storeStatusOf(meta, 'PICKUP')
-  return d.tone === 'closed' && p.tone === 'open' ? '可预约' : ''
+  return d.tone === 'closed' && p.tone === 'open' ? '（可预约）' : ''
 }
 
 module.exports = {

@@ -127,8 +127,8 @@ test('替代出路：本侧阻塞时给另一侧，另一侧也不可用时给 n
 // 切换栏小字（PO 2026-09-11）：顶部胶囊已有状态，只在店休而自取可预约时提示「可预约」
 test('pickupModeHint：店休且自取可预约才显示「可预约」，营业中/休业/自取暂停都为空', function () {
   assert.equal(pickupModeHint(PK), '')
-  assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, closedKind: 'CLOSED' })), '可预约')
-  assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, closedKind: 'BREAK' })), '可预约')
+  assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, closedKind: 'CLOSED' })), '（可预约）')
+  assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, closedKind: 'BREAK' })), '（可预约）')
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, holiday: { until: null, reason: '装修' } })), '')
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, pickup: Object.assign({}, PK.pickup, { paused: { reason: 'x', until: null } }) })), '')
   assert.equal(pickupModeHint(null), '')
