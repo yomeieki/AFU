@@ -237,3 +237,17 @@ export function sendDeliverSubscribeMessage(
 export function getSubscribeTemplateIds(): string[] {
   return [config.subscribe.paidTemplateId, config.subscribe.shipTemplateId, config.subscribe.refundTemplateId, config.subscribe.deliverTemplateId].filter(Boolean)
 }
+
+/**
+ * 按结算场景分组的模板 ID（spec 2026-09-11 §4.8）。wx.requestSubscribeMessage 一次最多 3 个，
+ * 三个渠道各自要的不一样：邮寄要发货，外送要配送，自取要取餐；退款三边都要。空 ID 自动剔除。
+ * 老字段 getSubscribeTemplateIds 保留给老版本小程序。
+ */
+export function getSubscribeTemplateGroups(): { express: string[]; local: string[]; pickup: string[] } {
+  const c = config.subscribe
+  return {
+    express: [c.shipTemplateId, c.refundTemplateId].filter(Boolean),
+    local: [c.deliverTemplateId, c.refundTemplateId].filter(Boolean),
+    pickup: [c.pickupTemplateId, c.refundTemplateId].filter(Boolean),
+  }
+}

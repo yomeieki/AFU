@@ -55,6 +55,8 @@ const envSchema = z.object({
   WECHAT_TMPL_REFUND_FIELDS: z.string().optional(),
   WECHAT_TMPL_DELIVER: z.string().optional(),
   WECHAT_TMPL_DELIVER_FIELDS: z.string().optional(),
+  WECHAT_TMPL_PICKUP: z.string().optional(),
+  WECHAT_TMPL_PICKUP_FIELDS: z.string().optional(),
 
   // 通知/告警
   ORDER_NOTIFY_WECOM_WEBHOOK: z.string().optional(),
@@ -196,6 +198,8 @@ export const config = {
     refundFields: env.WECHAT_TMPL_REFUND_FIELDS ?? '',
     deliverTemplateId: env.WECHAT_TMPL_DELIVER ?? '',
     deliverFields: env.WECHAT_TMPL_DELIVER_FIELDS ?? '',
+    pickupTemplateId: env.WECHAT_TMPL_PICKUP ?? '',
+    pickupFields: env.WECHAT_TMPL_PICKUP_FIELDS ?? '',
   },
   cos: {
     enabled: cosEnabled,

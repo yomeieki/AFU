@@ -95,7 +95,7 @@ export async function notifyCancelRequest(
   graceMin: number,
   // 同城/邮寄两个渠道的措辞不能共用一份「同城订单…」文案——邮寄单顾客看不到骑手也没有「同城」
   // 这个概念，误用同城口径会让店员去错工作台（同城工作台 vs 全国邮寄订单页）。
-  channel: 'LOCAL' | 'EXPRESS'
+  channel: 'LOCAL' | 'EXPRESS' | 'PICKUP'
 ): Promise<void> {
   const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
@@ -105,13 +105,17 @@ export async function notifyCancelRequest(
   // 调用方（orders.ts 的 cancel-request 路由）此刻传进来的 graceMin 实际必定 > 0——
   // 窗口关闭（cancelGraceMin<=0）时路由在更早处已经以 42229 拒绝了申请，走不到这条推送。
   // 这一支留作防御性兜底（万一以后哪个调用点忘了先判窗口再推送），不是当前会触发的正常路径。
-  const windowText = graceMin > 0 ? `接单后 ${graceMin} 分钟内` : '接单后不可申请（窗口已关闭）'
+  const windowText = channel === 'PICKUP'
+    ? '备好之前可申请'
+    : graceMin > 0 ? `接单后 ${graceMin} 分钟内` : '接单后不可申请（窗口已关闭）'
   const isExpress = channel === 'EXPRESS'
-  const title = isExpress ? '邮寄订单申请取消' : '同城订单申请取消'
-  const header = isExpress
-    ? `**📦 邮寄订单：顾客申请取消（${windowText}，需确认全额退款）**`
-    : `**🛵 同城订单：顾客申请取消（${windowText}，需确认全额退款）**`
-  const footer = isExpress ? '请到后台「接单工作台」或「全国邮寄」订单页处理' : '请到后台「同城订单」处理'
+  const title = channel === 'PICKUP' ? '自取订单申请取消' : isExpress ? '邮寄订单申请取消' : '同城订单申请取消'
+  const header = channel === 'PICKUP'
+    ? `**🏪 自取订单：顾客申请取消（${windowText}，需确认全额退款）**`
+    : isExpress
+      ? `**📦 邮寄订单：顾客申请取消（${windowText}，需确认全额退款）**`
+      : `**🛵 同城订单：顾客申请取消（${windowText}，需确认全额退款）**`
+  const footer = channel === 'PICKUP' ? '请到后台「接单工作台」处理' : isExpress ? '请到后台「接单工作台」或「全国邮寄」订单页处理' : '请到后台「同城订单」处理'
   const content = [
     header,
     `订单号：${order.orderNo}`,

@@ -13,15 +13,17 @@ import { rollbackOrderStock } from '../utils/order-stock'
 import { payLimiter } from '../middlewares/rate-limit'
 import { AFTER_SALE_REASONS, AFTER_SALE_REASON_LABEL, AfterSaleReason, payExpireAtOf } from '../utils/constants'
 import { initiateRefund, remainingRefundable } from '../services/refund'
-import { getSubscribeTemplateIds, sendPaidSubscribeMessage } from '../services/subscribe-message'
 import { loadOrderLines, assertLinesSellable } from '../services/order-lines'
 import { getExpressSettings, findRegionGroup, legacyShippingView } from '../services/express-settings'
 import { calcPackageWeightKg, calcExpressFee, itemsHash, addressHash, verifyExpressQuote, FeeCalc } from '../services/express-quote'
 import { fetchCourierQuotes, MAX_ADDRESS_BYTES } from '../services/express-quote-service'
-import { channelOfDeliveryType } from '../utils/channel'
+import { channelOfDeliveryType, deliveryTypeSchema } from '../utils/channel'
 import {
   getLocalSettings, isOpenNow, isPaused, nextOpenText, calcLocalFee, verifyQuote, haversineM,
+  isHolidayNow, isPickupPaused, LocalDeliverySettings,
 } from '../services/local-settings'
+import { isValidPickupSlot, prepStartAt, pickupDiscountOf, pickupSlotLabel } from '../services/pickup'
+import { getSubscribeTemplateIds, sendPaidSubscribeMessage, getSubscribeTemplateGroups } from '../services/subscribe-message'
 import { DELIVERY_STATUS_LABEL, providerLabel } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getCourierLocationByOrder } from '../services/delivery/courier-location'
@@ -74,15 +76,51 @@ function withPayExpire<T extends { status: string; createdAt: Date }>(
   }
 }
 
+/** 顾客端自取节：取餐时间、备好时刻、开始备餐时刻、门店（spec §5.5）。非自取单为 null */
+async function pickupViewOf(order: { deliveryType: string; pickupAt: Date | null; pickupReadyAt: Date | null }) {
+  if (order.deliveryType !== 'PICKUP' || !order.pickupAt) return null
+  const s = await getLocalSettings()
+  return {
+    pickupAt: order.pickupAt.toISOString(),
+    pickupReadyAt: order.pickupReadyAt?.toISOString() ?? null,
+    prepStartAt: prepStartAt(s, order.pickupAt).toISOString(),
+    slotLabel: pickupSlotLabel(order.pickupAt, s.pickup.slotMinutes),
+    store: { name: s.store.name, phone: s.store.phone, address: `${s.store.district}${s.store.address}`, latE6: s.store.latE6, lngE6: s.store.lngE6 },
+  }
+}
+/** 「取消订单」按钮该不该出现：待付款一律可；自取 PAID 且未到开始备餐；其余渠道 PAID 未接单 */
+async function canSelfCancelOf(order: { deliveryType: string; status: string; acceptedAt: Date | null; pickupAt: Date | null }) {
+  if (order.status === 'PENDING_PAYMENT') return true
+  if (order.status !== 'PAID' || order.acceptedAt) return false
+  if (order.deliveryType !== 'PICKUP') return true
+  if (!order.pickupAt) return false
+  const s = await getLocalSettings()
+  return Date.now() < prepStartAt(s, order.pickupAt).getTime()
+}
+
 function isPayExpired(order: { createdAt: Date }): boolean {
   return Date.now() >= payExpireAtOf(order.createdAt, config.order.payTimeoutMin).getTime()
 }
 
-/** D6 ②：同城/邮寄订单接单后 acceptGraceMin 分钟内可申请取消（各渠道各自的宽限分钟，0 = 关闭） */
-async function cancelWindowOf(order: { deliveryType: string; status: string; acceptedAt: Date | null; cancelRequestedAt: Date | null }) {
-  if (order.status !== 'PREPARING' || !order.acceptedAt) return { canRequestCancel: false, cancelRequestDeadline: null as Date | null, cancelGraceMin: 0 }
+/**
+ * D6 ②：同城/邮寄订单接单后 acceptGraceMin 分钟内可申请取消（各渠道各自的宽限分钟，0 = 关闭）。
+ * 自取（spec 2026-09-11 P10）：接单前且未到开始备餐时刻 → 自助秒退（不走这里）；
+ * PAID 且已过开始备餐时刻、或 PREPARING → 可申请；已备好（SHIPPED）后关闭。没有分钟数的概念。
+ */
+async function cancelWindowOf(order: { deliveryType: string; status: string; acceptedAt: Date | null; cancelRequestedAt: Date | null; pickupAt: Date | null }) {
+  const closed = { canRequestCancel: false, cancelRequestDeadline: null as Date | null, cancelGraceMin: 0 }
+  if (order.deliveryType === 'PICKUP') {
+    if (!order.pickupAt || order.cancelRequestedAt) return closed
+    if (order.status === 'PREPARING') return { canRequestCancel: true, cancelRequestDeadline: null, cancelGraceMin: 0 }
+    if (order.status === 'PAID') {
+      const s = await getLocalSettings()
+      return { canRequestCancel: Date.now() >= prepStartAt(s, order.pickupAt).getTime(), cancelRequestDeadline: null, cancelGraceMin: 0 }
+    }
+    return closed
+  }
+  if (order.status !== 'PREPARING' || !order.acceptedAt) return closed
   const graceMin = order.deliveryType === 'LOCAL' ? (await getLocalSettings()).acceptGraceMin : order.deliveryType === 'EXPRESS' ? (await getExpressSettings()).acceptGraceMin : 0
-  if (graceMin <= 0) return { canRequestCancel: false, cancelRequestDeadline: null as Date | null, cancelGraceMin: 0 }
+  if (graceMin <= 0) return closed
   const deadline = new Date(order.acceptedAt.getTime() + graceMin * 60 * 1000)
   return { canRequestCancel: !order.cancelRequestedAt && Date.now() < deadline.getTime(), cancelRequestDeadline: deadline, cancelGraceMin: graceMin }
 }
@@ -99,8 +137,13 @@ const createOrderSchema = z
   .object({
     cartItemIds: z.array(z.number().int().positive()).min(1, '请选择商品').optional(),
     directItem: directItemSchema.optional(),
-    addressId: z.number().int().positive('请选择收货地址'),
-    deliveryType: z.enum(['EXPRESS', 'LOCAL']).default('EXPRESS'),
+    addressId: z.number().int().positive('请选择收货地址').optional(),
+    deliveryType: deliveryTypeSchema.default('EXPRESS'),
+    // ── 到店自取（spec 2026-09-11 §4.3）──
+    pickupAt: z.string().datetime({ offset: true }).optional(),
+    pickupContact: z
+      .object({ name: z.string().trim().max(32).optional(), phone: z.string().trim().regex(/^1\d{10}$/, '取餐人手机号无效') })
+      .optional(),
     quoteToken: z.string().max(1024).optional(),
     // 备注上限 20 字（PO 2026-09-06 定）。不是字节预算问题——255 字也只让同城双联从 54 件降到
     // 34 件，远超实际量。真正的原因是**票面可读性**：备注用 <CB> 渲染（居中放大加粗，一个字占
@@ -123,6 +166,10 @@ const createOrderSchema = z
   .refine((v) => !v.gifts || new Set(v.gifts.map((g) => g.pointsGoodId)).size === v.gifts.length, {
     message: '同一种赠品请合并数量，不要重复提交',
   })
+  .refine((v) => (v.deliveryType === 'PICKUP' ? v.addressId === undefined : v.addressId !== undefined), {
+    message: '自取订单不需要收货地址；外送/邮寄订单请选择收货地址',
+  })
+  .refine((v) => v.deliveryType !== 'PICKUP' || (!!v.pickupAt && !!v.pickupContact), { message: '请选择取餐时间并填写取餐人手机号' })
 
 /**
  * 「订单已创建」的返回体。首次创建与幂等重试**必须逐字段相同**——
@@ -150,13 +197,16 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
     status: order.status,
     payExpireAt: payExpireAtOf(order.createdAt, config.order.payTimeoutMin),
     subscribeTemplateIds: getSubscribeTemplateIds(),
+    pickupAt: order.pickupAt ?? null,
+    pickupDiscountAmount: order.pickupDiscountAmount,
+    subscribeTemplates: getSubscribeTemplateGroups(),
   }
 }
 
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const { cartItemIds, directItem, addressId, deliveryType, quoteToken, remark, couponId, gifts, clientRequestId } =
+    const { cartItemIds, directItem, addressId, deliveryType, pickupAt, pickupContact, quoteToken, remark, couponId, gifts, clientRequestId } =
       createOrderSchema.parse(req.body)
 
     // 幂等前置查询：客户端超时重试时，绝大多数情况在这里就命中并原样返回，
@@ -173,11 +223,11 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     const channel = channelOfDeliveryType(deliveryType)
     assertLinesSellable(lines, channel)
 
-    // 3. 获取收货地址（验证归属）
-    const address = await prisma.address.findFirst({
-      where: { id: addressId, userId, deletedAt: null },
-    })
-    if (!address) throw new AppError(40401, '收货地址不存在', 404)
+    // 3. 收货地址（自取单没有：取餐地点是门店，后面写门店地址快照）
+    const address = deliveryType === 'PICKUP'
+      ? null
+      : await prisma.address.findFirst({ where: { id: addressId!, userId, deletedAt: null } })
+    if (deliveryType !== 'PICKUP' && !address) throw new AppError(40401, '收货地址不存在', 404)
 
     // 4. 计算金额（全部后端计算；单价取 SKU 价，无 SKU 走商品价）
     let totalAmount = 0
@@ -203,7 +253,6 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     const giftResult = await loadGiftLines(userId, channel, gifts ?? [])
     const giftLines = giftResult.lines
     const pointsUsed = giftResult.pointsUsed
-    const coupon = couponId ? await loadCouponForOrder(userId, couponId, channel, totalAmount) : null
 
     // ⚠️ 赠品与付费行指向同一商品时，上面两处库存校验各自独立通过（付费行判 1 件、赠品判 1 件），
     // 但库存只有 1 件。事务内第二次 updateMany 会判 count===0 整单回滚——**安全但文案误导**，
@@ -240,12 +289,30 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       distanceM?: number; distanceSource?: string; estimatedDeliveryAt?: Date
     } = {}
     let expressSnapshot: { expressQuoteSnapshot?: Prisma.InputJsonValue; expressRegionGroup?: string; expressWeightG?: number } = {}
-    if (deliveryType === 'LOCAL') {
+    // ── 自取：优惠先于券算出来，券面额按「小计 − 自取优惠」封顶（spec P6）──
+    let pickupDiscount = 0
+    let pickupSnapshot: { pickupAt?: Date; pickupDiscountAmount?: number } = {}
+    let localStore: LocalDeliverySettings['store'] | null = null
+    if (deliveryType === 'PICKUP') {
+      const s = await getLocalSettings()
+      if (!s.pickup.enabled) throw new AppError(42280, '到店自取暂未开通')
+      if (isHolidayNow(s)) throw new AppError(42280, `休息中${s.holiday?.until ? `，${s.holiday.until.slice(5).replace('-', '月')}日恢复` : ''}`)
+      if (isPickupPaused(s)) throw new AppError(42280, `自取暂停接单${s.pickup.paused?.reason ? `：${s.pickup.paused.reason}` : ''}`)
+      const at = new Date(pickupAt!)
+      // 必须精确命中此刻算出的某一格：顾客在页面磨蹭到那格过期了就拒，让他重选
+      if (!isValidPickupSlot(s, at, new Date())) throw new AppError(42281, '该时段已不可选，请重新选择取餐时间')
+      if (s.pickup.minOrderAmountFen > 0 && totalAmount < s.pickup.minOrderAmountFen) {
+        throw new AppError(42282, `到店自取满 ¥${(s.pickup.minOrderAmountFen / 100).toFixed(2)} 起，当前 ¥${(totalAmount / 100).toFixed(2)}`)
+      }
+      pickupDiscount = pickupDiscountOf(s, totalAmount)
+      pickupSnapshot = { pickupAt: at, pickupDiscountAmount: pickupDiscount }
+      localStore = s.store
+    } else if (deliveryType === 'LOCAL') {
       const s = await getLocalSettings()
       if (!s.enabled) throw new AppError(42226, '同城配送暂未开通')
       if (isPaused(s)) throw new AppError(42226, `同城配送暂停接单${s.paused?.reason ? `：${s.paused.reason}` : ''}`)
       if (!isOpenNow(s)) throw new AppError(42222, `当前非营业时间，${nextOpenText(s)}`)
-      if (address.latE6 === null || address.lngE6 === null) throw new AppError(42223, '该地址缺少定位，请编辑地址并在地图上选点')
+      if (address!.latE6 === null || address!.lngE6 === null) throw new AppError(42223, '该地址缺少定位，请编辑地址并在地图上选点')
       if (s.store.latE6 === null || s.store.lngE6 === null) throw new AppError(42226, '门店尚未设置坐标，暂不能配送')
       /**
        * ── quoteToken 的信任边界（改错这里就是每单漏钱，动之前先读完）──
@@ -280,7 +347,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
        * 从不参与「谁更低」的比较（这里不存在凭证价胜出的分支）。
        */
       const quoted = quoteToken ? verifyQuote(quoteToken) : null
-      if (!quoted || quoted.addressId !== address.id || quoted.latE6 !== address.latE6 || quoted.lngE6 !== address.lngE6) {
+      if (!quoted || quoted.addressId !== address!.id || quoted.latE6 !== address!.latE6 || quoted.lngE6 !== address!.lngE6) {
         throw new AppError(42239, '请重新获取配送报价后再提交')
       }
       if (quoted.storeLatE6 !== s.store.latE6 || quoted.storeLngE6 !== s.store.lngE6) {
@@ -311,9 +378,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       if (q.fee > quoted.fee) throw new AppError(42227, '配送费已更新，请刷新后重新提交')
       shippingFee = q.fee
       localSnapshot = {
-        receiverLatE6: address.latE6,
-        receiverLngE6: address.lngE6,
-        receiverPoiName: address.poiName,
+        receiverLatE6: address!.latE6,
+        receiverLngE6: address!.lngE6,
+        receiverPoiName: address!.poiName,
         distanceM,
         // 这一单的运费是按运力方实测道路距离收的，还是 /local/quote 查价失败退回的直线估算——
         // 判定只发生在报价那一刻（下单端点不重新外呼），所以这里直接落 token 里签的值，不是
@@ -340,9 +407,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
        * 两条路都不信客户端的任何金额。
        */
       const s = await getExpressSettings()
-      const group = findRegionGroup(s, address.province)
+      const group = findRegionGroup(s, address!.province)
       if (group.blocked) throw new AppError(42260, '该地区暂不支持邮寄')
-      if (Buffer.byteLength(address.fullAddress, 'utf8') > MAX_ADDRESS_BYTES) throw new AppError(42262, '收货地址过长，请精简后再试')
+      if (Buffer.byteLength(address!.fullAddress, 'utf8') > MAX_ADDRESS_BYTES) throw new AppError(42262, '收货地址过长，请精简后再试')
       if (s.minOrderAmountFen > 0 && totalAmount < s.minOrderAmountFen) {
         throw new AppError(42210, `订单满 ¥${(s.minOrderAmountFen / 100).toFixed(2)} 起送，当前 ¥${(totalAmount / 100).toFixed(2)}`)
       }
@@ -354,7 +421,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       const quoted = quoteToken ? verifyExpressQuote(quoteToken) : null
       // 地址是原地改的（PUT /api/addresses/:id 同 id 换省市区/详细地址），光比 addressId
       // 拦不住「报价成都、改地址到北京、拿着旧凭证下单」——凭证里的地址内容指纹也得对上。
-      if (quoteToken && (!quoted || quoted.addressId !== address.id || quoted.addressHash !== addressHash(address.fullAddress) || quoted.itemsHash !== hash)) {
+      if (quoteToken && (!quoted || quoted.addressId !== address!.id || quoted.addressHash !== addressHash(address!.fullAddress) || quoted.itemsHash !== hash)) {
         throw new AppError(42261, '运费已更新，请重新确认')
       }
       let fee: FeeCalc, snapshotQuotes: { kuaidicom: string; serviceType: string | null; priceFen: number | null }[], pricedWeightKg: number
@@ -365,7 +432,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         snapshotQuotes = quoted.quotes
       } else {
         pricedWeightKg = weightKg
-        const live = await fetchCourierQuotes(s, address.id, address.fullAddress, weightKg)
+        const live = await fetchCourierQuotes(s, address!.id, address!.fullAddress, weightKg)
         fee = calcExpressFee(s, group, weightKg, live, totalAmount)
         snapshotQuotes = (live ?? []).map((q) => ({ kuaidicom: q.kuaidicom, serviceType: q.serviceType, priceFen: q.priceFen }))
       }
@@ -382,8 +449,11 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 券 → 运费（**按券前小计**判包邮/起送）→ 实付。
     // 上面两条渠道分支里的 calcLocalFee / calcExpressFee / belowMin / minOrderAmount
     // 收到的都是券前 totalAmount，**一个字都没动**——顾客不因为用券失去包邮或跌破起送线。
+    const coupon = couponId
+      ? await loadCouponForOrder(userId, couponId, channel, totalAmount, deliveryType === 'PICKUP' ? { maxDiscount: totalAmount - pickupDiscount } : {})
+      : null
     const discount = coupon?.discount ?? 0
-    const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee })
+    const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee, pickupDiscount })
     // 0 元订单走不了微信支付，会掉进「没有支付回调」的死角（spec §5.1 与 §10 风险表第一行）。
     // 这一步必须在这里拒——computeCheckout 是纯函数，它只负责算对，拒不拒是业务判断。
     if (actualAmount === 0) throw new AppError(42251, '该券金额已超过本单可抵扣范围')
@@ -426,14 +496,17 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           deliveryType,
           ...expressSnapshot,
           remark,
-          receiverName: address.receiverName,
-          receiverPhone: address.receiverPhone,
-          receiverProvince: address.province,
-          receiverCity: address.city,
-          receiverDistrict: address.district,
-          receiverDetail: address.detail,
-          receiverFullAddress: address.fullAddress,
+          receiverName: deliveryType === 'PICKUP' ? (pickupContact!.name || '顾客') : address!.receiverName,
+          receiverPhone: deliveryType === 'PICKUP' ? pickupContact!.phone : address!.receiverPhone,
+          receiverProvince: deliveryType === 'PICKUP' ? localStore!.province : address!.province,
+          receiverCity: deliveryType === 'PICKUP' ? localStore!.city : address!.city,
+          receiverDistrict: deliveryType === 'PICKUP' ? localStore!.district : address!.district,
+          receiverDetail: deliveryType === 'PICKUP' ? localStore!.address : address!.detail,
+          receiverFullAddress: deliveryType === 'PICKUP'
+            ? `${localStore!.province}${localStore!.city}${localStore!.district}${localStore!.address}`
+            : address!.fullAddress,
           ...localSnapshot,
+          ...pickupSnapshot,
           couponId: coupon?.id ?? null,
           discountAmount: discount,
           pointsUsed,
@@ -519,13 +592,13 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     // 前端把参数拼错时那样会毫无征兆，顾客在「同城」页里看到邮寄单而没有任何人收到信号。
     // 空串按不传处理——前端拼 query 时很容易拼出一个 `&deliveryType=`。
     const rawDeliveryType = req.query.deliveryType
-    const deliveryType = rawDeliveryType
-      ? z.enum(['EXPRESS', 'LOCAL']).parse(rawDeliveryType)
-      : undefined
-
+    const deliveryType = rawDeliveryType ? deliveryTypeSchema.parse(rawDeliveryType) : undefined
+    // channel=LOCAL 一次拿外送 + 自取（同城渠道下的「我的订单」）；channel=EXPRESS 等价 deliveryType=EXPRESS
+    const rawChannel = req.query.channel
+    const channelFilter = rawChannel ? z.enum(['EXPRESS', 'LOCAL']).parse(rawChannel) : undefined
     const where = {
       userId,
-      ...(deliveryType ? { deliveryType } : {}),
+      ...(deliveryType ? { deliveryType } : channelFilter === 'LOCAL' ? { deliveryType: { in: ['LOCAL', 'PICKUP'] } } : channelFilter === 'EXPRESS' ? { deliveryType: 'EXPRESS' } : {}),
       ...(statuses.length === 1 ? { status: statuses[0] } : statuses.length > 1 ? { status: { in: statuses } } : {}),
     }
 
@@ -570,6 +643,7 @@ router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => 
     // 前端拿它只为「提交前把运费显示给顾客」，实际收费以下单时服务端重算为准。
     success(res, {
       subscribeTemplateIds: getSubscribeTemplateIds(),
+      subscribeTemplates: getSubscribeTemplateGroups(),
       payTimeoutMin: config.order.payTimeoutMin,
       shipping: legacyShippingView(await getExpressSettings()),
     })
@@ -629,6 +703,20 @@ router.get('/:id/courier', async (req: Request, res: Response, next: NextFunctio
       etaMinutes = Math.max(1, Math.round((legM / 1000 / s.riderSpeedKmh) * 60))
     }
     success(res, { location, etaMinutes })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/orders/pickup-contact — 最近一张自取单的取餐人，结算页预填用（spec §3.3，不加表）
+router.get('/pickup-contact', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const last = await prisma.order.findFirst({
+      where: { userId: req.userId!, deliveryType: 'PICKUP' },
+      orderBy: { id: 'desc' },
+      select: { receiverName: true, receiverPhone: true },
+    })
+    success(res, last ? { name: last.receiverName === '顾客' ? '' : last.receiverName, phone: last.receiverPhone } : null)
   } catch (e) {
     next(e)
   }
@@ -698,6 +786,9 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       // 可申请售后：已发货/已完成、还有可退余额、当前无处理中的售后单
       canApplyAfterSale: ['SHIPPED', 'COMPLETED'].includes(order.status) && remaining > 0 && !activeAfterSale,
       subscribeTemplateIds: getSubscribeTemplateIds(),
+      pickup: await pickupViewOf(order),
+      canSelfCancel: await canSelfCancelOf(order),
+      subscribeTemplates: getSubscribeTemplateGroups(),
       delivery,
       expressBooking,
       track,
@@ -731,9 +822,11 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     const snapshotStatus =
       order.deliveryType === 'LOCAL'
         ? ((await prisma.delivery.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE')
-        : ((await prisma.expressBooking.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE')
+        : order.deliveryType === 'EXPRESS'
+          ? ((await prisma.expressBooking.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE')
+          : 'NONE'
     const moved = await prisma.order.updateMany({
-      where: { id, status: 'PREPARING', cancelRequestedAt: null },
+      where: { id, status: { in: order.deliveryType === 'PICKUP' ? ['PAID', 'PREPARING'] : ['PREPARING'] }, cancelRequestedAt: null },
       data: {
         cancelRequestedAt, cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: snapshotStatus,
         // 上一次申请若被驳回过，痕迹要清掉：顾客在窗口内还能再申请一次（比如第一次没说清理由），
@@ -749,7 +842,7 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     notifyCancelRequest(
       { orderNo: order.orderNo, actualAmount: order.actualAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone, note },
       win.cancelGraceMin,
-      order.deliveryType === 'LOCAL' ? 'LOCAL' : 'EXPRESS'
+      order.deliveryType === 'LOCAL' ? 'LOCAL' : order.deliveryType === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
     ).catch((err) => console.error('[orders] notifyCancelRequest 失败:', (err as Error).message))
     // 出票（规格 §8b「顾客申请取消」）：这一步只是挂起申请、订单状态未变，但厨房该立刻知道「先别做了」，
     // 不必等店员处理完才收到消息——票面是给店内看的物理提醒，与走推送通知的 notifyCancelRequest 并列。
@@ -779,6 +872,7 @@ router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunctio
     // 且之后 720 回退也因不再是 SHIPPED 而落空。同城单的完成一律由 520 回调 / 店员「标记已送达」
     // / 兜底任务写入，这里对 LOCAL 直接拒绝。
     if (order.deliveryType === 'LOCAL') throw new AppError(42204, '同城订单由骑手送达后自动完成')
+    if (order.deliveryType === 'PICKUP') throw new AppError(42284, '自取订单由店员点「已取走」完成')
     if (order.status !== 'SHIPPED') throw new AppError(42204, '仅已发货订单可确认收货')
 
     // 条件写：上面读到的 status 是快照，与退款/售后并发时以先落库者为准，不能无条件 update
@@ -831,6 +925,12 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
       // 包一层不构成实际脱敏，但统一走 withPayExpire 免得日后这两列提前到更早状态写入时
       // 这里又漏一次。
       return success(res, withPayExpire(updated))
+    }
+
+    // 自取：已到开始备餐时刻就不能自助退了（店里可能已经在做），转「申请取消」（spec P10）
+    if (order.deliveryType === 'PICKUP' && order.status === 'PAID' && order.pickupAt) {
+      const s = await getLocalSettings()
+      if (Date.now() >= prepStartAt(s, order.pickupAt).getTime()) throw new AppError(42229, '已进入备餐时段，请改为「申请取消」由商家确认')
     }
 
     if (order.status === 'PAID' && !order.acceptedAt) {
