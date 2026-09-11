@@ -247,7 +247,8 @@ export default function LocalSettings() {
           <Field label="基础公里数" hint="不超过此距离只收基础运费">
             <input className={inputCls} type="number" step="0.5" min={0} value={s.fee.baseKm} onChange={(e) => patch({ fee: { ...s.fee, baseKm: Number(e.target.value) } })} /></Field>
           <Field label="超出每公里加价（元）"><input className={inputCls} inputMode="decimal" value={money.perKmFee} onChange={(e) => setMoney({ ...money, perKmFee: e.target.value })} /></Field>
-          <Field label="阶梯满额免运费"
+          {/* 一行「满 X 元·免 Y km」四个控件在单格里放不下（Chrome 里 km 会被挤出框），占两格 */}
+          <div className="sm:col-span-2"><Field label="阶梯满额免运费"
             hint="跑得越远要求点得越多。按券前商品小计判，取所有达标档里公里数最大的那一档。">
             <RowList rows={tiers} onChange={setTiers}
               blank={() => ({ minAmountFen: 0, maxKm: 0 })} errors={tierErrs} addLabel="再加一档"
@@ -255,11 +256,11 @@ export default function LocalSettings() {
               render={(row, set) => (
                 <>
                   <span className="text-sm text-gray-500 shrink-0">满</span>
-                  <input className={`${inputCls} !w-16 !px-2 shrink-0`} type="number" min={0} step={1}
+                  <input className={`${inputCls} !w-20 !px-2 shrink-0`} type="number" min={0} step={1}
                     value={row.minAmountFen ? row.minAmountFen / 100 : ''} placeholder="元"
                     onChange={(e) => set({ minAmountFen: Math.round(Number(e.target.value || 0) * 100) })} />
                   <span className="text-sm text-gray-500 shrink-0">元·免</span>
-                  <input className={`${inputCls} !w-14 !px-2 shrink-0`} type="number" min={0.5} step={0.5}
+                  <input className={`${inputCls} !w-[4.5rem] !px-2 shrink-0`} type="number" min={0.5} step={0.5}
                     value={row.maxKm || ''} placeholder="公里"
                     onChange={(e) => set({ maxKm: Number(e.target.value || 0) })} />
                   <span className="text-sm text-gray-500 shrink-0">km</span>
@@ -270,7 +271,7 @@ export default function LocalSettings() {
                 {[...tiers].sort((a, b) => a.maxKm - b.maxKm).map((t) => `满 ${t.minAmountFen / 100} 元 ${t.maxKm} 公里内免`).join('；')}
               </p>
             )}
-          </Field>
+          </Field></div>
           <Field label="起送金额（元）" hint="0 = 无门槛"><input className={inputCls} inputMode="decimal" value={money.minOrderAmount} onChange={(e) => setMoney({ ...money, minOrderAmount: e.target.value })} /></Field>
         </div>
         <div className="rounded-md bg-gray-50 border border-gray-200 p-3">

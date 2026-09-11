@@ -174,12 +174,12 @@ export default function ShopSettings() {
         </div>
         {groups.map((g, i) => (
           <div key={i} className="rounded-md border border-gray-200 p-3 space-y-3">
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-start">
               <Field label="组名"><input className={inputCls} value={g.name} disabled={g.isOther} onChange={(e) => patchGroup(i, { name: e.target.value })} /></Field>
               <Field label="满额包邮（元）" hint="0 = 不包邮"><input className={inputCls} inputMode="decimal" value={g.freeShipMin} disabled={g.blocked} onChange={(e) => patchGroup(i, { freeShipMin: e.target.value })} /></Field>
               <Field label="兜底首重价（元）"><input className={inputCls} inputMode="decimal" value={g.tableFirst} disabled={g.blocked} onChange={(e) => patchGroup(i, { tableFirst: e.target.value })} /></Field>
               <Field label="兜底续重/公斤（元）"><input className={inputCls} inputMode="decimal" value={g.tableOverPerKg} disabled={g.blocked} onChange={(e) => patchGroup(i, { tableOverPerKg: e.target.value })} /></Field>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 sm:pt-8">
                 <label className="inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={g.blocked} disabled={g.isOther} onChange={(e) => patchGroup(i, { blocked: e.target.checked, freeShipMin: e.target.checked ? '0.00' : g.freeShipMin })} />不寄送</label>
                 {!g.isOther && <button className="text-xs text-red-600" onClick={() => removeGroup(i)}>删除</button>}
               </div>

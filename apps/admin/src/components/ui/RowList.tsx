@@ -33,7 +33,7 @@ export function RowList<T>({ rows, onChange, blank, render, errors, addLabel, em
         return (
           <div key={i} className={`rounded-md border p-2 ${err ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'}`}>
             <div className="flex items-center gap-2">
-              <div className="flex-1 flex items-center gap-2 flex-nowrap min-w-0">{render(row, (p) => update(i, p), i)}</div>
+              <div className="flex-1 flex items-center gap-2 flex-wrap gap-y-1 min-w-0">{render(row, (p) => update(i, p), i)}</div>
               <button type="button" onClick={() => remove(i)} aria-label="删除这一段"
                 className="shrink-0 w-8 h-8 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-red-600">✕</button>
             </div>
@@ -89,9 +89,9 @@ export function TimeRangeRow({ row, set, cls }: {
 }) {
   return (
     <>
-      <input className={`${cls} !w-28 shrink-0`} type="time" step={60} value={row.start} onChange={(e) => set({ start: e.target.value })} />
+      <input className={`${cls} !w-36 shrink-0`} type="time" step={60} value={row.start} onChange={(e) => set({ start: e.target.value })} />
       <span className="text-sm text-gray-500 shrink-0">至</span>
-      <input className={`${cls} !w-28 shrink-0`} type="time" step={60} value={row.end} onChange={(e) => set({ end: e.target.value })} />
+      <input className={`${cls} !w-36 shrink-0`} type="time" step={60} value={row.end} onChange={(e) => set({ end: e.target.value })} />
     </>
   )
 }
