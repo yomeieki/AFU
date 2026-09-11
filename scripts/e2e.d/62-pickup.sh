@@ -95,3 +95,32 @@ R=$(req POST "/api/orders/$P62_O1/cancel-request" "$UT" '{"note":"临时有事"}
 assert_eq "PAID 状态申请取消 code 0" "$(code "$R")" "0"
 R=$(req POST "/api/orders/$P62_O1/cancel-request" "$UT" '{}')
 assert_eq "重复申请 42229" "$(code "$R")" "42229"
+
+echo "-- ⑦b 补测：确认收货对自取 42284；休业/自取暂停各自 42280 且时段 blocked；channel=EXPRESS 与非法值；取餐人空名 --"
+R=$(req PUT "/api/orders/$P62_O1/confirm" "$UT")
+assert_eq "顾客确认收货对自取 42284" "$(code "$R")" "42284"
+P62_TODAY=$(date +%F)
+p62_put ".holiday={until:\"$P62_TODAY\",reason:\"盘点\"}" >/dev/null
+R=$(req GET /api/local/pickup-slots)
+assert_eq "休业：今天没有格（明天仍可能有）" "$(jq -r "[.data.days[] | select(.date==\"$P62_TODAY\")] | length" <<<"$R")" "0"
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_SLOT\",\"pickupContact\":{\"phone\":\"13800001234\"}}")
+assert_eq "休业下单 42280" "$(code "$R")" "42280"
+[[ "$(jq -r .message <<<"$R")" == *"休息"* ]] && ok "休业文案含「休息」" || fail "休业文案不对" "$R"
+p62_put '.holiday=null | .pickup.paused={until:null,reason:"后厨忙"}' >/dev/null
+assert_eq "自取暂停 blocked=PAUSED" "$(req GET /api/local/pickup-slots | jq -r '.data.blocked.kind')" "PAUSED"
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_SLOT\",\"pickupContact\":{\"phone\":\"13800001234\"}}")
+assert_eq "自取暂停下单 42280" "$(code "$R")" "42280"
+assert_eq "自取暂停不影响外送开关" "$(req GET /api/local/meta | jq -r '.data.delivery.enabled')" "$(jq -r '.enabled' <<<"$P62_ORIG")"
+p62_put '.pickup.paused=null' >/dev/null
+R=$(req GET "/api/orders?channel=EXPRESS&pageSize=50" "$UT")
+assert_eq "channel=EXPRESS 全是邮寄" "$(jq -r '[.data.list[] | select(.deliveryType!="EXPRESS")] | length' <<<"$R")" "0"
+R=$(req GET "/api/orders?channel=FOO" "$UT")
+[[ "$(code "$R")" != "0" ]] && ok "非法 channel 报错不静默" || fail "非法 channel 被静默放过" "$R"
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_SLOT\",\"pickupContact\":{\"phone\":\"13800001234\"}}")
+P62_O7=$(jq -r .data.orderId <<<"$R")
+assert_eq "不填姓名落库为「顾客」" "$(sql "SELECT receiver_name FROM orders WHERE id=$P62_O7;")" "顾客"
+assert_eq "pickup-contact 把「顾客」映射成空串" "$(req GET /api/orders/pickup-contact "$UT" | jq -r '.data.name')" ""
+assert_eq "地址快照：省" "$(sql "SELECT receiver_province FROM orders WHERE id=$P62_O7;")" "$(jq -r '.store.province' <<<"$P62_ORIG")"
+assert_eq "地址快照：同城坐标列为空" "$(sql "SELECT receiver_lat_e6 IS NULL AND distance_m IS NULL FROM orders WHERE id=$P62_O7;")" "1"
+assert_eq "无 Shipment 行" "$(sql "SELECT COUNT(*) FROM shipments WHERE order_id=$P62_O7;")" "0"
+req PUT "/api/orders/$P62_O7/cancel" "$UT" >/dev/null

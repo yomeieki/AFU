@@ -246,6 +246,28 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         subtotal,
       }
     })
+    // ── 自取：门店校验与优惠先于券算出来（spec P6），totalAmount 一成形就能判 ──────────
+    // 必须在这里（券之前）完成：① 42280/42281/42282 三档错误要先于券报出，与老渠道
+    // （LOCAL/EXPRESS 的营业时间/范围/起送错误同样在券之前判）保持同一优先级；
+    // ② 券面额要按「小计 − 自取优惠」封顶，这个封顶值得先有 pickupDiscount 才算得出来。
+    let pickupDiscount = 0
+    let pickupSnapshot: { pickupAt?: Date; pickupDiscountAmount?: number } = {}
+    let localStore: LocalDeliverySettings['store'] | null = null
+    if (deliveryType === 'PICKUP') {
+      const s = await getLocalSettings()
+      if (!s.pickup.enabled) throw new AppError(42280, '到店自取暂未开通')
+      if (isHolidayNow(s)) throw new AppError(42280, `休息中${s.holiday?.until ? `，${s.holiday.until.slice(5).replace('-', '月')}日恢复` : ''}`)
+      if (isPickupPaused(s)) throw new AppError(42280, `自取暂停接单${s.pickup.paused?.reason ? `：${s.pickup.paused.reason}` : ''}`)
+      const at = new Date(pickupAt!)
+      // 必须精确命中此刻算出的某一格：顾客在页面磨蹭到那格过期了就拒，让他重选
+      if (!isValidPickupSlot(s, at, new Date())) throw new AppError(42281, '该时段已不可选，请重新选择取餐时间')
+      if (s.pickup.minOrderAmountFen > 0 && totalAmount < s.pickup.minOrderAmountFen) {
+        throw new AppError(42282, `到店自取满 ¥${(s.pickup.minOrderAmountFen / 100).toFixed(2)} 起，当前 ¥${(totalAmount / 100).toFixed(2)}`)
+      }
+      pickupDiscount = pickupDiscountOf(s, totalAmount)
+      pickupSnapshot = { pickupAt: at, pickupDiscountAmount: pickupDiscount }
+      localStore = s.store
+    }
     // ── 会员优惠（M2）：券与赠品的**只读**校验，必须在 totalAmount 成形之后 ──────────
     //
     // 放在这里而不是更早：券的门槛判定要比对商品小计，而小计是上面那段 map 累加出来的。
@@ -253,6 +275,14 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     const giftResult = await loadGiftLines(userId, channel, gifts ?? [])
     const giftLines = giftResult.lines
     const pointsUsed = giftResult.pointsUsed
+
+    // 券必须紧跟在这里：loadGiftLines 之后、下面「赠品聚合库存校验」之前——这是老渠道
+    // （LOCAL/EXPRESS）从一开始就有的位置，报错优先级（券过期 vs 打烊/超范围等）依赖这个顺序，
+    // 不能因为加了自取渠道就往后挪。自取单额外传第 5 参数，把面额封顶到「小计 − 自取优惠」；
+    // 非自取传 undefined，与改动前逐字节一致。
+    const coupon = couponId
+      ? await loadCouponForOrder(userId, couponId, channel, totalAmount, deliveryType === 'PICKUP' ? { maxDiscount: totalAmount - pickupDiscount } : undefined)
+      : null
 
     // ⚠️ 赠品与付费行指向同一商品时，上面两处库存校验各自独立通过（付费行判 1 件、赠品判 1 件），
     // 但库存只有 1 件。事务内第二次 updateMany 会判 count===0 整单回滚——**安全但文案误导**，
@@ -289,25 +319,8 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       distanceM?: number; distanceSource?: string; estimatedDeliveryAt?: Date
     } = {}
     let expressSnapshot: { expressQuoteSnapshot?: Prisma.InputJsonValue; expressRegionGroup?: string; expressWeightG?: number } = {}
-    // ── 自取：优惠先于券算出来，券面额按「小计 − 自取优惠」封顶（spec P6）──
-    let pickupDiscount = 0
-    let pickupSnapshot: { pickupAt?: Date; pickupDiscountAmount?: number } = {}
-    let localStore: LocalDeliverySettings['store'] | null = null
-    if (deliveryType === 'PICKUP') {
-      const s = await getLocalSettings()
-      if (!s.pickup.enabled) throw new AppError(42280, '到店自取暂未开通')
-      if (isHolidayNow(s)) throw new AppError(42280, `休息中${s.holiday?.until ? `，${s.holiday.until.slice(5).replace('-', '月')}日恢复` : ''}`)
-      if (isPickupPaused(s)) throw new AppError(42280, `自取暂停接单${s.pickup.paused?.reason ? `：${s.pickup.paused.reason}` : ''}`)
-      const at = new Date(pickupAt!)
-      // 必须精确命中此刻算出的某一格：顾客在页面磨蹭到那格过期了就拒，让他重选
-      if (!isValidPickupSlot(s, at, new Date())) throw new AppError(42281, '该时段已不可选，请重新选择取餐时间')
-      if (s.pickup.minOrderAmountFen > 0 && totalAmount < s.pickup.minOrderAmountFen) {
-        throw new AppError(42282, `到店自取满 ¥${(s.pickup.minOrderAmountFen / 100).toFixed(2)} 起，当前 ¥${(totalAmount / 100).toFixed(2)}`)
-      }
-      pickupDiscount = pickupDiscountOf(s, totalAmount)
-      pickupSnapshot = { pickupAt: at, pickupDiscountAmount: pickupDiscount }
-      localStore = s.store
-    } else if (deliveryType === 'LOCAL') {
+    // PICKUP 什么都不做——运费恒为 0，门店校验/优惠已在上面（券之前）算完。
+    if (deliveryType === 'LOCAL') {
       const s = await getLocalSettings()
       if (!s.enabled) throw new AppError(42226, '同城配送暂未开通')
       if (isPaused(s)) throw new AppError(42226, `同城配送暂停接单${s.paused?.reason ? `：${s.paused.reason}` : ''}`)
@@ -397,7 +410,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         // 顾客在结算页看到的是「大概多少分钟」而不是钟点，见 routes/local.ts 的报价响应。
         // 这里**不给这个字段**（列本身可空），接单时才落值。
       }
-    } else {
+    } else if (deliveryType === 'EXPRESS') {
       /**
        * 邮寄运费（批次一，spec §3/§4.1）。口径与同城一致：包邮/起送/不寄送按**下单时**的设置与**真实**小计判；
        * 报价数字只在两种来源里二选一——
@@ -446,12 +459,10 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         expressWeightG: Math.round(pricedWeightKg * 1000),
       }
     }
-    // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 券 → 运费（**按券前小计**判包邮/起送）→ 实付。
+    // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 自取优惠 → 券（已在上面 loadGiftLines 之后
+    // 算出，按「小计 − 自取优惠」封顶）→ 运费（**按券前小计**判包邮/起送）→ 实付。
     // 上面两条渠道分支里的 calcLocalFee / calcExpressFee / belowMin / minOrderAmount
     // 收到的都是券前 totalAmount，**一个字都没动**——顾客不因为用券失去包邮或跌破起送线。
-    const coupon = couponId
-      ? await loadCouponForOrder(userId, couponId, channel, totalAmount, deliveryType === 'PICKUP' ? { maxDiscount: totalAmount - pickupDiscount } : {})
-      : null
     const discount = coupon?.discount ?? 0
     const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee, pickupDiscount })
     // 0 元订单走不了微信支付，会掉进「没有支付回调」的死角（spec §5.1 与 §10 风险表第一行）。
@@ -927,8 +938,11 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
       return success(res, withPayExpire(updated))
     }
 
-    // 自取：已到开始备餐时刻就不能自助退了（店里可能已经在做），转「申请取消」（spec P10）
-    if (order.deliveryType === 'PICKUP' && order.status === 'PAID' && order.pickupAt) {
+    // 自取：已到开始备餐时刻就不能自助退了（店里可能已经在做），转「申请取消」（spec P10）。
+    // pickupAt 缺失（不该发生，但别信数据完整性）与已到开始备餐时刻，两者都必须关闭自助秒退——
+    // 前者若放行会掉进下面的秒退分支，方向与 cancelWindowOf/canSelfCancelOf 的「缺 pickupAt 就不可退」相反。
+    if (order.deliveryType === 'PICKUP' && order.status === 'PAID') {
+      if (!order.pickupAt) throw new AppError(42229, '订单数据异常，请联系商家协商退款')
       const s = await getLocalSettings()
       if (Date.now() >= prepStartAt(s, order.pickupAt).getTime()) throw new AppError(42229, '已进入备餐时段，请改为「申请取消」由商家确认')
     }
