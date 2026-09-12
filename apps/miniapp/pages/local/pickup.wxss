@@ -124,6 +124,8 @@
 .day-tabs { display: flex; gap: 16rpx; padding: 8rpx 0 16rpx; }
 .day-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4rpx; padding: 14rpx 0; border-radius: 10rpx; background: var(--bg); color: var(--text-2); font-size: 27rpx; }
 .day-tab.active { background: var(--brand-bg); color: var(--brand); font-weight: 600; }
+.day-date { font-size: 21rpx; color: var(--text-3); }
+.day-tab.active .day-date { color: var(--brand); opacity: 0.8; }
 .day-empty { font-size: 20rpx; color: var(--text-3); }
 .slot-grid-wrap { flex: 1; min-height: 200rpx; max-height: 48vh; }
 .slot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14rpx; padding-bottom: 8rpx; }

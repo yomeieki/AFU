@@ -22,9 +22,11 @@ function selectedItems(cart, cartItemIds) {
   })
 }
 
-function decorateSlot(slot, dayLabel) {
+// text 带具体日期「今天 9月12日 16:30–17:00」：顾客过了零点还停在结算页时，「今天」两个字会骗人，日期不会
+function decorateSlot(slot, day) {
   if (!slot) return null
-  return { startAt: slot.startAt, endAt: slot.endAt, label: slot.label, dayLabel: dayLabel, text: dayLabel + ' ' + slot.label }
+  var dateText = day.monthDay ? ' ' + day.monthDay : ''
+  return { startAt: slot.startAt, endAt: slot.endAt, label: slot.label, dayLabel: day.label, text: day.label + dateText + ' ' + slot.label }
 }
 
 Page({
@@ -139,7 +141,8 @@ Page({
       .then(function(view) {
         if (seq !== self._slotSeq) return
         var days = (view.days || []).map(function(d) {
-          return { date: d.date, label: d.label, slots: d.slots || [], empty: !(d.slots && d.slots.length) }
+          var dt = st.pickupDateText(d.date)
+          return { date: d.date, label: d.label, monthDay: dt.monthDay, dateText: dt.monthDay + ' ' + dt.weekday, slots: d.slots || [], empty: !(d.slots && d.slots.length) }
         })
         var patch = { days: days, slotsLoading: false }
         var blocked = !!view.blocked
@@ -157,7 +160,7 @@ Page({
           patch.activeDay = Math.min(self.data.activeDay || 0, Math.max(0, days.length - 1))
         } else {
           var first = st.firstSlot(view)
-          patch.selected = first ? decorateSlot(first.slot, days[first.dayIndex].label) : null
+          patch.selected = first ? decorateSlot(first.slot, days[first.dayIndex]) : null
           patch.activeDay = first ? first.dayIndex : 0
           patch.slotStale = false
           patch.blockReason = ''
@@ -221,7 +224,7 @@ Page({
     var day = this.data.days[this.data.activeDay]
     var slot = day && day.slots[idx]
     if (!slot) return
-    this.setData({ selected: decorateSlot(slot, day.label), slotStale: false, pickerOpen: false })
+    this.setData({ selected: decorateSlot(slot, day), slotStale: false, pickerOpen: false })
     // 换了时段就是另一张单：超时重试的幂等只该在同一时段内成立
     this._clientRequestId = newClientRequestId()
     this.recompute()

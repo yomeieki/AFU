@@ -94,7 +94,18 @@ function slotOffered(view, startAt) {
   return false
 }
 
+// 'YYYY-MM-DD' → { monthDay: '9月12日', weekday: '周六' }。星期按日历日算（Date.UTC 不受手机时区影响）。
+// 用途：时段弹层页签副标题、结算页「取餐时间」文案——顾客过了零点还停在这页，光看「今天/明天」会搞混（PO 2026-09-12）。
+var WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+function pickupDateText(dateStr) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '')
+  if (!m) return { monthDay: '', weekday: '' }
+  var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3])
+  return { monthDay: mo + '月' + d + '日', weekday: WEEKDAY[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()] }
+}
+
 module.exports = {
+  pickupDateText: pickupDateText,
   pickupCheckoutAction: pickupCheckoutAction,
   isValidPhone: isValidPhone,
   pickupDiscountOf: pickupDiscountOf,

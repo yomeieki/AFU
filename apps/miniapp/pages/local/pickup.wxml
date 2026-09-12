@@ -131,6 +131,7 @@
     <view class="day-tabs">
       <view wx:for="{{days}}" wx:key="date" class="day-tab {{activeDay === index ? 'active' : ''}}" bindtap="selectDay" data-idx="{{index}}">
         <text>{{item.label}}</text>
+        <text class="day-date">{{item.dateText}}</text>
         <text wx:if="{{item.empty}}" class="day-empty">无可取时段</text>
       </view>
     </view>

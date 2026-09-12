@@ -78,3 +78,9 @@ test('优先级：阻塞 > 未选时段 > 时段失效 > 手机号 > 起送 > �
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0 })).text, '提交订单')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, benefitsLoading: false })).text, '提交中')
 })
+
+test('pickupDateText：月日 + 星期按日历日算，非法输入给空', function () {
+  assert.deepEqual(st.pickupDateText('2026-09-12'), { monthDay: '9月12日', weekday: '周六' })
+  assert.deepEqual(st.pickupDateText('2026-10-01'), { monthDay: '10月1日', weekday: '周四' })
+  assert.deepEqual(st.pickupDateText(''), { monthDay: '', weekday: '' })
+})
