@@ -40,7 +40,8 @@ B1=$(d54 overview)
 assert_eq "B① 单数 +1" "$(n54 "$B1" .data.kpi.orderCount)" "$((B_CNT+1))"
 assert_eq "B② 实收 +实付" "$(n54 "$B1" .data.kpi.revenueFen)" "$((B_REV+BO_AMT))"
 assert_eq "B③ 邮寄渠道 +1" "$(n54 "$B1" .data.channels.EXPRESS.orderCount)" "$((B_EXP+1))"
-assert_eq "B④ 趋势今日 = 两渠道之和 = kpi 单数" "$(n54 "$B1" "[.data.trend[]|select(.date==\"$S54\")][0] | (.LOCAL.orderCount + .EXPRESS.orderCount)")" "$((B_CNT+1))"
+# 三个渠道都要加上：自取（PICKUP）是 6d6a5d9 后加进趋势的，只加两个渠道会差掉当天的自取单
+assert_eq "B④ 趋势今日 = 三渠道之和 = kpi 单数" "$(n54 "$B1" "[.data.trend[]|select(.date==\"$S54\")][0] | (.LOCAL.orderCount + .EXPRESS.orderCount + (.PICKUP.orderCount // 0))")" "$((B_CNT+1))"
 assert_eq "B⑤ 24 小时桶之和 = kpi 单数" "$(n54 "$B1" '.data.hourly | add')" "$((B_CNT+1))"
 assert_eq "B⑥ 热销榜该商品 qty +1（按 order_items 聚合）" "$(n54 "$B1" "[.data.hotProducts[]|select(.productId==$PID)][0].qty // 0")" "$((B_HOT+1))"
 # 服务端用 Math.round(revenueFen/orderCount)（四舍五入），bash 的 `/` 是截断——

@@ -1,12 +1,12 @@
-echo "== 50. 呼叫三级阶梯：一家 → 最便宜 N 家 → 全部，+ actualFee 认领 =="
+echo "== 50. 呼叫两级阶梯：一家 → 最便宜 N 家 → 到头只提醒，+ actualFee 认领 =="
 # 复用 e2e.sh 主体定义的 req/code/ok/fail/assert_eq/mk_local_paid/kd_cb（本文件在 e2e.sh 尾部被
 # source 进来，同一个 shell）。变量一律 D50_ 前缀，避免与主体或其它分片撞车。
 #
 # 这一组测的是 2026-09-06 首单实测暴露出来的两笔钱：
 #   ① 并呼让最贵的抢到 —— 达达报 ¥16.23、闪送 ¥23.32 抢到，一单多付 ¥7.09；
 #   ② 并呼按家数倍数占余额 —— 那一单冻结 ¥75.08 只花 ¥23.32，100 元余额同时只挂得下 1 单。
-# 店主 2026-09-07 定的解法是三级阶梯（一家 ¥16 → 三家 ¥52 → 全部 ¥75），
-# 绝大多数单在第一级就被接走、只冻一笔，真没人接的才逐级摊开。
+# 店主 2026-09-07 定的解法是阶梯（一家 ¥16 → 三家 ¥52），2026-09-12 去掉了第三级「全部 ¥75」：
+# 绝大多数单在第一级就被接走、只冻一笔，真没人接的升一级，三家还没人接就叫人处理。
 # 所以下面每条断言都盯着两件事：**这一级到底呼了谁**、**冻了几笔**。
 
 D50_ORIG=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
@@ -89,42 +89,45 @@ assert_eq "外呼顺序 precancel → cancel → createOrder" \
   "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -r '[.data[] | select(.op=="precancelOrder" or .op=="cancelOrder" or .op=="createOrder")] | .[-3:] | map(.op) | join(">")')" \
   "precancelOrder>cancelOrder>createOrder"
 
-echo "-- ③ 第三级：三家还是没人接 → 并呼全部运力建 D-3 --"
-# 「走到第几级」由当前策略本身表达（SOLO→CHEAPEST→ALL），不另设计数器；
-# 所以 D-2 仍在扫描范围里，下一轮超时会自然接着升。
+echo "-- ③ 两级到头：三家还是没人接 → 不再加人，只提醒店员一次 --"
+# 店主 2026-09-12 去掉了第三级「并呼全部」：三家都没人接再全呼多半也没人，白冻一笔 ¥75。
+# 现在 CHEAPEST 到点的行为是：不撤单、不重呼，发一次告警（标记复用 call_timeout_reminded_at）。
 d50_only "$D50_D2"
-req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
-req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
-d50_queue_price
 sleep 1
 R=$(sched '{"escalateAfterMin":0.01}')
-assert_eq "第三级也命中 1 单" "$(jq -r '.data.localEscalate' <<<"$R")" "1"
+assert_eq "到头不再计入升级（localEscalate=0）" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
 R=$(d50_dlv "$D50_O1")
-D50_DALL=$(jq -r '.data.delivery.deliveryNo' <<<"$R")
-[[ "$D50_DALL" != "$D50_D2" ]] && ok "又建了新配送单 $D50_DALL" || fail "第三级没建新单" "$D50_DALL"
-assert_eq "D-3 策略是 ALL" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "ALL"
-assert_eq "D-3 呼了设置里的全部运力" "$(jq -c '.data.delivery.calledProviders' <<<"$R")" "$D50_ALLPROV"
+assert_eq "D-2 仍在途未被动过" "$(jq -r '.data.delivery.deliveryNo' <<<"$R")" "$D50_D2"
+assert_eq "D-2 策略仍是 CHEAPEST（没有 D-3）" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "CHEAPEST"
+D50_D2_REM=$(sql "SELECT call_timeout_reminded_at IS NOT NULL FROM deliveries WHERE delivery_no='$D50_D2'")
+assert_eq "到头已标记提醒（call_timeout_reminded_at 非空）" "$D50_D2_REM" "1"
+# 没有多余的外呼：到头的单不该每分钟去问一次取消费
+assert_eq "到头这一轮没有 precancel 外呼" \
+  "$(req GET /api/admin/system/kd100-mock/calls "$AT" | jq -r '[.data[] | select(.op=="precancelOrder")] | length')" "1"
 
-echo "-- ③b 走到头之后不再升级 --"
-# ALL 不在 NEXT_RUNG 表里；漏了这条守卫就会每分钟撤一次单、无限重呼
+echo "-- ③b 再跑一轮：既不升级也不重复提醒 --"
 R=$(sched '{"escalateAfterMin":0.01}')
-assert_eq "再跑一轮不再命中" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
-assert_eq "D-3 仍在途未被动过" "$(d50_dlv "$D50_O1" | jq -r '.data.delivery.deliveryNo')" "$D50_DALL"
+assert_eq "再跑一轮仍不命中" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
+assert_eq "D-2 仍在途" "$(d50_dlv "$D50_O1" | jq -r '.data.delivery.deliveryNo')" "$D50_D2"
+# 10 分钟那条「待抢单超时」提醒见到标记非空也不会再发第二遍：看 D-2 那一行的标记时刻没被改写
+# （不数 localCallTimeout 的条数——库里其它残留的 CALLING 单会被这一轮一并提醒，条数不可控）
+D50_D2_REMAT=$(sql "SELECT call_timeout_reminded_at FROM deliveries WHERE delivery_no='$D50_D2'")
+sched '{"callTimeoutMin":0.01}' >/dev/null
+assert_eq "待抢单超时提醒不对已标记的单重复发（标记时刻不变）" "$(sql "SELECT call_timeout_reminded_at FROM deliveries WHERE delivery_no='$D50_D2'")" "$D50_D2_REMAT"
 
 echo "-- ⑤ 回调 100 认领实扣：中标运力那一笔预扣写进 actualFee --"
-# kd_cb 固定带 kuaidicom=shansongtongcheng，而 D-3 是并呼全表，闪送就在 orderFees 里
-# （D-2 只呼最便宜三家，闪送不在里面——这也正是三级阶梯省钱的地方）
+# D-2 并呼的是最便宜三家（达达/顺丰/蜂鸟），让达达中标——闪送不在里面，这正是阶梯省钱的地方
 D50_T2=$(d50_dlv "$D50_O1" | jq -r '.data.delivery.providerTaskId')
-D50_SSFEE=$(d50_dlv "$D50_O1" | jq -r '.data.delivery.orderFees[] | select(.provider=="shansongtongcheng") | .feeFen')
-assert_eq "回调 100 http 200" "$(kd_cb "$D50_DALL" "$D50_T2" 100 '骑手已接单' '2026-09-08 12:00:00')" "200"
+D50_DDFEE=$(d50_dlv "$D50_O1" | jq -r '.data.delivery.orderFees[] | select(.provider=="dadatongcheng") | .feeFen')
+assert_eq "回调 100 http 200" "$(kd_cb "$D50_D2" "$D50_T2" 100 '骑手已接单' '2026-09-08 12:00:00' '王骑手' '13900001111' 'dadatongcheng')" "200"
 R=$(d50_dlv "$D50_O1")
-assert_eq "中标运力落库" "$(jq -r '.data.delivery.courierCompany' <<<"$R")" "shansongtongcheng"
+assert_eq "中标运力落库" "$(jq -r '.data.delivery.courierCompany' <<<"$R")" "dadatongcheng"
 # 顾客端看到的必须是汉字（PO 2026-09-08）：库里存编码，顾客视图翻成 providerLabel
-assert_eq "顾客端骑手公司显示汉字" "$(req GET "/api/orders/$D50_O1" "$UT" | jq -r '.data.delivery.courierCompany')" "闪送"
-assert_eq "actualFee = 中标运力那一笔预扣" "$(jq -r '.data.delivery.actualFee' <<<"$R")" "$D50_SSFEE"
+assert_eq "顾客端骑手公司显示汉字" "$(req GET "/api/orders/$D50_O1" "$UT" | jq -r '.data.delivery.courierCompany')" "达达"
+assert_eq "actualFee = 中标运力那一笔预扣" "$(jq -r '.data.delivery.actualFee' <<<"$R")" "$D50_DDFEE"
 # 写一次为准：后续 230/310 再来也不许改（快递100 按预扣实扣，重写只会让对账口径漂移）
-assert_eq "回调 230 http 200" "$(kd_cb "$D50_DALL" "$D50_T2" 230 '骑手已到店' '2026-09-08 12:03:00')" "200"
-assert_eq "actualFee 不被后续回调改写" "$(d50_dlv "$D50_O1" | jq -r '.data.delivery.actualFee')" "$D50_SSFEE"
+assert_eq "回调 230 http 200" "$(kd_cb "$D50_D2" "$D50_T2" 230 '骑手已到店' '2026-09-08 12:03:00' '王骑手' '13900001111' 'dadatongcheng')" "200"
+assert_eq "actualFee 不被后续回调改写" "$(d50_dlv "$D50_O1" | jq -r '.data.delivery.actualFee')" "$D50_DDFEE"
 
 echo "-- ④ 预估取消费 > 0 → 放弃自动升级（SOLO_HELD），不撤单 --"
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
@@ -234,15 +237,14 @@ assert_eq "冻结笔数 = 呼叫家数（orderFees 三条）" "$(jq -r '.data.de
 [[ "$(jq -r '[.data.events[] | select(.source=="API")] | last | .statusDesc' <<<"$R")" == *"并呼最便宜 3 家"* ]] \
   && ok "时间线写明并呼了几家与合计冻结" \
   || fail "事件文案没写清并呼几家" "$(jq -r '[.data.events[] | select(.source=="API")] | last | .statusDesc' <<<"$R")"
-# 超时升级同样要覆盖 CHEAPEST——三家都不接和一家不接，该升级的理由一模一样
+# 第一次就并呼 N 家 = 直接站在第二级上：到点不再加人（2026-09-12 去掉了全呼），只标记提醒
 d50_only "$(jq -r '.data.delivery.deliveryNo' <<<"$R")"
-req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
-d50_queue_price
 sleep 1
 R=$(sched '{"escalateAfterMin":0.01}')
-assert_eq "CHEAPEST 单也会被自动升级" "$(jq -r '.data.localEscalate' <<<"$R")" "1"
+assert_eq "CHEAPEST_N 起呼的单到点不升级" "$(jq -r '.data.localEscalate' <<<"$R")" "0"
 R=$(d50_dlv "$D50_O7")
-assert_eq "升级后策略变 ALL" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "ALL"
+assert_eq "策略仍是 CHEAPEST（不再有 ALL 这一级）" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "CHEAPEST"
+assert_eq "到头已标记提醒" "$(sql "SELECT call_timeout_reminded_at IS NOT NULL FROM deliveries WHERE delivery_no='$(jq -r '.data.delivery.deliveryNo' <<<"$R")'")" "1"
 
 echo "-- ⑧ 店员手选运力：第一次呼他选的那家，之后走同一条阶梯 --"
 # 第一次默认自动挑最便宜那家，但店员可以当场改选（急单挑闪送）。这一段守的是
@@ -261,7 +263,7 @@ R=$(d50_dlv "$D50_O8")
 assert_eq "只呼了店员指定的闪送" "$(jq -c '.data.delivery.calledProviders' <<<"$R")" '["shansongtongcheng"]'
 assert_eq "策略标记为 MANUAL（与自动挑选分得开）" "$(jq -r '.data.delivery.callStrategy' <<<"$R")" "MANUAL"
 assert_eq "手选也只冻一笔" "$(jq -r '.data.delivery.orderFees | length' <<<"$R")" "1"
-# 第二级：手选的单到点没人接，同样要被并呼全部兜住。
+# 第二级：手选的单（含工作台「极速配送」只呼闪送）到点没人接，同样要升到并呼 N 家。
 # 预估取消费必须压成 0 才走「真升级」分支——mock 默认回 ¥2，那对应「骑手已经接了单」，
 # 会走 *_HELD（放弃升级、留给人工），localEscalate 同样计数，但策略不会变成 ALL。
 d50_only "$(jq -r '.data.delivery.deliveryNo' <<<"$R")"

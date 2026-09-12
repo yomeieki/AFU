@@ -383,13 +383,14 @@ export default function LocalSettings() {
             </select>
           </Field>
           */}
-          <Field label="第一次呼谁（店员没手选时）"
-            hint="三级阶梯的第一级。工作台弹窗里始终列出全部报价，店员可以当场改选任意一家（急单选闪送）；这里定的是他不动手时默认呼谁。并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。">
+          <Field label="「普通配送」第一次呼谁"
+            hint="两级阶梯的第一级。工作台弹窗只有「普通配送」和「极速配送（只呼闪送）」两个选项，这里定的是普通配送第一次怎么呼。并呼几家就同时冻结几笔预扣，只有中标那家最终扣款。">
             <select className={inputCls} value={s.callStrategy.mode}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, mode: e.target.value as 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL' } })}>
               <option value="SOLO_LOWEST">只呼最低价那一家（推荐）</option>
               <option value="CHEAPEST_N">并呼最便宜的几家</option>
-              <option value="ALL">并呼全部运力（旧行为）</option>
+              {/* ALL（并呼全部）已从选项里去掉（PO 2026-09-12）；库里若仍是 ALL，保留显示，免得一进页面就被静默改掉 */}
+              {s.callStrategy.mode === 'ALL' && <option value="ALL">并呼全部运力（旧设置，建议改掉）</option>}
             </select>
           </Field>
           <Field label="第二级并呼最便宜的几家"
@@ -397,7 +398,7 @@ export default function LocalSettings() {
             <input className={inputCls} type="number" min={1} max={7} value={s.callStrategy.cheapestN}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, cheapestN: Number(e.target.value) } })} /></Field>
           <Field label="每一级等几分钟"
-            hint="一家没人接 → 等这么久 → 并呼最便宜几家 → 再等这么久 → 并呼全部运力（约冻 ¥75）。不分第一次是怎么呼的——店员手选的那一家同样会被逐级兜住。0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
+            hint="一家没人接 → 等这么久 → 并呼最便宜几家 → 再等这么久 → 不再加人，提醒店员处理。极速配送（只呼闪送）没人接同样会升到并呼几家。0 = 不自动升级。调度器每分钟跑一轮，实际会在设定值到 +1 分钟之间发生">
             <input className={inputCls} type="number" min={0} max={30} value={s.callStrategy.escalateAfterMin}
               onChange={(e) => patch({ callStrategy: { ...s.callStrategy, escalateAfterMin: Number(e.target.value) } })} /></Field>
           <Field label="商品默认净重（克）" hint="商品未填净重时用"><input className={inputCls} type="number" min={50} value={s.kd100.defaultItemWeightG} onChange={(e) => patch({ kd100: { ...s.kd100, defaultItemWeightG: Number(e.target.value) } })} /></Field>

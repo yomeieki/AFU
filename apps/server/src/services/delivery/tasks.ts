@@ -243,14 +243,15 @@ export async function refreshStaleQuotes(min?: number): Promise<number> {
  *  - 预估取消费 > 0：说明骑手多半已经接单了（未接单的单撤销不要钱）。这时自动撤单要真花钱，
  *    改标 `*_HELD` 交给人决定。这个标记同时让该行离开扫描范围，不会每分钟重复 precancel + 重复告警。
  *
- * 店主 2026-09-07 定的是**三级阶梯**，一级一级往上加人，不一步跳到全表：
- *      第一次 自动挑最便宜的一家  →  第二次 并呼最便宜 N 家  →  第三次 并呼全部
- * 所以这里不再固定升到 ALL，而是按当前这一行的策略决定下一级（NEXT_RUNG）。
- * 升到 CHEAPEST 之后那一行仍在扫描范围里，下一轮超时会自然接着升到 ALL——
- * 三级不需要额外的计数器，靠「当前策略」本身就能表达走到哪一级了。
+ * 店主 2026-09-12 定的是**两级阶梯**（原三级去掉了「并呼全部」那一级）：
+ *      第一次 自动挑最便宜的一家（或店员选「极速」只呼闪送）  →  第二次 并呼最便宜 N 家  →  到头
+ * 按当前这一行的策略决定下一级（NEXT_RUNG）。升到 CHEAPEST 之后不再加人：
+ * 三家都没人接再全呼多半也没人，白冻一笔 ¥75；改成到点**只发一次告警**叫人处理
+ * （加小费 / 改自己送 / 取消）。告警的「只发一次」复用 callTimeoutRemindedAt 这一列——
+ * 它本来就是「这张单的超时提醒发过了」的标记，remindCallTimeout 见到非空也不会再发第二遍。
  *
- * 扫描范围含 SOLO / CHEAPEST / MANUAL。MANUAL 也在里面：店员手选的那一家没人接，
- * 菜一样做好了在等，没有理由不给它后面两级（原来把它排除在外，理由是「不该在背后
+ * 升级扫描范围只含 SOLO / MANUAL。MANUAL 也在里面：店员手选的那一家没人接，
+ * 菜一样做好了在等，没有理由不给它第二级（原来把它排除在外，理由是「不该在背后
  * 换掉店员的选择」——那会让手选的单永远停在第一级）。升级只在仍是 CALLING 且
  * 预估取消费为 0 时动手，不会撤掉已接单的骑手。
  *
@@ -262,10 +263,25 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
   const threshold = min ?? s.callStrategy.escalateAfterMin
   if (threshold <= 0) return 0
   if (isCircuitTripped()) return 0
+  // 第二级到头：并呼 N 家仍无人接 → 只提醒一次，不撤单不重呼。
+  // 放在升级扫描之前、且不经过 precancel（那是一次外呼，到头的单没必要每分钟去问一次取消费）。
+  const ended = await prisma.delivery.findMany({
+    where: { status: 'CALLING', callStrategy: 'CHEAPEST', calledAt: { lt: ago(threshold) }, callTimeoutRemindedAt: null },
+    take: BATCH, select: { id: true, orderNo: true, calledProviders: true },
+  })
+  for (const d of ended) {
+    const marked = await prisma.delivery.updateMany({ where: { id: d.id, callTimeoutRemindedAt: null }, data: { callTimeoutRemindedAt: new Date() } })
+    if (marked.count === 0) continue
+    notifyLocalDeliveryAlert('并呼多家仍无人接单', [
+      `订单 ${d.orderNo}（已并呼 ${calledLabel(d.calledProviders)}）`,
+      `等待超过 ${threshold} 分钟仍无人接单，阶梯已到头，不再自动加人`,
+      '请到工作台处理：加小费、改自己送，或取消重呼',
+    ], { key: `dlv-ladder-end:${d.id}` })
+  }
   const rows = await prisma.delivery.findMany({
     where: {
       // providerTaskId 非空 = 运力方那头确实有单可撤（占位/UNKNOWN 行没有它，precancel 会 42234）
-      status: 'CALLING', callStrategy: { in: ['SOLO', 'CHEAPEST', 'MANUAL'] }, providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
+      status: 'CALLING', callStrategy: { in: ['SOLO', 'MANUAL'] }, providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
       // 顾客已经申请取消的单不许升级：callRider 对这个条件是硬拦截（42204），
       // 而 cancelDelivery 不拦——不排除的话会「先把 D-1 撤了、再在重呼那一步必然失败」，
       // 留下一条「请到工作台手动呼叫骑手」的告警，把店员引向与顾客意愿相反的操作。
@@ -307,12 +323,12 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
       // 压到「一次本地查询」。仍不是原子的，但代价与概率都降了两个量级。
       const stillSame = await getActiveDelivery(d.orderId)
       if (!stillSame || stillSame.id !== d.id) continue
-      // 下一级：一家没人接 → 最便宜 N 家；N 家还没人接 → 全部。
+      // 下一级：一家没人接 → 最便宜 N 家（两级到头，N 家没人接只提醒，见上面 ended）。
       // 挑谁交给 callRider/resolveCallProviders 按**当下**的报价现算（forceMode），
       // 不拿三分钟前那份名单——那三分钟里报价会变，运力表也可能被店主改过。
       const nextMode = NEXT_RUNG[d.callStrategy as DeliveryCallStrategy]
       if (!nextMode) continue
-      const rungText = nextMode === 'ALL' ? '并呼全部运力' : `并呼最便宜 ${s.callStrategy.cheapestN} 家`
+      const rungText = `并呼最便宜 ${s.callStrategy.cheapestN} 家`
       await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为${rungText}` })
       try {
         await callRider({

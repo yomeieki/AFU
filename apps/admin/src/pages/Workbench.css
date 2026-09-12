@@ -245,6 +245,19 @@
 /* 勾位常驻占宽：只在选中时才占位的话，勾一变整列文字就左右跳 */
 .wb__quote-tick { display:inline-block; width:14px; color:var(--local); font-weight:700; }
 .wb__quote-note { margin-top:6px; font-size:12px; color:var(--text-2); line-height:1.5; }
+/* 呼叫方式两张卡（PO 2026-09-12：只留「普通配送 / 极速配送」）。做成按钮：键盘可达、触屏点击区完整。
+   极速卡在闪送没报价时 disabled 置灰，不隐藏——店员要知道「今天没有极速可选」而不是以为功能没了。 */
+.wb__callopts { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:6px; }
+.wb__callopt { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-height:64px;
+  padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:transparent;
+  color:var(--text-1); font:inherit; text-align:left; cursor:pointer; }
+.wb__callopt:hover:not(:disabled) { background:var(--bg); }
+.wb__callopt--on { border-color:var(--local); background:var(--local-soft); }
+.wb__callopt:disabled { opacity:.5; cursor:not-allowed; }
+.wb__callopt-name { font-size:13px; color:var(--text-2); }
+.wb__callopt--on .wb__callopt-name { color:var(--local); font-weight:600; }
+.wb__callopt-fee { font-size:18px; font-weight:700; line-height:1.2; }
+.wb__callopt-sub { font-size:11px; color:var(--text-2); }
 .wb__quote-note--warn { color:var(--warn); font-weight:600; }
 .wb__redbar { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }

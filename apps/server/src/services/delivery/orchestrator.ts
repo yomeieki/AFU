@@ -85,14 +85,15 @@ export const HELD_OF: Partial<Record<DeliveryCallStrategy, DeliveryCallStrategy>
 }
 
 /**
- * 超时未接时，当前策略的**下一级**该怎么呼（店主 2026-09-07 定的三级阶梯）：
- *      一家（SOLO / 店员手选 MANUAL）→ 最便宜 N 家 → 全部
- * 有对应值 = 还能往上升；ALL 与 *_HELD 不在表里，走到头了。
- * 升到 CHEAPEST 的那一行仍会被升级任务扫到，下一轮超时自然接着升到 ALL——
+ * 超时未接时，当前策略的**下一级**该怎么呼（店主 2026-09-12 改成两级）：
+ *      一家（SOLO / 店员手选 MANUAL，含「极速」只呼闪送）→ 最便宜 N 家 → 到头，只提醒店员
+ * 有对应值 = 还能往上升；CHEAPEST / ALL / *_HELD 不在表里，走到头了。
+ * 原来第三级是「并呼全部」，店主 2026-09-12 去掉：三家都没人接再全呼多半也没人，
+ * 白冻一笔 ¥75，不如立刻叫人处理（tasks.ts 的 escalateSoloCalls 到头时发一次告警）。
  * 「走到第几级」由当前策略本身表达，不需要另设计数器。
  */
-export const NEXT_RUNG: Partial<Record<DeliveryCallStrategy, 'CHEAPEST_N' | 'ALL'>> = {
-  SOLO: 'CHEAPEST_N', MANUAL: 'CHEAPEST_N', CHEAPEST: 'ALL',
+export const NEXT_RUNG: Partial<Record<DeliveryCallStrategy, 'CHEAPEST_N'>> = {
+  SOLO: 'CHEAPEST_N', MANUAL: 'CHEAPEST_N',
 }
 
 /**
@@ -105,20 +106,23 @@ function callEventDesc(
   called: string[],
   lowest: { provider: string; feeFen: number } | null,
   escalateAfterMin: number,
+  cheapestN: number,
   chosen?: { provider: string; feeFen: number }[],
 ): string {
   const yuan = (fen: number) => `¥${(fen / 100).toFixed(2)}`
-  const tail = escalateAfterMin > 0 ? `（约 ${escalateAfterMin} 分钟无人接自动改为并呼全部）` : '（不自动升级）'
+  // 两级阶梯：第一级（一家）到点升到最便宜 N 家；第二级到点不再加人，只提醒店员
+  const upTail = escalateAfterMin > 0 ? `（约 ${escalateAfterMin} 分钟无人接自动改为并呼最便宜 ${cheapestN} 家）` : '（不自动升级）'
+  const endTail = escalateAfterMin > 0 ? `（约 ${escalateAfterMin} 分钟无人接将提醒店员，不再自动加人）` : '（不自动升级）'
   if (strategy === 'SOLO' && lowest) {
-    return `只呼最低价 ${providerLabel(lowest.provider)} ${yuan(lowest.feeFen)}${tail}`
+    return `只呼最低价 ${providerLabel(lowest.provider)} ${yuan(lowest.feeFen)}${upTail}`
   }
   if (strategy === 'CHEAPEST' && chosen?.length) {
     // 把选中的几家连价一起写出来：对账时「为什么冻了这么多」只看这一行就够
     const list = chosen.map((q) => `${providerLabel(q.provider)} ${yuan(q.feeFen)}`).join('、')
     const total = chosen.reduce((n, q) => n + q.feeFen, 0)
-    return `并呼最便宜 ${chosen.length} 家：${list}；合计冻结约 ${yuan(total)}${tail}`
+    return `并呼最便宜 ${chosen.length} 家：${list}；合计冻结约 ${yuan(total)}${endTail}`
   }
-  if (strategy === 'MANUAL') return `已向指定运力下单：${called.map(providerLabel).join('、')}`
+  if (strategy === 'MANUAL') return `已向指定运力下单：${called.map(providerLabel).join('、')}${upTail}`
   return `已向运力方下单（并呼 ${called.length} 家抢单中）`
 }
 
@@ -323,7 +327,7 @@ export async function callRider(input: CallRiderInput) {
           notifySystemAlert('呼叫骑手成功但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, `taskId=${result!.taskId ?? ''}`, '请到快递100 后台核对，必要时人工登记'], { key: `kd100-landing-race:${orderId}` })
           return
         }
-        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: callEventDesc(callStrategy, calledProviders, lowest, s.callStrategy.escalateAfterMin, chosen), operator })
+        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: callEventDesc(callStrategy, calledProviders, lowest, s.callStrategy.escalateAfterMin, s.callStrategy.cheapestN, chosen), operator })
       })
     } catch (e) {
       // 落库失败（如 providerTaskId 撞唯一索引）会让占位行永远停在 PENDING：
