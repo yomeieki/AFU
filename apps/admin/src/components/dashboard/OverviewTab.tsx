@@ -20,7 +20,7 @@ export default function OverviewTab({ range }: { range: DateRange }) {
     [range.startDate, range.endDate, hotChannel],
   )
   return (
-    <StatsShell loading={loading} failed={failed} reload={reload}>
+    <StatsShell loading={loading} failed={failed} reload={reload} hasData={!!data}>
       {data && <Body d={data} hotChannel={hotChannel} setHotChannel={setHotChannel} />}
     </StatsShell>
   )

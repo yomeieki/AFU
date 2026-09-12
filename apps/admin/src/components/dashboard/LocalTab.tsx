@@ -9,7 +9,7 @@ import type { DateRange } from './RangePicker'
 
 export default function LocalTab({ range }: { range: DateRange }) {
   const { data, loading, failed, reload } = useStats<LocalStats>(() => getLocalStats(range), [range.startDate, range.endDate])
-  return <StatsShell loading={loading} failed={failed} reload={reload}>{data && <Body d={data} />}</StatsShell>
+  return <StatsShell loading={loading} failed={failed} reload={reload} hasData={!!data}>{data && <Body d={data} />}</StatsShell>
 }
 
 function Card({ title, children }: { title: string; children: ReactNode }) {

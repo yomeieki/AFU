@@ -187,8 +187,9 @@ export default function LocalOrders() {
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-card overflow-hidden">
-        {loading ? (
+      {/* 同 ui/Table：有旧列表时不换骨架，压淡保留，免得翻页/切筛选时页面塌回顶部 */}
+      <div className={`bg-white rounded-lg shadow-card overflow-hidden${loading && list.length > 0 ? ' opacity-60 pointer-events-none' : ''}`}>
+        {loading && list.length === 0 ? (
           <div className="p-3 space-y-3">
             {[...Array(3)].map((_, i) => (
               <div key={i} className="h-24 bg-gray-100 rounded-lg animate-pulse" />

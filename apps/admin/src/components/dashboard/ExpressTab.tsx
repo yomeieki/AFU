@@ -8,7 +8,7 @@ import type { DateRange } from './RangePicker'
 
 export default function ExpressTab({ range }: { range: DateRange }) {
   const { data, loading, failed, reload } = useStats<ExpressStats>(() => getExpressStats(range), [range.startDate, range.endDate])
-  return <StatsShell loading={loading} failed={failed} reload={reload}>{data && <Body d={data} />}</StatsShell>
+  return <StatsShell loading={loading} failed={failed} reload={reload} hasData={!!data}>{data && <Body d={data} />}</StatsShell>
 }
 
 function Body({ d }: { d: ExpressStats }) {

@@ -34,8 +34,10 @@ export default function Table({
   const table = (
     <table className="w-full text-sm">
       <thead className="bg-gray-50 text-gray-600">{head}</thead>
-      <tbody className="divide-y divide-gray-100">
-        {loading ? (
+      {/* 翻页/筛选时已有行就原地保留并压淡，不换成 5 行骨架：行数一变页面高度就变，
+          在底部点「下一页」会被浏览器钳回顶部（同 dashboard/useStats.tsx 的原因）。骨架只给首次加载。 */}
+      <tbody className={`divide-y divide-gray-100${loading && !isEmpty ? ' opacity-60 pointer-events-none' : ''}`}>
+        {loading && isEmpty ? (
           [...Array(5)].map((_, i) => (
             <tr key={i}>
               <td colSpan={columns} className="px-4 py-3">
@@ -61,8 +63,8 @@ export default function Table({
   return (
     <>
       <div className="hidden md:block">{table}</div>
-      <div className="md:hidden p-3 space-y-3">
-        {loading ? (
+      <div className={`md:hidden p-3 space-y-3${loading && !isEmpty ? ' opacity-60 pointer-events-none' : ''}`}>
+        {loading && isEmpty ? (
           [...Array(4)].map((_, i) => (
             <div key={i} className="h-20 bg-gray-100 rounded-lg animate-pulse" />
           ))
