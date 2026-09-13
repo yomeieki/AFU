@@ -102,7 +102,7 @@ router.put('/local-delivery', async (req, res, next) => {
     // 不认识 packing 字段，请求体里就没有它，sanitize 会把「没填」当默认值补上
     // （开、¥1），把店主关掉的打包费静默打开。body 没带 packing 就从当前设置原样带回去。
     const body = req.body
-    const mergedBody = (body && typeof body === 'object' && !Array.isArray(body) && (body as Record<string, unknown>).packing === undefined)
+    const mergedBody = (body && typeof body === 'object' && !Array.isArray(body) && (body as Record<string, unknown>).packing == null)
       ? { ...(body as Record<string, unknown>), packing: (await getLocalSettings()).packing }
       : body
     const next_ = sanitizeLocalSettings(mergedBody)
