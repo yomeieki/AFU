@@ -62,6 +62,8 @@ export interface Product {
   deliveryType: string
   channel: Channel
   netWeightG: number | null
+  /** 单件打包费（分）；null = 跟随全店默认，0 = 这道菜不收 */
+  packingFeeFen: number | null
   isRecommended: number
   salesCount: number
   qrScene: string | null
@@ -152,6 +154,8 @@ export interface Order {
   status: OrderStatus
   totalAmount: number
   shippingFee: number
+  /** 打包费（分）。邮寄单恒为 0 */
+  packingFee?: number
   actualAmount: number
   /** M2：券抵扣额（分） */
   discountAmount?: number
@@ -364,6 +368,8 @@ export interface LocalDeliverySettings {
     roundToFen: number
   }
   businessHours: { start: string; end: string }[]
+  /** 打包费：整店默认每份多少钱，商品可各自覆盖（见 Product.packingFeeFen） */
+  packing: { enabled: boolean; perItemFen: number }
   /** 平时备餐时长（分）。**从店员点接单开始算**，不含顾客下单到接单那一段 */
   prepMinutes: number
   /** 高峰时段：备餐排队。prepMin/prepMax 是范围——结算页如实给顾客看区间，算预计送达取上界 */

@@ -2185,6 +2185,7 @@ export default function Workbench() {
             <div className="wb__block">
               <div className="wb__block-t">金额明细</div>
               <div className="wb__line"><span>商品小计</span><span className="wb__amt">¥{yuan(o?.totalAmount ?? 0)}</span></div>
+              {!!o?.packingFee && <div className="wb__line"><span>打包费</span><span className="wb__amt">¥{yuan(o.packingFee)}</span></div>}
               {/* 券在「小计」与「运费」之间——顺序与顾客在结算页看到的一致（小计→券→运费→实付），
                   也与小票上那三行一致。店员三处对账时能逐行对上，不用换算。自取优惠在券之前——
                   与小程序结算页一致（小计 → 自取优惠 → 券） */}

@@ -220,6 +220,7 @@ export default function LocalOrders() {
                       </a>
                     </span>
                     <span>实付 ¥{yuan(o.actualAmount)}</span>
+                    {!!o.packingFee && <span>打包费 ¥{yuan(o.packingFee)}</span>}
                     {o.refundedAmount > 0 && <span>已退 ¥{yuan(o.refundedAmount)}</span>}
                     {o.deliveryType === 'PICKUP' ? (
                       <>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, Search, Download, QrCode } from 'lucide-react'
-import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus } from '../api/admin'
+import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus, getLocalSettings } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
 import { CenterAction } from '../components/BusinessCenter'
 import SpecEditor, { type SkuRow } from '../components/SpecEditor'
@@ -33,6 +33,7 @@ const emptyForm = {
   deliveryInfo: '',
   description: '',
   netWeightG: '',
+  packingFeeFen: '',
   status: 'ON_SHELF' as 'ON_SHELF' | 'OFF_SHELF',
   isRecommended: 0,
 }
@@ -62,6 +63,11 @@ export default function Products() {
   const [qrModal, setQrModal] = useState<Product | null>(null)
   // 没有 catch 的话接口一挂就渲染「暂无商品」，店主会以为商品库被清空了
   const [loadFailed, setLoadFailed] = useState(false)
+  // 商品编辑页「打包费」提示要显示全店默认值；取不到就只写「全店默认」
+  const [defaultPackingFen, setDefaultPackingFen] = useState<number | null>(null)
+  const packingHint = defaultPackingFen != null
+    ? `留空 = 跟随全店默认 ¥${(defaultPackingFen / 100).toFixed(2)}；填 0 = 这道菜不收`
+    : '留空 = 跟随全店默认；填 0 = 这道菜不收'
 
   const setChannel = (next: Channel) => {
     setSearchParams((previous) => {
@@ -92,6 +98,7 @@ export default function Products() {
 
   useEffect(() => {
     getCategories().then((res) => setCategories(res.data.data))
+    getLocalSettings().then((s) => setDefaultPackingFen(s.packing.perItemFen)).catch(() => {})
   }, [])
 
   useEffect(() => { load() }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -129,6 +136,7 @@ export default function Products() {
       deliveryInfo: p.deliveryInfo ?? '',
       description: p.description ?? '',
       netWeightG: p.netWeightG?.toString() ?? '',
+      packingFeeFen: p.packingFeeFen != null ? (p.packingFeeFen / 100).toString() : '',
       status: p.status,
       isRecommended: p.isRecommended,
     })
@@ -191,6 +199,7 @@ export default function Products() {
         deliveryInfo: form.deliveryInfo || null,
         description: form.description || null,
         netWeightG: form.netWeightG ? Number(form.netWeightG) : null,
+        packingFeeFen: form.packingFeeFen.trim() === '' ? null : Math.round(parseFloat(form.packingFeeFen) * 100),
         status: form.status,
         isRecommended: form.isRecommended,
         specDimensions: specDims.length > 0 ? specDims : null,
@@ -633,6 +642,18 @@ export default function Products() {
                     onChange={(e) => setForm({ ...form, netWeightG: e.target.value })}
                     placeholder="同城配送按重量呼叫骑手，空=用默认值"
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">打包费（元）</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={form.packingFeeFen}
+                    onChange={(e) => setForm({ ...form, packingFeeFen: e.target.value })}
+                    placeholder={packingHint}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">{packingHint}</p>
                 </div>
               </div>
               <div>

@@ -34,7 +34,7 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
 export default function LocalSettings() {
   const { setDirty } = useUnsavedSettings()
   const [s, setS] = useState<LocalDeliverySettings | null>(null)
-  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '' })
+  const [money, setMoney] = useState({ baseFee: '', perKmFee: '', minOrderAmount: '', maxPerCall: '', maxPerOrder: '', quoteMarkup: '', roundTo: '', quoteNearMarkup: '', packingPerItem: '' })
   const [coord, setCoord] = useState({ lat: '', lng: '' })
   const [pauseOpen, setPauseOpen] = useState(false)
   const [tiers, setTiers] = useState<{ minAmountFen: number; maxKm: number }[]>([])
@@ -52,6 +52,7 @@ export default function LocalSettings() {
       quoteMarkup: toYuan(v.fee.quoteMarkupFen), roundTo: toYuan(v.fee.roundToFen),
       quoteNearMarkup: toYuan(v.fee.quoteNearMarkupFen),
       minOrderAmount: toYuan(v.fee.minOrderAmount), maxPerCall: toYuan(v.tip.maxPerCall), maxPerOrder: toYuan(v.tip.maxPerOrder),
+      packingPerItem: toYuan(v.packing.perItemFen),
     })
     setTiers([...(v.fee.freeShipTiers ?? [])])
     setCoord({ lat: v.store.latE6 === null ? '' : (v.store.latE6 / 1e6).toFixed(6), lng: v.store.lngE6 === null ? '' : (v.store.lngE6 / 1e6).toFixed(6) })
@@ -116,6 +117,7 @@ export default function LocalSettings() {
           quoteMarkupFen: fen.quoteMarkup ?? s.fee.quoteMarkupFen, roundToFen: fen.roundTo ?? s.fee.roundToFen,
           quoteNearMarkupFen: fen.quoteNearMarkup ?? s.fee.quoteNearMarkupFen },
         tip: { maxPerCall: fen.maxPerCall!, maxPerOrder: fen.maxPerOrder! },
+        packing: { enabled: s.packing.enabled, perItemFen: fen.packingPerItem! },
         pickup: fresh.pickup,   // 自取在「到店自取设置」页单独编辑（PO 2026-09-11），这里同样不能用页面缓存覆盖
       }
       // 保存后的提示按「这次是否动了门店坐标」分叉，因为两种情况对顾客的影响完全不同：
@@ -309,6 +311,26 @@ export default function LocalSettings() {
             计时从<b>店员接单</b>起算，不含顾客下单到接单那一段（结算页已写明这一点）。
             骑手取货之后，顾客端会改用骑手实时位置重算，不再用这个估算。
           </p>
+        </div>
+      </section>
+
+      <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <h3 className="font-medium text-gray-800">打包费</h3>
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="packingEnabled"
+            checked={s.packing.enabled}
+            onChange={(e) => patch({ packing: { ...s.packing, enabled: e.target.checked } })}
+            className="rounded"
+          />
+          <label htmlFor="packingEnabled" className="text-sm text-gray-700">收取打包费（关闭 = 整店暂不收，商品上的设置保留）</label>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="默认每份打包费（元）">
+            <input className={inputCls} inputMode="decimal" value={money.packingPerItem}
+              onChange={(e) => setMoney({ ...money, packingPerItem: e.target.value })} disabled={!s.packing.enabled} />
+          </Field>
         </div>
       </section>
 
