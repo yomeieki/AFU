@@ -143,6 +143,10 @@
       <text class="amount-label">商品金额</text>
       <text class="amount-value">¥{{order.totalAmountText}}</text>
     </view>
+    <view class="amount-row" wx:if="{{order.packingFee > 0}}">
+      <text class="amount-label">打包费</text>
+      <text class="amount-value">¥{{order.packingFeeText}}</text>
+    </view>
     <view class="amount-row" wx:if="{{order.pickupDiscountAmount > 0}}">
       <text class="amount-label">自取优惠</text>
       <text class="amount-value discount">−¥{{order.pickupDiscountAmountText}}</text>

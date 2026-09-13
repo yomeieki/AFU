@@ -113,6 +113,15 @@ test('传 undefined / 空对象不抛，按「没选地址」处理', function (
   assert.equal(checkoutAction({}).text, '请选择地址')
 })
 
+// 打包费预览与自取结算页共用同一份实现（require('./pickup-checkout-state')），
+// 这里只验证 local-checkout-state 导出的是同一套口径，不重复抄一份公式的全部用例。
+test('packingFeeOf：与 pickup-checkout-state 同一份实现，Σ quantity × 单份打包费，总开关关为 0', function () {
+  const { packingFeeOf } = require('../../apps/miniapp/utils/local-checkout-state')
+  const items = [{ quantity: 2, packingFeeEach: 100 }, { quantity: 3, packingFeeEach: 100 }]
+  assert.equal(packingFeeOf(items, true), 500)
+  assert.equal(packingFeeOf(items, false), 0)
+})
+
 // 幂等键的形状必须过服务端的 zod .uuid()——不合法会被 400 拒掉，
 // 而那看起来像是「下单坏了」，没人会想到是 id 的格式问题。
 test('newClientRequestId 生成合法 UUID v4，且每次都不同', function () {

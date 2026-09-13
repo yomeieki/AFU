@@ -52,10 +52,42 @@ test('自取优惠与服务端同一公式：PERCENT 四舍五入、FIXED 封顶
   assert.equal(st.pickupDiscountOf({ type: 'FIXED', value: 300 }, 200), 200)
   assert.equal(st.pickupDiscountOf(null, 5000), 0)
   assert.deepEqual(st.computePickupPay(5000, { type: 'PERCENT', value: 95 }, 500),
-    { pickupDiscount: 250, couponDiscount: 500, payAmount: 4250 })
+    { pickupDiscount: 250, couponDiscount: 500, packingFee: 0, payAmount: 4250 })
   // 券面额超过「小计−自取优惠」时封顶，实付不会算成负数
   assert.deepEqual(st.computePickupPay(1000, { type: 'FIXED', value: 300 }, 1000),
-    { pickupDiscount: 300, couponDiscount: 700, payAmount: 0 })
+    { pickupDiscount: 300, couponDiscount: 700, packingFee: 0, payAmount: 0 })
+})
+
+test('打包费：Σ quantity × 单份打包费；enabled=false 整单为 0；总开关不影响券封顶', function () {
+  var items = [
+    { quantity: 2, packingFeeEach: 100 },
+    { quantity: 1, packingFeeEach: 250 },
+  ]
+  // 3 份共 450：2×100 + 1×250
+  assert.equal(st.packingFeeOf(items, true), 450)
+  assert.equal(st.packingFeeOf(items, undefined), 450) // 默认（未显式传 false）当作开
+  assert.equal(st.packingFeeOf(items, false), 0)
+  assert.equal(st.packingFeeOf([], true), 0)
+  // 兼容 { product: { packingFeeEach } } 这种嵌套形状
+  assert.equal(st.packingFeeOf([{ quantity: 2, product: { packingFeeEach: 100 } }], true), 200)
+  // 打包费加在券封顶之后，不参与「小计−自取优惠」那个封顶判定
+  assert.deepEqual(st.computePickupPay(5000, { type: 'PERCENT', value: 95 }, 500, 300),
+    { pickupDiscount: 250, couponDiscount: 500, packingFee: 300, payAmount: 4550 })
+})
+
+test('打包费副文案：各份单价相同给「N 份 × ¥X.XX」，不同只给份数「N 份」', function () {
+  var same = [
+    { quantity: 2, packingFeeEach: 100 },
+    { quantity: 1, packingFeeEach: 100 },
+  ]
+  assert.equal(st.packingFeeText(same), '3 份 × ¥1.00')
+  var diff = [
+    { quantity: 2, packingFeeEach: 100 },
+    { quantity: 1, packingFeeEach: 0 },
+  ]
+  assert.equal(st.packingFeeText(diff), '3 份')
+  assert.equal(st.packingFeeText([]), '')
+  assert.equal(st.packingFeeText(null), '')
 })
 test('时段：默认选第一个可选格；今天为空时落到明天；已选格不在最新列表里即视为失效', function () {
   const view = { days: [

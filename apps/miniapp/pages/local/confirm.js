@@ -15,6 +15,8 @@ var formatPrice = require('../../utils/format').formatPrice
 var checkoutState = require('../../utils/local-checkout-state')
 var checkoutAction = checkoutState.checkoutAction
 var newClientRequestId = checkoutState.newClientRequestId
+var packingFeeOf = checkoutState.packingFeeOf
+var packingFeeText = require('../../utils/pickup-checkout-state').packingFeeText
 var app = getApp()
 
 function getHeadNotice(quote) {
@@ -80,6 +82,8 @@ Page({
     needTableware: false,
     remark: '',
     payAmount: 0,
+    packingFee: 0,
+    packingFeeText: '',
     // 会员优惠（M4）。四个值全部来自 checkout-benefits 组件，本页不自己算 discount。
     couponId: null,
     gifts: [],
@@ -176,6 +180,7 @@ Page({
       var notice = getHeadNotice(meta)
       self._metaNotice = notice
       self.setData({ meta: meta })
+      self.recomputePackingFee()
     }).catch(function() {
       // 报价结果才是确认页的最终状态；meta 仅为报价前的店头信息兜底，拉取失败不影响主流程。
     })
@@ -190,6 +195,7 @@ Page({
         var addresses = results[1] || []
         var address = addresses.find(function(item) { return item.isDefault }) || addresses[0] || null
         self.setData({ items: items, subtotal: subtotal, address: address })
+        self.recomputePackingFee()
         self._quotedOnce = true
         self.refreshQuote('load')
       })
@@ -274,10 +280,10 @@ Page({
         } else {
           patch.blockReason = ''
           patch.quoteToken = quote.quoteToken
-          // 券只抵扣商品金额，不抵扣配送费。
+          // 券只抵扣商品金额，不抵扣配送费。打包费与运费同层相加，不参与券封顶。
           // ⚠️ 传给 /local/quote 的 subtotal 仍是**券前**小计（见 refreshQuote 入口，一行没动）：
           // 服务端 `q.fee > quoted.fee` 那道防线依赖两边口径一致，起送线也按券前判。
-          patch.payAmount = self.data.subtotal - self.data.discount + (quote.fee || 0)
+          patch.payAmount = self.data.subtotal - self.data.discount + (quote.fee || 0) + self.data.packingFee
         }
         // m1: 报价成功后复位，后续 42901 仍可自动重试一次
         self._retriedRateLimit = false
@@ -378,7 +384,22 @@ Page({
       var items = selectedItems(cart || {}, self.data.cartItemIds)
       var subtotal = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
       self.setData({ items: items, subtotal: subtotal })
+      self.recomputePackingFee()
       self.scheduleQuote()
+    })
+  },
+
+  // 打包费预览（2026-09-13 打包费设计 §4.1）：Σ quantity × 单份打包费，总开关关时为 0。
+  // items 与 meta 分两路异步拉回来，谁后到都要重算一次——只在其中一处调用会在另一路
+  // 先回来的那一刻算出一个用着旧值的错误金额。真正影响应付金额的是 refreshQuote 成功分支
+  // 与 onBenefitsChange 里再读一次 this.data.packingFee，这里只负责把它算对、存好。
+  recomputePackingFee: function() {
+    var d = this.data
+    var meta = d.meta
+    var enabled = !!(meta && meta.packing && meta.packing.enabled !== false)
+    this.setData({
+      packingFee: packingFeeOf(d.items, enabled),
+      packingFeeText: packingFeeText(d.items),
     })
   },
 
@@ -502,7 +523,7 @@ Page({
     }
     if (this.data.quoteToken && !this.data.blockReason && !this.data.quoteError) {
       var fee = (this.data.quote && this.data.quote.fee) || 0
-      var pay = this.data.subtotal - patch.discount + fee
+      var pay = this.data.subtotal - patch.discount + fee + this.data.packingFee
       patch.payAmount = pay < 0 ? 0 : pay
     }
     this.setData(patch)

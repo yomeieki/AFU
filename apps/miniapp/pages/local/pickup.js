@@ -59,6 +59,8 @@ Page({
     // 金额
     discountRule: null,
     pickupDiscount: 0,
+    packingFee: 0,
+    packingFeeText: '',
     payAmount: null,
     belowMinGap: 0,
     submitting: false,
@@ -183,12 +185,18 @@ Page({
    */
   recompute: function() {
     var d = this.data
-    var amounts = st.computePickupPay(d.subtotal, d.discountRule, d.discount)
+    var meta = d.meta
+    // meta 可能还没拉到（loadAll 里 getLocalMeta 失败会退成 null），这里不能直接 meta.packing——
+    // 那会在首屏 meta 未就绪时直接抛错，把整页的 recompute 打断。
+    var packingFee = st.packingFeeOf(d.items, !!(meta && meta.packing && meta.packing.enabled !== false))
+    var amounts = st.computePickupPay(d.subtotal, d.discountRule, d.discount, packingFee)
     var gap = Math.max(0, localCatalog.minOrderOf(d.meta, 'PICKUP') - d.subtotal)
     var payAmount = d.items.length ? amounts.payAmount : null
     this.setData({
       pickupDiscount: amounts.pickupDiscount,
       couponDiscount: amounts.couponDiscount,
+      packingFee: amounts.packingFee,
+      packingFeeText: st.packingFeeText(d.items),
       payAmount: payAmount,
       belowMinGap: gap,
       action: st.pickupCheckoutAction({

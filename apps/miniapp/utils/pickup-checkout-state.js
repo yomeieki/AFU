@@ -66,12 +66,58 @@ function pickupDiscountOf(rule, subtotal) {
   return 0
 }
 
-/** 小计 → 自取优惠 → 券（封顶到 小计−自取优惠）→ 实付。运费恒 0，所以这里没有它 */
-function computePickupPay(subtotal, rule, couponDiscount) {
+/** 小计 → 自取优惠 → 券（封顶到 小计−自取优惠）→ 打包费 → 实付。运费恒 0，所以这里没有它。
+ * 打包费不参与券封顶的判定（封顶只看 小计−自取优惠），只在最后原样加回来——
+ * 与服务端 computeCheckout 的口径一致：packingFee 与 shippingFee 同层相加。 */
+function computePickupPay(subtotal, rule, couponDiscount, packingFee) {
   var pd = pickupDiscountOf(rule, subtotal)
   var cap = Math.max(0, subtotal - pd)
   var cd = Math.min(couponDiscount || 0, cap)
-  return { pickupDiscount: pd, couponDiscount: cd, payAmount: subtotal - pd - cd }
+  var pf = packingFee || 0
+  return { pickupDiscount: pd, couponDiscount: cd, packingFee: pf, payAmount: subtotal - pd - cd + pf }
+}
+
+/** 单份打包费（分）：优先取行上已解析好的 packingFeeEach（购物车行是扁平字段），
+ * 兼容传入 { product: { packingFeeEach } } 这种嵌套形状。 */
+function packingFeeEachOf(item) {
+  if (!item) return 0
+  var p = item.product
+  if (p && typeof p.packingFeeEach === 'number') return p.packingFeeEach
+  return typeof item.packingFeeEach === 'number' ? item.packingFeeEach : 0
+}
+
+/**
+ * 打包费预览（2026-09-13 打包费设计 §4.1）：Σ quantity × 单份打包费。
+ * 赠品行不在购物车里，不需要额外排除。总开关关闭（enabled===false）时整单为 0，
+ * 与服务端 calcPackingFee 的总开关口径一致——不是「商品覆盖为 0」那种逐行判断。
+ */
+function packingFeeOf(items, enabled) {
+  if (enabled === false) return 0
+  return (items || []).reduce(function(sum, item) {
+    return sum + (item.quantity || 0) * packingFeeEachOf(item)
+  }, 0)
+}
+
+/**
+ * 打包费副文案：所有份单价相同才给「N 份 × ¥X.XX」，否则只给份数「N 份」——
+ * 商品级覆盖值不同时硬凑一个单价会算错账，不如老实说「N 份」。
+ */
+function packingFeeText(items) {
+  var list = items || []
+  var totalQty = 0
+  var each = null
+  var same = true
+  for (var i = 0; i < list.length; i++) {
+    var qty = list[i].quantity || 0
+    if (!qty) continue
+    var e = packingFeeEachOf(list[i])
+    totalQty += qty
+    if (each === null) each = e
+    else if (e !== each) same = false
+  }
+  if (!totalQty) return ''
+  if (same && each !== null) return totalQty + ' 份 × ¥' + formatPrice(each)
+  return totalQty + ' 份'
 }
 
 /** 第一个可选格：{ dayIndex, slot }；一格都没有返回 null */
@@ -110,6 +156,8 @@ module.exports = {
   isValidPhone: isValidPhone,
   pickupDiscountOf: pickupDiscountOf,
   computePickupPay: computePickupPay,
+  packingFeeOf: packingFeeOf,
+  packingFeeText: packingFeeText,
   firstSlot: firstSlot,
   slotOffered: slotOffered,
 }

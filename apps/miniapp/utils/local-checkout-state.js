@@ -30,6 +30,11 @@ function result(disabled, text, amountState, action) {
   return { disabled: disabled, text: text, amountState: amountState, action: action }
 }
 
+// 打包费预览是同一套公式（Σ quantity × 单份打包费，总开关关时为 0），
+// 与自取结算页共用一份实现，不在这里另抄一遍——两处口径一旦分叉，
+// 改设置时只改了一边，另一边的应付金额就悄悄算错了。
+var packingFeeOf = require('./pickup-checkout-state').packingFeeOf
+
 /**
  * @param {Object} s 结算页当前状态，字段全部可选：
  *   hasAddress    已选中收货地址
@@ -97,4 +102,5 @@ module.exports = {
   TEXT: TEXT,
   checkoutAction: checkoutAction,
   newClientRequestId: newClientRequestId,
+  packingFeeOf: packingFeeOf,
 }

@@ -360,6 +360,7 @@ function decorateOrder(order) {
     // 服务端从 2026-09-11 起下发 canSelfCancel（自取按「开始备餐时刻」判）；老服务端没有就按旧规则算
     canSelfCancel: selfCancel,
     totalAmountText: formatPrice(order.totalAmount),
+    packingFeeText: formatPrice(order.packingFee || 0),
     shippingFeeText: formatPrice(order.shippingFee),
     actualAmountText: formatPrice(order.actualAmount),
     refundedAmountText: formatPrice(order.refundedAmount || 0),
