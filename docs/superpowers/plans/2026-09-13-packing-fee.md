@@ -58,6 +58,8 @@ apps/admin/src/api/admin.ts
 apps/admin/src/pages/{Products,LocalSettings,Workbench,LocalOrders,Orders}.tsx
 docs/staff-guide.md
 docs/superpowers/plans/2026-09-13-packing-fee.md（本文件：勘误与验收记录）
+docs/superpowers/specs/2026-09-13-packing-fee-design.md（仅 02 复核 #2 的「夹取」口径修正）
+apps/server/src/routes/admin/settings.ts（仅 02 复核 #4：整包 PUT 缺 packing 沿用当前值）
 ```
 
 ## 上报触发条件（遇到即 BLOCKED）
@@ -156,6 +158,8 @@ computeCheckout({ subtotal, discount, shippingFee, pickupDiscount?, packingFee? 
 5. 全额退款金额含打包费。
 
 ## 勘误与验收记录（执行时追加）
+
+- 执行完成 2026-09-13：11 提交 `69ac0ae..HEAD`。02 复核（opus）无阻断，03 回判采纳 #1 邮寄商品不显示打包费框、#2 文档「夹取」→「越界回落默认」、#4 整包 PUT 缺 packing 沿用当前值（扩白名单）、#5 前端 ¥100 上限、#7① 小票 0 不印断言、#9 手册补一句；#3 上线步骤记入部署单（打烊后部署 + 验单）；#6/#7②③/#8 延后。04 机械核对 C1–C8/C PASS，W 因 spec 文件改动未列白名单一次 FAIL → 本条勘误补入白名单。干净库 e2e 1657/0。
 
 - Task 3 勘误：购物车行的 `packingFeeEach` 服务端放在**行级**（`item.packingFeeEach`），不在 `item.product` 下（`docs/api.md` 附录 I 以此为准）；商品接口仍在商品对象上。小程序两种形状都接。
 - Task 2 上报：默认 `packing.enabled=true` 使 §49/§62 里六条按精确实付断言的老用例各多 ¥1（§62「券减到 0 → 42251」前提失效）。裁定：老段在各自的设置钉死里加 `.packing.enabled=false`（收尾本就恢复 ORIG），打包费只在 §63 验；白名单相应扩两文件。
