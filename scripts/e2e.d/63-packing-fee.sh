@@ -12,6 +12,7 @@ p63_put '.packing.enabled=true | .packing.perItemFen=100
   | .pickup.minOrderAmountFen=0 | .pickup.discount={type:"NONE",value:0} | .pickup.autoCompleteAfterMin=120
   | .pickup.unpickedRemindAfterMin=30 | .prepMinutes=20 | .peak.windows=[]
   | .businessHours=[{start:"00:00",end:"23:59"}] | .holiday=null | .pickup.paused=null
+  | .fee.minOrderAmount=0 | .fee.freeShipTiers=[] | .enabled=true | .paused=null
   | .paused=null | .enabled=true' >/dev/null
 R=$(req GET /api/local/meta)
 assert_eq "meta.packing.enabled=true" "$(jq -r '.data.packing.enabled' <<<"$R")" "true"
@@ -93,14 +94,14 @@ P63_O5=$(jq -r .data.orderId <<<"$R")
 assert_eq "邮寄单 packingFee=0" "$(jq -r .data.packingFee <<<"$R")" "0"
 
 echo "-- ⑥ 券门槛用商品小计，不算打包费：门槛=小计 仍可用 --"
-P63_TID=$(req POST /api/admin/coupon-templates "$AT" "{\"name\":\"E2E-PACK-COUPON$RANDOM\",\"amount\":100,\"threshold\":2000,\"channel\":\"LOCAL\",\"validDays\":30,\"source\":\"CAMPAIGN\"}" | jq -r '.data.id')
+P63_TID=$(req POST /api/admin/coupon-templates "$AT" "{\"name\":\"E2E-PACK-COUPON$RANDOM\",\"amount\":300,\"threshold\":2000,\"channel\":\"LOCAL\",\"validDays\":30,\"source\":\"CAMPAIGN\"}" | jq -r '.data.id')
 P63_CID=$(req POST /api/member/coupons/claim "$UT" "{\"templateId\":$P63_TID}" | jq -r '.data.id')
 R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$P63_PA,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P63_SLOT\",\"pickupContact\":{\"phone\":\"13800001111\"},\"couponId\":$P63_CID}")
 assert_eq "门槛=小计（不含打包费）仍可用 code 0" "$(code "$R")" "0"
 P63_O6=$(jq -r .data.orderId <<<"$R")
-assert_eq "抵扣 ¥1" "$(jq -r .data.discountAmount <<<"$R")" "100"
+assert_eq "抵扣 ¥3" "$(jq -r .data.discountAmount <<<"$R")" "300"
 assert_eq "packingFee=100（A 跟随默认，打包费不因用券而变）" "$(jq -r .data.packingFee <<<"$R")" "100"
-assert_eq "actualAmount = 小计 − 券 + 打包费" "$(jq -r .data.actualAmount <<<"$R")" "$((2000 - 100 + 100))"
+assert_eq "actualAmount = 小计 − 券 + 打包费" "$(jq -r .data.actualAmount <<<"$R")" "$((2000 - 300 + 100))"
 
 echo "-- ⑦ 全额退款：remainingRefundable 含打包费 --"
 req POST "/api/orders/$P63_O1/pay" "$UT" >/dev/null
@@ -113,6 +114,7 @@ assert_eq "订单 → REFUNDED" "$(p63_ord "$P63_O1" | jq -r .data.status)" "REF
 assert_eq "退款后 remainingRefundable=0" "$(p63_ord "$P63_O1" | jq -r .data.remainingRefundable)" "0"
 
 echo "-- ⑧ 小票：配送/取餐联含「打包费：」，厨房联不含 --"
+P63_ORIG_PRINTER=$(req GET /api/admin/settings/printer "$AT" | jq -c .data)
 req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"P63-P","channels":["LOCAL","EXPRESS"],"copies":1}],"printCancel":true}' >/dev/null
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
 R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$P63_PA,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P63_SLOT\",\"pickupContact\":{\"phone\":\"13800002222\"}}")
@@ -131,5 +133,8 @@ req PUT "/api/admin/products/$P63_PA" "$AT" '{"status":"OFF_SHELF"}' >/dev/null
 req PUT "/api/admin/products/$P63_PB" "$AT" '{"status":"OFF_SHELF"}' >/dev/null
 for t in ${P63_TID:-}; do req PUT "/api/admin/coupon-templates/$t" "$AT" '{"status":"OFF"}' >/dev/null 2>&1 || true; done
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+req PUT /api/admin/settings/printer "$AT" "$P63_ORIG_PRINTER" >/dev/null
+# O8 停在 PAID 未接单：不收掉的话下一轮同库跑 e2e 时会被 repeatAnnounce 催单出票（§62 对 O4 同款防护）
+sql "UPDATE orders SET status='CANCELLED', cancelled_at=NOW(3), cancel_reason='e2e 收尾' WHERE id=$P63_O8 AND status='PAID';"
 sql "DELETE FROM print_jobs WHERE order_id IN ($P63_O1,$P63_O2,$P63_O3,$P63_O3B,$P63_O4,$P63_O5,$P63_O6,$P63_O8);"
 sql "UPDATE orders SET is_test=1 WHERE id IN ($P63_O1,$P63_O2,$P63_O3,$P63_O3B,$P63_O4,$P63_O5,$P63_O6,$P63_O8);"

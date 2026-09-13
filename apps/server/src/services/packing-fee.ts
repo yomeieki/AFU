@@ -16,7 +16,9 @@ import { LocalDeliverySettings } from './local-settings'
  * 单份打包费（分）。总开关关掉时整店为 0——即便某道菜自己覆盖了一个非零金额，
  * 开关是「临时不收」的总闸，商品上的覆盖值原样保留、只是暂不生效。
  */
-export function packingFeeEach(s: LocalDeliverySettings, product: { packingFeeFen: number | null }): number {
+export function packingFeeEach(s: LocalDeliverySettings, product: { packingFeeFen: number | null; channel?: string }): number {
+  // 邮寄渠道的商品永远不收（箱费在运费里）：字段语义是「单份实收」，给邮寄商品报一个收不到的数会让结算页渲染出假行
+  if (product.channel === 'EXPRESS') return 0
   return s.packing.enabled ? (product.packingFeeFen ?? s.packing.perItemFen) : 0
 }
 

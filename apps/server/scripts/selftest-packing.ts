@@ -61,4 +61,10 @@ t('PICKUP（到店自取）与 LOCAL 同价同口径', () => {
   assert.strictEqual(calcPackingFee(base, 'PICKUP', lines), 200)
 })
 
+t('packingFeeEach：邮寄渠道商品恒 0（字段是「单份实收」，邮寄不收）', () => {
+  assert.strictEqual(packingFeeEach(base, { packingFeeFen: null, channel: 'EXPRESS' }), 0)
+  assert.strictEqual(packingFeeEach(base, { packingFeeFen: 250, channel: 'EXPRESS' }), 0)
+  assert.strictEqual(packingFeeEach(base, { packingFeeFen: 250, channel: 'LOCAL' }), 250)
+})
+
 console.log(`\n${pass} 例通过${process.exitCode ? '，存在失败' : ''}`)

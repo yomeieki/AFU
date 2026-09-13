@@ -240,6 +240,11 @@ t('computeCheckout 打包费与运费同层相加', () => {
 t('computeCheckout 不传 packingFee 与传 0 逐字节一致', () => {
   assert.deepStrictEqual(computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 300 }), computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 300, packingFee: 0 }))
 })
+t('computeCheckout 自取优惠 + 打包费同时在（生产默认配置：9.5 折 + ¥1/份）', () => {
+  assert.deepStrictEqual(
+    computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 0, pickupDiscount: 250, packingFee: 200 }),
+    { actualAmount: 4450 })
+})
 t('computeCheckout 打包费为负 → 抛', () => {
   assert.throws(() => computeCheckout({ subtotal: 1000, discount: 0, shippingFee: 0, packingFee: -1 }))
 })

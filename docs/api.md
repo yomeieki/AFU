@@ -1852,7 +1852,7 @@ actualAmount      = subtotal − pickupDiscount − couponDiscount + shippingFee
 | `packingFeeEach: number` | 商品对象、购物车行 | 已解析出的单份实收（分），供结算页/购物车预览用；`= packingFeeEach(settings, product)`。 |
 | `packingFee: number` | 订单对象（下单响应、顾客订单列表/详情、后台订单列表/详情） | 本单打包费快照（分）。`EXPRESS` 单恒 0。 |
 
-赠品行不计打包费（`isGift` 整行排除，不论数量）。
+赠品行不计打包费：下单时赠品行根本不进入 `calcPackingFee`（`lines` 只含付费行），函数另留 `isGift` 守卫作第二道闸。邮寄渠道商品的 `packingFeeEach` 恒为 0。
 
 ### 小票
 
