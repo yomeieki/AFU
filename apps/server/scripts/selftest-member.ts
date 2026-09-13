@@ -311,8 +311,11 @@ t('厨房联：不含「实付」「合计」', () => {
   assert.ok(!k.includes('实付') && !k.includes('合计'))
 })
 t('无券无赠品时，优惠两行都不打（不留空行）', () => {
-  const d = slips(mkTicket({ discountAmount: 0, pointsUsed: 0, items: [{ productName: '凉拌黑木耳', specText: null, quantity: 2, subtotal: 2400 }] })).delivery
+  const s = mkTicket({ discountAmount: 0, pointsUsed: 0, items: [{ productName: '凉拌黑木耳', specText: null, quantity: 2, subtotal: 2400 }] })
+  const d = slips(s).delivery
   assert.ok(!d.includes('优惠券') && !d.includes('赠品抵扣'))
+  // packingFee=0（未传，默认 0）时打包费行不印
+  assert.ok(!s.includes('打包费'))
 })
 t('两联用同一个赠品标记（不一致会让店员对着两张写法不同的票核对）', () => {
   const s = slips(mkTicket())

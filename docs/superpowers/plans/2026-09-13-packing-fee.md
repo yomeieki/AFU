@@ -21,7 +21,7 @@
 - 独立库 `food_shop_packing`，服务端口 **3110**（`apps/server/.env` 已配好，mock 全开、`SCHEDULER_DISABLED=true`）。服务端启动：`cd apps/server && PORT=3110 npx ts-node-dev --respawn --transpile-only src/app.ts`。**e2e 只能在干净库跑**：`/tmp/packing-e2e-fresh.sh [logfile]`。
 - **计费公式（逐字）**：`perItem(product) = product.packingFeeFen ?? settings.packing.perItemFen`；`packingFee = (settings.packing.enabled && deliveryType ∈ {LOCAL, PICKUP}) ? Σ(非赠品行 quantity × perItem) : 0`；`actualAmount = subtotal − pickupDiscount − couponDiscount + shippingFee + packingFee`。
 - 起送门槛、阶梯免运、券门槛、自取折扣、券封顶**一律不看打包费**（继续用商品小计）。
-- 默认设置 `packing: { enabled: true, perItemFen: 100 }`；`perItemFen` 夹取 0–10000；商品 `packingFeeFen` 校验 0–10000 或 null。
+- 默认设置 `packing: { enabled: true, perItemFen: 100 }`；`perItemFen` 越界回落默认 100（仓库既有 `int()` 语义，不是夹到边界）；商品 `packingFeeFen` 校验 0–10000 或 null，越界是 zod 400 拒绝。
 - 展示顺序（结算页 / 详情 / 小票 / 工作台）：商品小计 → **打包费** → 自取优惠 → 优惠券 → 运费（外送）→ 实付。打包费为 0 时不显示该行（小票、详情、后台）；结算页在 `meta.packing.enabled=false` 时不显示。
 - 文案逐字：「打包费」；结算页副文案「N 份 × ¥X.XX」；商品编辑页标签「打包费（元）」，提示「留空 = 跟随全店默认 ¥X；填 0 = 这道菜不收」；同城设置卡片标题「打包费」，字段「默认每份打包费（元）」，开关文案「收取打包费（关闭 = 整店暂不收，商品上的设置保留）」。
 - 老渠道零行为变化：EXPRESS 单 `packingFee` 恒 0，邮寄结算页/小票不出现打包费行。
@@ -159,3 +159,4 @@ computeCheckout({ subtotal, discount, shippingFee, pickupDiscount?, packingFee? 
 
 - Task 3 勘误：购物车行的 `packingFeeEach` 服务端放在**行级**（`item.packingFeeEach`），不在 `item.product` 下（`docs/api.md` 附录 I 以此为准）；商品接口仍在商品对象上。小程序两种形状都接。
 - Task 2 上报：默认 `packing.enabled=true` 使 §49/§62 里六条按精确实付断言的老用例各多 ¥1（§62「券减到 0 → 42251」前提失效）。裁定：老段在各自的设置钉死里加 `.packing.enabled=false`（收尾本就恢复 ORIG），打包费只在 §63 验；白名单相应扩两文件。
+- perItemFen 越界回落默认非夹取（02 复核 #2）。

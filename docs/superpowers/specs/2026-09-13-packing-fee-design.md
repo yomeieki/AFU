@@ -46,7 +46,7 @@
 packing: { enabled: boolean /* 默认 true */, perItemFen: number /* 默认 100 */ }
 ```
 
-sanitize：`perItemFen` 取整、0–10000（¥100）夹取；缺省补 `{ enabled: true, perItemFen: 100 }`。
+sanitize：`perItemFen` 取整、0–10000（¥100）；越界或非整数回落默认 100（仓库既有 `int()` 语义，不是夹到边界）；缺省补 `{ enabled: true, perItemFen: 100 }`。
 
 ### 2.4 计算公式（服务端唯一实现 `services/packing-fee.ts`）
 

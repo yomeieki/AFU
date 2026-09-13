@@ -1847,7 +1847,7 @@ actualAmount      = subtotal − pickupDiscount − couponDiscount + shippingFee
 
 | 字段 | 位置 | 说明 |
 |---|---|---|
-| `packing: { enabled, perItemFen }` | `GET /api/local/meta`、`GET/PUT /api/admin/settings/local-delivery` | 全店开关（默认开）与默认每份打包费（分，默认 100，夹取 0–10000）。`enabled=false` 时整店临时不收，商品上的覆盖值原样保留。 |
+| `packing: { enabled, perItemFen }` | `GET /api/local/meta`、`GET/PUT /api/admin/settings/local-delivery` | 全店开关（默认开）与默认每份打包费（分，默认 100；0–10000（分）；越界或非整数回落默认 100（仓库 int() 语义）；商品级 packingFeeFen 越界是 400 拒绝，不回落）。`enabled=false` 时整店临时不收，商品上的覆盖值原样保留。 |
 | `packingFeeFen: number \| null` | 商品对象（`GET /api/products*`、购物车行）、`POST/PUT /api/admin/products` | 商品级覆盖：`null`=跟随全店默认，`0`=该菜不收，其它=该菜每份打包费（分，0–10000）。 |
 | `packingFeeEach: number` | 商品对象、购物车行 | 已解析出的单份实收（分），供结算页/购物车预览用；`= packingFeeEach(settings, product)`。 |
 | `packingFee: number` | 订单对象（下单响应、顾客订单列表/详情、后台订单列表/详情） | 本单打包费快照（分）。`EXPRESS` 单恒 0。 |

@@ -78,6 +78,7 @@ export default function LocalSettings() {
   const handleSave = async (enabledOverride?: boolean) => {
     const fen = Object.fromEntries(Object.entries(money).map(([k, v]) => [k, toFen(v)])) as Record<keyof typeof money, number | null>
     if (Object.values(fen).some((v) => v === null)) { toast.error('金额格式不正确（最多两位小数）'); return }
+    if (fen.packingPerItem! > 10_000) { toast.error('默认每份打包费不能超过 ¥100'); return }
     if (formErrors) { toast.error(formErrors); return }
     // 手填坐标只在店主动过输入框时才算数；没动过就在下面用服务端最新值
     let typedLatE6: number | null = null, typedLngE6: number | null = null
