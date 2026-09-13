@@ -15,6 +15,12 @@
 //   action === 'submit' → doSubmit()
 // 绝不允许写成「按钮没禁用就去提交」。
 
+// 打包费预览与副文案是同一套公式，与自取结算页共用一份实现，不在这里另抄一遍——
+// 两处口径一旦分叉，改设置时只改了一边，另一边的应付金额就悄悄算错了。
+var pickupCheckoutState = require('./pickup-checkout-state')
+var packingFeeOf = pickupCheckoutState.packingFeeOf
+var packingFeeText = pickupCheckoutState.packingFeeText
+
 // 按钮宽度是按这七种文案定的；多一种就可能在 320 宽的机器上把金额挤没。
 var TEXT = {
   NO_ADDRESS: '请选择地址',
@@ -29,11 +35,6 @@ var TEXT = {
 function result(disabled, text, amountState, action) {
   return { disabled: disabled, text: text, amountState: amountState, action: action }
 }
-
-// 打包费预览是同一套公式（Σ quantity × 单份打包费，总开关关时为 0），
-// 与自取结算页共用一份实现，不在这里另抄一遍——两处口径一旦分叉，
-// 改设置时只改了一边，另一边的应付金额就悄悄算错了。
-var packingFeeOf = require('./pickup-checkout-state').packingFeeOf
 
 /**
  * @param {Object} s 结算页当前状态，字段全部可选：
@@ -103,4 +104,5 @@ module.exports = {
   checkoutAction: checkoutAction,
   newClientRequestId: newClientRequestId,
   packingFeeOf: packingFeeOf,
+  packingFeeText: packingFeeText,
 }

@@ -115,11 +115,15 @@ test('传 undefined / 空对象不抛，按「没选地址」处理', function (
 
 // 打包费预览与自取结算页共用同一份实现（require('./pickup-checkout-state')），
 // 这里只验证 local-checkout-state 导出的是同一套口径，不重复抄一份公式的全部用例。
-test('packingFeeOf：与 pickup-checkout-state 同一份实现，Σ quantity × 单份打包费，总开关关为 0', function () {
-  const { packingFeeOf } = require('../../apps/miniapp/utils/local-checkout-state')
+test('packingFeeOf：与 pickup-checkout-state 同一份实现（同一个函数引用），Σ quantity × 单份打包费', function () {
+  const local = require('../../apps/miniapp/utils/local-checkout-state')
+  const pickup = require('../../apps/miniapp/utils/pickup-checkout-state')
+  // 不是「口径相同的两份代码」，是同一个函数引用——两处一旦分叉就无从谈起。
+  assert.equal(local.packingFeeOf, pickup.packingFeeOf)
+  assert.equal(local.packingFeeText, pickup.packingFeeText)
   const items = [{ quantity: 2, packingFeeEach: 100 }, { quantity: 3, packingFeeEach: 100 }]
-  assert.equal(packingFeeOf(items, true), 500)
-  assert.equal(packingFeeOf(items, false), 0)
+  assert.equal(local.packingFeeOf(items), 500)
+  assert.equal(local.packingFeeOf([{ quantity: 2, packingFeeEach: 0 }]), 0)
 })
 
 // 幂等键的形状必须过服务端的 zod .uuid()——不合法会被 400 拒掉，

@@ -185,10 +185,12 @@ Page({
    */
   recompute: function() {
     var d = this.data
-    var meta = d.meta
-    // meta 可能还没拉到（loadAll 里 getLocalMeta 失败会退成 null），这里不能直接 meta.packing——
-    // 那会在首屏 meta 未就绪时直接抛错，把整页的 recompute 打断。
-    var packingFee = st.packingFeeOf(d.items, !!(meta && meta.packing && meta.packing.enabled !== false))
+    // 打包费不再额外接一道 meta.packing.enabled 的门：总开关关闭时服务端下发的
+    // items[].packingFeeEach 本就恒为 0，与 calcPackingFee 同一口径。meta 可能还没
+    // 拉到（loadAll 里 getLocalMeta 失败会退成 null）时若在这里另判 enabled，
+    // 会把这一项硬压成 0，而 items 里的 packingFeeEach 其实是非 0 的，导致顾客看到的
+    // 应付比微信实扣少一笔打包费。
+    var packingFee = st.packingFeeOf(d.items)
     var amounts = st.computePickupPay(d.subtotal, d.discountRule, d.discount, packingFee)
     var gap = Math.max(0, localCatalog.minOrderOf(d.meta, 'PICKUP') - d.subtotal)
     var payAmount = d.items.length ? amounts.payAmount : null

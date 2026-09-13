@@ -16,7 +16,7 @@ var checkoutState = require('../../utils/local-checkout-state')
 var checkoutAction = checkoutState.checkoutAction
 var newClientRequestId = checkoutState.newClientRequestId
 var packingFeeOf = checkoutState.packingFeeOf
-var packingFeeText = require('../../utils/pickup-checkout-state').packingFeeText
+var packingFeeText = checkoutState.packingFeeText
 var app = getApp()
 
 function getHeadNotice(quote) {
@@ -283,11 +283,14 @@ Page({
           // 券只抵扣商品金额，不抵扣配送费。打包费与运费同层相加，不参与券封顶。
           // ⚠️ 传给 /local/quote 的 subtotal 仍是**券前**小计（见 refreshQuote 入口，一行没动）：
           // 服务端 `q.fee > quoted.fee` 那道防线依赖两边口径一致，起送线也按券前判。
-          patch.payAmount = self.data.subtotal - self.data.discount + (quote.fee || 0) + self.data.packingFee
+          // payAmount 交给 syncPayAmount 统一算（见下面 setData 之后那一行）——
+          // 它读 this.data.quote，所以必须等 patch（含 quote/quoteToken/blockReason）
+          // 真正落到 this.data 之后再调用。
         }
         // m1: 报价成功后复位，后续 42901 仍可自动重试一次
         self._retriedRateLimit = false
         self.setData(patch)
+        self.syncPayAmount()
         self.syncAction()
       })
       .catch(function(err) {
@@ -389,18 +392,40 @@ Page({
     })
   },
 
-  // 打包费预览（2026-09-13 打包费设计 §4.1）：Σ quantity × 单份打包费，总开关关时为 0。
+  // 打包费预览（2026-09-13 打包费设计 §4.1）：Σ quantity × 单份打包费。总开关关闭时
+  // 服务端下发的 items[].packingFeeEach 本就恒为 0（与 calcPackingFee 同一口径），
+  // 这里不再额外接一道「meta.packing.enabled」的门——那道门在 meta 还没拉到/拉失败时
+  // （loadMeta 与 loadData 是两路独立请求，谁先回来都可能撞上另一路还没回来的一刻）
+  // 会把这一项硬压成 0，而 items 里的 packingFeeEach 其实是非 0 的，导致顾客看到的
+  // 应付金额比微信实扣少一笔打包费。
+  //
   // items 与 meta 分两路异步拉回来，谁后到都要重算一次——只在其中一处调用会在另一路
-  // 先回来的那一刻算出一个用着旧值的错误金额。真正影响应付金额的是 refreshQuote 成功分支
-  // 与 onBenefitsChange 里再读一次 this.data.packingFee，这里只负责把它算对、存好。
+  // 先回来的那一刻算出一个用着旧值的错误金额。算完打包费之后必须跟着调 syncPayAmount，
+  // 否则会出现「明细行的打包费变了，下面的应付合计还是旧的」这种账对不上的竞态
+  // （典型场景：报价先成功、meta 后到，recomputePackingFee 只改了 packingFee 一项）。
   recomputePackingFee: function() {
     var d = this.data
-    var meta = d.meta
-    var enabled = !!(meta && meta.packing && meta.packing.enabled !== false)
     this.setData({
-      packingFee: packingFeeOf(d.items, enabled),
+      packingFee: packingFeeOf(d.items),
       packingFeeText: packingFeeText(d.items),
     })
+    this.syncPayAmount()
+  },
+
+  /**
+   * payAmount 的唯一重算点，供 refreshQuote 成功分支 / onBenefitsChange /
+   * recomputePackingFee 三处共用——公式必须逐字相同，散着各写一份迟早会分叉。
+   *
+   * 公式：小计 − 优惠 + 配送费 + 打包费。只有 quoteToken 存在且当前既不阻塞、
+   * 也没有报价失败时才写出一个非 null 的数字，否则按兵不动（降级分支该显示
+   * 「待计算」的地方不能被这里悄悄填上一个数）。
+   */
+  syncPayAmount: function() {
+    var d = this.data
+    if (!d.quoteToken || d.blockReason || d.quoteError) return
+    var fee = (d.quote && d.quote.fee) || 0
+    var pay = d.subtotal - d.discount + fee + d.packingFee
+    this.setData({ payAmount: pay < 0 ? 0 : pay })
   },
 
   onDecrease: function(e) {
@@ -504,11 +529,11 @@ Page({
   },
 
   /**
-   * payAmount 只有两个写入点：refreshQuote 的成功分支，和这里。
+   * payAmount 由 syncPayAmount 统一重算（见该函数定义处）。
    *
    * **降级分支一行不改**：quoteError / blockReason / 报价失败时 payAmount 是 null，
-   * 底部合计整块不显示。这里必须守住同一条规矩——报价还没成功就把 payAmount 写成
-   * 一个数，等于在「运费未知」的状态下给顾客看一个收不到的金额。
+   * 底部合计整块不显示——这条规矩由 syncPayAmount 的守卫条件保证，报价还没成功
+   * 就不会把 payAmount 写成一个数，等于在「运费未知」的状态下给顾客看一个收不到的金额。
    */
   onBenefitsChange: function(e) {
     var d = e.detail || {}
@@ -521,12 +546,8 @@ Page({
       // 不锁的话顾客会按着一个旧的应付金额提交，服务端按新的券状态算出另一个数。
       benefitsLoading: !!d.loading,
     }
-    if (this.data.quoteToken && !this.data.blockReason && !this.data.quoteError) {
-      var fee = (this.data.quote && this.data.quote.fee) || 0
-      var pay = this.data.subtotal - patch.discount + fee + this.data.packingFee
-      patch.payAmount = pay < 0 ? 0 : pay
-    }
     this.setData(patch)
+    this.syncPayAmount()
     this.syncAction()
   },
 

@@ -88,11 +88,12 @@ function packingFeeEachOf(item) {
 
 /**
  * 打包费预览（2026-09-13 打包费设计 §4.1）：Σ quantity × 单份打包费。
- * 赠品行不在购物车里，不需要额外排除。总开关关闭（enabled===false）时整单为 0，
- * 与服务端 calcPackingFee 的总开关口径一致——不是「商品覆盖为 0」那种逐行判断。
+ * 赠品行不在购物车里，不需要额外排除。总开关关闭时服务端下发的 packingFeeEach
+ * 本就恒为 0（见 apps/server 侧 packingFeeEach 恒 0 的口径），这里不再额外接一道
+ * enabled 门——那道门在 meta 没拉到/拉失败时会把这一项算成 0，
+ * 而 items 里的 packingFeeEach 其实是非 0 的，导致明细行与应付金额对不上。
  */
-function packingFeeOf(items, enabled) {
-  if (enabled === false) return 0
+function packingFeeOf(items) {
   return (items || []).reduce(function(sum, item) {
     return sum + (item.quantity || 0) * packingFeeEachOf(item)
   }, 0)
@@ -101,6 +102,8 @@ function packingFeeOf(items, enabled) {
 /**
  * 打包费副文案：所有份单价相同才给「N 份 × ¥X.XX」，否则只给份数「N 份」——
  * 商品级覆盖值不同时硬凑一个单价会算错账，不如老实说「N 份」。
+ * 只数单份打包费 > 0 的行：单价为 0 的菜不收打包费，不该计进「N 份」里，
+ * 否则「2 份 × ¥1.00」会被算成「3 份 × ¥1.00」这种自相矛盾的文案。
  */
 function packingFeeText(items) {
   var list = items || []
@@ -109,8 +112,8 @@ function packingFeeText(items) {
   var same = true
   for (var i = 0; i < list.length; i++) {
     var qty = list[i].quantity || 0
-    if (!qty) continue
     var e = packingFeeEachOf(list[i])
+    if (!qty || !e) continue
     totalQty += qty
     if (each === null) each = e
     else if (e !== each) same = false

@@ -92,7 +92,9 @@
     </view>
   </view>
 
-  <!-- 金额明细：商品金额 / 自取优惠 / 优惠券 / 积分赠品 / 应付金额（spec §5.4） -->
+  <!-- 金额明细（spec §5.4 + 2026-09-13 打包费设计 §4.1 加打包费行）：
+       商品金额 / 打包费 / 自取优惠 / 优惠券 / 积分赠品 / 应付金额。
+       打包费行仅在 packingFee > 0 时显示。 -->
   <view class="section card amount-section">
     <view class="section-title">金额明细</view>
     <view class="sum-row">
