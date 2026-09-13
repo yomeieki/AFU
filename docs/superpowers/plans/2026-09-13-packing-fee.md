@@ -157,4 +157,5 @@ computeCheckout({ subtotal, discount, shippingFee, pickupDiscount?, packingFee? 
 
 ## 勘误与验收记录（执行时追加）
 
+- Task 3 勘误：购物车行的 `packingFeeEach` 服务端放在**行级**（`item.packingFeeEach`），不在 `item.product` 下（`docs/api.md` 附录 I 以此为准）；商品接口仍在商品对象上。小程序两种形状都接。
 - Task 2 上报：默认 `packing.enabled=true` 使 §49/§62 里六条按精确实付断言的老用例各多 ¥1（§62「券减到 0 → 42251」前提失效）。裁定：老段在各自的设置钉死里加 `.packing.enabled=false`（收尾本就恢复 ORIG），打包费只在 §63 验；白名单相应扩两文件。
