@@ -19,7 +19,6 @@
 // 两处口径一旦分叉，改设置时只改了一边，另一边的应付金额就悄悄算错了。
 var pickupCheckoutState = require('./pickup-checkout-state')
 var packingFeeOf = pickupCheckoutState.packingFeeOf
-var packingFeeText = pickupCheckoutState.packingFeeText
 
 // 按钮宽度是按这七种文案定的；多一种就可能在 320 宽的机器上把金额挤没。
 var TEXT = {
@@ -104,5 +103,4 @@ module.exports = {
   checkoutAction: checkoutAction,
   newClientRequestId: newClientRequestId,
   packingFeeOf: packingFeeOf,
-  packingFeeText: packingFeeText,
 }

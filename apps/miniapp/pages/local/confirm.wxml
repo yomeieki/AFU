@@ -102,7 +102,7 @@
     </view>
     <view wx:if="{{packingFee > 0}}" class="sum-row">
       <text class="sum-k">打包费</text>
-      <text class="sum-v">¥{{pricefmt.fen(packingFee)}}<text wx:if="{{packingFeeText}}" class="sum-wait">（{{packingFeeText}}）</text></text>
+      <text class="sum-v">¥{{pricefmt.fen(packingFee)}}</text>
     </view>
     <view wx:if="{{discount > 0}}" class="sum-row">
       <text class="sum-k">优惠券</text>

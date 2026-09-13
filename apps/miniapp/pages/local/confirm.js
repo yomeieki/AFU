@@ -16,7 +16,6 @@ var checkoutState = require('../../utils/local-checkout-state')
 var checkoutAction = checkoutState.checkoutAction
 var newClientRequestId = checkoutState.newClientRequestId
 var packingFeeOf = checkoutState.packingFeeOf
-var packingFeeText = checkoutState.packingFeeText
 var app = getApp()
 
 function getHeadNotice(quote) {
@@ -83,7 +82,6 @@ Page({
     remark: '',
     payAmount: 0,
     packingFee: 0,
-    packingFeeText: '',
     // 会员优惠（M4）。四个值全部来自 checkout-benefits 组件，本页不自己算 discount。
     couponId: null,
     gifts: [],
@@ -407,7 +405,6 @@ Page({
     var d = this.data
     this.setData({
       packingFee: packingFeeOf(d.items),
-      packingFeeText: packingFeeText(d.items),
     })
     this.syncPayAmount()
   },

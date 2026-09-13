@@ -60,7 +60,6 @@ Page({
     discountRule: null,
     pickupDiscount: 0,
     packingFee: 0,
-    packingFeeText: '',
     payAmount: null,
     belowMinGap: 0,
     submitting: false,
@@ -198,7 +197,6 @@ Page({
       pickupDiscount: amounts.pickupDiscount,
       couponDiscount: amounts.couponDiscount,
       packingFee: amounts.packingFee,
-      packingFeeText: st.packingFeeText(d.items),
       payAmount: payAmount,
       belowMinGap: gap,
       action: st.pickupCheckoutAction({

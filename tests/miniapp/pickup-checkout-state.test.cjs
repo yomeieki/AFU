@@ -75,26 +75,6 @@ test('打包费：Σ quantity × 单份打包费；每份 packingFeeEach=0 → �
     { pickupDiscount: 250, couponDiscount: 500, packingFee: 300, payAmount: 4550 })
 })
 
-test('打包费副文案：各份单价相同给「N 份 × ¥X.XX」，不同只给份数「N 份」；单价为 0 的行不计份数', function () {
-  var same = [
-    { quantity: 2, packingFeeEach: 100 },
-    { quantity: 1, packingFeeEach: 100 },
-  ]
-  assert.equal(st.packingFeeText(same), '3 份 × ¥1.00')
-  var diff = [
-    { quantity: 2, packingFeeEach: 100 },
-    { quantity: 1, packingFeeEach: 250 },
-  ]
-  assert.equal(st.packingFeeText(diff), '3 份')
-  // 单价为 0 的菜不收打包费，不该计进份数——2 份 × ¥1.00，不是「3 份 × ¥1.00」
-  var zeroRow = [
-    { quantity: 2, packingFeeEach: 100 },
-    { quantity: 1, packingFeeEach: 0 },
-  ]
-  assert.equal(st.packingFeeText(zeroRow), '2 份 × ¥1.00')
-  assert.equal(st.packingFeeText([]), '')
-  assert.equal(st.packingFeeText(null), '')
-})
 test('时段：默认选第一个可选格；今天为空时落到明天；已选格不在最新列表里即视为失效', function () {
   const view = { days: [
     { date: '2026-09-11', label: '今天', slots: [] },

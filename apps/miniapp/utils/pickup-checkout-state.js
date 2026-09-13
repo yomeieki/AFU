@@ -99,29 +99,6 @@ function packingFeeOf(items) {
   }, 0)
 }
 
-/**
- * 打包费副文案：所有份单价相同才给「N 份 × ¥X.XX」，否则只给份数「N 份」——
- * 商品级覆盖值不同时硬凑一个单价会算错账，不如老实说「N 份」。
- * 只数单份打包费 > 0 的行：单价为 0 的菜不收打包费，不该计进「N 份」里，
- * 否则「2 份 × ¥1.00」会被算成「3 份 × ¥1.00」这种自相矛盾的文案。
- */
-function packingFeeText(items) {
-  var list = items || []
-  var totalQty = 0
-  var each = null
-  var same = true
-  for (var i = 0; i < list.length; i++) {
-    var qty = list[i].quantity || 0
-    var e = packingFeeEachOf(list[i])
-    if (!qty || !e) continue
-    totalQty += qty
-    if (each === null) each = e
-    else if (e !== each) same = false
-  }
-  if (!totalQty) return ''
-  if (same && each !== null) return totalQty + ' 份 × ¥' + formatPrice(each)
-  return totalQty + ' 份'
-}
 
 /** 第一个可选格：{ dayIndex, slot }；一格都没有返回 null */
 function firstSlot(view) {
@@ -160,7 +137,6 @@ module.exports = {
   pickupDiscountOf: pickupDiscountOf,
   computePickupPay: computePickupPay,
   packingFeeOf: packingFeeOf,
-  packingFeeText: packingFeeText,
   firstSlot: firstSlot,
   slotOffered: slotOffered,
 }

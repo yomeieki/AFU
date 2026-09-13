@@ -120,7 +120,6 @@ test('packingFeeOf：与 pickup-checkout-state 同一份实现（同一个函数
   const pickup = require('../../apps/miniapp/utils/pickup-checkout-state')
   // 不是「口径相同的两份代码」，是同一个函数引用——两处一旦分叉就无从谈起。
   assert.equal(local.packingFeeOf, pickup.packingFeeOf)
-  assert.equal(local.packingFeeText, pickup.packingFeeText)
   const items = [{ quantity: 2, packingFeeEach: 100 }, { quantity: 3, packingFeeEach: 100 }]
   assert.equal(local.packingFeeOf(items), 500)
   assert.equal(local.packingFeeOf([{ quantity: 2, packingFeeEach: 0 }]), 0)

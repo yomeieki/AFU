@@ -99,7 +99,7 @@ actualAmount = subtotal − pickupDiscount − couponDiscount + shippingFee + pa
 
 ### 4.1 结算页（同城外送 `pages/local/confirm`、自取 `pages/local/pickup`）
 
-- 金额明细顺序：商品金额 → 打包费「¥2.00（2 份 × ¥1.00）」→ 自取优惠 / 运费 → 优惠券 → 积分赠品 → 应付。
+- 金额明细顺序：商品金额 → 打包费「¥2.00」（只写合计，PO 2026-09-13）→ 自取优惠 / 运费 → 优惠券 → 积分赠品 → 应付。
 - 打包费本地按购物车行的 `packingFeeEach × quantity`（排除赠品）预览，提交后以服务端返回为准；`meta.packing.enabled=false` 时整行不显示。
 - 底部合计 = 服务端口径公式，`utils/local-checkout-state.js` / `pickup-checkout-state.js` 各加 `packingFee` 入参，单测覆盖。
 
@@ -127,7 +127,7 @@ actualAmount = subtotal − pickupDiscount − couponDiscount + shippingFee + pa
 
 ## 7. 手工验收
 
-1. 后台默认值 ¥1，商品 A 设 0，商品 B 留空；小程序同城外送下单 A×1 + B×2 → 结算页「打包费 ¥2.00（2 份 × ¥1.00）」，应付含它；自取同样。
+1. 后台默认值 ¥1，商品 A 设 0，商品 B 留空；小程序同城外送下单 A×1 + B×2 → 结算页「打包费 ¥2.00」，应付含它；自取同样。
 2. 券门槛按商品小计（打包费不算）能用；自取折扣只打商品。
 3. 订单详情、小票、工作台抽屉、后台订单页都有打包费行；邮寄单没有。
 4. 关掉开关再下单打包费 0；已下的单不变。
