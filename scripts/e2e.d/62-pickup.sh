@@ -14,7 +14,8 @@ R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\
 assert_eq "未开通下单 42280" "$(code "$R")" "42280"
 
 echo "-- ② 开通：meta 分节、时段有格、外送开关独立 --"
-R=$(p62_put '.pickup.enabled=true | .pickup.slotMinutes=30 | .pickup.acceptBufferMin=5 | .pickup.daysAhead=1 | .pickup.minOrderAmountFen=0 | .pickup.discount={type:"PERCENT",value:95} | .pickup.autoCompleteAfterMin=120 | .pickup.unpickedRemindAfterMin=30 | .prepMinutes=20 | .peak.windows=[] | .businessHours=[{start:"00:00",end:"23:59"}] | .holiday=null | .pickup.paused=null')
+R=$(p62_put '.pickup.enabled=true | .pickup.slotMinutes=30 | .pickup.acceptBufferMin=5 | .pickup.daysAhead=1 | .pickup.minOrderAmountFen=0 | .pickup.discount={type:"PERCENT",value:95} | .pickup.autoCompleteAfterMin=120 | .pickup.unpickedRemindAfterMin=30 | .prepMinutes=20 | .peak.windows=[] | .businessHours=[{start:"00:00",end:"23:59"}] | .holiday=null | .pickup.paused=null | .packing.enabled=false')
+# .packing.enabled=false：本段验自取优惠与券的封顶公式，打包费（§63 单独验）会让「券把实付减到 0 → 42251」这条永远打不到 0；收尾恢复 ORIG。
 assert_eq "开通自取 code 0" "$(code "$R")" "0"
 R=$(req GET /api/local/meta)
 assert_eq "meta.pickup.enabled=true" "$(jq -r '.data.pickup.enabled' <<<"$R")" "true"

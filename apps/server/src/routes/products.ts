@@ -3,6 +3,8 @@ import prisma from '../utils/prisma'
 import { success, paginate } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { parseChannelQuery } from '../utils/channel'
+import { getLocalSettings } from '../services/local-settings'
+import { packingFeeEach } from '../services/packing-fee'
 
 const router = Router()
 
@@ -38,6 +40,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
           stock: true,
           status: true,
           channel: true,
+          packingFeeFen: true,
           _count: { select: { skus: true } },
         },
         orderBy: [{ isRecommended: 'desc' }, { createdAt: 'desc' }],
@@ -47,8 +50,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       prisma.product.count({ where }),
     ])
 
+    // 打包费预览（2026-09-13 打包费设计 §3.1）：packingFeeEach 是「已解析出的单份实收」，
+    // 一个请求只取一次设置（60s 缓存），不必每条商品各查一遍。
+    const s = await getLocalSettings()
     // 多规格商品价格为最低 SKU 价（冗余同步），前端据 hasSkus 显示「¥xx起」
-    const items = list.map(({ _count, ...p }) => ({ ...p, hasSkus: _count.skus > 0 }))
+    const items = list.map(({ _count, ...p }) => ({ ...p, hasSkus: _count.skus > 0, packingFeeEach: packingFeeEach(s, p) }))
     paginate(res, items, total, page, pageSize)
   } catch (e) {
     next(e)
@@ -85,7 +91,8 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
 
     if (!product) throw new AppError(40401, '商品不存在', 404)
 
-    success(res, product)
+    const s = await getLocalSettings()
+    success(res, { ...product, packingFeeEach: packingFeeEach(s, product) })
   } catch (e) {
     next(e)
   }

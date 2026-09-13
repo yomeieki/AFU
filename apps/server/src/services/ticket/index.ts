@@ -149,7 +149,7 @@ function buildSkipDedupeKey(orderId: number, kind: PrintJobKind, seq: number, re
 
 type OrderForTicket = {
   id: number; orderNo: string; deliveryType: string; createdAt: Date; paidAt: Date | null
-  totalAmount: number; shippingFee: number; actualAmount: number; remark: string | null
+  totalAmount: number; shippingFee: number; packingFee: number; actualAmount: number; remark: string | null
   receiverName: string; receiverPhone: string; receiverFullAddress: string
   receiverDistrict: string; receiverDetail: string
   receiverPoiName: string | null; distanceM: number | null; estimatedDeliveryAt: Date | null
@@ -169,7 +169,7 @@ type OrderForTicket = {
 
 const ORDER_SELECT = {
   id: true, orderNo: true, deliveryType: true, createdAt: true, paidAt: true,
-  totalAmount: true, shippingFee: true, actualAmount: true, remark: true,
+  totalAmount: true, shippingFee: true, packingFee: true, actualAmount: true, remark: true,
   receiverName: true, receiverPhone: true, receiverFullAddress: true,
   receiverDistrict: true, receiverDetail: true,
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
@@ -188,6 +188,7 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderI
     items: order.items,
     totalAmount: order.totalAmount,
     shippingFee: order.shippingFee,
+    packingFee: order.packingFee,
     actualAmount: order.actualAmount,
     remark: order.remark,
     receiverName: order.receiverName,

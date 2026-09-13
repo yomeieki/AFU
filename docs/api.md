@@ -1827,3 +1827,45 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 ### 环境变量
 
 `WECHAT_TMPL_PICKUP` / `WECHAT_TMPL_PICKUP_FIELDS`（取餐提醒模板；留空只 warn 不阻塞）。
+
+## 附录 I：打包费（2026-09-13）
+
+设计依据 `docs/superpowers/specs/2026-09-13-packing-fee-design.md`。同城外送（`LOCAL`）与到店自取（`PICKUP`）按份收打包费；全国邮寄（`EXPRESS`）恒 0（箱费已在运费里）。唯一实现见 `services/packing-fee.ts`。
+
+### 公式
+
+```
+perItem(product) = product.packingFeeFen ?? settings.packing.perItemFen
+packingFee        = (settings.packing.enabled && deliveryType ∈ {LOCAL, PICKUP})
+                    ? Σ(非赠品行 quantity × perItem(product)) : 0
+actualAmount      = subtotal − pickupDiscount − couponDiscount + shippingFee + packingFee
+```
+
+打包费按**下单时**的设置与商品覆盖值算好，写进 `orders.packing_fee` 快照；之后改设置或改商品都不影响已下的单（与运费同理）。**不参与**起送门槛、阶梯免运、券门槛、券封顶、自取折扣的任何判定——那些判定用的都是商品小计（`totalAmount`），全程未动过。
+
+### 字段
+
+| 字段 | 位置 | 说明 |
+|---|---|---|
+| `packing: { enabled, perItemFen }` | `GET /api/local/meta`、`GET/PUT /api/admin/settings/local-delivery` | 全店开关（默认开）与默认每份打包费（分，默认 100，夹取 0–10000）。`enabled=false` 时整店临时不收，商品上的覆盖值原样保留。 |
+| `packingFeeFen: number \| null` | 商品对象（`GET /api/products*`、购物车行）、`POST/PUT /api/admin/products` | 商品级覆盖：`null`=跟随全店默认，`0`=该菜不收，其它=该菜每份打包费（分，0–10000）。 |
+| `packingFeeEach: number` | 商品对象、购物车行 | 已解析出的单份实收（分），供结算页/购物车预览用；`= packingFeeEach(settings, product)`。 |
+| `packingFee: number` | 订单对象（下单响应、顾客订单列表/详情、后台订单列表/详情） | 本单打包费快照（分）。`EXPRESS` 单恒 0。 |
+
+赠品行不计打包费（`isGift` 整行排除，不论数量）。
+
+### 小票
+
+取餐/配送联金额顺序：`合计 → 打包费 → 自取优惠 → 优惠券 → 运费（外送）→ 实付`。`packingFee > 0` 才打「打包费：¥X.XX」；`packingFee=0` 不印；厨房联不印（不印任何金额）。
+
+### 退款
+
+`remainingRefundable = actualAmount − refundedAmount` 已天然含打包费，未改动。
+
+### 错误码
+
+无新增。
+
+### 影响的既有接口
+
+`POST /api/orders`（计价接线）、`GET /api/orders`、`GET /api/orders/:id`、`GET /api/admin/orders`、`GET /api/admin/orders/:id`、`GET /api/products`、`GET /api/products/:id`、`GET /api/cart`、`POST /api/admin/products`、`PUT /api/admin/products/:id`。

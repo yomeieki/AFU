@@ -20,7 +20,10 @@ L9_LS=$(jq -c '
   .store.latE6=29339000 | .store.lngE6=104778000 | .radiusKm=5 | .detourFactor=1.7
   | .fee={baseFee:300,baseKm:3,perKmFee:100,freeShipTiers:[],minOrderAmount:2000,mode:"TABLE"}
   | .businessHours=[{start:"00:00",end:"23:59"}] | .enabled=true | .paused=null | .autoCallDelayMin=0
+  | .packing.enabled=false
 ' <<<"$L9_ORIG_LS")
+# .packing.enabled=false：本段守的是「实付 = 小计 − 券 + 运费」这个券的不变量，打包费（§63 单独验）会往每单加 ¥1，
+# 混进来会把每条期望值都变成「+100」的魔数。关掉后本段金额与打包费无关；结尾恢复 ORIG。
 R=$(req PUT /api/admin/settings/local-delivery "$AT" "$L9_LS")
 assert_eq "49 前置：同城设置已钉死并开启" "$(jq -r '.data.enabled' <<<"$R")" "true"
 assert_eq "49 前置：起送线 ¥20" "$(jq -r '.data.fee.minOrderAmount' <<<"$R")" "2000"

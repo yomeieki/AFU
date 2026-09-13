@@ -39,6 +39,9 @@ export interface TicketOrderInput {
   totalAmount: number
   /** 运费（分） */
   shippingFee: number
+  /** 打包费（分）。2026-09-13 打包费设计 §3.6：>0 时取餐/配送联在「合计」与「自取优惠」之间
+   *  打一行「打包费：¥X.XX」；邮寄单恒 0（EXPRESS 不收）；厨房联不打（不印钱） */
+  packingFee?: number
   /** 实付（分） */
   actualAmount: number
   remark: string | null
@@ -347,12 +350,14 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   const remarkBlock: string[] = o.remark ? [`<CB>备注：${esc(o.remark)}</CB>`] : []
 
   // 优惠两行只在**配送联**出现（PO 2026-09-06 定：厨房联只有菜品和数量，不印钱）。
-  // 位置有讲究：券在「合计」与「运费」之间——顺序要和顾客在结算页看到的一致
-  // （小计 → 券 → 运费 → 实付），店员对账时能逐行对上。
+  // 位置有讲究：打包费/券在「合计」与「运费」之间——顺序要和顾客在结算页看到的一致
+  // （小计 → 打包费 → 自取优惠 → 券 → 运费 → 实付，2026-09-13 打包费设计 §3.6），
+  // 店员对账时能逐行对上。
   // 赠品抵扣放在「实付」之后：它不参与这个加减法（赠品价 0、积分另算），
   // 混进上面那三行会让人以为实付里减过它。
   const footer: string[] = [
     `合计：${yuan(o.totalAmount)}`,
+    ...(o.packingFee && o.packingFee > 0 ? [`打包费：${yuan(o.packingFee)}`] : []),
     ...(o.pickupDiscountAmount && o.pickupDiscountAmount > 0 ? [`自取优惠：−${yuan(o.pickupDiscountAmount)}`] : []),
     ...(o.discountAmount && o.discountAmount > 0 ? [`优惠券：−${yuan(o.discountAmount)}`] : []),
     ...(isPickup ? [] : [`运费：${yuan(o.shippingFee)}`]),

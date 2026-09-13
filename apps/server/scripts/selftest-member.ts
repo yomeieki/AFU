@@ -319,7 +319,7 @@ t('自取小票：票头「到店自取」、取餐时间放大、不印地址/�
   const s = renderOrderTicket({
     channel: 'PICKUP', orderNo: 'ORD1', createdAt: new Date('2026-09-11T02:00:00Z'), paidAt: new Date('2026-09-11T02:01:00Z'),
     items: [{ productName: '凉拌牛肉', specText: null, quantity: 2, subtotal: 5000 }],
-    totalAmount: 5000, shippingFee: 0, actualAmount: 4750, remark: null, discountAmount: 0, pointsUsed: 0, pickupDiscountAmount: 250,
+    totalAmount: 5000, shippingFee: 0, packingFee: 200, actualAmount: 4950, remark: null, discountAmount: 0, pointsUsed: 0, pickupDiscountAmount: 250,
     receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '四川省自贡市自流井区丹桂40栋底楼',
     pickupAt: new Date('2026-09-12T04:00:00Z'), pickupSlotLabel: '9月12日（周六）12:00–12:30', pickupDayStamp: '明日单',
   })
@@ -331,6 +331,9 @@ t('自取小票：票头「到店自取」、取餐时间放大、不印地址/�
   assert.ok(!s.includes('运费'))
   assert.ok(s.includes('自取优惠：−¥2.50'))
   assert.ok(s.includes('<CB>厨房联</CB>'))
+  // 2026-09-13 打包费设计 §3.6：打包费在「合计」与「自取优惠」之间
+  assert.ok(s.includes('打包费：¥2.00'))
+  assert.ok(s.indexOf('打包费：¥2.00') < s.indexOf('自取优惠：−¥2.50'))
 })
 
 console.log(`\n${pass} passed${process.exitCode ? ', 有失败' : ''}`)

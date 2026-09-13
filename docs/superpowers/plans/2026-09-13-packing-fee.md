@@ -46,6 +46,7 @@ apps/server/scripts/selftest-local-settings.ts
 apps/server/scripts/selftest-member.ts
 scripts/e2e.sh                                                           （仅在段落列表登记 63）
 scripts/e2e.d/63-packing-fee.sh                                          （新建）
+scripts/e2e.d/{49-local-coupon,62-pickup}.sh                             （仅各加 `.packing.enabled=false` 到本段的设置钉死：老段验券公式，与打包费无关；Task 2 勘误）
 docs/api.md
 apps/miniapp/pages/local/{confirm,pickup}.{js,wxml}
 apps/miniapp/pages/order/detail.{js,wxml}
@@ -156,4 +157,4 @@ computeCheckout({ subtotal, discount, shippingFee, pickupDiscount?, packingFee? 
 
 ## 勘误与验收记录（执行时追加）
 
-（空）
+- Task 2 上报：默认 `packing.enabled=true` 使 §49/§62 里六条按精确实付断言的老用例各多 ¥1（§62「券减到 0 → 42251」前提失效）。裁定：老段在各自的设置钉死里加 `.packing.enabled=false`（收尾本就恢复 ORIG），打包费只在 §63 验；白名单相应扩两文件。

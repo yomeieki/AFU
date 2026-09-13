@@ -22,6 +22,7 @@ import {
   getLocalSettings, isOpenNow, isPaused, nextOpenText, calcLocalFee, verifyQuote, haversineM,
   isHolidayNow, isPickupPaused, LocalDeliverySettings,
 } from '../services/local-settings'
+import { calcPackingFee } from '../services/packing-fee'
 import { isValidPickupSlot, prepStartAt, pickupDiscountOf, pickupSlotLabel } from '../services/pickup'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage, getSubscribeTemplateGroups } from '../services/subscribe-message'
 import { DELIVERY_STATUS_LABEL, providerLabel } from '../services/delivery/state'
@@ -191,6 +192,7 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
     orderNo: order.orderNo,
     totalAmount: order.totalAmount,
     shippingFee: order.shippingFee,
+    packingFee: order.packingFee,
     actualAmount: order.actualAmount,
     discountAmount: order.discountAmount,
     pointsUsed: order.pointsUsed,
@@ -464,11 +466,18 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       }
     }
     // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 自取优惠 → 券（已在上面 loadGiftLines 之后
-    // 算出，按「小计 − 自取优惠」封顶）→ 运费（**按券前小计**判包邮/起送）→ 实付。
+    // 算出，按「小计 − 自取优惠」封顶）→ 运费（**按券前小计**判包邮/起送）→ 打包费（2026-09-13
+    // 打包费设计 §2.4：同城外送/到店自取按份收，全国邮寄恒 0，不参与门槛/免运/券封顶的任何判定，
+    // 只在这里与运费同一层相加）→ 实付。
     // 上面两条渠道分支里的 calcLocalFee / calcExpressFee / belowMin / minOrderAmount
     // 收到的都是券前 totalAmount，**一个字都没动**——顾客不因为用券失去包邮或跌破起送线。
     const discount = coupon?.discount ?? 0
-    const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee, pickupDiscount })
+    const packingFee = calcPackingFee(
+      await getLocalSettings(),
+      deliveryType,
+      lines.map((l) => ({ packingFeeFen: l.product.packingFeeFen, quantity: l.quantity }))
+    )
+    const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee, pickupDiscount, packingFee })
     // 0 元订单走不了微信支付，会掉进「没有支付回调」的死角（spec §5.1 与 §10 风险表第一行）。
     // 这一步必须在这里拒——computeCheckout 是纯函数，它只负责算对，拒不拒是业务判断。
     // F10：自取单没用券也能被自取优惠单独抵到 0（老文案「该券金额已超过本单可抵扣范围」在
@@ -514,6 +523,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           status: 'PENDING_PAYMENT',
           totalAmount,
           shippingFee,
+          packingFee,
           actualAmount,
           deliveryType,
           ...expressSnapshot,

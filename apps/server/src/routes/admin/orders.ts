@@ -25,6 +25,7 @@ const orderListSelect = {
   status: true,
   totalAmount: true,
   shippingFee: true,
+  packingFee: true,
   actualAmount: true,
   refundedAmount: true,
   deliveryType: true,

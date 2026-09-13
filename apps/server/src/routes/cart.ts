@@ -4,6 +4,8 @@ import prisma from '../utils/prisma'
 import { success } from '../utils/response'
 import { AppError } from '../middlewares/error'
 import { parseChannelQuery } from '../utils/channel'
+import { getLocalSettings } from '../services/local-settings'
+import { packingFeeEach } from '../services/packing-fee'
 
 const router = Router()
 
@@ -25,6 +27,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
             status: true,
             unit: true,
             channel: true,
+            packingFeeFen: true,
           },
         },
         sku: {
@@ -34,6 +37,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       orderBy: { createdAt: 'desc' },
     })
 
+    // 打包费预览（2026-09-13 打包费设计 §3.1）：结算页按这一份 × quantity 本地预览，
+    // 提交后以服务端下单时重算的为准。一个请求只取一次设置，不必每行各查一遍。
+    const s = await getLocalSettings()
     // 有 SKU 的行价格/库存取自 SKU，无 SKU 走商品级（向后兼容）
     const cartItems = items.map((item) => {
       const price = item.sku?.price ?? item.product.price
@@ -51,6 +57,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         quantity: item.quantity,
         isSelected: item.isSelected,
         subtotal: price * item.quantity,
+        packingFeeFen: item.product.packingFeeFen,
+        packingFeeEach: packingFeeEach(s, item.product),
       }
     })
 

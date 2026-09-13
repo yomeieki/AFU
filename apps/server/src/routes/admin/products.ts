@@ -48,6 +48,8 @@ const productBaseSchema = z.object({
   // @deprecated 兼容旧后台仍可能传入；服务端忽略，渠道以分类为准
   deliveryType: z.string().max(64).optional(),
   netWeightG: z.number().int().min(1).max(50_000).nullable().optional(),
+  // 打包费商品级覆盖（2026-09-13 打包费设计 §2.1）：null=跟随全店默认，0=不收，>0=按这个数（分）。
+  packingFeeFen: z.number().int().min(0).max(10_000).nullable().optional(),
   isRecommended: z.number().int().min(0).max(1),
   // 商品多图（详情轮播），按数组顺序作为 sortOrder 同步到 ProductImage
   imageUrls: z.array(z.string().max(500)).max(9).optional(),
