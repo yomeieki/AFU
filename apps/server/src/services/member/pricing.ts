@@ -113,11 +113,18 @@ export function computeCheckout(i: {
   shippingFee: number
   /** 自取优惠（分），只有 PICKUP 单非 0。顺序：小计 → 自取优惠 → 券 → 运费（spec 2026-09-11 P6） */
   pickupDiscount?: number
+  /**
+   * 打包费（分），默认 0，与 `shippingFee` 同一层相加——不参与起送门槛/券门槛/自取折扣，
+   * 那些判定用的是券前商品小计（2026-09-13 打包费设计 §2.4）。
+   */
+  packingFee?: number
 }): { actualAmount: number } {
   const pickupDiscount = i.pickupDiscount ?? 0
+  const packingFee = i.packingFee ?? 0
   if (pickupDiscount < 0) throw new Error(`自取优惠 ${pickupDiscount} 为负：调用方传错`)
+  if (packingFee < 0) throw new Error(`打包费 ${packingFee} 为负：调用方传错`)
   if (pickupDiscount + i.discount > i.subtotal) {
     throw new Error(`自取优惠 ${pickupDiscount} + 折扣 ${i.discount} 超过商品小计 ${i.subtotal}：调用方未按封顶逻辑算券`)
   }
-  return { actualAmount: i.subtotal - pickupDiscount - i.discount + i.shippingFee }
+  return { actualAmount: i.subtotal - pickupDiscount - i.discount + i.shippingFee + packingFee }
 }

@@ -233,6 +233,17 @@ t('computeCheckout 自取优惠为负 → 抛', () => {
   assert.throws(() => computeCheckout({ subtotal: 1000, discount: 0, shippingFee: 0, pickupDiscount: -1 }))
 })
 
+// ── computeCheckout：打包费（2026-09-13 打包费设计 §2.4：与 shippingFee 同层相加）──
+t('computeCheckout 打包费与运费同层相加', () => {
+  assert.deepStrictEqual(computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 300, packingFee: 200 }), { actualAmount: 5000 - 500 + 300 + 200 })
+})
+t('computeCheckout 不传 packingFee 与传 0 逐字节一致', () => {
+  assert.deepStrictEqual(computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 300 }), computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 300, packingFee: 0 }))
+})
+t('computeCheckout 打包费为负 → 抛', () => {
+  assert.throws(() => computeCheckout({ subtotal: 1000, discount: 0, shippingFee: 0, packingFee: -1 }))
+})
+
 // ── 票面：优惠与赠品的两联分工（M2 Task 9）────────────────────────────────
 //
 // 这个项目**没有任何小票的自动化测试**——apps/server/scripts/ 下没有 ticket selftest，

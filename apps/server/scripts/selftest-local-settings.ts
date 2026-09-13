@@ -240,6 +240,15 @@ t('sanitize：折扣类型只认三个字面量，PERCENT 的 value 夹到 1–1
   assert.deepStrictEqual(sanitizeLocalSettings({ pickup: { discount: { type: 'PERCENT', value: 250 } } }).pickup.discount, { type: 'PERCENT', value: 100 })
   assert.deepStrictEqual(sanitizeLocalSettings({ pickup: { discount: { type: 'HALF', value: 5 } } }).pickup.discount, { type: 'NONE', value: 0 })
 })
+t('sanitize 缺 packing 时补默认值：总开关默认开、¥1/份', () => {
+  const s = sanitizeLocalSettings({})
+  assert.deepStrictEqual(s.packing, { enabled: true, perItemFen: 100 })
+})
+t('sanitize：perItemFen 越界（负数/超 ¥100）回落默认值 100，界内的合法值原样保留', () => {
+  assert.strictEqual(sanitizeLocalSettings({ packing: { perItemFen: -5 } }).packing.perItemFen, 100)
+  assert.strictEqual(sanitizeLocalSettings({ packing: { perItemFen: 20_000 } }).packing.perItemFen, 100)
+  assert.deepStrictEqual(sanitizeLocalSettings({ packing: { enabled: false, perItemFen: 250 } }).packing, { enabled: false, perItemFen: 250 })
+})
 t('休业：until 含当天，过了 until 自动恢复；until=null 一直休', () => {
   const h = { ...base, holiday: { until: '2026-10-08', reason: '国庆' } }
   assert.strictEqual(isHolidayOn(h, '2026-10-08'), true)

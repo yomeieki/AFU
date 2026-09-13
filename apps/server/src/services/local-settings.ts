@@ -40,6 +40,17 @@ export interface PickupSettings {
   unpickedRemindAfterMin: number
 }
 
+/**
+ * 打包费（2026-09-13 打包费设计 §2.3）：同城外送 + 到店自取按份收，全店一个默认值；
+ * 每道菜可在商品上单独覆盖（`Product.packingFeeFen`：null=跟随本节 perItemFen，0=不收，>0=改这个数）。
+ * `enabled` 是总开关——关掉整店临时不收，商品上的覆盖值原样保留，重新打开立刻按原样生效。
+ */
+export interface PackingSettings {
+  enabled: boolean
+  /** 全店默认每份打包费（分）。0–10_000（¥100）夹取，默认 100（¥1） */
+  perItemFen: number
+}
+
 export interface LocalDeliverySettings {
   version: number
   enabled: boolean
@@ -112,6 +123,7 @@ export interface LocalDeliverySettings {
    */
   holiday: { until: string | null; reason: string } | null
   pickup: PickupSettings
+  packing: PackingSettings
   businessHours: BusinessHour[]
   /**
    * 平时的备餐时长（分钟）。**这段时间是从店员点「接单」开始算的**，不是从顾客下单开始——
@@ -246,6 +258,8 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     minOrderAmountFen: 0, discount: { type: 'NONE', value: 0 },
     autoCompleteAfterMin: 120, unpickedRemindAfterMin: 30,
   },
+  // 默认开、¥1/份（P2/P7）：新店直接生效，不用店主上线当天先记得来开一次开关。
+  packing: { enabled: true, perItemFen: 100 },
   businessHours: [{ start: '09:00', end: '20:00' }],
   // 15 → 20（PO 2026-09-07）：15 是拍脑袋的初值。首单实测接单→取货 10.4 分钟，看着够，
   // 但那是晚上 8 点的单；而且原来的预计送达从**下单**起算，把「下单→付款→接单」那一段
@@ -319,6 +333,7 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
     ? kd.providers.filter((p): p is string => typeof p === 'string' && (KD100_PROVIDERS as readonly string[]).includes(p))
     : D.kd100.providers
   const pk = asObj(o.pickup), pkd = asObj(pk.discount)
+  const pkg = asObj(o.packing)
   const DATE = /^\d{4}-\d{2}-\d{2}$/
   const holiday = o.holiday && typeof o.holiday === 'object'
     ? (() => {
@@ -389,6 +404,10 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       discount,
       autoCompleteAfterMin: int(pk.autoCompleteAfterMin, D.pickup.autoCompleteAfterMin, 10, 1440),
       unpickedRemindAfterMin: int(pk.unpickedRemindAfterMin, D.pickup.unpickedRemindAfterMin, 5, 1440),
+    },
+    packing: {
+      enabled: bool(pkg.enabled, D.packing.enabled),
+      perItemFen: int(pkg.perItemFen, D.packing.perItemFen, 0, 10_000),
     },
     businessHours: hours,
     prepMinutes: int(o.prepMinutes, D.prepMinutes, 0, 180),
@@ -985,6 +1004,7 @@ export function publicLocalMeta(s: LocalDeliverySettings, now: Date = new Date()
       slotMinutes: s.pickup.slotMinutes,
       daysAhead: s.pickup.daysAhead,
     },
+    packing: { enabled: s.packing.enabled, perItemFen: s.packing.perItemFen },
     holiday: isHolidayNow(s, now) ? { until: s.holiday?.until ?? null, reason: s.holiday?.reason ?? '' } : null,
   }
 }

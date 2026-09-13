@@ -101,6 +101,8 @@ model Product {
   channel        String    @default("EXPRESS") @db.VarChar(16)
   // 净重（克），同城下单换算快递100 weight(kg)；空则用同城设置的默认值
   netWeightG     Int?      @map("net_weight_g")
+  // 打包费（分）：null=跟随同城设置的全店默认值，0=本菜不收，>0=本菜每份打包费（2026-09-13 打包费设计 §2.1）
+  packingFeeFen  Int?      @map("packing_fee_fen")
   isRecommended  Int       @default(0) @map("is_recommended") @db.TinyInt
   qrScene        String?   @map("qr_scene") @db.VarChar(64)
   qrCodeUrl      String?   @map("qr_code_url") @db.VarChar(500)
@@ -226,6 +228,8 @@ model Order {
   status                      String    @db.VarChar(32)
   totalAmount                 Int       @map("total_amount")
   shippingFee                 Int       @default(0) @map("shipping_fee")
+  // 本单打包费快照（分），下单时按当时设置算好存入，之后改设置不影响已下的单（2026-09-13 打包费设计 §2.2）
+  packingFee                  Int       @default(0) @map("packing_fee")
   actualAmount                Int       @map("actual_amount")
   deliveryType                String    @map("delivery_type") @db.VarChar(16)
   remark                      String?   @db.VarChar(255)
