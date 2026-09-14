@@ -9,12 +9,17 @@ export type TablewareMode = (typeof TABLEWARE_MODES)[number]
 export const TABLEWARE_MAX = 10
 
 export const tablewareSchema = z
-  .object({
-    mode: z.enum(TABLEWARE_MODES, { message: '餐具选项无效' }),
-    count: z.number().int('餐具份数为 1–10 份').min(1, '餐具份数为 1–10 份').max(TABLEWARE_MAX, '餐具份数为 1–10 份').optional(),
-  })
-  // 指定份数时必须带 count；其余两种不得带——带了说明客户端状态机错位，宁可拒也不猜
-  .refine((t) => (t.mode === 'COUNT') === (t.count !== undefined), { message: '指定餐具份数时请填写 1–10 份' })
+  .object(
+    {
+      mode: z.enum(TABLEWARE_MODES, { message: '餐具选项无效' }),
+      count: z.number({ error: '餐具份数为 1–10 份' }).int('餐具份数为 1–10 份').min(1, '餐具份数为 1–10 份').max(TABLEWARE_MAX, '餐具份数为 1–10 份').optional(),
+    },
+    { error: '餐具选项无效' },
+  )
+  // 指定份数时必须带 count；其余两种不得带——带了说明客户端状态机错位，宁可拒也不猜。
+  // 拆成两条是为了各报各的文案：缺 count 提示填份数，多带 count 提示选项无效
+  .refine((t) => t.mode !== 'COUNT' || t.count !== undefined, { message: '指定餐具份数时请填写 1–10 份' })
+  .refine((t) => t.mode === 'COUNT' || t.count === undefined, { message: '餐具选项无效' })
 
 /** 旧版小程序把「需要餐具」拼在备注前面（占掉 20 字里的 7 个）。服务端在 zod 解析之前剥掉并补成按餐量（T9） */
 export const LEGACY_TABLEWARE_PREFIX = /^\[需要餐具\]\s*/
@@ -24,7 +29,8 @@ export function applyLegacyTablewarePrefix(body: unknown): unknown {
   const b = body as Record<string, unknown>
   if (typeof b.remark !== 'string' || !LEGACY_TABLEWARE_PREFIX.test(b.remark)) return body
   const remark = b.remark.replace(LEGACY_TABLEWARE_PREFIX, '')
-  return { ...b, remark: remark || undefined, tableware: b.tableware ?? { mode: 'BY_MEAL' } }
+  // 只补「没传」；显式 null 原样交给 zod 拒掉，与备注不带前缀时的行为一致
+  return { ...b, remark: remark || undefined, tableware: b.tableware === undefined ? { mode: 'BY_MEAL' } : b.tableware }
 }
 
 export function tablewareColumns(

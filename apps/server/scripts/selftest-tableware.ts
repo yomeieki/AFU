@@ -62,6 +62,7 @@ t('tablewareSchema COUNT+count=3 成功', () => {
 t('tablewareSchema COUNT 缺 count 失败', () => {
   const r = tablewareSchema.safeParse({ mode: 'COUNT' })
   assert.strictEqual(r.success, false)
+  assert.strictEqual(r.error!.issues[0].message, '指定餐具份数时请填写 1–10 份')
 })
 t('tablewareSchema COUNT count=0 失败', () => {
   const r = tablewareSchema.safeParse({ mode: 'COUNT', count: 0 })
@@ -78,10 +79,21 @@ t('tablewareSchema COUNT count=1.5 失败', () => {
 t('tablewareSchema BY_MEAL 带 count=2 失败', () => {
   const r = tablewareSchema.safeParse({ mode: 'BY_MEAL', count: 2 })
   assert.strictEqual(r.success, false)
+  assert.strictEqual(r.error!.issues[0].message, '餐具选项无效')
 })
 t('tablewareSchema mode=XX 失败', () => {
   const r = tablewareSchema.safeParse({ mode: 'XX' })
   assert.strictEqual(r.success, false)
+})
+t('tablewareSchema COUNT+count=null 失败：份数提示', () => {
+  const r = tablewareSchema.safeParse({ mode: 'COUNT', count: null })
+  assert.strictEqual(r.success, false)
+  assert.strictEqual(r.error!.issues[0].message, '餐具份数为 1–10 份')
+})
+t('tablewareSchema.optional() 解析 null 失败：选项无效', () => {
+  const r = tablewareSchema.optional().safeParse(null)
+  assert.strictEqual(r.success, false)
+  assert.strictEqual(r.error!.issues[0].message, '餐具选项无效')
 })
 
 // 4. applyLegacyTablewarePrefix
@@ -98,6 +110,7 @@ t('applyLegacyTablewarePrefix 无空格前缀：同样剥前缀 + 补 BY_MEAL', 
 t('applyLegacyTablewarePrefix 剥完为空串：remark 视为未填（undefined）', () => {
   const r = applyLegacyTablewarePrefix({ remark: '[需要餐具] ' }) as Record<string, unknown>
   assert.strictEqual(r.remark, undefined)
+  assert.deepStrictEqual(r.tableware, { mode: 'BY_MEAL' })
 })
 t('applyLegacyTablewarePrefix 已带 tableware:{mode:NONE}：保留 NONE，只剥前缀', () => {
   const r = applyLegacyTablewarePrefix({ remark: '[需要餐具] 不要辣', tableware: { mode: 'NONE' } }) as Record<
@@ -106,6 +119,11 @@ t('applyLegacyTablewarePrefix 已带 tableware:{mode:NONE}：保留 NONE，只�
   >
   assert.strictEqual(r.remark, '不要辣')
   assert.deepStrictEqual(r.tableware, { mode: 'NONE' })
+})
+t('applyLegacyTablewarePrefix 带前缀 + tableware:null：只剥前缀，null 原样保留交给 zod', () => {
+  const r = applyLegacyTablewarePrefix({ remark: '[需要餐具] 不要辣', tableware: null }) as Record<string, unknown>
+  assert.strictEqual(r.remark, '不要辣')
+  assert.strictEqual(r.tableware, null)
 })
 t('applyLegacyTablewarePrefix 无前缀：原样返回（同一对象引用）', () => {
   const body = { remark: '不要辣' }

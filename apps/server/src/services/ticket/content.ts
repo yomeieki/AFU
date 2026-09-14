@@ -346,7 +346,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
           `电话 ${maskPhone(esc(o.receiverPhone))}`,
         ]
 
-  // 备注要突出：<CB> 居中放大加粗。餐具选择（2026-09-14 餐具设计 §12→已落地）已独立成行，
+  // 备注要突出：<CB> 居中放大加粗。餐具已独立成行（2026-09-14 餐具选择设计 §4.5），
   // 不再挤在备注里——见下面的 tablewareBlock。
   // remark 是顾客自填的自由文本，必须先 esc 再拼进票面——不然顾客填一个 <CUT> 就能在商品明细
   // 之前提前切纸（金额/明细落到下一段），填 <QR> 之类飞鹅不认识的标签会让内容校验失败、

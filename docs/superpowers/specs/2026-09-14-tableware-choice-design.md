@@ -56,7 +56,7 @@
 ### 4.1 下单 `POST /api/orders`
 
 - body 新增可选 `tableware: { mode: 'NONE' | 'BY_MEAL' | 'COUNT', count?: number }`。
-- 校验（40001）：`mode` 只能是三者之一；`COUNT` 时 `count` 必须是 1–10 的整数；非 `COUNT` 时不得带 `count`。校验以追加的独立 `refine` 实现，排在现有地址/时段/取餐人校验之后，不改动它们的报错文案。
+- 校验（40001）：`mode` 只能是三者之一；`COUNT` 时 `count` 必须是 1–10 的整数；非 `COUNT` 时不得带 `count`。校验放在 `services/tableware.ts` 的 `tablewareSchema` 内部（对象级 refine），`createOrderSchema` 既有地址/时段/取餐人 refine 及其文案不动。
 - `LOCAL` / `PICKUP`：有就写入两列；没有就写 null，**不拒单**（T9）。
 - `EXPRESS`：忽略该字段，两列写 null。
 - 写入位置：共用的 `tx.order.create` 里 `remark` 旁边。
@@ -174,4 +174,5 @@
 
 ## 勘误
 
-- **2026-09-14 实施期间（Task 4）**：§5.3 自取页优先级原文把「金额未就绪」放在「未达起送」之后单独一段，与「餐具排在其后」的顺序矛盾——`amountState='ready'` 是餐具判定要读的信号，必须等金额已经算出来才有意义，所以「金额未就绪」必须先于餐具判定，即先于「优惠加载中」。已改为「……未达起送、金额未就绪之后，优惠加载中、提交中之前」，与 `apps/miniapp/utils/pickup-checkout-state.js` 的实现一致。
+- **2026-09-14 实施期间（Task 4）**：§5.3 自取页优先级原文把「金额未就绪」排在餐具之后，与代码的判定顺序不同——「请选择餐具」这一格返回 `amountState='ready'`，必须排在「金额未就绪」（`payAmount` 为空）之后，否则金额还没算出来页面就按 ready 显示。已改为「……未达起送、金额未就绪之后，优惠加载中、提交中之前」，与 `apps/miniapp/utils/pickup-checkout-state.js` 的实现一致。
+- **2026-09-14 回判（03）**：§4.1 原文要求餐具校验做成 createOrderSchema 末尾追加的独立 refine；实现改为 tablewareSchema 内部 refine，以满足『餐具规则唯一来源』（验收 C3）。副作用仅限请求同时带非法 tableware 且缺地址/时段时的 40001 文案：zod 4 下枚举/类型错误时外层 refine 不再执行，只报餐具提示；范围错误时两条文案用『；』并列、餐具在前。正常客户端不会发出这种请求；不带或合法 tableware 的请求文案与改前逐字一致。
