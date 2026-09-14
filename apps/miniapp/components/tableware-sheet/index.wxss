@@ -1,0 +1,63 @@
+/* 遮罩与底板照 pages/local/pickup.wxss 的 .sheet-mask/.sheet/.sheet-head/.sheet-title/.sheet-close 数值抄一份改名 tw-*。 */
+.tw-mask { position: fixed; z-index: 100; inset: 0; background: rgba(0, 0, 0, 0.45); }
+.tw-sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 70vh; display: flex; flex-direction: column; padding: 24rpx 24rpx calc(24rpx + env(safe-area-inset-bottom)); background: var(--card); border-radius: 24rpx 24rpx 0 0; box-sizing: border-box; }
+.tw-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 16rpx; }
+.tw-title { font-size: 30rpx; font-weight: 600; color: var(--text-1); }
+.tw-close { font-size: 26rpx; color: var(--text-3); }
+
+/* 两个选项等宽并排 */
+.tw-choices { display: flex; gap: 20rpx; }
+.tw-choice {
+  flex: 1;
+  height: 120rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6rpx;
+  border: 2rpx solid var(--divider);
+  border-radius: var(--radius-md);
+  color: var(--text-1);
+}
+.tw-choice-name { font-size: 28rpx; font-weight: 500; }
+.tw-choice.active,
+.tw-bymeal.active,
+.tw-stepper.active {
+  border-color: var(--brand);
+  background: var(--brand-bg);
+  color: var(--brand);
+}
+.tw-eco { font-size: 22rpx; color: var(--success, #16a34a); }
+
+.tw-sub { display: block; margin-top: 28rpx; font-size: 28rpx; font-weight: 600; color: var(--text-1); }
+
+/* .tw-qty 两块等宽并排 */
+.tw-qty { display: flex; gap: 20rpx; margin-top: 16rpx; }
+.tw-bymeal {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88rpx;
+  border: 2rpx solid var(--divider);
+  border-radius: var(--radius-md);
+  color: var(--text-1);
+  font-size: 26rpx;
+}
+.tw-stepper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 88rpx;
+  padding: 0 24rpx;
+  border: 2rpx solid var(--divider);
+  border-radius: var(--radius-md);
+  color: var(--text-1);
+  box-sizing: border-box;
+}
+.tw-step { width: 44rpx; text-align: center; font-size: 34rpx; color: var(--text-1); }
+.tw-step.disabled { color: var(--text-disabled); }
+.tw-count { font-size: 26rpx; color: inherit; }
+
+.tw-confirm { margin-top: 32rpx; height: 88rpx; line-height: 88rpx; text-align: center; }

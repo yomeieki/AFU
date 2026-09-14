@@ -19,6 +19,7 @@ const READY = {
   quoteExpiresAt: 1893456000000,
   now: 1893455000000,
   payAmount: 4900,
+  hasTableware: true,
 }
 const on = function (over) { return Object.assign({}, READY, over) }
 
@@ -70,20 +71,34 @@ test('优先级固定：地址 → 报价 → 业务阻塞 → 提交中', funct
   assert.equal(checkoutAction(on({ blockReason: '已打烊', submitting: true })).text, '暂不可配送')
 })
 
-// 按钮宽度是按这七种文案定的，多一种就可能在 320 宽的机器上溢出。
-test('文案只允许这七种', function () {
-  var allowed = ['请选择地址', '请补充定位', '正在计算运费', '重新获取运费', '暂不可配送', '提交订单', '提交中']
+// 按钮宽度是按这八种文案定的，多一种就可能在 320 宽的机器上溢出。
+test('文案只允许这八种', function () {
+  var allowed = ['请选择地址', '请补充定位', '正在计算运费', '重新获取运费', '暂不可配送', '请选择餐具', '提交订单', '提交中']
   var cases = [
     {}, { hasAddress: true }, { hasAddress: true, hasLocation: false },
     { hasAddress: true, quoting: true }, { hasAddress: true, quoteError: true },
     on({ blockReason: 'x' }), READY, on({ submitting: true }), on({ quoteToken: null }),
+    on({ hasTableware: false }),
   ]
   cases.forEach(function (c) {
     var r = checkoutAction(c)
     assert.ok(allowed.indexOf(r.text) !== -1, '意外文案：' + r.text)
-    assert.ok(['submit', 'retry', 'none'].indexOf(r.action) !== -1, '意外 action：' + r.action)
+    assert.ok(['submit', 'retry', 'tableware', 'none'].indexOf(r.action) !== -1, '意外 action：' + r.action)
     assert.ok(['ready', 'pending', 'error', 'blocked'].indexOf(r.amountState) !== -1, '意外 amountState：' + r.amountState)
   })
+})
+
+// 餐具必选（餐具设计 T2）：放在报价有效之后，按钮可点、动作是打开弹层，不是提交。
+test('没选餐具：按钮可点，动作是打开弹层', function () {
+  assert.deepEqual(checkoutAction(on({ hasTableware: false })),
+    { disabled: false, text: '请选择餐具', amountState: 'ready', action: 'tableware' })
+})
+
+// 优先级：餐具排在报价之后、提交中之前——先看得到运费与应付，再被提醒选餐具。
+test('优先级：餐具排在报价有效之后、提交中之前', function () {
+  assert.equal(checkoutAction(on({ hasTableware: false, quoteToken: null })).text, '正在计算运费')
+  assert.equal(checkoutAction(on({ hasTableware: false, blockReason: 'x' })).text, '暂不可配送')
+  assert.equal(checkoutAction(on({ hasTableware: false, submitting: true })).text, '请选择餐具')
 })
 
 // 报价凭证的有效期由服务端随报价下发（quoteExpiresAt），客户端不再自己写死 TTL。

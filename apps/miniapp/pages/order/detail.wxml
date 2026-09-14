@@ -190,6 +190,10 @@
       <text class="info-label">备注</text>
       <text class="info-value">{{order.remark}}</text>
     </view>
+    <view class="info-row" wx:if="{{order.tablewareLabel}}">
+      <text class="info-label">餐具</text>
+      <text class="info-value">{{order.tablewareLabel}}</text>
+    </view>
     <view class="info-row">
       <text class="info-label">下单时间</text>
       <text class="info-value">{{order.createdAtText}}</text>

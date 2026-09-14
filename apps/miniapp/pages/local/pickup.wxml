@@ -86,6 +86,11 @@
   />
 
   <view class="section card remark-section">
+    <view class="tableware-row" bindtap="openTableware">
+      <text class="row-label">餐具</text>
+      <text class="tableware-value {{tableware ? '' : 'tableware-empty'}}">{{tableware ? tablewareLabel : '请选择'}}</text>
+      <text class="tableware-arrow">›</text>
+    </view>
     <view class="remark-row">
       <text class="row-label">备注</text>
       <textarea class="remark-input" value="{{remark}}" maxlength="20" auto-height placeholder="20 字以内，如不要辣" placeholder-class="remark-placeholder" bindinput="onRemarkInput" />
@@ -181,3 +186,5 @@
     </view>
   </view>
 </view>
+
+<tableware-sheet show="{{tablewareOpen}}" value="{{tableware}}" bind:confirm="onTablewareConfirm" bind:close="closeTableware" />

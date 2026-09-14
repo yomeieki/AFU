@@ -37,10 +37,11 @@ const PAGE_COMPONENTS = {
   // 同城主页（pages/index 在 LOCAL 渠道）：门店头 + 外送/自取切换栏
   'index-local': ['empty-state', 'local-store-header', 'local-mode-bar'],
   'index-local-pickup': ['empty-state', 'local-store-header', 'local-mode-bar'],
-  'local-pickup': ['checkout-benefits'],
+  'local-pickup': ['checkout-benefits', 'tableware-sheet'],
   'local-pickup-picker': ['checkout-benefits'],
   'order-confirm': ['checkout-benefits'],
-  'local-confirm': ['checkout-benefits'],
+  'local-confirm': ['checkout-benefits', 'tableware-sheet'],
+  'local-tableware-sheet': ['checkout-benefits', 'tableware-sheet'],
 }
 
 // wxss → 浏览器 CSS
@@ -109,6 +110,8 @@ const PAGE_WXSS = {
   'local-pickup': 'pages/local/pickup.wxss',
   // 时段弹层打开态与结算页同一份 wxss
   'local-pickup-picker': 'pages/local/pickup.wxss',
+  // 餐具选择弹层镜像：与自取结算页同一份 wxss，样式主要来自 tableware-sheet 组件
+  'local-tableware-sheet': 'pages/local/pickup.wxss',
   'member-index': 'pages/member/index.wxss',
   'member-mall': 'pages/member/mall.wxss',
   'member-coupons': 'pages/member/coupons.wxss',

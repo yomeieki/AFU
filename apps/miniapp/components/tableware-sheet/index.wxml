@@ -1,0 +1,29 @@
+<view wx:if="{{show}}" class="tw-mask" bindtap="onClose">
+  <view class="tw-sheet" catchtap="noop">
+    <view class="tw-head">
+      <text class="tw-title">是否需要餐具</text>
+      <text class="tw-close" bindtap="onClose">关闭</text>
+    </view>
+    <view class="tw-choices">
+      <view class="tw-choice {{needChoice === 'NEED' ? 'active' : ''}}" bindtap="onPickNeed">
+        <text class="tw-choice-name">需要餐具</text>
+      </view>
+      <view class="tw-choice {{needChoice === 'NONE' ? 'active' : ''}}" bindtap="onPickNone">
+        <text class="tw-choice-name">无需餐具</text>
+        <text class="tw-eco">环保助力</text>
+      </view>
+    </view>
+    <block wx:if="{{needChoice === 'NEED'}}">
+      <text class="tw-sub">餐具数量</text>
+      <view class="tw-qty">
+        <view class="tw-bymeal {{qtyMode === 'BY_MEAL' ? 'active' : ''}}" bindtap="onPickByMeal">商家按餐量提供</view>
+        <view class="tw-stepper {{qtyMode === 'COUNT' ? 'active' : ''}}">
+          <text class="tw-step {{qtyMode === 'COUNT' && count <= 1 ? 'disabled' : ''}}" bindtap="onMinus">−</text>
+          <text class="tw-count">{{count}} 份</text>
+          <text class="tw-step {{qtyMode === 'COUNT' && count >= max ? 'disabled' : ''}}" bindtap="onPlus">+</text>
+        </view>
+      </view>
+    </block>
+    <view class="tw-confirm btn-primary {{needChoice ? '' : 'btn-disabled'}}" bindtap="onConfirm">确定</view>
+  </view>
+</view>

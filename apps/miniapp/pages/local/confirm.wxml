@@ -79,9 +79,10 @@
   />
 
   <view class="section card remark-section">
-    <view class="tableware-row">
-      <text class="row-label">需要餐具</text>
-      <switch checked="{{needTableware}}" color="#e5441e" bindchange="onTablewareChange" />
+    <view class="tableware-row" bindtap="openTableware">
+      <text class="row-label">餐具</text>
+      <text class="tableware-value {{tableware ? '' : 'tableware-empty'}}">{{tableware ? tablewareLabel : '请选择'}}</text>
+      <text class="tableware-arrow">›</text>
     </view>
     <view class="remark-row">
       <text class="row-label">备注</text>
@@ -168,3 +169,5 @@
     </view>
   </view>
 </view>
+
+<tableware-sheet show="{{tablewareOpen}}" value="{{tableware}}" bind:confirm="onTablewareConfirm" bind:close="closeTableware" />

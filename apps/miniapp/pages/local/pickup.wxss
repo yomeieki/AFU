@@ -29,10 +29,14 @@
 .stepper-btn.disabled { background: var(--bg); color: var(--text-disabled); }
 .stepper-num { min-width: 24rpx; color: var(--text-1); font-size: 26rpx; text-align: center; }
 .item-delete { color: var(--text-3); font-size: 22rpx; }
+.tableware-row { display: flex; gap: 20rpx; align-items: center; padding: 10rpx 0; }
 .remark-row { display: flex; gap: 20rpx; align-items: flex-start; padding: 10rpx 0; }
 .row-label { width: 116rpx; flex-shrink: 0; color: var(--text-2); font-size: 27rpx; }
 .remark-input { flex: 1; min-height: 72rpx; color: var(--text-1); font-size: 26rpx; line-height: 1.45; }
 .remark-placeholder { color: var(--text-disabled); }
+.tableware-value { flex: 1; text-align: right; color: var(--text-1); font-size: 26rpx; }
+.tableware-empty { color: var(--brand); }
+.tableware-arrow { color: var(--text-3); font-size: 30rpx; }
 .spacer { height: 8rpx; }
 .bottom-bar { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; padding: 10rpx 24rpx calc(14rpx + env(safe-area-inset-bottom)); background: var(--card); border-top: 1rpx solid var(--divider); box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, .03); }
 .escape-btn {

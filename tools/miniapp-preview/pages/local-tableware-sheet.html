@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/local-tableware-sheet.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;height:520px;background:#f5f6f7;overflow:hidden}.mp-page{position:relative;height:520px;overflow:hidden}.tw-sheet{max-height:none}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page"></div>
+
+  <!-- 餐具选择弹层：需要餐具 + 指定 2 份的状态 -->
+  <div class="tw-mask">
+    <div class="tw-sheet">
+      <div class="tw-head"><span class="tw-title">是否需要餐具</span><span class="tw-close">关闭</span></div>
+      <div class="tw-choices">
+        <div class="tw-choice active"><span class="tw-choice-name">需要餐具</span></div>
+        <div class="tw-choice"><span class="tw-choice-name">无需餐具</span><span class="tw-eco">环保助力</span></div>
+      </div>
+      <span class="tw-sub">餐具数量</span>
+      <div class="tw-qty">
+        <div class="tw-bymeal">商家按餐量提供</div>
+        <div class="tw-stepper active">
+          <span class="tw-step">−</span>
+          <span class="tw-count">2 份</span>
+          <span class="tw-step">+</span>
+        </div>
+      </div>
+      <div class="tw-confirm btn-primary">确定</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

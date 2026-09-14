@@ -8,6 +8,7 @@ var timeUtil = require('../../utils/time')
 var fmtDateTime = timeUtil.fmtDateTime
 var fmtHHmm = timeUtil.fmtHHmm
 var expressTrackUtil = require('../../utils/express-track')
+var tablewareUtil = require('../../utils/tableware')
 
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
@@ -327,6 +328,7 @@ function decorateOrder(order) {
     isLocal: isLocal,
     isExpress: isExpress,
     isPickup: isPickup,
+    tablewareLabel: tablewareUtil.tablewareLabel(order.tablewareMode, order.tablewareCount),
     phoneTail: (order.receiverPhone || '').slice(-4),
     pickupSlotLabel: order.pickup ? (order.pickup.slotLabel || '') : '',
     pickupStore: order.pickup ? order.pickup.store : null,

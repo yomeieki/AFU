@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "确认同城订单",
   "usingComponents": {
-    "checkout-benefits": "/components/checkout-benefits/index"
+    "checkout-benefits": "/components/checkout-benefits/index",
+    "tableware-sheet": "/components/tableware-sheet/index"
   }
 }

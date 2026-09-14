@@ -4,7 +4,7 @@
 // 「能不能点 / 写什么 / 金额显示成什么 / 点了干什么」，散在页面里拼三元表达式
 // 必然出现「文案改了但按钮还能点」。
 //
-// 优先级：阻塞 → 未选时段 → 时段失效 → 手机号 → 起送线 → 金额未知 → 优惠重算中 → 提交中。
+// 优先级：阻塞 → 未选时段 → 时段失效 → 手机号 → 起送线 → 金额未知 → 餐具 → 优惠重算中 → 提交中。
 // 「时段失效」那一格按钮**可点**，动作是 reslot（重新拉时段并打开选择器），不是提交——
 // 页面必须按 action 分派，绝不能以「按钮没禁用」推断该提交。
 //
@@ -17,6 +17,7 @@ var TEXT = {
   NO_SLOT: '请选择取餐时间',
   SLOT_STALE: '重新选择时间',
   NO_PHONE: '请填写手机号',
+  NO_TABLEWARE: '请选择餐具',
   SUBMIT: '提交订单',
   SUBMITTING: '提交中',
 }
@@ -33,6 +34,7 @@ function result(disabled, text, amountState, action) {
  *   phoneValid      取餐人手机号合法
  *   belowMinGap     距自取起送线还差多少（分），0 = 达标
  *   payAmount       应付金额（分），null = 还算不出来
+ *   hasTableware    已选餐具
  *   benefitsLoading 优惠券/赠品正在重算
  *   submitting      正在提交
  */
@@ -44,6 +46,9 @@ function pickupCheckoutAction(s) {
   if (!st.phoneValid) return result(true, TEXT.NO_PHONE, 'ready', 'none')
   if (st.belowMinGap > 0) return result(true, '还差 ¥' + formatPrice(st.belowMinGap) + ' 起', 'ready', 'none')
   if (st.payAmount === null || st.payAmount === undefined) return result(true, TEXT.SUBMIT, 'pending', 'none')
+  // 餐具必选（餐具设计 T2）。放在金额未知之后——amountState='ready' 时金额一定算得出来
+  // （spec §5.3 的顺序据此勘误）。按钮可点，动作是打开餐具弹层
+  if (!st.hasTableware) return result(false, TEXT.NO_TABLEWARE, 'ready', 'tableware')
   if (st.benefitsLoading) return result(true, TEXT.SUBMIT, 'ready', 'submit')
   if (st.submitting) return result(true, TEXT.SUBMITTING, 'ready', 'submit')
   return result(false, TEXT.SUBMIT, 'ready', 'submit')

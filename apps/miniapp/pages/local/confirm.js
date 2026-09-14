@@ -16,6 +16,7 @@ var checkoutState = require('../../utils/local-checkout-state')
 var checkoutAction = checkoutState.checkoutAction
 var newClientRequestId = checkoutState.newClientRequestId
 var packingFeeOf = checkoutState.packingFeeOf
+var tableware = require('../../utils/tableware')
 var app = getApp()
 
 function getHeadNotice(quote) {
@@ -78,7 +79,9 @@ Page({
     quoteExpiresAtMs: 0,
     quoteError: '',
     blockReason: '',
-    needTableware: false,
+    tableware: null,
+    tablewareLabel: '',
+    tablewareOpen: false,
     remark: '',
     payAmount: 0,
     packingFee: 0,
@@ -186,13 +189,14 @@ Page({
 
   loadData: function() {
     var self = this
-    Promise.all([getCart('LOCAL'), getAddresses()])
+    Promise.all([getCart('LOCAL'), getAddresses(), orderApi.getLastTableware().catch(function() { return null })])
       .then(function(results) {
         var items = selectedItems(results[0] || {}, self.data.cartItemIds)
         var subtotal = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
         var addresses = results[1] || []
         var address = addresses.find(function(item) { return item.isDefault }) || addresses[0] || null
         self.setData({ items: items, subtotal: subtotal, address: address })
+        self.applyLastTableware(results[2])
         self.recomputePackingFee()
         self._quotedOnce = true
         self.refreshQuote('load')
@@ -375,6 +379,7 @@ Page({
         quoteToken: d.quoteToken,
         quoteExpiresAt: d.quoteExpiresAtMs,
         payAmount: d.payAmount,
+        hasTableware: !!d.tableware,
       }),
     })
   },
@@ -489,8 +494,21 @@ Page({
     wx.navigateTo({ url: '/pages/address/edit?id=' + this.data.address.id + '&channel=LOCAL' })
   },
 
-  onTablewareChange: function(e) {
-    this.setData({ needTableware: !!e.detail.value })
+  openTableware: function() { this.setData({ tablewareOpen: true }) },
+  closeTableware: function() { this.setData({ tablewareOpen: false }) },
+  // 顾客在弹层里确定的选择。_tablewareTouched 挡住「预填请求比顾客手慢」时把顾客刚选的值冲掉
+  onTablewareConfirm: function(e) {
+    var v = tableware.normalizeTableware(e.detail)
+    if (!v) return
+    this._tablewareTouched = true
+    this.setData({ tableware: v, tablewareLabel: tableware.tablewareLabel(v.mode, v.count), tablewareOpen: false })
+    this.syncAction()
+  },
+  applyLastTableware: function(raw) {
+    var v = tableware.normalizeTableware(raw)
+    if (!v || this._tablewareTouched || this.data.tableware) return
+    this.setData({ tableware: v, tablewareLabel: tableware.tablewareLabel(v.mode, v.count) })
+    this.syncAction()
   },
 
   onRemarkInput: function(e) {
@@ -555,6 +573,10 @@ Page({
    */
   onSubmit: function() {
     var act = this.data.action || {}
+    if (act.action === 'tableware') {
+      this.openTableware()
+      return
+    }
     if (act.action === 'retry') {
       // 同 onRetryQuote：重新报价前先刷一次 meta，免得头条还停在旧结论上
       this.loadMeta()
@@ -575,17 +597,17 @@ Page({
   },
 
   doSubmit: function() {
-    if (this.data.submitting || !this.data.quoteToken || !this.data.address) return
+    if (this.data.submitting || !this.data.quoteToken || !this.data.address || !this.data.tableware) return
     this.setData({ submitting: true })
     this.syncAction()
     var self = this
-    var remark = (this.data.needTableware ? '[需要餐具] ' : '') + (this.data.remark || '')
     createOrder({
       cartItemIds: this.data.cartItemIds,
       addressId: this.data.address.id,
       deliveryType: 'LOCAL',
       quoteToken: this.data.quoteToken,
-      remark: remark ? remark.slice(0, 255) : undefined,
+      remark: this.data.remark ? this.data.remark.slice(0, 20) : undefined,
+      tableware: this.data.tableware,
       // 没选券/没加赠品时是 undefined，不会被序列化——请求体与改前一致
       couponId: this.data.couponId || undefined,
       gifts: this.data.gifts && this.data.gifts.length ? this.data.gifts : undefined,

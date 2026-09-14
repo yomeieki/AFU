@@ -91,11 +91,17 @@ function getPickupContact() {
   return request({ url: '/orders/pickup-contact', silent: true })
 }
 
+// 该顾客最近一次选过的餐具（结算页预填），没有则 null。silent：拉不到就让顾客自己选
+function getLastTableware() {
+  return request({ url: '/orders/tableware-last', silent: true })
+}
+
 module.exports = {
   createOrder,
   getOrders,
   getOrderMeta,
   getPickupContact,
+  getLastTableware,
   getOrderDetail,
   confirmOrder,
   cancelOrder,

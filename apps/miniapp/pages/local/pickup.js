@@ -14,6 +14,7 @@ var formatPrice = require('../../utils/format').formatPrice
 var localCatalog = require('../../utils/local-catalog')
 var st = require('../../utils/pickup-checkout-state')
 var newClientRequestId = require('../../utils/local-checkout-state').newClientRequestId
+var tableware = require('../../utils/tableware')
 var app = getApp()
 
 function selectedItems(cart, cartItemIds) {
@@ -48,6 +49,9 @@ Page({
     // 取餐人
     contactName: '',
     contactPhone: '',
+    tableware: null,
+    tablewareLabel: '',
+    tablewareOpen: false,
     remark: '',
     // 优惠（来自 checkout-benefits）
     couponId: null,
@@ -98,6 +102,7 @@ Page({
       cartApi.getCart('LOCAL'),
       localApi.getLocalMeta().catch(function() { return null }),
       orderApi.getPickupContact().catch(function() { return null }),
+      orderApi.getLastTableware().catch(function() { return null }),
     ]).then(function(results) {
       var items = selectedItems(results[0] || {}, self.data.cartItemIds)
       var subtotal = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
@@ -108,6 +113,7 @@ Page({
         contactName: contact.name || '',
         contactPhone: contact.phone || '',
       })
+      self.applyLastTableware(results[3])
       self.applyMeta(results[1])
       self._loadedOnce = true
       self.loadSlots()
@@ -206,6 +212,7 @@ Page({
         phoneValid: st.isValidPhone(d.contactPhone),
         belowMinGap: gap,
         payAmount: payAmount,
+        hasTableware: !!d.tableware,
         benefitsLoading: d.benefitsLoading,
         submitting: d.submitting,
       }),
@@ -248,6 +255,23 @@ Page({
   },
   onRemarkInput: function(e) {
     this.setData({ remark: e.detail.value })
+  },
+
+  openTableware: function() { this.setData({ tablewareOpen: true }) },
+  closeTableware: function() { this.setData({ tablewareOpen: false }) },
+  // 顾客在弹层里确定的选择。_tablewareTouched 挡住「预填请求比顾客手慢」时把顾客刚选的值冲掉
+  onTablewareConfirm: function(e) {
+    var v = tableware.normalizeTableware(e.detail)
+    if (!v) return
+    this._tablewareTouched = true
+    this.setData({ tableware: v, tablewareLabel: tableware.tablewareLabel(v.mode, v.count), tablewareOpen: false })
+    this.recompute()
+  },
+  applyLastTableware: function(raw) {
+    var v = tableware.normalizeTableware(raw)
+    if (!v || this._tablewareTouched || this.data.tableware) return
+    this.setData({ tableware: v, tablewareLabel: tableware.tablewareLabel(v.mode, v.count) })
+    this.recompute()
   },
 
   // ── 商品数量（与同城结算页同款） ─────────────────────────────
@@ -341,6 +365,10 @@ Page({
   onSubmit: function() {
     var act = this.data.action || {}
     var self = this
+    if (act.action === 'tableware') {
+      this.openTableware()
+      return
+    }
     if (act.action === 'reslot') {
       this.setData({ selected: null, slotStale: false, pickerOpen: true })
       this.recompute()
@@ -352,7 +380,7 @@ Page({
   },
 
   doSubmit: function() {
-    if (this.data.submitting || !this.data.selected || this.data.slotStale || !this.data.action || this.data.action.action !== 'submit' || this.data.action.disabled) return
+    if (this.data.submitting || !this.data.selected || this.data.slotStale || !this.data.tableware || !this.data.action || this.data.action.action !== 'submit' || this.data.action.disabled) return
     this.setData({ submitting: true })
     this.recompute()
     var self = this
@@ -363,6 +391,7 @@ Page({
       pickupAt: this.data.selected.startAt,
       pickupContact: name ? { name: name.slice(0, 32), phone: this.data.contactPhone.trim() } : { phone: this.data.contactPhone.trim() },
       remark: this.data.remark ? this.data.remark.slice(0, 20) : undefined,
+      tableware: this.data.tableware,
       couponId: this.data.couponId || undefined,
       gifts: this.data.gifts && this.data.gifts.length ? this.data.gifts : undefined,
       // 幂等键。失败时故意不换：超时那一类失败服务端可能已建单，再按一次带同一个 id 就拿回那张单

@@ -20,13 +20,14 @@
 var pickupCheckoutState = require('./pickup-checkout-state')
 var packingFeeOf = pickupCheckoutState.packingFeeOf
 
-// 按钮宽度是按这七种文案定的；多一种就可能在 320 宽的机器上把金额挤没。
+// 按钮宽度是按这八种文案定的；多一种就可能在 320 宽的机器上把金额挤没。
 var TEXT = {
   NO_ADDRESS: '请选择地址',
   NO_LOCATION: '请补充定位',
   QUOTING: '正在计算运费',
   RETRY: '重新获取运费',
   BLOCKED: '暂不可配送',
+  NO_TABLEWARE: '请选择餐具',
   SUBMIT: '提交订单',
   SUBMITTING: '提交中',
 }
@@ -52,7 +53,8 @@ function result(disabled, text, amountState, action) {
  *   now           当前时刻（毫秒），仅为可测试性而暴露，页面不传
  *   benefitsLoading 优惠券/赠品正在重算
  *   payAmount     应付金额（分）
- * @returns {{disabled:boolean, text:string, amountState:'ready'|'pending'|'error'|'blocked', action:'submit'|'retry'|'none'}}
+ *   hasTableware  已选餐具
+ * @returns {{disabled:boolean, text:string, amountState:'ready'|'pending'|'error'|'blocked', action:'submit'|'retry'|'tableware'|'none'}}
  */
 function checkoutAction(s) {
   var st = s || {}
@@ -71,6 +73,9 @@ function checkoutAction(s) {
   if (st.quoteExpiresAt && (st.now || Date.now()) > st.quoteExpiresAt) {
     return result(true, TEXT.QUOTING, 'pending', 'none')
   }
+  // 餐具必选（餐具设计 T2）。放在报价有效之后：先让顾客看到运费和应付，再提醒选餐具；
+  // 按钮可点，动作是打开餐具弹层——页面必须按 action 分派
+  if (!st.hasTableware) return result(false, TEXT.NO_TABLEWARE, 'ready', 'tableware')
   // 优惠重算中：合计此刻是不确定的，放行会让顾客按着旧的应付金额提交，
   // 而服务端按新的券状态算出另一个数。金额继续显示（不闪成「待计算」）——
   // 券的抵扣额通常只差几块，把整个合计抹掉反而像是出了故障。

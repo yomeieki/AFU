@@ -6,7 +6,7 @@ const assert = require('node:assert/strict')
 
 const st = require('../../apps/miniapp/utils/pickup-checkout-state')
 
-const READY = { hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, payAmount: 4750 }
+const READY = { hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, payAmount: 4750, hasTableware: true }
 const on = function (over) { return Object.assign({}, READY, over) }
 
 test('阻塞（休业/暂停/未开通）压过一切，按钮一句短文案', function () {
@@ -26,6 +26,15 @@ test('手机号无效 → 禁用，但金额照常显示（顾客要先看到要
 test('未达起送：说出具体差额', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ belowMinGap: 500 })),
     { disabled: true, text: '还差 ¥5.00 起', amountState: 'ready', action: 'none' })
+})
+// 餐具必选（餐具设计 T2）：放在金额未知之后——amountState='ready' 时金额一定算得出来。
+test('没选餐具：按钮可点，动作是打开弹层', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ hasTableware: false })),
+    { disabled: false, text: '请选择餐具', amountState: 'ready', action: 'tableware' })
+})
+test('优先级：起送与金额未知都排在餐具之前', function () {
+  assert.equal(st.pickupCheckoutAction(on({ hasTableware: false, belowMinGap: 500 })).text, '还差 ¥5.00 起')
+  assert.equal(st.pickupCheckoutAction(on({ hasTableware: false, payAmount: null })).text, '提交订单')
 })
 test('优惠重算中锁提交但金额不闪；提交中锁死', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ benefitsLoading: true })),
@@ -86,15 +95,16 @@ test('时段：默认选第一个可选格；今天为空时落到明天；已�
   assert.equal(st.firstSlot({ days: [] }), null)
   assert.equal(st.firstSlot(null), null)
 })
-test('优先级：阻塞 > 未选时段 > 时段失效 > 手机号 > 起送 > 优惠重算 > 提交中', function () {
-  const all = { blockReason: 'x', hasSlot: false, slotStale: true, phoneValid: false, belowMinGap: 500, benefitsLoading: true, submitting: true, payAmount: 100 }
+test('优先级：阻塞 > 未选时段 > 时段失效 > 手机号 > 起送 > 金额未知 > 餐具 > 优惠重算 > 提交中', function () {
+  const all = { blockReason: 'x', hasSlot: false, slotStale: true, phoneValid: false, belowMinGap: 500, hasTableware: false, benefitsLoading: true, submitting: true, payAmount: 100 }
   assert.equal(st.pickupCheckoutAction(all).text, '暂不可自取')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).text, '请选择取餐时间')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true })).action, 'reslot')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false })).text, '请填写手机号')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true })).text, '还差 ¥5.00 起')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0 })).text, '提交订单')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, benefitsLoading: false })).text, '提交中')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0 })).text, '请选择餐具')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, hasTableware: true })).text, '提交订单')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, hasTableware: true, benefitsLoading: false })).text, '提交中')
 })
 
 test('pickupDateText：月日 + 星期按日历日算，非法输入给空', function () {
