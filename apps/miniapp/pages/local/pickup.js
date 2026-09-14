@@ -98,11 +98,13 @@ Page({
 
   loadAll: function() {
     var self = this
+    // 预填上次餐具是静默请求（spec §5.4）：单独发、不进 Promise.all，慢了不拖住商品/地址/报价。
+    // applyLastTableware 自带 _tablewareTouched 与已选值两道守卫，晚回来也不会冲掉顾客自己选的
+    orderApi.getLastTableware().then(function(v) { self.applyLastTableware(v) }).catch(function() {})
     Promise.all([
       cartApi.getCart('LOCAL'),
       localApi.getLocalMeta().catch(function() { return null }),
       orderApi.getPickupContact().catch(function() { return null }),
-      orderApi.getLastTableware().catch(function() { return null }),
     ]).then(function(results) {
       var items = selectedItems(results[0] || {}, self.data.cartItemIds)
       var subtotal = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
@@ -113,7 +115,6 @@ Page({
         contactName: contact.name || '',
         contactPhone: contact.phone || '',
       })
-      self.applyLastTableware(results[3])
       self.applyMeta(results[1])
       self._loadedOnce = true
       self.loadSlots()

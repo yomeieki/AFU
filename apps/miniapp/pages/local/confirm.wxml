@@ -162,7 +162,7 @@
       <text wx:elif="{{action.amountState === 'error'}}" class="bottom-calculating">待重新计算</text>
       <text wx:else class="bottom-calculating">待计算</text>
     </view>
-    <!-- 文案只有七种、且都很短。长原因（「超出配送范围（约 12.4 km）」之类）
+    <!-- 文案只有八种、且都很短。长原因（「超出配送范围（约 12.4 km）」之类）
          走上面的提示条，塞进按钮在 320 宽的机器上必然溢出。 -->
     <view class="submit-btn btn-primary {{action.disabled ? 'btn-disabled' : ''}}" bindtap="onSubmit">
       <text>{{action.text}}</text>

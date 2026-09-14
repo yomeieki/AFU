@@ -189,14 +189,16 @@ Page({
 
   loadData: function() {
     var self = this
-    Promise.all([getCart('LOCAL'), getAddresses(), orderApi.getLastTableware().catch(function() { return null })])
+    // 预填上次餐具是静默请求（spec §5.4）：单独发、不进 Promise.all，慢了不拖住商品/地址/报价。
+    // applyLastTableware 自带 _tablewareTouched 与已选值两道守卫，晚回来也不会冲掉顾客自己选的
+    orderApi.getLastTableware().then(function(v) { self.applyLastTableware(v) }).catch(function() {})
+    Promise.all([getCart('LOCAL'), getAddresses()])
       .then(function(results) {
         var items = selectedItems(results[0] || {}, self.data.cartItemIds)
         var subtotal = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
         var addresses = results[1] || []
         var address = addresses.find(function(item) { return item.isDefault }) || addresses[0] || null
         self.setData({ items: items, subtotal: subtotal, address: address })
-        self.applyLastTableware(results[2])
         self.recomputePackingFee()
         self._quotedOnce = true
         self.refreshQuote('load')
