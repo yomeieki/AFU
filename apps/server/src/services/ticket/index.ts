@@ -159,6 +159,9 @@ type OrderForTicket = {
   // 票面就永远打不出它，而且不会有任何编译错误提示你。
   discountAmount: number
   pointsUsed: number
+  // 餐具选择（2026-09-14 餐具设计）。同样是 TicketOrderInput 的**唯一生产者**：邮寄/老单为 null 不印。
+  tablewareMode: string | null
+  tablewareCount: number | null
   items: { productName: string; specText: string | null; quantity: number; subtotal: number; isGift: boolean; pointsCost: number }[]
   /** 顾客申请取消时自己写的理由。只有 CANCEL_REQUEST 票用它——它是店员判断退不退的主要依据 */
   cancelRequestNote: string | null
@@ -174,6 +177,7 @@ const ORDER_SELECT = {
   receiverDistrict: true, receiverDetail: true,
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
   discountAmount: true, pointsUsed: true, cancelRequestNote: true,
+  tablewareMode: true, tablewareCount: true,
   pickupAt: true, pickupDiscountAmount: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
@@ -201,6 +205,8 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderI
     estimatedDeliveryAt: order.estimatedDeliveryAt,
     discountAmount: order.discountAmount,
     pointsUsed: order.pointsUsed,
+    tablewareMode: order.tablewareMode,
+    tablewareCount: order.tablewareCount,
     pickupAt: order.pickupAt,
     // 票面印绝对日期（方案一）：付款时打的票第二天还在夹子上，「明天」会变成假话
     pickupSlotLabel: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).text : null,

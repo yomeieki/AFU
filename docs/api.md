@@ -1869,3 +1869,74 @@ actualAmount      = subtotal − pickupDiscount − couponDiscount + shippingFee
 ### 影响的既有接口
 
 `POST /api/orders`（计价接线）、`GET /api/orders`、`GET /api/orders/:id`、`GET /api/admin/orders`、`GET /api/admin/orders/:id`、`GET /api/products`、`GET /api/products/:id`、`GET /api/cart`、`POST /api/admin/products`、`PUT /api/admin/products/:id`。
+
+## 附录 J：餐具选择（2026-09-14）
+
+设计依据 `docs/superpowers/specs/2026-09-14-tableware-choice-design.md`。同城外送（`LOCAL`）与到店自取（`PICKUP`）结算页必选餐具；全国邮寄（`EXPRESS`）不涉及餐具。规则唯一来源 `services/tableware.ts`（zod 校验、旧版前缀兼容、落库列、两套文案），下单时写入 `orders.tableware_mode`/`orders.tableware_count`，其余接口只读这两列。**免费**：不参与任何金额明细（结算页、小票、工作台、订单详情都不出现餐具行的金额）。
+
+### 下单 body：`tableware`
+
+```
+tableware?: { mode: 'NONE' | 'BY_MEAL' | 'COUNT', count?: number }
+```
+
+- `mode='COUNT'` 时必须带 `count`（1–10 的整数）；`mode='NONE'`/`'BY_MEAL'` 时不得带 `count`——带了直接 400（`40001`），不做静默纠正。
+- `LOCAL`/`PICKUP` 不带 `tableware` 也能建单（两列落 `null`，兼容未升级的旧版客户端）。
+- `EXPRESS` 单即使带了 `tableware` 也会被忽略（两列恒 `null`）。
+
+| 校验失败场景 | 错误码 |
+|---|---|
+| `mode='COUNT'` 缺 `count` | `40001` |
+| `count` 不在 1–10（如 `0`、`11`） | `40001` |
+| `mode` 非 `COUNT` 却带了 `count`（如 `{mode:'BY_MEAL',count:2}`） | `40001` |
+| `mode` 不在三值枚举内 | `40001` |
+
+### 旧版前缀兼容
+
+旧版小程序把「需要餐具」拼进备注前缀：请求体 `remark` 以 `/^\[需要餐具\]\s*/` 开头时，服务端在 zod 解析**之前**剥掉这个前缀；若同一请求没有 `tableware` 字段，自动补成 `{ mode: 'BY_MEAL' }`（旧版客户端不区分按餐量/按份数，一律按餐量记）；剥完前缀后若剩余字符串为空，`remark` 视为未填。`remark` 的 20 字上限只约束剥前缀之后的正文，原始请求体因此允许比 20 字更长（前缀本身不占用户的备注字数）。
+
+### `GET /api/orders/tableware-last`
+
+该顾客最近一次选过餐具的订单（`deliveryType ∈ {LOCAL, PICKUP}` 且 `tablewareMode` 非空），供结算页预填「记住上次选择」用，不建新表：
+
+```json
+{ "mode": "COUNT", "count": 3 }
+```
+
+没有任何历史选择时返回 `null`。
+
+### 订单对象字段
+
+| 字段 | 位置 | 说明 |
+|---|---|---|
+| `tablewareMode: 'NONE' \| 'BY_MEAL' \| 'COUNT' \| null` | 下单响应、顾客订单列表/详情、后台订单列表/详情 | `EXPRESS` 单与未选餐具的旧版客户端单恒为 `null`。 |
+| `tablewareCount: number \| null` | 同上 | 仅 `tablewareMode='COUNT'` 时为 1–10 的整数，其余情况恒为 `null`。 |
+
+### 工作台卡片
+
+`GET /api/admin/workbench/snapshot` 的每张卡片新增：
+
+```json
+"tableware": { "mode": "COUNT", "count": 3 } | null
+```
+
+`tablewareMode` 为空时整个 `tableware` 字段为 `null`（不是 `{mode:null,count:null}`）。
+
+### 文案
+
+| 位置 | `NONE` | `BY_MEAL` | `COUNT`（N 份） | `null` |
+|---|---|---|---|---|
+| 界面（小程序结算页/详情、后台工作台/同城订单列表） | 无需餐具 | 需要餐具 · 按餐量 | 需要餐具 · N 份 | （不显示） |
+| 小票 | 无需餐具 | 餐具：按餐量 | 餐具：N 份 | （不印） |
+
+### 小票
+
+餐具独立成行，**不进备注、也不进金额明细**：取餐联/配送联在收件信息块之后、备注之前印一行（`<B>` 放大）；厨房联紧跟尾号印同一行。票面超长触发降级时，第⑤步（压缩备注）之前的所有降级都不会动这一行——保证「少放一份餐具」这种错误不会因为票面裁剪而发生。邮寄单与未选餐具的旧单不印这一行。
+
+### 错误码
+
+无新增，复用 `40001`（zod 校验失败）。
+
+### 影响的既有接口
+
+`POST /api/orders`（校验、旧前缀兼容、计价接线不涉及）、`GET /api/orders`、`GET /api/orders/:id`、`GET /api/admin/orders`、`GET /api/admin/orders/:id`、`GET /api/admin/workbench/snapshot`、`GET /api/orders/tableware-last`（新增）、小票渲染（`services/ticket/content.ts`）。

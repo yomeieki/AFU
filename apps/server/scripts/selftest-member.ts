@@ -344,4 +344,58 @@ t('自取小票：票头「到店自取」、取餐时间放大、不印地址/�
   assert.ok(s.indexOf('打包费：¥2.00') < s.indexOf('自取优惠：−¥2.50'))
 })
 
+// ── 餐具（2026-09-14 餐具选择设计 §4.5）：独立成行，不进备注，两联都印 ──────
+
+t('餐具：取餐联在收件信息块之后、备注之前印一行；厨房联紧跟尾号印同一行', () => {
+  const s = renderOrderTicket({
+    channel: 'PICKUP', orderNo: 'ORD1', createdAt: new Date('2026-09-11T02:00:00Z'), paidAt: new Date('2026-09-11T02:01:00Z'),
+    items: [{ productName: '凉拌牛肉', specText: null, quantity: 2, subtotal: 5000 }],
+    totalAmount: 5000, shippingFee: 0, packingFee: 200, actualAmount: 4950, remark: '不要辣', discountAmount: 0, pointsUsed: 0, pickupDiscountAmount: 250,
+    receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '四川省自贡市自流井区丹桂40栋底楼',
+    pickupAt: new Date('2026-09-12T04:00:00Z'), pickupSlotLabel: '9月12日（周六）12:00–12:30', pickupDayStamp: '明日单',
+    tablewareMode: 'COUNT', tablewareCount: 3,
+  })
+  assert.strictEqual((s.match(/<B>餐具：3 份<\/B>/g) ?? []).length, 2)
+  const a = s.indexOf('<B>餐具：3 份</B>')
+  const b = s.indexOf('<B>餐具：3 份</B>', a + 1)
+  assert.ok(s.indexOf('取餐人') < a, '取餐联餐具行应在收件信息块之后')
+  assert.ok(a < s.indexOf('<CB>备注：不要辣</CB>'), '取餐联餐具行应在备注之前')
+  assert.ok(s.indexOf('<CB>厨房联</CB>') < b, '厨房联餐具行应在「厨房联」标题之后')
+})
+
+t('餐具：NONE 打「无需餐具」', () => {
+  const s = renderOrderTicket({
+    channel: 'PICKUP', orderNo: 'ORD1', createdAt: new Date('2026-09-11T02:00:00Z'), paidAt: new Date('2026-09-11T02:01:00Z'),
+    items: [{ productName: '凉拌牛肉', specText: null, quantity: 2, subtotal: 5000 }],
+    totalAmount: 5000, shippingFee: 0, packingFee: 200, actualAmount: 4950, remark: '不要辣', discountAmount: 0, pointsUsed: 0, pickupDiscountAmount: 250,
+    receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '四川省自贡市自流井区丹桂40栋底楼',
+    pickupAt: new Date('2026-09-12T04:00:00Z'), pickupSlotLabel: '9月12日（周六）12:00–12:30', pickupDayStamp: '明日单',
+    tablewareMode: 'NONE',
+  })
+  assert.ok(s.includes('<B>无需餐具</B>'))
+})
+
+t('餐具：不传两列 → 不印任何餐具行', () => {
+  const s = renderOrderTicket({
+    channel: 'PICKUP', orderNo: 'ORD1', createdAt: new Date('2026-09-11T02:00:00Z'), paidAt: new Date('2026-09-11T02:01:00Z'),
+    items: [{ productName: '凉拌牛肉', specText: null, quantity: 2, subtotal: 5000 }],
+    totalAmount: 5000, shippingFee: 0, packingFee: 200, actualAmount: 4950, remark: '不要辣', discountAmount: 0, pointsUsed: 0, pickupDiscountAmount: 250,
+    receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '四川省自贡市自流井区丹桂40栋底楼',
+    pickupAt: new Date('2026-09-12T04:00:00Z'), pickupSlotLabel: '9月12日（周六）12:00–12:30', pickupDayStamp: '明日单',
+  })
+  assert.ok(!s.includes('餐具'))
+})
+
+t('餐具：压缩到第⑤步（备注压缩）仍保留（配送联超长地址迫使降级一路走到底）', () => {
+  const items = Array.from({ length: 30 }, () => ({ productName: '凉拌黑木耳', specText: null, quantity: 1, subtotal: 1200 }))
+  const s = mkTicket({
+    receiverPoiName: '长'.repeat(1700),
+    remark: '一二三四五六七八九十一二三四五六七八九十',
+    tablewareMode: 'BY_MEAL',
+    items,
+  })
+  assert.ok(/<CB>备注：[^<]*…<\/CB>/.test(s), '应证明第⑤步真的执行了（备注被压缩且带省略号）')
+  assert.strictEqual((s.match(/<B>餐具：按餐量<\/B>/g) ?? []).length, 2)
+})
+
 console.log(`\n${pass} passed${process.exitCode ? ', 有失败' : ''}`)

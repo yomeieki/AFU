@@ -13,6 +13,7 @@
  */
 
 import { localShortAddress } from '../../utils/address'
+import { tablewareTicketText } from '../tableware'
 
 export type TicketChannel = 'LOCAL' | 'EXPRESS' | 'PICKUP'
 const CHANNEL_WORD: Record<TicketChannel, string> = { LOCAL: '同城', EXPRESS: '邮寄', PICKUP: '自取' }
@@ -45,6 +46,9 @@ export interface TicketOrderInput {
   /** 实付（分） */
   actualAmount: number
   remark: string | null
+  /** 餐具（2026-09-14 餐具设计 §4.5）。取餐/配送联在收件信息块之后、备注之前印一行；厨房联紧跟尾号印同一行；邮寄与老单为 null 不印 */
+  tablewareMode?: string | null
+  tablewareCount?: number | null
   /** M2：券抵扣额（分）。>0 时配送联打一行「优惠券 −¥X」；**厨房联不打**（不印钱） */
   discountAmount?: number
   /** M2：赠品消耗的积分。>0 时配送联打一行；厨房联同样不打 */
@@ -342,12 +346,16 @@ export function renderOrderTicket(o: TicketOrderInput): string {
           `电话 ${maskPhone(esc(o.receiverPhone))}`,
         ]
 
-  // 备注要突出：<CB> 居中放大加粗。规格 §8b 提到的「餐具标记」目前 Order 无对应字段
-  // （精细餐具选项是 §12 明确的二期项），先不渲染，等那个字段落地后在这里补一行。
+  // 备注要突出：<CB> 居中放大加粗。餐具选择（2026-09-14 餐具设计 §12→已落地）已独立成行，
+  // 不再挤在备注里——见下面的 tablewareBlock。
   // remark 是顾客自填的自由文本，必须先 esc 再拼进票面——不然顾客填一个 <CUT> 就能在商品明细
   // 之前提前切纸（金额/明细落到下一段），填 <QR> 之类飞鹅不认识的标签会让内容校验失败、
   // 整单一张纸都不出（H2）。上限 20 字由接口与小程序共同约束（PO 2026-09-06 定，见 orders.ts）。
   const remarkBlock: string[] = o.remark ? [`<CB>备注：${esc(o.remark)}</CB>`] : []
+
+  // 餐具单独成行、不进备注：票面超长时第⑤步只压缩备注，这一行永不截断——装袋的人少放一份餐具就是一条差评
+  const tablewareText = tablewareTicketText(o.tablewareMode, o.tablewareCount)
+  const tablewareBlock: string[] = tablewareText ? [`<B>${tablewareText}</B>`] : []
 
   // 优惠两行只在**配送联**出现（PO 2026-09-06 定：厨房联只有菜品和数量，不印钱）。
   // 位置有讲究：打包费/券在「合计」与「运费」之间——顺序要和顾客在结算页看到的一致
@@ -382,6 +390,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
       // 厨房联也用尾号（PO 2026-09-08 定）：两联靠同一个数联系，后厨出菜装袋时对得上配送联。
       // 尾号 4 位不是完整手机号，不算泄漏联系方式。
       `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
+      ...tablewareBlock,
       HR,
       ...items.flatMap((it) => kitchenItemLines(it, level)),
       ...(omitted > 0 ? [`<B>……等 ${omitted} 件</B>`] : []),
@@ -390,7 +399,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   }
 
   const deliveryOf = (itemLines: string[]) =>
-    assemble([...header, ...receiverBlock, ...remarkBlock, ...itemLines, ...footer])
+    assemble([...header, ...receiverBlock, ...tablewareBlock, ...remarkBlock, ...itemLines, ...footer])
   const totalBytes = (itemLines: string[], kitchen: string[] | null) =>
     Buffer.byteLength(deliveryOf(itemLines), 'utf8') +
     (kitchen ? Buffer.byteLength(assemble(kitchen), 'utf8') : 0)
