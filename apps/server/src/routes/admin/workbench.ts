@@ -81,6 +81,7 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
     // 赠品在卡片上也要标：工作台卡片是店员接单时看的第一眼，漏标就可能整单少备一份
     items: { first: o.items.slice(0, 2).map((it) => `${it.isGift ? '赠 ' : ''}${it.productName} ×${it.quantity}`), kinds: o.items.length, units },
     note: o.remark || null,
+    tableware: o.tablewareMode ? { mode: o.tablewareMode, count: o.tablewareCount } : null,
     receiver: { name: o.receiverName, phone: o.receiverPhone },
     express: o.deliveryType === 'EXPRESS'
       ? {

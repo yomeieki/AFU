@@ -30,6 +30,8 @@ const orderListSelect = {
   refundedAmount: true,
   deliveryType: true,
   remark: true,
+  tablewareMode: true,
+  tablewareCount: true,
   receiverName: true,
   receiverPhone: true,
   receiverFullAddress: true,

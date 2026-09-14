@@ -233,6 +233,10 @@ model Order {
   actualAmount                Int       @map("actual_amount")
   deliveryType                String    @map("delivery_type") @db.VarChar(16)
   remark                      String?   @db.VarChar(255)
+  /// 餐具（2026-09-14 餐具选择设计）：NONE / BY_MEAL / COUNT；null = 未记录（邮寄单、老订单、旧版客户端未选）
+  tablewareMode               String?   @map("tableware_mode") @db.VarChar(16)
+  /// 仅 COUNT 时为 1–10
+  tablewareCount              Int?      @map("tableware_count")
   // 收货地址快照
   receiverName                String    @map("receiver_name") @db.VarChar(64)
   receiverPhone               String    @map("receiver_phone") @db.VarChar(20)

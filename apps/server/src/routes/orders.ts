@@ -32,6 +32,7 @@ import { bookingView } from '../services/delivery/express-booking'
 import { parseStoredTrack } from '../services/delivery/express-track-json'
 import { settlePoints } from '../services/member/points'
 import { allocateOrderNo } from '../services/order-no'
+import { tablewareSchema, applyLegacyTablewarePrefix, tablewareColumns } from '../services/tableware'
 
 const router = Router()
 
@@ -151,6 +152,7 @@ const createOrderSchema = z
     // 两列），255 字在 58mm 纸上要占约 17 行放大字，把订单信息全挤没，而且配送联厨房联各印一遍。
     // 数据库仍是 varchar(255)，故意不收窄——不需要迁移，已有数据也不会因为收紧入口变非法。
     remark: z.string().max(20).optional(),
+    tableware: tablewareSchema.optional(),
     // 客户端下单幂等键（UUID）。**必须可选**：邮寄结算页与 e2e 里几十处下单都不传，
     // 写成必填会让那些调用方当场全红。不传时行为与本字段上线前逐字节一致。
     clientRequestId: z.string().uuid().optional(),
@@ -193,6 +195,8 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
     totalAmount: order.totalAmount,
     shippingFee: order.shippingFee,
     packingFee: order.packingFee,
+    tablewareMode: order.tablewareMode,
+    tablewareCount: order.tablewareCount,
     actualAmount: order.actualAmount,
     discountAmount: order.discountAmount,
     pointsUsed: order.pointsUsed,
@@ -209,8 +213,8 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const { cartItemIds, directItem, addressId, deliveryType, pickupAt, pickupContact, quoteToken, remark, couponId, gifts, clientRequestId } =
-      createOrderSchema.parse(req.body)
+    const { cartItemIds, directItem, addressId, deliveryType, pickupAt, pickupContact, quoteToken, remark, tableware, couponId, gifts, clientRequestId } =
+      createOrderSchema.parse(applyLegacyTablewarePrefix(req.body))
 
     // 幂等前置查询：客户端超时重试时，绝大多数情况在这里就命中并原样返回，
     // 连库存与券都不会再碰一次。真正并发的两次提交靠唯一索引在事务里挡（见下面的 P2002 分支）。
@@ -528,6 +532,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           deliveryType,
           ...expressSnapshot,
           remark,
+          ...tablewareColumns(deliveryType, tableware),
           receiverName: deliveryType === 'PICKUP' ? (pickupContact!.name || '顾客') : address!.receiverName,
           receiverPhone: deliveryType === 'PICKUP' ? pickupContact!.phone : address!.receiverPhone,
           receiverProvince: deliveryType === 'PICKUP' ? localStore!.province : address!.province,
@@ -749,6 +754,21 @@ router.get('/pickup-contact', async (req: Request, res: Response, next: NextFunc
       select: { receiverName: true, receiverPhone: true },
     })
     success(res, last ? { name: last.receiverName === '顾客' ? '' : last.receiverName, phone: last.receiverPhone } : null)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/orders/tableware-last — 该顾客最近一次选过的餐具，结算页预填用（餐具设计 T6，不加表）。
+// 只看同城/自取且列不为空的单：邮寄单、旧版客户端没选的单不会把上一次的选择冲掉。
+router.get('/tableware-last', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const last = await prisma.order.findFirst({
+      where: { userId: req.userId!, deliveryType: { in: ['LOCAL', 'PICKUP'] }, tablewareMode: { not: null } },
+      orderBy: { id: 'desc' },
+      select: { tablewareMode: true, tablewareCount: true },
+    })
+    success(res, last ? { mode: last.tablewareMode, count: last.tablewareCount } : null)
   } catch (e) {
     next(e)
   }
