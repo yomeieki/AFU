@@ -487,3 +487,22 @@ export function tablewareTicketText(mode: string | null | undefined, count: numb
 ## 勘误与验收记录（执行时追加）
 
 - **2026-09-14 计划复核（opus 对抗审，16 agent，10 条存活）已并入本文**：pickup 优先级用例的 `all` fixture（原计划会让最后两条断言变红）；e2e 工作台断言补付款 + `snapshot?fresh=1` + 非空断言；压缩用例原写法走不到第⑤步，改为超长 POI 必达；顺序用例补备注；e2e ①②④ 每种模式覆盖四个面；后台列表必须带 `deliveryType`；`detail.js` 函数名为 `decorateOrder`。
+- **2026-09-14 终审返工第 1 轮 R1**：§4.1 原文要求餐具校验做成 createOrderSchema 末尾追加的独立 refine；实现改为 tablewareSchema 内部 refine，以满足『餐具规则唯一来源』（验收 C3）。副作用仅限请求同时带非法 tableware 且缺地址/时段时的 40001 文案：zod 4 下枚举/类型错误时外层 refine 不再执行，只报餐具提示；范围错误时两条文案用『；』并列、餐具在前。正常客户端不会发出这种请求；不带或合法 tableware 的请求文案与改前逐字一致。
+- **2026-09-14 终审返工第 1 轮 R4**：Task 2 Step 4 第 8 条（e2e §64 ⑧ `tableware-last`）改为临时 SQL 改 ④/⑦ 后断言再恢复——原写法 ④ 与 ⑤ 都是 `BY_MEAL`、⑦ 邮寄单两列本来就是 null，验不到「取的是最近一张同城/自取单」与「邮寄单有值也不采信」。
+- **2026-09-14 终审返工第 1 轮 R6**：Task 3 Step 5/6 的预填改为独立请求、不进 Promise.all——spec §5.4「静默请求、不影响主流程」，原写法把商品/地址/报价（自取页还有取餐人/时段）都拖到预填请求回来才渲染。
+- **2026-09-14 终审返工第 1 轮（合并汇总，HEAD 起点 1a08efc）**：
+  - **R1** `services/tableware.ts` 的 `tablewareSchema` 拆成两条 `refine`（缺 count / 多带 count 各报各的文案），`z.number`/`z.object` 补 `error` 文案；`selftest-tableware.ts` 补断言与 2 例（`count:null`、`optional().parse(null)`）；spec §4.1 改为「校验放在 tablewareSchema 内部」，勘误小节追加回判说明；本文件同步追加摘要（上面一条）。
+  - **R2** `applyLegacyTablewarePrefix` 的 `??` 改成 `=== undefined` 判断，显式 `tableware:null` 不再被误当「没传」补成 BY_MEAL；`selftest-tableware.ts` 补 1 断言 + 1 新例；`docs/api.md` 附录 J 补一句 EXPRESS 带非法 tableware 同样 40001。
+  - **R3** `selftest-member.ts` 厨房联用例补两条断言（餐具行在尾号之后、在第一条菜品之前），锁住 C5「厨房联在尾号之后」。
+  - **R4** `scripts/e2e.d/64-tableware.sh`：`p64_check_four` 顾客详情改单次取数；⑧ 段补临时 SQL 改 ④/⑦ 再断言再恢复，堵住「④⑤同为 BY_MEAL、⑦邮寄单本就是 null」两个盲区（摘要见上面一条）。
+  - **R6** 两个结算页 `loadData`/`loadAll` 的 `getLastTableware()` 改成独立请求、不进 `Promise.all`（摘要见上面一条）。
+  - **R7** `local-checkout-state.test.cjs`/`pickup-checkout-state.test.cjs` 各补 2/1 条边界断言（报价过期排餐具前、优惠加载中排餐具后）。
+  - **R8** `tools/miniapp-preview/pages/local-pickup.html` 按钮文案改「请选择餐具」，与该页餐具行「请选择」态一致。
+  - **R11** `docs/staff-guide.md` 336 行改为「上线前老单不回填、老单看备注前缀、上线后旧版客户端会被剥前缀」，不再声称服务端把老单转成新字段。
+  - **R12** `docs/api.md` 1934 行改为「①–⑤ 所有降级都不动餐具行」，消除「第⑤步会动它」的歧义。
+  - **R13** `docs/staff-guide.md` 332 行点明是「顾客小程序」的订单详情，并注明后台邮寄订单页没有这一行。
+  - **R14** `services/ticket/content.ts` 的注释改为指向新 spec §4.5，不再挂错旧 spec §12。
+  - **R16** `apps/miniapp/pages/local/confirm.wxml` 165 行注释「七种」改「八种」，与代码一致。
+  - **R19** spec 勘误第一条改写，纠正因果（是「请选择餐具」这一格自己返回 `amountState='ready'`，必须排在 `payAmount` 判断之后，不是「amountState 是餐具判定要读的信号」）。
+  - **R20** `docs/design/workbench-ui-spec.md` §5 自上而下清单补入「餐具」，与 `Workbench.tsx` 抽屉的实际顺序（备注 → 餐具 → 状态条）对齐。
+  - **测试**：`cd apps/server && npx tsc --noEmit -p .` 通过；`npx ts-node --transpile-only scripts/selftest-tableware.ts` 29 例全过；`npx ts-node --transpile-only scripts/selftest-member.ts` 64 例全过；`npm run -s test:miniapp` 117 例全过；`node scripts/check-miniapp-es5.mjs apps/miniapp/pages/local/confirm.js apps/miniapp/pages/local/pickup.js` 全过；干净库全量 e2e（标签 final-r1，`/tmp/tableware-e2e-final-r1.log`）`通过 1706 / 失败 0`，§64 段全部 ✔（含 ⑧ 的新断言）。未touch `apps/admin`，未跑其 `npm test`/`build`。
