@@ -99,6 +99,9 @@ test('优先级：餐具排在报价有效之后、提交中之前', function ()
   assert.equal(checkoutAction(on({ hasTableware: false, quoteToken: null })).text, '正在计算运费')
   assert.equal(checkoutAction(on({ hasTableware: false, blockReason: 'x' })).text, '暂不可配送')
   assert.equal(checkoutAction(on({ hasTableware: false, submitting: true })).text, '请选择餐具')
+  assert.equal(checkoutAction(on({ hasTableware: false, quoteExpiresAt: 1893455000000, now: 1893456000000 })).text, '正在计算运费')
+  assert.deepEqual(checkoutAction(on({ hasTableware: false, benefitsLoading: true })),
+    { disabled: false, text: '请选择餐具', amountState: 'ready', action: 'tableware' })
 })
 
 // 报价凭证的有效期由服务端随报价下发（quoteExpiresAt），客户端不再自己写死 TTL。

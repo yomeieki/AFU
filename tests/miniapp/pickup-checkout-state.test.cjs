@@ -35,6 +35,7 @@ test('没选餐具：按钮可点，动作是打开弹层', function () {
 test('优先级：起送与金额未知都排在餐具之前', function () {
   assert.equal(st.pickupCheckoutAction(on({ hasTableware: false, belowMinGap: 500 })).text, '还差 ¥5.00 起')
   assert.equal(st.pickupCheckoutAction(on({ hasTableware: false, payAmount: null })).text, '提交订单')
+  assert.equal(st.pickupCheckoutAction(on({ hasTableware: false, benefitsLoading: true })).text, '请选择餐具')
 })
 test('优惠重算中锁提交但金额不闪；提交中锁死', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ benefitsLoading: true })),
