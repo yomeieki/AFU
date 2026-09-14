@@ -15,6 +15,7 @@ import type {
   LocalDeliverySettings, Order, OrderChannel, OrderItem, QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
 } from '../types'
 import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor } from '../utils/pickup'
+import { tablewareLabel } from '../utils/tableware'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
   callRider, cancelDelivery, cancelExpressBooking, getExpressBooking,
@@ -1161,6 +1162,8 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
       </div>
       <div className="wb__items">{itemsSummary(card.items, card.channel)}</div>
 
+      {card.tableware && <div className="wb__tableware">{tablewareLabel(card.tableware.mode, card.tableware.count)}</div>}
+
       {/* 无备注必须明写，留空则「没看见」与「没有」无法区分（§4） */}
       {card.note ? <div className="wb__note">{card.note}</div> : <div className="wb__nonote">无备注</div>}
 
@@ -1987,6 +1990,8 @@ export default function Workbench() {
 
             {/* 备注放大（§5 第一项）；无备注同样必须写出来 */}
             {card.note ? <div className="wb__note wb__note--lg">{card.note}</div> : <div className="wb__nonote">无备注</div>}
+
+            {card.tableware && <div className="wb__tableware">{tablewareLabel(card.tableware.mode, card.tableware.count)}</div>}
 
             <div className="wb__block">
               <div className="wb__actions" style={{ alignItems: 'center' }}>

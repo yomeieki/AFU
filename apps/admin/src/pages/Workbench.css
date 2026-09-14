@@ -147,6 +147,7 @@
 .wb__note { background:var(--note-bg); border-left:3px solid var(--note-line); font-weight:600;
   padding:4px 8px; border-radius:4px; margin-top:6px; }
 .wb__nonote { margin-top:6px; font-size:12px; color:var(--text-2); }
+.wb__tableware { margin: 4px 0; font-size: 13px; font-weight: 600; color: var(--text-1); }
 .wb__fields { margin-top:6px; font-size:12px; color:var(--text-2); display:flex; flex-wrap:wrap; gap:4px 10px; }
 .wb__strip { margin-top:8px; border-radius:6px; padding:5px 8px; font-size:12px; font-weight:600;
   display:flex; align-items:center; justify-content:space-between; gap:8px; }

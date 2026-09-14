@@ -176,6 +176,9 @@ export interface Order {
   /** 同城单为「区+详细地址」，邮寄单同 receiverFullAddress。服务端算好，前端直接显示 */
   receiverDisplayAddress?: string
   remark?: string | null
+  /** 餐具选择（2026-09-14 设计）。列表与详情都返回；邮寄单、老订单为 null */
+  tablewareMode?: string | null
+  tablewareCount?: number | null
   cancelReason?: string | null
   paidAt: string | null
   acceptedAt?: string | null
@@ -539,6 +542,8 @@ export interface WorkbenchCard {
   amountFen: number
   items: { first: string[]; kinds: number; units: number }
   note: string | null
+  /** 餐具选择（2026-09-14 设计）。同城/自取单才有；老单为 null */
+  tableware: { mode: string; count: number | null } | null
   receiver: { name: string; phone: string }
   express: {
     province: string; city: string; expressCompany: string | null; expressNo: string | null

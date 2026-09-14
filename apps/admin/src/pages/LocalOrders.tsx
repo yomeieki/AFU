@@ -11,6 +11,7 @@ import RefundDialog from '../components/RefundDialog'
 import { toast } from '../components/ui/Toast'
 import type { DeliveryEventInfo, DeliveryInfo, Order } from '../types'
 import { fmtDateTime, fmtDateTimeSec } from '../utils/time'
+import { tablewareLabel } from '../utils/tableware'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -221,6 +222,7 @@ export default function LocalOrders() {
                     </span>
                     <span>实付 ¥{yuan(o.actualAmount)}</span>
                     {!!o.packingFee && <span>打包费 ¥{yuan(o.packingFee)}</span>}
+                    {o.tablewareMode && <span>{tablewareLabel(o.tablewareMode, o.tablewareCount)}</span>}
                     {o.refundedAmount > 0 && <span>已退 ¥{yuan(o.refundedAmount)}</span>}
                     {o.deliveryType === 'PICKUP' ? (
                       <>
