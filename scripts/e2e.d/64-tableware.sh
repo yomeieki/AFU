@@ -20,8 +20,9 @@ P64_PA=$(jq -r '.data.id // empty' <<<"$R"); [[ -n "$P64_PA" ]] && ok "创建同
 # 四面取数写法（①②④每种模式都要过）：下单响应 / 顾客详情 / 后台列表（带渠道参数）/ 工作台卡片（付款后、fresh=1）
 p64_check_four() { # $1=orderId $2=admin列表 deliveryType 参数值 $3=期望 mode $4=期望 count（字面量 null 或数字） $5=场景标签
   local id=$1 dt=$2 wantMode=$3 wantCount=$4 label=$5
-  assert_eq "$label 顾客详情 tablewareMode" "$(req GET "/api/orders/$id" "$UT" | jq -r .data.tablewareMode)" "$wantMode"
-  assert_eq "$label 顾客详情 tablewareCount" "$(req GET "/api/orders/$id" "$UT" | jq -r .data.tablewareCount)" "$wantCount"
+  local det; det=$(req GET "/api/orders/$id" "$UT")
+  assert_eq "$label 顾客详情 tablewareMode" "$(jq -r .data.tablewareMode <<<"$det")" "$wantMode"
+  assert_eq "$label 顾客详情 tablewareCount" "$(jq -r .data.tablewareCount <<<"$det")" "$wantCount"
   local row; row=$(req GET "/api/admin/orders?deliveryType=$dt&pageSize=50" "$AT" | jq -c "[.data.list[] | select(.id==$id)][0]")
   assert_eq "$label 后台列表 tablewareMode" "$(jq -r .tablewareMode <<<"$row")" "$wantMode"
   assert_eq "$label 后台列表 tablewareCount" "$(jq -r .tablewareCount <<<"$row")" "$wantCount"
@@ -91,10 +92,16 @@ P64_O7=$(jq -r .data.orderId <<<"$R")
 assert_eq "⑦ 邮寄单 tablewareMode=null" "$(jq -r .data.tablewareMode <<<"$R")" "null"
 assert_eq "⑦ 邮寄单 tablewareCount=null" "$(jq -r .data.tablewareCount <<<"$R")" "null"
 
-echo "-- ⑧ GET /api/orders/tableware-last：⑦之后仍返回⑥之前最近一张非空单的选择（应为⑤的 BY_MEAL） --"
+echo "-- ⑧ GET /api/orders/tableware-last：应取最近一张同城/自取且有值的单（⑤ BY_MEAL），邮寄单有值也不采信 --"
+# ④ 与 ⑤ 都是 BY_MEAL、⑦ 两列本来就是 null，原样查分不清取的是哪张、也验不到 deliveryType 过滤：
+# 临时把 ④ 改成 NONE、⑦ 改成 COUNT/9，⑧ 仍返回 BY_MEAL 才证明取的是 ⑤ 且邮寄单有值也不采信；断言完恢复
+sql "UPDATE orders SET tableware_mode='NONE' WHERE id=$P64_O4;"
+sql "UPDATE orders SET tableware_mode='COUNT', tableware_count=9 WHERE id=$P64_O7;"
 R=$(req GET /api/orders/tableware-last "$UT")
-assert_eq "⑧ tableware-last mode=BY_MEAL" "$(jq -r .data.mode <<<"$R")" "BY_MEAL"
+assert_eq "⑧ tableware-last mode=BY_MEAL（来自⑤，不是④/⑦）" "$(jq -r .data.mode <<<"$R")" "BY_MEAL"
 assert_eq "⑧ tableware-last count=null" "$(jq -r .data.count <<<"$R")" "null"
+sql "UPDATE orders SET tableware_mode='BY_MEAL' WHERE id=$P64_O4;"
+sql "UPDATE orders SET tableware_mode=NULL, tableware_count=NULL WHERE id=$P64_O7;"
 
 echo "-- ⑨ 小票：付款一张 COUNT/3 自取单，NEW_ORDER 两联各印一次「餐具：3 份」；付款一张 NONE 单，票面含「无需餐具」 --"
 P64_ORIG_PRINTER=$(req GET /api/admin/settings/printer "$AT" | jq -c .data)

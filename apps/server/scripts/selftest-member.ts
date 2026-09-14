@@ -361,6 +361,10 @@ t('餐具：取餐联在收件信息块之后、备注之前印一行；厨房�
   assert.ok(s.indexOf('取餐人') < a, '取餐联餐具行应在收件信息块之后')
   assert.ok(a < s.indexOf('<CB>备注：不要辣</CB>'), '取餐联餐具行应在备注之前')
   assert.ok(s.indexOf('<CB>厨房联</CB>') < b, '厨房联餐具行应在「厨房联」标题之后')
+  const kitchenAt = s.indexOf('<CB>厨房联</CB>')
+  const tailAt = s.indexOf('<CB>尾号1234</CB>', kitchenAt)
+  assert.ok(tailAt !== -1 && tailAt < b, '厨房联餐具行应在尾号行之后')
+  assert.ok(b < s.indexOf('凉拌牛肉', kitchenAt), '厨房联餐具行应在第一条菜品之前')
 })
 
 t('餐具：NONE 打「无需餐具」', () => {
