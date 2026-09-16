@@ -43,7 +43,16 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
           packingFeeFen: true,
           _count: { select: { skus: true } },
         },
-        orderBy: [{ isRecommended: 'desc' }, { createdAt: 'desc' }],
+        // 排序：推荐置顶（首页取本接口前 6 条，须先出勾了「推荐」的菜）；
+        // 其余按后台分类顺序（category.sortOrder），sortOrder 可能重复故用 categoryId 兜底；
+        // 类内按录入顺序（createdAt 升序，旧的在前），createdAt 相同时用 id 兜底保证分页稳定。
+        orderBy: [
+          { isRecommended: 'desc' },
+          { category: { sortOrder: 'asc' } },
+          { categoryId: 'asc' },
+          { createdAt: 'asc' },
+          { id: 'asc' },
+        ],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
