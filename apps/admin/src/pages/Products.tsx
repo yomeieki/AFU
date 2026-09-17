@@ -138,7 +138,7 @@ export default function Products() {
     try {
       await updateCategory(sortCategory.id, { productSortMode: next })
       setCategories((cs) => cs.map((c) => (c.id === sortCategory.id ? { ...c, productSortMode: next } : c)))
-      toast.success('已切换，顾客端最多 60 秒内生效')
+      toast.success('已切换，顾客端立刻生效')
       load(1)
     } catch (err: unknown) {
       toast.error(
@@ -170,6 +170,13 @@ export default function Products() {
   // 即置顶区长度。置顶行恒在最前、不参与拖拽；非置顶行最多也只能拖到置顶区之后。
   let pinnedCount = 0
   while (pinnedCount < list.length && list[pinnedCount].isRecommended === 1) pinnedCount++
+  // ↑↓ 按钮的 title：置顶行（含紧邻置顶区、上移会被挡住的第一条非置顶行）说明「为什么点不动」，
+  // 其余情况维持原「按销量自动排序」提示或普通的「上移/下移」。
+  const pinnedMoveTip = '推荐菜固定在整个列表最前，不参与排序'
+  const moveUpTitle = (idx: number) =>
+    sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : idx <= pinnedCount ? pinnedMoveTip : '上移'
+  const moveDownTitle = (idx: number) =>
+    sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : idx < pinnedCount ? pinnedMoveTip : '下移'
   const dragIndexRef = useRef<number | null>(null)
   const handleRowDragStart = (index: number) => { dragIndexRef.current = index }
   const handleRowDrop = (index: number) => {
@@ -531,7 +538,9 @@ export default function Products() {
           emptyText="暂无商品"
           head={
             <tr>
-              {sortActive && <th className="w-8 px-2 py-3" />}
+              {/* 固定宽度：这一列要容纳「推荐·置顶」徽标或拖拽把手，宽度按徽标撑满算，
+                  避免同分类下有/无置顶商品切换、或换分类时列宽跟着跳动。 */}
+              {sortActive && <th className="w-24 px-2 py-3" />}
               <th className="text-left px-4 py-3">商品名称</th>
               <th className="text-left px-4 py-3">分类</th>
               <th className="text-right px-4 py-3">价格</th>
@@ -607,10 +616,18 @@ export default function Products() {
                       <button onClick={() => handleDelete(p)} className="text-red-500">删除</button>
                       {sortActive && (
                         <>
+                          {idx < pinnedCount && (
+                            <span
+                              title={pinnedMoveTip}
+                              className="inline-block px-1.5 py-0.5 rounded text-xs bg-amber-50 text-amber-600 whitespace-nowrap"
+                            >
+                              推荐·置顶
+                            </span>
+                          )}
                           <button
                             onClick={() => applyOrder(moveAdjacent(list, idx, -1))}
                             disabled={!manualDragActive || idx <= pinnedCount}
-                            title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '上移'}
+                            title={moveUpTitle(idx)}
                             className="text-gray-500 disabled:opacity-30"
                           >
                             ↑
@@ -618,7 +635,7 @@ export default function Products() {
                           <button
                             onClick={() => applyOrder(moveAdjacent(list, idx, 1))}
                             disabled={!manualDragActive || idx < pinnedCount || idx === list.length - 1}
-                            title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '下移'}
+                            title={moveDownTitle(idx)}
                             className="text-gray-500 disabled:opacity-30"
                           >
                             ↓
@@ -720,7 +737,7 @@ export default function Products() {
                     <button
                       onClick={() => applyOrder(moveAdjacent(list, idx, -1))}
                       disabled={!manualDragActive || idx <= pinnedCount}
-                      title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '上移'}
+                      title={moveUpTitle(idx)}
                       className="text-gray-500 hover:text-gray-700 disabled:opacity-30"
                     >
                       <ArrowUp className="w-3.5 h-3.5 inline" />
@@ -728,7 +745,7 @@ export default function Products() {
                     <button
                       onClick={() => applyOrder(moveAdjacent(list, idx, 1))}
                       disabled={!manualDragActive || idx < pinnedCount || idx === list.length - 1}
-                      title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '下移'}
+                      title={moveDownTitle(idx)}
                       className="text-gray-500 hover:text-gray-700 disabled:opacity-30"
                     >
                       <ArrowDown className="w-3.5 h-3.5 inline" />
