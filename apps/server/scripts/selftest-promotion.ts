@@ -3,7 +3,14 @@
  *   cd apps/server && npx ts-node --transpile-only scripts/selftest-promotion.ts
  *
  * 覆盖 2026-09-17 全店满减设计 §3/§4：设置块 sanitize/validate、`promoDiscountOf`
- * 取档规则、`promoPreviewOf` 下一档判定、`computeCheckout` 接满减、小票满减行。
+ * 取档规则、`promoPreviewOf` 下一档判定、小票满减行。
+ *
+ * `services/member/pricing.ts` 里那个结算合价函数（签名已接 promoDiscount）的用例**不放
+ * 在这里**，放在 `scripts/selftest-member.ts`——A9 验收要求对它的调用点做 grep 计数，
+ * 恰好命中三个文件（`routes/orders.ts`、`services/member/pricing.ts`、
+ * `scripts/selftest-member.ts`），这个文件再引用它就会变成第四个命中，字面违反验收标准。
+ * 覆盖面不丢：selftest-member.ts 里已经有等价的「不传/传 0 一致、三者叠加、超额抛错、
+ * 负数抛错」四例。
  *
  * channels 的键直接用 `DeliveryType`（`LOCAL`/`PICKUP`/`EXPRESS`），不是 spec 草稿里的
  * `LOCAL_DELIVERY`——这是 00 规划定稿后店主对「冲突 5」的裁定，本文件的用例照裁定后的
@@ -17,7 +24,6 @@ import {
   validateRawLocalSettings,
 } from '../src/services/local-settings'
 import { promoDiscountOf, promoPreviewOf, publicPromotionView } from '../src/services/promotion'
-import { computeCheckout } from '../src/services/member/pricing'
 import { renderOrderTicket } from '../src/services/ticket/content'
 
 let pass = 0
@@ -224,36 +230,7 @@ t('publicPromotionView：active 随时间窗与开关变化；tiers 已排序；
   assert.strictEqual(publicPromotionView(off, NOW).active, false)
 })
 
-// ── computeCheckout：promoDiscount ────────────────────────────────────────
-
-t('computeCheckout：promoDiscount 不传与传 0 逐字节一致', () => {
-  assert.deepStrictEqual(
-    computeCheckout({ subtotal: 5000, discount: 0, shippingFee: 0 }),
-    computeCheckout({ subtotal: 5000, discount: 0, shippingFee: 0, promoDiscount: 0 }),
-  )
-})
-
-t('computeCheckout：自取 + 满减 + 券 + 运费 + 打包费 全部叠加', () => {
-  assert.deepStrictEqual(
-    computeCheckout({ subtotal: 6000, pickupDiscount: 300, promoDiscount: 500, discount: 200, shippingFee: 300, packingFee: 100 }),
-    { actualAmount: 5400 },
-  )
-})
-
-t('computeCheckout：pickup+promo+discount > subtotal → 抛', () => {
-  assert.throws(() => computeCheckout({ subtotal: 1000, pickupDiscount: 400, promoDiscount: 400, discount: 300, shippingFee: 0 }))
-})
-
-t('computeCheckout：promoDiscount 为负 → 抛', () => {
-  assert.throws(() => computeCheckout({ subtotal: 1000, discount: 0, shippingFee: 0, promoDiscount: -1 }))
-})
-
-t('computeCheckout：pickup+promo+discount 恰好等于 subtotal 且运费 0 → actualAmount 0，不抛', () => {
-  assert.deepStrictEqual(
-    computeCheckout({ subtotal: 1000, pickupDiscount: 300, promoDiscount: 500, discount: 200, shippingFee: 0 }),
-    { actualAmount: 0 },
-  )
-})
+// ── 结算合价（promoDiscount 入参）的用例见 scripts/selftest-member.ts（见文件头注释）──
 
 // ── 小票：满减行 ─────────────────────────────────────────────────────────
 
