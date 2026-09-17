@@ -40,8 +40,13 @@ export default function BusinessCenter({ title, description, tabs, onTabClick }:
 
       {/* flex-wrap + nav 的 flex-auto（基准 = 页签实际宽度）：宽度够就页签与主操作同排，
           不够就让按钮整个落到第二行，而不是把最后一个页签挤进横向滚动区里看不见。
-          375px 上商品管理（2 页签）仍是一排，会员营销（3 页签）自动换行。 */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-2 shadow-sm">
+
+          窄屏通栏（-mx-4 抵掉 main 的 p-4，md 起恢复常规卡片）：页签条被 main 的左右内边距
+          各吃 16px、自己再吃 8px，一共 48px。375px 手机上「店铺设置」四项实测需要 404px、
+          只剩 327px 可用——最后一个页签要横划才看得见，而这是改名之前就有的老问题。
+          通栏把那 48px 还给页签，五个中心才能在手机上都一行装下、行为一致。
+          通栏条去掉圆角与左右边框（rounded-none border-x-0），否则贴边时边框会切在屏幕边上。 */}
+      <div className="-mx-4 flex flex-wrap items-center gap-2 border-y border-gray-200 bg-white px-2 shadow-sm md:mx-0 md:rounded-xl md:border">
         <nav className="min-w-0 flex-auto overflow-x-auto" aria-label={`${title}功能导航`}>
           <div className="flex min-w-max" role="tablist">
             {tabs.map((tab) => (

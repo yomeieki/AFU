@@ -26,7 +26,6 @@ import MemberSettings from './pages/MemberSettings'
 import Workbench from './pages/Workbench'
 import CatalogCenter from './pages/CatalogCenter'
 import OrderCenter from './pages/OrderCenter'
-import MembershipCenter from './pages/MembershipCenter'
 import SettingsCenter from './pages/SettingsCenter'
 import LegacyRedirect from './components/LegacyRedirect'
 import { UnsavedSettingsProvider } from './components/UnsavedSettings'
@@ -77,19 +76,12 @@ export default function App() {
             <Route path="local" element={<LocalOrders />} />
             <Route path="express" element={<Orders />} />
           </Route>
-          <Route path="membership" element={<MembershipCenter />}>
-            <Route index element={<LegacyRedirect />} />
-            <Route path="coupons" element={<Coupons />} />
-            <Route path="points-goods" element={<PointsGoods />} />
-            <Route path="settings" element={<MemberSettings />} />
-          </Route>
           <Route path="settings" element={<SettingsCenter />}>
             <Route index element={<LegacyRedirect />} />
             <Route path="express" element={<ShopSettings />} />
             <Route path="local" element={<LocalSettings />} />
             <Route path="pickup" element={<PickupSettings />} />
             <Route path="hours" element={<BusinessHoursSettings />} />
-            <Route path="promotion" element={<PromotionSettings />} />
           </Route>
           <Route path="products" element={<LegacyRedirect />} />
           <Route path="categories" element={<LegacyRedirect />} />
@@ -97,10 +89,23 @@ export default function App() {
           <Route path="coupons" element={<LegacyRedirect />} />
           <Route path="points-goods" element={<LegacyRedirect />} />
           <Route path="member-settings" element={<LegacyRedirect />} />
+          {/* 「会员营销」整个中心已并入推广运营，它自己和三个子页都得还能落地 */}
+          <Route path="membership" element={<LegacyRedirect />} />
+          <Route path="membership/coupons" element={<LegacyRedirect />} />
+          <Route path="membership/points-goods" element={<LegacyRedirect />} />
+          <Route path="membership/settings" element={<LegacyRedirect />} />
+          {/* 满减活动从 /settings/promotion 挪到 /promotion/discount */}
+          <Route path="settings/promotion" element={<LegacyRedirect />} />
           <Route path="users" element={<Users />} />
           <Route path="promotion" element={<PromotionCenter />}>
             <Route index element={<LegacyRedirect />} />
+            <Route path="coupons" element={<Coupons />} />
+            <Route path="discount" element={<PromotionSettings />} />
+            <Route path="points-goods" element={<PointsGoods />} />
             <Route path="banners" element={<Banners />} />
+            <Route path="member" element={<MemberSettings />} />
+            {/* 扫码统计：店主决定先收起入口（navigation.ts 的 centerTabs.promotion 里没有它），
+                页面与路由都留着，直接输地址仍可访问，要恢复只需把页签加回去。 */}
             <Route path="scan-stats" element={<ScanStats />} />
           </Route>
           <Route path="banners" element={<LegacyRedirect />} />

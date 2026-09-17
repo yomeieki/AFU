@@ -24,10 +24,9 @@ export const mainNavigation: NavItem[] = [
   { to: '/dashboard', prefix: '/dashboard', label: '经营概览' },
   { to: '/catalog/products', prefix: '/catalog', label: '商品管理' },
   { to: '/orders/local', prefix: '/orders', label: '订单管理' },
-  { to: '/membership/coupons', prefix: '/membership', label: '会员营销' },
+  { to: '/promotion/coupons', prefix: '/promotion', label: '推广运营' },
   { to: '/settings/express', prefix: '/settings', label: '店铺设置' },
   { to: '/users', prefix: '/users', label: '用户管理' },
-  { to: '/promotion/banners', prefix: '/promotion', label: '推广运营' },
   { to: '/system/printer', prefix: '/system', label: '系统维护' },
 ]
 
@@ -39,7 +38,7 @@ export const activeNavLabel = (pathname: string) =>
   topNavigation.find((item) => pathname.startsWith(item.prefix))?.label ?? '经营概览'
 
 export const centerTabs: Record<
-  'catalog' | 'orders' | 'membership' | 'settings' | 'promotion' | 'system',
+  'catalog' | 'orders' | 'settings' | 'promotion' | 'system',
   CenterTab[]
 > = {
   catalog: [
@@ -50,21 +49,31 @@ export const centerTabs: Record<
     { to: '/orders/local', label: '同城配送' },
     { to: '/orders/express', label: '全国邮寄' },
   ],
-  membership: [
-    { to: '/membership/coupons', label: '优惠券' },
-    { to: '/membership/points-goods', label: '积分赠品' },
-    { to: '/membership/settings', label: '会员设置' },
-  ],
+  // 页签名不带「设置」：上面标题已经是「店铺设置」，每个页签再写一遍是重复，
+  // 而且四个 6 字页签在 375px 手机上要横滑 47px（改名前实测）——这是本来就有的适配问题。
+  // 去掉后与「订单管理」下的渠道叫法也统一了：同一个渠道在整个后台是同一个词。
   settings: [
-    { to: '/settings/express', label: '全国邮寄设置' },
-    { to: '/settings/local', label: '同城配送设置' },
-    { to: '/settings/pickup', label: '到店自取设置' },
+    { to: '/settings/express', label: '全国邮寄' },
+    { to: '/settings/local', label: '同城配送' },
+    { to: '/settings/pickup', label: '到店自取' },
     { to: '/settings/hours', label: '营业时间' },
-    { to: '/settings/promotion', label: '满减活动' },
   ],
+  // 2026-09-17 归拢：原「会员营销」整个并进来，满减活动从「店铺设置」挪进来。
+  // 顺序按「怎么发优惠 → 摆在哪儿 → 按什么规则」排：前三项是日常要新建要停用的活动，
+  // 轮播图是展示位，会员设置是开店时定一次的规则，放最后。
+  //
+  // 扫码统计（/promotion/scan-stats）**故意不在这里**：店主 2026-09-17 决定先收起来，
+  // 等要用时再放回来。页面与路由都还在，往这个数组里加回一行 { to: '/promotion/scan-stats',
+  // label: '扫码统计' } 就恢复，不需要动别的地方。
   promotion: [
+    { to: '/promotion/coupons', label: '优惠券' },
+    // 「满减活动」在这一行里是唯一能安全缩短的：标题已经说了这是推广运营，
+    // 「满减」两个字不会有歧义。保留「积分赠品」「会员设置」的全称——缩成
+    // 「赠品」会被当成随单送的赠品，缩成「会员」会跟「用户管理」里的会员列表混。
+    { to: '/promotion/discount', label: '满减' },
+    { to: '/promotion/points-goods', label: '积分赠品' },
     { to: '/promotion/banners', label: '轮播图' },
-    { to: '/promotion/scan-stats', label: '扫码统计' },
+    { to: '/promotion/member', label: '会员设置' },
   ],
   system: [
     { to: '/system/printer', label: '打印机' },
@@ -89,22 +98,31 @@ export const readChannel = (params: URLSearchParams): Channel => {
  */
 const legacyRoutes: Record<string, string> = {
   '/catalog': '/catalog/products',
-  '/membership': '/membership/coupons',
   '/settings': '/settings/express',
-  '/promotion': '/promotion/banners',
+  '/promotion': '/promotion/coupons',
   '/system': '/system/printer',
   '/products': '/catalog/products',
   '/categories': '/catalog/categories',
   '/orders': '/orders/express',
   '/local/orders': '/orders/local',
-  '/coupons': '/membership/coupons',
-  '/points-goods': '/membership/points-goods',
-  '/member-settings': '/membership/settings',
   '/shop-settings': '/settings/express',
   '/local/settings': '/settings/local',
   '/banners': '/promotion/banners',
   '/scan-stats': '/promotion/scan-stats',
   '/printer-settings': '/system/printer',
+
+  // 2026-09-17 归拢到「推广运营」后的旧地址。店主与店员浏览器里存的链接、以及第一批
+  // 改造时留下的更老的裸地址（/coupons 这种），都必须还能落地。
+  // 「会员营销」这个中心整个没了，它自己和三个子页一起重定向。
+  '/membership': '/promotion/coupons',
+  '/membership/coupons': '/promotion/coupons',
+  '/membership/points-goods': '/promotion/points-goods',
+  '/membership/settings': '/promotion/member',
+  '/coupons': '/promotion/coupons',
+  '/points-goods': '/promotion/points-goods',
+  '/member-settings': '/promotion/member',
+  // 满减活动从店铺设置挪到推广运营
+  '/settings/promotion': '/promotion/discount',
 }
 
 export const legacyTarget = (pathname: string, search: string) => ({

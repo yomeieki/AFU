@@ -2,7 +2,7 @@ import { useEffect, useState, type MouseEvent } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell, ChevronDown, ClipboardList, LayoutDashboard, LayoutGrid, LogOut, Megaphone,
-  Package, Store, Ticket, Users, Wrench, type LucideIcon,
+  Package, Store, Users, Wrench, type LucideIcon,
 } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
@@ -17,15 +17,18 @@ import VersionBanner from './VersionBanner'
  * 工作台与订单管理必须是两个不同图标：上一版顶栏两者都用 ClipboardList，
  * 窄屏九宫格里只靠图标扫一眼时根本认不出是哪个。
  */
+// 键是各入口的 `to`（navigation.ts 里的默认子页地址）。改了那边的默认子页，
+// 这里必须跟着改——查不到就是 undefined，`<Icon />` 直接抛「type is invalid」白屏。
 const navIcons: Record<string, LucideIcon> = {
   '/workbench': LayoutGrid,
   '/dashboard': LayoutDashboard,
   '/catalog/products': Package,
   '/orders/local': ClipboardList,
-  '/membership/coupons': Ticket,
+  // 2026-09-17：会员营销并入推广运营，入口默认子页成了优惠券；沿用喇叭图标（推广），
+  // 原来那张券图标随「会员营销」一起退役。
+  '/promotion/coupons': Megaphone,
   '/settings/express': Store,
   '/users': Users,
-  '/promotion/banners': Megaphone,
   '/system/printer': Wrench,
 }
 
@@ -114,7 +117,7 @@ export default function Layout() {
             <nav(1240px) 去掉图标与「退出登录」文字，保证不换行也不横滚 */}
         <nav aria-label="主导航" className="hidden min-w-0 flex-1 items-center gap-0.5 navrow:flex">
           {mainNavigation.map((item) => {
-            const Icon = navIcons[item.to]
+            const Icon = navIcons[item.to] ?? Megaphone // 兜底：改了默认子页忘了改这张表时降级成图标不对，而不是白屏
             const active = location.pathname.startsWith(item.prefix)
             const count = badgeOf(item.to)
             return (
@@ -221,9 +224,11 @@ export default function Layout() {
         hidden={!panelOpen}
         className="absolute inset-x-0 top-14 z-30 border-b border-gray-100 bg-white p-3 shadow-lg navrow:hidden"
       >
-        <div className="grid grid-cols-3 gap-2">
+        {/* 4 列：一级入口 8 个，正好两行铺满；3 列会剩「3+3+2」的半行。
+            375px 下每格 82×72，最窄的 360dp 安卓也有 78px，「接单工作台」五个字不折行（实测）。 */}
+        <div className="grid grid-cols-4 gap-2">
           {topNavigation.map((item) => {
-            const Icon = navIcons[item.to]
+            const Icon = navIcons[item.to] ?? Megaphone // 兜底：改了默认子页忘了改这张表时降级成图标不对，而不是白屏
             const active = location.pathname.startsWith(item.prefix)
             const count = badgeOf(item.to)
             return (
