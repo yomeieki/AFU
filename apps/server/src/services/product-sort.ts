@@ -12,6 +12,9 @@
  *   4. 最后 id 升序兜底，保证分页稳定。
  * 商品所属分类不在传入的分类表里（理论上不会发生）→ 视为 sortOrder = Number.MAX_SAFE_INTEGER、
  * MANUAL，排到最后而不是抛错。
+ *
+ * 调用方式：sortProducts(rows, categoryMap, salesMap)。全仓库只有两处调用，
+ * 见 routes/products.ts（公开列表）与 routes/admin/products.ts（后台列表）。
  */
 
 export const PRODUCT_SORT_MODES = ['MANUAL', 'SALES_30D'] as const
