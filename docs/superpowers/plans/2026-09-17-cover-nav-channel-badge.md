@@ -22,7 +22,7 @@
 - **ES5 硬约束**：新建的 `apps/miniapp/utils/cover-nav.js`、`apps/miniapp/components/channel-badge/index.js` 必须通过 `node scripts/check-miniapp-es5.mjs`；`utils/channel.js`、`pages/cover/index.js`、`components/local-store-header/index.js` 现在是 ES5、改完仍须通过。`app.js`、`pages/product/list.js`、`pages/index/index.js` 现状**不是**纯 ES5（`const` + 解构、方法简写），本批不回头改它们，但**本批新增/改写的每一行只许 `var` / `function`，不用 `let` / `const` / 箭头函数 / 模板字符串 / 解构 / 简写属性**（沿用文件里既有的 `onLoad() {}` 方法简写体例即可）。
 - **渠道出口只有既有的两条**：去同城一律经 `app.gateLocalChannel()` / `app.enterLocalChannel(url)`（位置许可门在 app.js 里，页面**不得**自己调 `ensurePrivacyAuthorize`）；去邮寄一律 `app.setShoppingChannel('EXPRESS')` 后 `switchTab` 或 `reloadForChannel()`。验收 A7 用 grep 钉住。
 - **四栏不高亮**：只用 `assets/tabbar/{home,category,cart,user}.png` 四张灰图，**不引用**任何 `*-active.png`；文字色 `#999999`（`app.json` 的 `tabBar.color`）。验收 A5 钉住。
-- **尺寸契约（逐字）**：自绘栏内容高 `98rpx`（= 系统标签栏 49px）+ `env(safe-area-inset-bottom)`；图标 `54rpx × 54rpx`（原图 81×81，系统渲染约 27px）；文字 `20rpx`（10pt）；栏底色 `#ffffff`，顶边 `1rpx solid #e5e5e5`。JS 侧同一高度：`TAB_BAR_PX = 49`，底部安全区 = `max(0, info.screenHeight - info.safeArea.bottom)`，两者都取不到时按 0（与 iPhone SE 等无安全区机型一致；也与单测桩一致）。
+- **尺寸契约（逐字，勘误 13 订正）**：对齐系统标签栏的尺寸一律用 `px`，不用 `rpx`——系统标签栏固定 49px，不随屏宽缩放，用 rpx 在不同机型上会和它一眼看出不一样（390pt 高 2px，428pt 高 6.9px）。自绘栏内容高 `49px`（= 系统标签栏）+ `env(safe-area-inset-bottom)`；图标 `27px × 27px`（原图 81×81，系统渲染约 27px）；文字 `10px`（10pt）；栏底色 `#ffffff`，顶边 `1rpx solid #e5e5e5`（非对齐系统件的细节仍用 rpx）。JS 侧同一高度：`TAB_BAR_PX = 49`，底部安全区 = `max(0, info.screenHeight - info.safeArea.bottom)`，两者都取不到时按 0（与 iPhone SE 等无安全区机型一致；也与单测桩一致）。
 - **不改的东西**：`app.json`（含 `tabBar`、`pages`）；`config/cover-entries.js` 六个入口的 `rect / action / route`；`.cover-stage` 的 `transform-origin`、`CONTENT_TOP / CONTENT_BOTTOM / CLEARANCE / MIN_SCALE` 四个常量；`enterLocalChannel()` 无参时的行为（`tests/miniapp/navigation.test.cjs` 既有断言一条不动）；`local-store-header` 的 `meta / mode` 属性与 `switchmode / goexpress` 事件；分类页的分组锚点逻辑（`loadCatalog / locateGroup / measureOffsets` 不碰）；主页 `.navbar` 的高度算法。
 - 既有测试的**期望值**一律不改；允许给既有 wx 桩**补方法/字段**（`safeArea`、`screenHeight`、`menu.left/width`），补了要在提交说明里列出。
 - 每个任务结束前跑本任务的测试；提交信息中文（`feat/fix/test/docs`），尾注按当前会话系统提示给的 `Co-Authored-By` 行；`git add` 只加白名单文件。
@@ -252,7 +252,7 @@ app.enterLocalChannel(url)    // url 可选，缺省 '/pages/index/index'；行�
   ```xml
   <!-- 底部四栏：页面自绘，不是系统标签栏（app.json 的 tabBar 不动）。四项都不高亮——封面不属于其中任何一项。
        配置与落点规则在 utils/cover-nav.js。z-index 高于舞台，舞台里越界的热区不会从栏底下接到点击。 -->
-  <view class="cover-tabbar" aria-role="tablist">
+  <view class="cover-tabbar">
     <view wx:for="{{tabs}}" wx:key="id" class="cover-tab"
           aria-role="button" aria-label="{{item.label}}"
           data-id="{{item.id}}" bindtap="onTapTab">
@@ -261,25 +261,27 @@ app.enterLocalChannel(url)    // url 可选，缺省 '/pages/index/index'；行�
     </view>
   </view>
   ```
+  （容器不加 `aria-role="tablist"`——勘误 14：tablist 隐含「有一项当前被选中」，与「四项都不高亮、封面不属于任何一项」矛盾；子项的 `aria-role="button"` 保留。）
 - [ ] **Step 4 `pages/cover/index.wxss`**：
-  - `.cover-bg-wall { bottom: calc(98rpx + env(safe-area-inset-bottom)); }`，行上注释：「锚到自绘四栏上沿：98rpx = 49px 栏高，安全区随机型。JS 的 layout() 用同一口径扣高度（TAB_BAR_PX + bottomInsetPx）」。`.cover-bg-paper` **不动**（理由见勘误 4）。
+  - `.cover-bg-wall { bottom: calc(49px + env(safe-area-inset-bottom)); }`，行上注释：「锚到自绘四栏上沿：对齐系统标签栏的尺寸一律用 px，不用 rpx。JS 的 layout() 用同一口径扣高度（TAB_BAR_PX + bottomInsetPx）」。`.cover-bg-paper` **不动**（理由见勘误 4）。
   - 追加：
     ```css
     /* ---------- 底部自绘四栏 ----------
-       与系统标签栏同规格：内容高 49px（98rpx）+ 底部安全区，图标约 27px（54rpx），文字 10pt（20rpx），
-       灰 #999999 = app.json tabBar.color。不做按下态、不做高亮。z-index 5 > 舞台 2。 */
+       与系统标签栏同规格：内容高 49px，图标 27px，文字 10px，灰 #999999 = app.json tabBar.color。
+       对齐系统标签栏的尺寸一律用 px，不用 rpx；与 JS 的 TAB_BAR_PX 同一口径。
+       不做按下态、不做高亮。z-index 5 > 舞台 2。 */
     .cover-tabbar {
       position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
       display: flex;
-      height: calc(98rpx + env(safe-area-inset-bottom));
+      height: calc(49px + env(safe-area-inset-bottom));
       padding-bottom: env(safe-area-inset-bottom);
       box-sizing: border-box;
       background: #ffffff;
       border-top: 1rpx solid #e5e5e5;
     }
-    .cover-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4rpx; }
-    .cover-tab-icon { width: 54rpx; height: 54rpx; }
-    .cover-tab-label { font-size: 20rpx; line-height: 1; color: #999999; }
+    .cover-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+    .cover-tab-icon { width: 27px; height: 27px; }
+    .cover-tab-label { font-size: 10px; line-height: 1; color: #999999; }
     ```
 - [ ] **Step 5** `node --test tests/miniapp/navigation.test.cjs` 全绿；`node scripts/check-miniapp-es5.mjs apps/miniapp/pages/cover/index.js` ✔。提交 `feat(miniapp): 封面底部自绘四栏，背景让位，按记忆渠道跳转`。
 - [ ] **Step 6 开发者工具自测**（执行方跑验收 B1、B2、B6、B7，把现象写进报告；无开发者工具则如实标注留给店主）。若 375×812 模拟器上 `stageScale < 1` 或墙被压——按上报触发条件 3 停下。
@@ -436,7 +438,7 @@ app.enterLocalChannel(url)    // url 可选，缺省 '/pages/index/index'；行�
 
 **Files:** `apps/miniapp/pages/index/index.js`、`index.wxml`、`index.wxss`
 
-- [ ] **Step 1 `index.wxss`**：`.navbar-channel` 的 `right: 24rpx;` 改为 `right: 208rpx;`，注释补一句：「兜底值：iOS 胶囊 87px + 右边距 7px + 间距 10px ≈ 104px；实际由 computeNavBar 按胶囊实测 left 算出并以 style 覆盖（安卓胶囊 95px + 10px 更宽，写死会压到）」。
+- [ ] **Step 1 `index.wxss`**：`.navbar-channel` 的 `right: 24rpx;` 改为 `right: 115px;`（勘误 15：`208rpx` 在 375pt 安卓上只差 1px 不压住、360dp 上压 5px，而这个兜底分支恰恰是安卓冷启动拿不到胶囊位置时会走的那条，胶囊是固定 px 的系统件，兜底也用 px），注释补一句：「兜底值：安卓胶囊 95 + 右边距 10 + 间距 10 = 115px；胶囊是固定 px 的系统件，兜底也用 px；实际由 computeNavBar 按胶囊实测 left 算出并以 style 覆盖」。同批把 `.navbar-inner` 改 `justify-content: flex-start; padding-left: 88rpx;`（店名靠左紧跟返回箭头）——渠道标识挪到胶囊左侧后会与居中的标题重叠（375pt 上压约 11px、安卓约 20px），三者在 375 宽下几何上放不下，必须动版式（勘误 13）。
 - [ ] **Step 2 `index.js` 的 `computeNavBar()`**：在读到 `menu` 之后加
   ```js
   // 渠道标识的右边距：胶囊左沿再往左 10px。桩/低版本库拿不到 left 时用 wxss 的 208rpx 兜底（不写 style）
@@ -466,9 +468,10 @@ app.enterLocalChannel(url)    // url 可选，缺省 '/pages/index/index'；行�
 |---|---|---|
 | A1 | `npm run -s test:miniapp` | `fail 0`；`tests` 总数 ≥ **182**（基线 162 + 新增 ≥ 20）。分文件：`node --test tests/miniapp/cover-nav.test.cjs` ≥ 8 例；`tests/miniapp/channel.test.cjs` ≥ 11 例（既有 8 + 追加 ≥ 3）；`tests/miniapp/navigation.test.cjs` ≥ 24 例（既有 14 + 追加 ≥ 10）；`tests/miniapp/channel-badge-page.test.cjs` ≥ 7 例 |
 | A2 | `node scripts/check-miniapp-es5.mjs apps/miniapp/utils/cover-nav.js apps/miniapp/utils/channel.js apps/miniapp/pages/cover/index.js apps/miniapp/components/channel-badge/index.js apps/miniapp/components/local-store-header/index.js` | 五个 `ES5 ✔`，退出码 0 |
-| A3 | `grep -n "right: 24rpx" apps/miniapp/pages/index/index.wxss` | 无结果；且 `grep -c "right: 208rpx" apps/miniapp/pages/index/index.wxss` 为 `1` |
+| A3 | `grep -c "right: 115px" apps/miniapp/pages/index/index.wxss`（勘误 16：原来 `grep -n "right: 24rpx"` 已随 208rpx→115px 一并订正） | 为 `1` |
 | A4 | `git diff --name-only 58f6bb4..HEAD -- apps/miniapp/app.json apps/miniapp/config apps/miniapp/assets apps/server apps/admin tools docs/superpowers/specs` | 无输出（tabBar / pages / 入口配置 / 素材 / 服务端 / 后台 / 工具 / spec 零改动） |
-| A5 | `grep -n "\-active" apps/miniapp/utils/cover-nav.js apps/miniapp/pages/cover/index.wxml apps/miniapp/pages/cover/index.wxss` | 无结果（四栏不高亮）；且 `grep -c "assets/tabbar/" apps/miniapp/utils/cover-nav.js` 为 `4` |
+| A5 | `grep -n -- "-active\.png" apps/miniapp/utils/cover-nav.js apps/miniapp/pages/cover/index.wxml apps/miniapp/pages/cover/index.wxss`（勘误 16：原来扫纯文本 `-active` 会把注释里的字误判成命中，执行方上一轮正是因此改了注释措辞——根因在验收写法，不在代码，故改扫 `-active.png` 这个更精确的模式） | 无结果（四栏不高亮）；且 `grep -c "assets/tabbar/" apps/miniapp/utils/cover-nav.js` 为 `4` |
+| A11 | `grep -n "98rpx\|54rpx" apps/miniapp/pages/cover/index.wxss` | 无结果；且 `grep -c "49px" apps/miniapp/pages/cover/index.wxss` ≥ `2`（勘误 13：尺寸契约改用 px 后的收尾断言） |
 | A6 | `grep -n "env(safe-area-inset-bottom)" apps/miniapp/pages/cover/index.wxss` | ≥ 3 处命中（`.cover-bg-wall` 的 `bottom`、`.cover-tabbar` 的 `height` 与 `padding-bottom`）；`grep -n "TAB_BAR_PX\|bottomInsetPx\|onTapTab\|decideCoverTab\|getRememberedChannel" apps/miniapp/pages/cover/index.js` 五个都命中 |
 | A7 | `grep -n "ensurePrivacyAuthorize" apps/miniapp/pages/cover/index.js apps/miniapp/pages/product/list.js apps/miniapp/components/local-store-header/index.js apps/miniapp/components/channel-badge/index.js` | 无结果（许可门只在 app.js）；且 `grep -n "gateLocalChannel()\|enterLocalChannel(url)" apps/miniapp/app.js` 两个都命中 |
 | A8 | `grep -n -A4 "store-name-wrap" apps/miniapp/components/local-store-header/index.wxml \| grep -c "status-pill"` 与 `grep -c "justify-content: space-between" apps/miniapp/components/local-store-header/index.wxss` | 前者 ≥ 1（胶囊在左侧组内）；后者 ≥ 1（`.store-title-row` 已改；`.head-notice` 本来就有一处，所以是 ≥ 1 不是 = 1——用 `grep -n -A3 "^\.store-title-row" …wxss \| grep space-between` 单独确认那一处） |
@@ -478,17 +481,17 @@ app.enterLocalChannel(url)    // url 可选，缺省 '/pages/index/index'；行�
 
 ### B. 真机（微信开发者工具 + 店主手机；每条写「操作 → 期望」）
 
-1. **封面四栏都不高亮**：冷启动到封面。→ 底部一条白底四栏「主页 / 分类 / 购物车 / 我的」，四项图标与文字**全是灰色**，没有任何一项红色；与主页底部系统标签栏并排截图对比：栏高、图标大小、字号、文字与图标间距、底部安全区留白肉眼一致（iPhone X 系底栏在 Home 条上方，无白边错位）。
+1. **封面四栏都不高亮**：冷启动到封面。→ 底部一条白底四栏「主页 / 分类 / 购物车 / 我的」，四项图标与文字**全是灰色**，没有任何一项红色；与主页底部系统标签栏并排截图对比：栏高、图标大小、字号、文字与图标间距、底部安全区留白肉眼一致（iPhone X 系底栏在 Home 条上方，无白边错位）。**390pt 与 428pt 机型上同样对齐**（勘误 13：改用 px 后不再随屏宽放大，两种机型都要看一遍）。
 2. **首次安装 / 清缓存后默认同城**：开发者工具「清缓存 → 全部」或真机删除小程序后重进。点四栏「主页」→ 先弹位置许可 → 同意 → 进**同城**主页（顶栏标识「同城配送」，门店头在）。回封面（顶栏「‹ 封面」）点「分类」→ 同城分类页（门店头在、无搜索框）。再回封面点「购物车」→ 同城购物车。
 3. **四栏落到记忆渠道（邮寄）**：封面中间点「全国邮寄」进邮寄 → 「‹ 封面」回封面 → 点四栏「分类」→ **邮寄**分类页（搜索框在、右端「全国邮寄 ▾」）；点「购物车」→ 邮寄购物车（角标为邮寄车件数）。
 4. **四栏落到记忆渠道（同城）**：在「我的」页用渠道入口切到同城 → 回封面 → 点四栏「主页」→ 同城主页；已授权过位置许可时**不再弹**许可。
 5. **点「我的」直接进**：任意渠道下封面点「我的」→ 直接进「我的」页，页内「切换到 X」入口文案与切之前一致（渠道没被改）。
-6. **封面青瓦墙与冷链入口不被遮**：375×812（iPhone X/11 Pro/12 mini/13 mini 等）：青瓦墙整段完整露在四栏上方；「全国冷链配送」下沿与墙之间有一指以上空隙；Logo 不压胶囊；六个入口的字与图标完整。iPhone Plus/Pro Max：墙与栏之间无宣纸露缝、栏在 Home 条上方。iPhone SE / 无安全区安卓：内容略缩（≤ 14%）但冷链入口不压墙。
+6. **封面青瓦墙与冷链入口不被遮**：375×812（iPhone X/11 Pro/12 mini/13 mini 等）：青瓦墙整段完整露在四栏上方；「全国冷链配送」下沿与墙之间有一指以上空隙；Logo 不压胶囊；六个入口的字与图标完整。iPhone Plus/Pro Max：墙与栏之间无宣纸露缝、栏在 Home 条上方。iPhone SE / 无安全区安卓：内容略缩（≤ 14%）但冷链入口不压墙。**用一台安卓手势导航机，记录 `screenHeight − safeArea.bottom` 与栏实测高度**（勘误 13：手势导航安卓的底部安全区取值方式与 iPhone 不同，需实测口径是否一致）。
 7. **隐私弹窗盖在四栏之上**：首次点同城相关入口弹出的隐私授权弹窗完整盖住四栏，四栏不可点。
 8. **分类页同城第一行**：封面 → 同城 → 「分类」。→ 第一行 `[店铺图标 店名 营业状态胶囊]` 靠左紧挨着，「同城配送 ▾」在**右端**、不被胶囊遮挡（原生导航栏）；店主后台把状态改成暂停 / 打烊（长文案）→ 这一行**不换行**、胶囊不被压扁、标识完整可见，店名过长时店名先出省略号。主页同城门店头同样是胶囊紧邻店名（同一组件）、且主页**没有**多出第二枚标识。
 9. **同城 → 邮寄**：点「同城配送 ▾」→ 弹层两项、「同城配送」打勾 → 点「全国邮寄」→ 弹层关、页面变邮寄分类页（搜索框 + 右端「全国邮寄 ▾」、左侧 7 个邮寄分类）、底部购物车角标变成邮寄车件数。弹层开着时底下列表不能跟手滚；点遮罩关闭。
 10. **邮寄 → 同城**：点「全国邮寄 ▾」→ 选「同城配送」→ 若未授权先弹位置许可 → 同意 → 页面变同城分类页（门店头、外送/自取栏、9 个同城分类）、角标变同城车件数；**拒绝**许可 → toast「需要同意位置许可才能使用同城配送」、页面仍是邮寄分类页、标识仍「全国邮寄 ▾」。选中当前渠道（例如在同城里再点「同城配送」）→ 只关弹层，页面不重载。
-11. **主页渠道标识不再被胶囊压住**：主页（邮寄）右上角「全国邮寄」整枚可见、在胶囊左侧、与胶囊有明显间隙；切到同城后「同城配送」同样；**安卓机**（胶囊更宽）也看一眼，不压。
+11. **主页渠道标识不再被胶囊压住**：主页（邮寄）右上角「全国邮寄」整枚可见、在胶囊左侧、与胶囊有明显间隙；切到同城后「同城配送」同样；**安卓机**（胶囊更宽）也看一眼，不压。**主页标题左对齐紧随箭头，渠道标识不压标题**（勘误 13：店名改靠左后，一并确认标题与标识互不重叠）。
 12. **回归**：封面六个原入口行为不变（同城问许可进主页、全国邮寄/冷链进邮寄主页、会员三入口进会员页）；分类页左右联动、加购、购物车条、外送/自取切换照旧。
 
 ## 复核与收尾（02–04）
@@ -518,11 +521,18 @@ app.enterLocalChannel(url)    // url 可选，缺省 '/pages/index/index'；行�
   11. **既有单测桩的 `getWindowInfo` 没有 `safeArea` / `screenHeight`、胶囊桩没有 `left`**（`navigation.test.cjs`、`channel-pages.test.cjs` 等四处）：封面 `bottomInsetPx()` 与主页 `channelRight` 都必须对缺字段兜底（按 0 / 走 WXSS 兜底），既有用例才不需要改桩；Task 3 的两条版式用例自带完整桩。
   12. **`wx.switchTab` 从封面到 `/pages/cart/index`、`/pages/user/index` 是本仓库第一次**（此前封面只 `switchTab` 到主页、`navigateTo` 到会员页）。四个目标都在 `app.json` 的 `tabBar.list` 里，理论上可行；真机不通即命中上报触发条件 1。
 
+- **2026-09-17 02 复核 + 03 回判发现的返工项**（未改需求，订正执行细节）：
+  13. **对齐系统标签栏的尺寸一律改用固定 px，不用 rpx**：系统标签栏固定 49px，不随屏宽缩放；原来封面自绘栏用 `98rpx`／`54rpx`／`20rpx` 在 390pt 机型高 2px、428pt（Pro Max）高 6.9px、图标字号同比放大 14%，与进去之后那条系统标签栏一眼能看出不是同一条。改为 `.cover-bg-wall { bottom: calc(49px + env(safe-area-inset-bottom)); }`、`.cover-tabbar { height: calc(49px + env(safe-area-inset-bottom)); }`（`padding-bottom` 不变）、`.cover-tab-icon { width: 27px; height: 27px; }`、`.cover-tab-label { font-size: 10px; }`、`.cover-tab { gap: 2px }`。JS 一行不动（`TAB_BAR_PX` 本就是 px 口径），`navigation.test.cjs` 的版式用例期望不变。同一发现牵出主页店名与渠道标识的版式问题：渠道标识挪到胶囊左侧后会与居中的标题重叠（375pt 上压约 11px、安卓约 20px，标识有底色会盖住「菜」字），三者在 375 宽下几何上放不下——店主拍板店名改靠左，`.navbar-inner` 改 `justify-content: flex-start; padding-left: 88rpx;`（88rpx = 返回箭头触控区宽）。
+  14. **封面四栏容器删掉 `aria-role="tablist"`**（子项 `aria-role="button"` 保留）：tablist 隐含「有一项当前被选中」，与「四项都不高亮、封面不属于任何一项」矛盾。
+  15. **主页 `.navbar-channel` 兜底值 `208rpx` 改 `115px`**：`208rpx` 在 375pt 安卓上只差 1px 不压住、360dp 上压 5px；而这个兜底分支恰恰是安卓冷启动拿不到胶囊位置时会走的那条，胶囊是固定 px 的系统件（安卓 95 + 右边距 10 + 间距 10 = 115px），兜底也该用 px。
+  16. **两条验收写法本身有问题，已订正**：A5 原来 `grep -n "\-active"` 扫纯文本会把注释里的字误判成命中（执行方上一轮正是因此改了注释措辞——根因在验收写法，不在代码），改扫 `-active.png`；A3 原来只钉 `right: 24rpx` 消失，未钉新值，改为 `grep -c "right: 115px" … 为 1`。
+  17. **执行记录里的数字订正**：01 执行记录写的 iPhone SE `stageScale ≈ 0.979` 是笔误，实跑值为 `0.8607`（用例断言 `>= 0.86 && < 0.9`），已在该处更正。
+
 - **2026-09-17 01 执行 · sonnet：执行记录**（分支 `claude/cover-nav`，基线 `58f6bb4`）：
   - **店主已拍板**：勘误 1 保留位置许可门——封面四栏进同城仍走 `app.enterLocalChannel(url)`，Task 3 按计划默认实现，未改成绕过许可的写法。
   - **Task 1** `19f6e55` `feat(miniapp): 封面四栏落点决策与记忆渠道读取（纯函数 + 单测）`——`utils/channel.js` 加 `getRememberedChannel()`，新建 `utils/cover-nav.js`（`TABS` + `decideCoverTab`），按计划模板实现，无偏离。
   - **Task 2** `5f9130f` `refactor(miniapp): 同城之门拆成 gateLocalChannel，enterLocalChannel 可指定目标 tab`——按计划把 `enterLocalChannel()` 拆成 `gateLocalChannel()` + 带目标 tab 的 `enterLocalChannel(url)`，既有「顺序不可换」「拒绝许可」「跳转失败给的是跳转的错」三例原样通过。
-  - **Task 3** `98526d6` `feat(miniapp): 封面底部自绘四栏，背景让位，按记忆渠道跳转`——按计划加自绘四栏、`layout()` 扣导航条高、`onTapTab`。375×812 单测桩验得 `stageScale === 1`、`stageOffset === 41`；iPhone SE 桩验得 `stageScale ≈ 0.979`（工具算出，位于 `[0.86, 0.9)` 内且不触底），均未命中上报触发条件 3。开发者工具真机自测（B1/B2/B6/B7）本环境无微信开发者工具，**未执行，留给人工**。
+  - **Task 3** `98526d6` `feat(miniapp): 封面底部自绘四栏，背景让位，按记忆渠道跳转`——按计划加自绘四栏、`layout()` 扣导航条高、`onTapTab`。375×812 单测桩验得 `stageScale === 1`、`stageOffset === 41`；iPhone SE 桩验得 `stageScale ≈ 0.8607`（勘误 17 订正：此处此前误记为 `0.979`，实跑值为 `0.8607`，用例断言 `>= 0.86 && < 0.9`，位于 `[0.86, 0.9)` 内且不触底），均未命中上报触发条件 3。开发者工具真机自测（B1/B2/B6/B7）本环境无微信开发者工具，**未执行，留给人工**。
   - **Task 4** `e121308` `feat(miniapp): 渠道标识小组件 channel-badge`——按计划新建四个文件，无偏离。
   - **Task 5** `272b189` `feat(miniapp): 门店头第一行——状态胶囊紧邻店名，右端渠道标识`——按计划把状态胶囊挪进 `store-name-wrap`、`.store-title-row` 改回 `space-between`，`local-store-header` 加 `channel` 属性与 `onTapChannel`。
   - **Task 6** `a1ecfa0` `feat(miniapp): 分类页两侧渠道标识与切换弹层，切渠道重载本页`——按计划加 `channelSheetOpen` / `openChannelSheet` / `closeChannelSheet` / `noop` / `onPickChannel`，两侧标识与共用弹层落地。开发者工具真机自测（B8–B10）**未执行，留给人工**。

@@ -67,7 +67,7 @@
 
   <!-- 底部四栏：页面自绘，不是系统标签栏（app.json 的 tabBar 不动）。四项都不高亮——封面不属于其中任何一项。
        配置与落点规则在 utils/cover-nav.js。z-index 高于舞台，舞台里越界的热区不会从栏底下接到点击。 -->
-  <view class="cover-tabbar" aria-role="tablist">
+  <view class="cover-tabbar">
     <view wx:for="{{tabs}}" wx:key="id" class="cover-tab"
           aria-role="button" aria-label="{{item.label}}"
           data-id="{{item.id}}" bindtap="onTapTab">

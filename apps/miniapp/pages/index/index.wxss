@@ -256,7 +256,8 @@
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding-left: 88rpx;
 }
 /* 触控区 88rpx=44px，与 iOS 原生返回键一致；箭头本身靠左对齐到 24rpx */
 .navbar-back {
@@ -286,13 +287,15 @@
 }
 
 /* ── 双渠道 ─────────────────────────────────────────────
-   渠道标识。绝对定位到右侧而不是塞进 flex 流：标题是 justify-content:center 居中的，
-   把标识排进同一条流会把标题挤偏，两个渠道下偏移量还不一样（「同城配送」比「全国邮寄」宽）。 */
+   渠道标识。绝对定位到右侧而不是塞进 flex 流：标题靠左紧跟返回箭头，
+   把标识排进同一条流会顶着标题走，两个渠道下偏移量还不一样（「同城配送」比「全国邮寄」宽）。 */
 .navbar-channel {
   position: absolute;
-  /* 兜底值：iOS 胶囊 87px + 右边距 7px + 间距 10px ≈ 104px；实际由 computeNavBar 按胶囊实测 left 算出并以 style 覆盖
-     （安卓胶囊 95px + 10px 更宽，写死会压到） */
-  right: 208rpx;
+  /* 兜底值：安卓胶囊 95 + 右边距 10 + 间距 10 = 115px；胶囊是固定 px 的系统件，兜底也用 px；
+     实际由 computeNavBar 按胶囊实测 left 算出并以 style 覆盖。
+     208rpx 在 375pt 安卓上只差 1px 不压住、360dp 上压 5px——这个兜底分支恰恰是安卓冷启动
+     拿不到胶囊位置时会走的那条，必须用不随屏宽缩放的 px。 */
+  right: 115px;
   top: 50%;
   transform: translateY(-50%);
   padding: 6rpx 16rpx;

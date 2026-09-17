@@ -29,8 +29,10 @@ page {
 /* ---------- 背景 ---------- */
 .cover-bg { position: absolute; left: 0; width: 750rpx; z-index: 1; }
 .cover-bg-paper { top: 0; }
-/* 锚到自绘四栏上沿：98rpx = 49px 栏高，安全区随机型。JS 的 layout() 用同一口径扣高度（TAB_BAR_PX + bottomInsetPx） */
-.cover-bg-wall { bottom: calc(98rpx + env(safe-area-inset-bottom)); }
+/* 锚到自绘四栏上沿：对齐系统标签栏的尺寸一律用 px，不用 rpx——系统标签栏固定 49px，不随屏宽缩放，
+   用 rpx 在不同机型上会和它一眼看出不一样（390pt 高 2px，428pt 高 6.9px）。
+   与 JS 的 `TAB_BAR_PX` 同一口径。JS 的 layout() 用同一口径扣高度（TAB_BAR_PX + bottomInsetPx） */
+.cover-bg-wall { bottom: calc(49px + env(safe-area-inset-bottom)); }
 
 /* ---------- 舞台 ---------- */
 .cover-stage {
@@ -189,17 +191,19 @@ page {
 }
 
 /* ---------- 底部自绘四栏 ----------
-   与系统标签栏同规格：内容高 49px（98rpx）+ 底部安全区，图标约 27px（54rpx），文字 10pt（20rpx），
-   灰 #999999 = app.json tabBar.color。不做按下态、不做高亮。z-index 5 > 舞台 2。 */
+   与系统标签栏同规格：内容高 49px，图标 27px，文字 10px，灰 #999999 = app.json tabBar.color。
+   对齐系统标签栏的尺寸一律用 px，不用 rpx；与 JS 的 `TAB_BAR_PX` 同一口径——
+   系统标签栏是固定 49px，不随屏宽缩放，用 rpx 在不同机型上会和它一眼看出不一样。
+   不做按下态、不做高亮。z-index 5 > 舞台 2。 */
 .cover-tabbar {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
   display: flex;
-  height: calc(98rpx + env(safe-area-inset-bottom));
+  height: calc(49px + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   box-sizing: border-box;
   background: #ffffff;
   border-top: 1rpx solid #e5e5e5;
 }
-.cover-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4rpx; }
-.cover-tab-icon { width: 54rpx; height: 54rpx; }
-.cover-tab-label { font-size: 20rpx; line-height: 1; color: #999999; }
+.cover-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.cover-tab-icon { width: 27px; height: 27px; }
+.cover-tab-label { font-size: 10px; line-height: 1; color: #999999; }
