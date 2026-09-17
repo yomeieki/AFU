@@ -328,6 +328,10 @@ model Order {
   pickupReadyAt               DateTime? @map("pickup_ready_at")
   // 「过时未取」提醒只发一次的标记，与 acceptRemindedAt 同款
   pickupRemindedAt            DateTime? @map("pickup_reminded_at")
+  // 满减（分）。与 pickupDiscountAmount / discountAmount 同级的下单时快照：小票、退款、对账直接读它，
+  // 不从设置反推——活动会变，这单当时减了多少不该跟着变（2026-09-17 全店满减设计 §3.2）。
+  // 命中的档位不单独存，需要时从金额反推。
+  promoDiscountAmount         Int       @default(0) @map("promo_discount_amount")
   // 客户端下单幂等键（UUID）。治的是「服务端已创建、客户端超时没收到响应」这一类重复下单：
   // 顾客点一次、网络卡住、他再点一次，库里就是两张单、库存扣两次、券核销两次。
   // 客户端每进一次结算页生成一个，重试沿用同一个；服务端见到重复的就把原单原样返回。
