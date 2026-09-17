@@ -220,6 +220,7 @@
 | cancel_reason | VARCHAR(255) | NULL | 取消原因 |
 | coupon_id | INT | NULL | 用的哪张券。普通 Int 列，**不建关系字段**（避免与 `user_coupons.order_id` 双向强关联） |
 | discount_amount | INT | DEFAULT 0 | 券抵扣额（分）。只抵商品金额，不抵运费 |
+| promo_discount_amount | INT | NOT NULL DEFAULT 0 | 本单实际减掉的满减金额（分）。0 = 没参加/未达标；下单时快照，之后改活动不影响（2026-09-17 全店满减设计，见 docs/api.md 附录 K） |
 | points_used | INT | DEFAULT 0 | 赠品消耗的积分 |
 | points_earned | INT | DEFAULT 0 | 本单发放的积分 |
 | points_settled_at | DATETIME | NULL | 积分已结算的标记。**判「结算过没有」只能看它,不能用 `points_earned === 0`**——否则得 0 分的订单会被兜底任务永远重扫（spec §5.4） |

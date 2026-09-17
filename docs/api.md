@@ -1801,7 +1801,7 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 |---|---|
 | `GET /api/local/meta` | 新增 `delivery`、`pickup`、`holiday` 三节（老字段保留）。`pickup: { enabled, paused, available, minOrderAmountFen, discount, discountText, slotMinutes, daysAhead }`；`holiday` 休业中才非 null。 |
 | `GET /api/local/pickup-slots` | 公开。`{ days: [{ date, label('今天'/'明天'/'MM-DD'), slots: [{ startAt, endAt, label }] }], earliestAt, slotMinutes, blocked: null \| { kind: 'HOLIDAY'\|'PAUSED'\|'DISABLED', text } }`。不可选的格子不返回；今天为空时 `days[0].slots=[]`。 |
-| `POST /api/orders` | `deliveryType:'PICKUP'` 时 **不传** `addressId`，必传 `pickupAt`（须精确等于某格 `startAt`）与 `pickupContact: { name?, phone }`。计价：小计 → 自取优惠 → 券（门槛看原小计，面额封顶到小计−自取优惠）→ 实付；运费 0。响应多 `pickupAt`、`pickupDiscountAmount`、`subscribeTemplates`。 |
+| `POST /api/orders` | `deliveryType:'PICKUP'` 时 **不传** `addressId`，必传 `pickupAt`（须精确等于某格 `startAt`）与 `pickupContact: { name?, phone }`。计价：小计 → 自取优惠 → 满减（2026-09-17 加入，见附录 K）→ 券（门槛看原小计，面额封顶到小计−自取优惠−满减）→ 实付；运费 0。响应多 `pickupAt`、`pickupDiscountAmount`、`promoDiscountAmount`、`subscribeTemplates`。 |
 | `GET /api/orders` | `deliveryType` 接受 `PICKUP`；新增 `channel=LOCAL`（外送 + 自取）/ `channel=EXPRESS`。 |
 | `GET /api/orders/:id` | 自取单多 `pickup: { pickupAt, pickupReadyAt, prepStartAt, slotLabel, store }`；所有单多 `canSelfCancel`、`subscribeTemplates`。自取的 `canRequestCancel`：PAID 且已到开始备餐时刻、或 PREPARING；SHIPPED 后 false。 |
 | `GET /api/orders/pickup-contact` | 最近一张自取单的 `{ name, phone }`，无则 `null`。 |
@@ -1864,10 +1864,10 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 perItem(product) = product.packingFeeFen ?? settings.packing.perItemFen
 packingFee        = (settings.packing.enabled && deliveryType ∈ {LOCAL, PICKUP})
                     ? Σ(非赠品行 quantity × perItem(product)) : 0
-actualAmount      = subtotal − pickupDiscount − couponDiscount + shippingFee + packingFee
+actualAmount      = subtotal − pickupDiscount − promoDiscount − couponDiscount + shippingFee + packingFee
 ```
 
-打包费按**下单时**的设置与商品覆盖值算好，写进 `orders.packing_fee` 快照；之后改设置或改商品都不影响已下的单（与运费同理）。**不参与**起送门槛、阶梯免运、券门槛、券封顶、自取折扣的任何判定——那些判定用的都是商品小计（`totalAmount`），全程未动过。
+打包费按**下单时**的设置与商品覆盖值算好，写进 `orders.packing_fee` 快照；之后改设置或改商品都不影响已下的单（与运费同理）。**不参与**起送门槛、阶梯免运、券门槛、券封顶、自取折扣、满减档位的任何判定——那些判定用的都是商品小计（`totalAmount`），全程未动过。`promoDiscount`（满减）见附录 K，2026-09-17 加入本公式。
 
 ### 字段
 
@@ -1882,7 +1882,7 @@ actualAmount      = subtotal − pickupDiscount − couponDiscount + shippingFee
 
 ### 小票
 
-取餐/配送联金额顺序：`合计 → 打包费 → 自取优惠 → 优惠券 → 运费（外送）→ 实付`。`packingFee > 0` 才打「打包费：¥X.XX」；`packingFee=0` 不印；厨房联不印（不印任何金额）。
+取餐/配送联金额顺序：`合计 → 打包费 → 自取优惠 → 满减 → 优惠券 → 运费（外送）→ 实付`（2026-09-17 全店满减设计加入「满减」一行，见附录 K）。`packingFee > 0` 才打「打包费：¥X.XX」；`packingFee=0` 不印；厨房联不印（不印任何金额）。
 
 ### 退款
 
@@ -1966,3 +1966,74 @@ tableware?: { mode: 'NONE' | 'BY_MEAL' | 'COUNT', count?: number }
 ### 影响的既有接口
 
 `POST /api/orders`（校验、旧前缀兼容、计价接线不涉及）、`GET /api/orders`、`GET /api/orders/:id`、`GET /api/admin/orders`、`GET /api/admin/orders/:id`、`GET /api/admin/workbench/snapshot`、`GET /api/orders/tableware-last`（新增）、小票渲染（`services/ticket/content.ts`）。
+
+## 附录 K：全店自动满减（2026-09-17）
+
+设计依据 `docs/superpowers/specs/2026-09-17-store-promotion-design.md`。后台可配「全店自动满减」（多档、按渠道勾选、可设起止时间），顾客不用领券、达标自动减。唯一实现见 `services/promotion.ts`（纯函数）与 `services/local-settings.ts`（设置块）。**本批不改小程序**：活动条 / 进度提示 / 结算页金额行留给下一批，本批只保证服务端算对、后台配得了、四个只读契约字段先就位。
+
+`channels` 的键**直接用 `DeliveryType`**（`LOCAL`/`PICKUP`/`EXPRESS`），不是设计稿草案里的 `LOCAL_DELIVERY`——两套值域本来就一一对应，00 规划定稿后由店主裁定去掉这层映射（避免多一处将来对不上的地方）。
+
+### 公式
+
+```
+promoDiscount  = min(promoDiscountOf(settings, subtotal, channel, now), subtotal − pickupDiscount)
+couponDiscount = 券 ? min(券面额, subtotal − pickupDiscount − promoDiscount) : 0
+actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscount + shippingFee + packingFee
+```
+
+计价顺序：小计 → 自取优惠 → **满减** → 优惠券 → 运费 → 打包费 → 实付。满减插在自取优惠之后、
+优惠券之前；`promoDiscountOf` 本身保证 `cutFen < minFen ≤ subtotal`，但「自取立减 + 满减」仍可能
+把两者之和推过小计，所以额外封顶到 `subtotal − pickupDiscount`——满减让位给自取折扣（自取折扣先
+算，是「渠道属性」）。起送门槛、阶梯免运、券门槛判定**一律按减前的商品小计**（`totalAmount`），
+不受满减影响，与既有的打包费/自取折扣口径一致。
+
+### 设置块：`promotion`（`GET/PUT /api/admin/settings/local-delivery`、`GET /api/local/meta`）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `enabled` | boolean | 总开关，默认 `false`（存量生产库没有这个块，部署后活动关着，店主自己开）。 |
+| `name` | string | 活动名称，1–20 字，默认「全店满减」；空串回默认。 |
+| `startAt` / `endAt` | string(ISO 8601) \| null | 起止时间，`null` = 立即生效 / 长期有效。格式必须是带 `T` 分隔符的 ISO 8601（如 `2026-09-18T00:00:00+08:00`）——`2026/10/08` 这类斜杠日期会被 `Date.parse` 当本地时区悄悄解析成一个「看似正确」的时刻，因此格式闸门不能只查 `Date.parse` 是否有限，`validateRawLocalSettings` 与 sanitize 都用同一条更严格的正则。 |
+| `channels` | `{ LOCAL, PICKUP, EXPRESS: boolean }` | 三个渠道各自的开关，默认 `{ LOCAL: true, PICKUP: false, EXPRESS: true }`（自取默认不勾，避免叠加自取折扣亏本）。 |
+| `tiers` | `{ minFen, cutFen }[]` | 按 `minFen` 升序、去重（同门槛只留 `cutFen` 更大的那条）、≤ 10 档，默认 `[]`。 |
+
+校验（`validateLocalSettings`，保存时）：任一档 `cutFen >= minFen` → 「满 ¥X 减 ¥Y：减的比门槛还多，这样配会亏本」；`startAt && endAt && startAt >= endAt` → 「活动结束时间须晚于开始时间」；`enabled && tiers.length === 0` → 「启用满减至少要配一档」。
+
+后台整包保存（`PUT /api/admin/settings/local-delivery`）里请求体不带 `promotion` 键时，从当前设置原样带回再 sanitize——与 `packing` 同一处理：不这样做的话，任何一个不认识这个块的整包保存页面（同城配送设置、到店自取设置……）一保存就会把活动静默关掉。
+
+### 满减规则（`services/promotion.ts`）
+
+- `promoDiscountOf(settings, subtotalFen, channel, now)`：活动未 active（未启用 / 不在起止时间内）或该渠道未勾选 → `0`；否则在所有 `subtotalFen >= minFen` 的档里取 **`cutFen` 最大**的一档（不是最后一档，不叠加多档）；没有达标档 → `0`。
+- `promoPreviewOf(settings, subtotalFen, channel, now)` → `{ active, discountFen, nextTierMinFen, nextTierCutFen, nextTierGapFen }`：`discountFen` 同上；「下一档」是按 `minFen` 升序第一条满足 `minFen > subtotal && cutFen > discountFen` 的档（减得不比当前多的档不算「值得再买」）；不 active 时 `discountFen=0`、三个 `null`。
+- 四个函数（含 `isPromoActive`、`publicPromotionView`）都是纯函数：不 import prisma、不抛 AppError，`now` 必传。
+
+### 只读接口（下一批小程序接的契约，改名即破坏契约）
+
+| 接口 | 新增字段 | 说明 |
+|---|---|---|
+| `GET /api/local/meta` | `promotion: { active, name, startAt, endAt, channels, tiers }` | 不 active 也照常给结构（`active:false`），字段形状稳定。 |
+| `POST /api/local/quote` | `promoDiscountFen`、`nextTierGapFen` | 按 `LOCAL` 渠道、请求体 `subtotal` 算。 |
+| `POST /api/express/quote` | `promoDiscountFen`、`nextTierGapFen` | 按 `EXPRESS` 渠道、清单小计算。 |
+| `GET /api/local/promo-preview?deliveryType=LOCAL\|PICKUP\|EXPRESS&subtotal=N`（新增） | `promoPreviewOf(...)` 原样 | 公开、不登录、无限流。自取没有报价接口、购物车阶段没有地址报不了 `LOCAL` 的价，这是它们唯一能拿到「本单减多少 / 还差多少」的地方。`subtotal` 是顾客传的展示用值，真正下单时服务端按 `totalAmount` 重算。 |
+
+### 订单对象字段
+
+| 字段 | 位置 | 说明 |
+|---|---|---|
+| `promoDiscountAmount: number` | 下单响应、顾客订单列表/详情、后台订单列表/详情 | 本单实际减掉的满减金额（分），下单时快照。非参加单（未启用/未达标/渠道未勾）恒为 `0`。 |
+
+### 小票
+
+配送/取餐联金额顺序：`合计 → 打包费 → 自取优惠 → 满减 → 优惠券 → 运费（外送）→ 实付`。`promoDiscountAmount > 0` 才打「满减：−¥X.XX」，紧跟在「自取优惠」之后、「优惠券」之前；`=0` 不印；厨房联不印（不印任何金额）。
+
+### 退款
+
+`services/refund.ts` 不改计算：退款一律按**实付金额**为上限，满减不返还、部分退款不重算满减（与打包费、自取优惠同一口径）。
+
+### 错误码
+
+无新增，复用 `40001`（zod 校验失败 / `validateLocalSettings` 业务校验失败）与 `42251`（实付被抵到 0，与既有「券/自取优惠抵完」共用同一码）。
+
+### 影响的既有接口
+
+`POST /api/orders`（计价接线：自取优惠之后、券之前插入满减，券封顶随之改为「小计 − 自取优惠 − 满减」）、`GET /api/orders`、`GET /api/orders/:id`、`GET /api/admin/orders`、`GET /api/admin/orders/:id`、`GET /api/local/meta`、`POST /api/local/quote`、`POST /api/express/quote`、`GET /api/local/promo-preview`（新增）、`GET/PUT /api/admin/settings/local-delivery`、小票渲染（`services/ticket/content.ts`）。`services/member/pricing.ts` 的 `computeCheckout` 新增可选入参 `promoDiscount`（默认 0，不传与传 0 逐字节一致）。
