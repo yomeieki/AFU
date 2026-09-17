@@ -258,6 +258,38 @@ test('enterLocalChannel：跳转失败给的是跳转的错，不是「需要同
   assert.ok(!calls.some((c) => c.includes('位置许可')), '不能误报成许可问题')
 })
 
+// ── 2026-09-17：同城之门拆成 gateLocalChannel()，enterLocalChannel(url) 可指定目标 tab ──
+// 封面底部四栏要进的是「分类 / 购物车」而不只是主页，分类页渠道标识切到同城后
+// 还要留在本页重载——都要走这同一道门，但门后去向各不相同。
+
+test('enterLocalChannel(url)：带目标 tab 时顺序不可换，最终 switchTab 到指定 url', async function () {
+  const { app, calls } = loadApp()
+  app.globalData.shoppingChannel = 'EXPRESS'
+  await app.enterLocalChannel('/pages/cart/index')
+  assert.deepEqual(calls, [
+    'privacy', 'storage:shoppingChannel=LOCAL', 'updateCart:LOCAL', 'switchTab:/pages/cart/index',
+  ])
+})
+
+test('gateLocalChannel()：只过门不跳转，通过后 resolve true', async function () {
+  const { app, calls } = loadApp()
+  app.globalData.shoppingChannel = 'EXPRESS'
+  const ok = await app.gateLocalChannel()
+  assert.equal(ok, true)
+  assert.deepEqual(calls, ['privacy', 'storage:shoppingChannel=LOCAL', 'updateCart:LOCAL'])
+  assert.ok(!calls.some((c) => c.indexOf('switchTab:') === 0), '只过门，不应跳转：' + calls.join(','))
+})
+
+test('gateLocalChannel()：拒绝许可时 resolve false（不是 reject），不切渠道', async function () {
+  const { app, calls } = loadApp({ privacyDenied: true })
+  app.globalData.shoppingChannel = 'EXPRESS'
+  const ok = await app.gateLocalChannel()
+  assert.equal(ok, false)
+  assert.ok(calls.includes('toast:需要同意位置许可才能使用同城配送'), calls.join(','))
+  assert.ok(!calls.includes('storage:shoppingChannel=LOCAL'), '拒绝许可不能切渠道：' + calls.join(','))
+  assert.equal(app.globalData.shoppingChannel, 'EXPRESS')
+})
+
 test('setShoppingChannel：清掉待决分类意图（否则切回邮寄会去选一个同城分类）', function () {
   const { app } = loadApp()
   app.globalData.pendingCategoryId = 99

@@ -138,33 +138,41 @@ App({
     return channel
   },
 
-  // 六个同城入口的唯一出口（封面 / 购物车跨渠道提示 / 商品详情 / 会员商城 / 「我的」/ 旧路由）。
-  // 顺序不可换：**先过位置许可，再定渠道，最后才跳**。
-  //   先跳后定渠道 → 主页 onShow 已按旧渠道拉过一轮，顾客会看到上个渠道的商品闪一下；
-  //   不问许可就进 → 顾客一路选完菜、到地图选点才被拦，前面全白填。
-  // 用两参数 then 而不是 .catch：否则 switchTab 的失败也会掉进「拒绝许可」那条分支，
-  // 顾客看到一句莫名其妙的「需要同意位置许可」。
-  // 拒绝许可不再挡在门外：自取不需要定位，仍放行进同城，子模式落到自取；
-  // 外送在结算页选地址时会再问一次许可。
-  enterLocalChannel() {
+  // 同城之门：位置许可 → 定渠道 LOCAL。只做这两步、不跳转，返回是否放行。
+  // 拆出来的原因（2026-09-17）：封面底部四栏要进的是「分类 / 购物车」而不只是主页，
+  // 分类页的渠道标识切到同城后要**留在本页重载**而不是跳主页——都要这道门，但门后去向各不相同。
+  // 用两参数 then 而不是 .catch：调用方的后续失败不能掉进「拒绝许可」这条分支。
+  gateLocalChannel() {
     var self = this
     return this.ensurePrivacyAuthorize().then(
       function() {
         self.setShoppingChannel('LOCAL')
-        wx.switchTab({
-          url: '/pages/index/index',
-          fail: function(err) {
-            console.error('[channel] 进入同城失败', err)
-            wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
-          },
-        })
+        return true
       },
       function() {
         // PO 2026-09-11 定：进同城（含自取）一律要先同意位置许可，不同意就不放行——
         // 同城入口只有一个门，门口只问一次，比「自取免定位、外送到结算页再问」少一种状态
         wx.showToast({ title: '需要同意位置许可才能使用同城配送', icon: 'none' })
+        return false
       }
     )
+  },
+
+  // 六个同城入口 + 封面四栏的统一出口（封面 / 购物车跨渠道提示 / 商品详情 / 会员商城 / 「我的」/ 旧路由）：
+  // 过门 → switchTab 到目标 tab（缺省主页）。顺序不可换的理由见 gateLocalChannel；
+  // 跳转失败给的是跳转的错，不是「需要同意位置许可」。
+  enterLocalChannel(url) {
+    var target = url || '/pages/index/index'
+    return this.gateLocalChannel().then(function(ok) {
+      if (!ok) return
+      wx.switchTab({
+        url: target,
+        fail: function(err) {
+          console.error('[channel] 进入同城失败', err)
+          wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
+        },
+      })
+    })
   },
 
   // 刷新购物车数量并更新 tabBar 角标（登录成功、加购、购物车变更、下单/切渠道后调用）
