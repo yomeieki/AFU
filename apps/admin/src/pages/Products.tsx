@@ -51,10 +51,14 @@ export default function Products() {
   const [filterCategoryId, setFilterCategoryId] = useState('')
   const [filterKeyword, setFilterKeyword] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
-  // 分类内排序区：只在「选定了某个分类、关键词为空、状态为全部」时启用——
+  // 已生效的筛选（点「搜索」/ 首次加载 / 切渠道时才更新）——排序控件只看这份，不看上面三个
+  // 输入态，否则切了分类但还没点搜索时控件就会拿旧列表数据误判（常见路径：误报「超过 200
+  // 道，暂不支持拖拽」；个别情况下还能真拖出跨分类 ids 被服务端 40001 挡回）。
+  const [applied, setApplied] = useState({ categoryId: '', keyword: '', status: '' })
+  // 分类内排序区：只在「已生效的筛选选定了某个分类、关键词为空、状态为全部」时启用——
   // 保存接口要求 ids 是该分类的全集，列表不是全集时拖拽保存必被服务端判为非法（2026-09-17 分类内排序设计 §5）。
-  const sortCategory = filterCategoryId ? channelCategories.find((c) => String(c.id) === filterCategoryId) : undefined
-  const sortActive = !!sortCategory && !filterKeyword && !filterStatus
+  const sortCategory = applied.categoryId ? channelCategories.find((c) => String(c.id) === applied.categoryId) : undefined
+  const sortActive = !!sortCategory && !applied.keyword && !applied.status
   const sortModeSales = sortActive && sortCategory!.productSortMode === 'SALES_30D'
   const [sortModeSaving, setSortModeSaving] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -87,14 +91,20 @@ export default function Products() {
   // 排序区一页取完该分类全集（拖拽保存要求 ids 是全集）；其余情形维持原分页（20/页）。
   const effectivePageSize = sortActive ? 200 : pageSize
   const load = (p = page) => {
+    // 本次请求实际用的筛选，同时落成「已生效的筛选」——排序控件之后只认这份，不认输入态。
+    const next = { categoryId: filterCategoryId, keyword: filterKeyword, status: filterStatus }
+    setApplied(next)
+    const nextSortCategory = next.categoryId ? channelCategories.find((c) => String(c.id) === next.categoryId) : undefined
+    const nextSortActive = !!nextSortCategory && !next.keyword && !next.status
+    const nextPageSize = nextSortActive ? 200 : pageSize
     setLoading(true)
     setLoadFailed(false)
     getProducts({
-      page: sortActive ? 1 : p,
-      pageSize: effectivePageSize,
-      categoryId: filterCategoryId ? Number(filterCategoryId) : undefined,
-      keyword: filterKeyword || undefined,
-      status: filterStatus || undefined,
+      page: p,
+      pageSize: nextPageSize,
+      categoryId: next.categoryId ? Number(next.categoryId) : undefined,
+      keyword: next.keyword || undefined,
+      status: next.status || undefined,
       channel,
     })
       .then((res) => {
@@ -156,13 +166,17 @@ export default function Products() {
   }
 
   const manualDragActive = sortActive && !sortModeSales && !sortOverLimit
+  // 后台列表经 sortProducts 排过，推荐菜必然连续排在最前——数开头连续 isRecommended 的行数
+  // 即置顶区长度。置顶行恒在最前、不参与拖拽；非置顶行最多也只能拖到置顶区之后。
+  let pinnedCount = 0
+  while (pinnedCount < list.length && list[pinnedCount].isRecommended === 1) pinnedCount++
   const dragIndexRef = useRef<number | null>(null)
   const handleRowDragStart = (index: number) => { dragIndexRef.current = index }
   const handleRowDrop = (index: number) => {
     const from = dragIndexRef.current
     dragIndexRef.current = null
     if (from == null) return
-    applyOrder(moveItem(list, from, index))
+    applyOrder(moveItem(list, from, Math.max(index, pinnedCount)))
   }
 
   const openCreate = () => {
@@ -595,7 +609,7 @@ export default function Products() {
                         <>
                           <button
                             onClick={() => applyOrder(moveAdjacent(list, idx, -1))}
-                            disabled={!manualDragActive || idx === 0}
+                            disabled={!manualDragActive || idx <= pinnedCount}
                             title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '上移'}
                             className="text-gray-500 disabled:opacity-30"
                           >
@@ -603,7 +617,7 @@ export default function Products() {
                           </button>
                           <button
                             onClick={() => applyOrder(moveAdjacent(list, idx, 1))}
-                            disabled={!manualDragActive || idx === list.length - 1}
+                            disabled={!manualDragActive || idx < pinnedCount || idx === list.length - 1}
                             title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '下移'}
                             className="text-gray-500 disabled:opacity-30"
                           >
@@ -622,18 +636,27 @@ export default function Products() {
             <tr
               key={p.id}
               className="hover:bg-gray-50"
-              draggable={manualDragActive}
-              onDragStart={manualDragActive ? () => handleRowDragStart(idx) : undefined}
+              draggable={manualDragActive && idx >= pinnedCount}
+              onDragStart={manualDragActive && idx >= pinnedCount ? () => handleRowDragStart(idx) : undefined}
               onDragOver={manualDragActive ? (e) => e.preventDefault() : undefined}
               onDrop={manualDragActive ? () => handleRowDrop(idx) : undefined}
             >
               {sortActive && (
                 <td className="px-2 py-3 text-center">
-                  <span title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '拖拽调整顺序'}>
-                    <GripVertical
-                      className={`w-4 h-4 inline-block ${manualDragActive ? 'text-gray-400 cursor-grab' : 'text-gray-200'}`}
-                    />
-                  </span>
+                  {idx < pinnedCount ? (
+                    <span
+                      title="勾了推荐的菜固定在整个列表最前，不参与拖拽"
+                      className="inline-block px-1.5 py-0.5 rounded text-xs bg-amber-50 text-amber-600 whitespace-nowrap"
+                    >
+                      推荐·置顶
+                    </span>
+                  ) : (
+                    <span title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '拖拽调整顺序'}>
+                      <GripVertical
+                        className={`w-4 h-4 inline-block ${manualDragActive ? 'text-gray-400 cursor-grab' : 'text-gray-200'}`}
+                      />
+                    </span>
+                  )}
                 </td>
               )}
               <td className="px-4 py-3 text-gray-800">
@@ -696,7 +719,7 @@ export default function Products() {
                   <>
                     <button
                       onClick={() => applyOrder(moveAdjacent(list, idx, -1))}
-                      disabled={!manualDragActive || idx === 0}
+                      disabled={!manualDragActive || idx <= pinnedCount}
                       title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '上移'}
                       className="text-gray-500 hover:text-gray-700 disabled:opacity-30"
                     >
@@ -704,7 +727,7 @@ export default function Products() {
                     </button>
                     <button
                       onClick={() => applyOrder(moveAdjacent(list, idx, 1))}
-                      disabled={!manualDragActive || idx === list.length - 1}
+                      disabled={!manualDragActive || idx < pinnedCount || idx === list.length - 1}
                       title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '下移'}
                       className="text-gray-500 hover:text-gray-700 disabled:opacity-30"
                     >
@@ -730,7 +753,7 @@ export default function Products() {
         </Table>
         )}
         {!loading && !loadFailed && (
-          <Pagination page={sortActive ? 1 : page} total={total} pageSize={effectivePageSize} onChange={setPage} />
+          <Pagination page={page} total={total} pageSize={effectivePageSize} onChange={setPage} />
         )}
       </div>
 
