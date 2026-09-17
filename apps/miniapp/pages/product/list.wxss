@@ -7,12 +7,15 @@
   overflow: hidden;
 }
 
-/* Search bar */
+/* Search bar：搜索框 + 右端渠道标识（2026-09-17），标识不可收缩，搜索框占满剩余宽度 */
 .search-bar {
   flex-shrink: 0;
   background-color: var(--card);
   padding: 20rpx 24rpx;
   z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
 }
 .search-input-wrap {
   display: flex;
@@ -20,6 +23,8 @@
   background-color: var(--bg);
   border-radius: 999rpx;
   padding: 14rpx 24rpx;
+  flex: 1;
+  min-width: 0;
 }
 .search-icon {
   font-size: 28rpx;
@@ -284,3 +289,12 @@
 @keyframes skeleton-breath { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 /* 吸顶浮动条：尺寸继承 .group-head，两者必须一样高，否则滚到 0 时露出双层段头 */
 .group-float { position: absolute; top: 0; left: 0; right: 0; z-index: 5; border-bottom: 1rpx solid var(--divider); box-sizing: border-box; }
+
+/* 渠道切换弹层：z-index 100 > 购物车条 90；底部留安全区 */
+.channel-mask { position: fixed; z-index: 100; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.45); }
+.channel-sheet { position: absolute; left: 0; right: 0; bottom: 0; padding: 24rpx 24rpx calc(24rpx + env(safe-area-inset-bottom)); background: var(--card); border-radius: 24rpx 24rpx 0 0; box-sizing: border-box; }
+.channel-sheet-title { font-size: 26rpx; color: var(--text-3); padding: 0 8rpx 12rpx; }
+.channel-option { display: flex; align-items: center; justify-content: space-between; padding: 26rpx 16rpx; border-radius: 12rpx; font-size: 30rpx; color: var(--text-1); }
+.channel-option-hover { background: var(--bg); }
+.channel-option.active { color: var(--brand); font-weight: 600; }
+.channel-option-check { color: var(--brand); font-size: 30rpx; }

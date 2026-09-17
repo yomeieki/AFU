@@ -50,9 +50,9 @@
   <!-- 同城：完整门店头（店名 + 状态 + 配送规则行 + 打烊/阻塞通知），与主页一致。
        2026-09-17 起不再用紧凑版：分类页也要能看到配送范围/起送/运费与打烊提示，
        不能逼顾客切回主页才看得到。门店头变高后右侧商品列表相应变矮，属预期。 -->
-  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" />
+  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" channel="{{channel}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" bind:switchchannel="openChannelSheet" />
 
-  <!-- 邮寄：搜索框。同城菜单只有几十件、左侧分类一眼看完，不需要搜索。 -->
+  <!-- 邮寄：搜索框 + 右端渠道标识。同城菜单只有几十件、左侧分类一眼看完，不需要搜索。 -->
   <view wx:else class="search-bar">
     <view class="search-input-wrap">
       <text class="search-icon">🔍</text>
@@ -69,6 +69,7 @@
         <text>搜索</text>
       </view>
     </view>
+    <channel-badge channel="{{channel}}" bind:switch="openChannelSheet" />
   </view>
 
   <!-- Active search chip（搜索模式：点 × 清除并回到分组视图） -->
@@ -153,6 +154,21 @@
   </view>
 
   <local-sku-picker wx:if="{{channel === 'LOCAL'}}" id="local-sku-picker" bind:added="onAdded" />
+</view>
+
+<!-- 渠道切换弹层：两侧标识共用。遮罩 catchtouchmove 防止底下 scroll-view 跟着滚（与 sku-popup 同一套写法）。 -->
+<view wx:if="{{channelSheetOpen}}" class="channel-mask" bindtap="closeChannelSheet" catchtouchmove="noop">
+  <view class="channel-sheet" catchtap="noop">
+    <view class="channel-sheet-title">购物方式</view>
+    <view class="channel-option {{channel === 'LOCAL' ? 'active' : ''}}" hover-class="channel-option-hover" bindtap="onPickChannel" data-channel="LOCAL">
+      <text class="channel-option-name">同城配送</text>
+      <text wx:if="{{channel === 'LOCAL'}}" class="channel-option-check">✓</text>
+    </view>
+    <view class="channel-option {{channel === 'EXPRESS' ? 'active' : ''}}" hover-class="channel-option-hover" bindtap="onPickChannel" data-channel="EXPRESS">
+      <text class="channel-option-name">全国邮寄</text>
+      <text wx:if="{{channel === 'EXPRESS'}}" class="channel-option-check">✓</text>
+    </view>
+  </view>
 </view>
 
 <!-- 同城购物车条。fixed 在原生 tabBar 之上，车空时组件自己不渲染、不占位。 -->

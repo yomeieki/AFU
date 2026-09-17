@@ -41,6 +41,7 @@ Page({
     scrollIntoView: '',    // 'g-<id>'，点左侧时设置
     tailHeight: 0,         // 最后一段之后的补白（px），量出来的
     catalogLoading: false, // 分组视图拉全量中 → 骨架屏
+    channelSheetOpen: false, // 渠道切换弹层（两侧标识共用）
   },
 
   onLoad() {
@@ -417,6 +418,27 @@ Page({
   onGoExpress() {
     app.setShoppingChannel('EXPRESS')
     this.reloadForChannel()
+  },
+
+  // ── 渠道标识与切换弹层（2026-09-17 设计 N1–N3）────────────────────
+  // 两侧标识共用这一个弹层；选中即切渠道并**重载本页**（不跳主页）。
+  // 去同城走 app.gateLocalChannel()（位置许可 → 定渠道），页面不自己问许可；去邮寄与 onGoExpress 同一条路。
+  openChannelSheet() {
+    this.setData({ channelSheetOpen: true })
+  },
+  closeChannelSheet() {
+    this.setData({ channelSheetOpen: false })
+  },
+  noop() {},
+  onPickChannel(e) {
+    var target = e.currentTarget.dataset.channel
+    this.closeChannelSheet()
+    if (target === this.data.channel) return
+    if (target === 'EXPRESS') { this.onGoExpress(); return }
+    var self = this
+    app.gateLocalChannel().then(function (ok) {
+      if (ok) self.reloadForChannel()
+    })
   },
 
   // 子模式变了：阻塞态按新模式重算，购物车条的按钮跟着变（去向与起送线都不一样）
