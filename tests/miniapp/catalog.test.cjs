@@ -7,7 +7,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 
-const { buildCategoriesUrl, buildProductsUrl } = require('../../apps/miniapp/api/catalog')
+const { buildCategoriesUrl, buildProductsUrl, getAllProducts, ALL_PAGE_SIZE, ALL_MAX_PAGES } = require('../../apps/miniapp/api/catalog')
 
 test('分类：渠道永远显式带上', function () {
   assert.equal(buildCategoriesUrl('EXPRESS'), '/categories?channel=EXPRESS')
@@ -55,4 +55,81 @@ test('商品：搜索词与分类互斥——传了 keyword 就不带 categoryId
 
 test('商品：page/pageSize 缺省补 1/20，不发一个没有分页的请求', function () {
   assert.equal(buildProductsUrl({ channel: 'LOCAL' }), '/products?channel=LOCAL&page=1&pageSize=20')
+})
+
+// ── getAllProducts：分组视图一次拉全（2026-09-17 分组锚点设计 §5.2 / C4） ──
+//
+// 桩打在 wx.request 上，按 `page=` 查询参数返回不同页，记录发出的每一个 URL——
+// 断言的是「实际按什么顺序、发了几个请求」，不是拼好的 Promise 结果。
+function makeAllCtx(respond) {
+  const urls = []
+  global.wx = {
+    getStorageSync: function () { return '' },
+    request: function (o) {
+      const u = o.url.replace(/^https?:\/\/[^/]+(\/api)?/, '')
+      urls.push(u)
+      const pageMatch = /page=(\d+)/.exec(o.url)
+      const page = pageMatch ? Number(pageMatch[1]) : 1
+      const body = respond(page)
+      o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: body } })
+    },
+  }
+  return urls
+}
+
+test('getAllProducts：按页循环直到拉全，URL 不含 categoryId 也不含 keyword', async function () {
+  const urls = makeAllCtx(function (page) {
+    if (page === 1) return { list: new Array(50).fill(0).map(function (_, i) { return { id: i + 1 } }), total: 120 }
+    if (page === 2) return { list: new Array(50).fill(0).map(function (_, i) { return { id: i + 51 } }), total: 120 }
+    return { list: new Array(20).fill(0).map(function (_, i) { return { id: i + 101 } }), total: 120 }
+  })
+  const result = await getAllProducts('LOCAL')
+  assert.deepEqual(urls, [
+    '/products?channel=LOCAL&page=1&pageSize=50',
+    '/products?channel=LOCAL&page=2&pageSize=50',
+    '/products?channel=LOCAL&page=3&pageSize=50',
+  ])
+  assert.equal(result.list.length, 120)
+  assert.equal(result.total, 120)
+  assert.equal(result.truncated, false)
+  urls.forEach(function (u) {
+    assert.equal(u.indexOf('categoryId=') === -1, true, u)
+    assert.equal(u.indexOf('keyword=') === -1, true, u)
+  })
+})
+
+test('getAllProducts：total 为 0 时只发一个请求，list 为空', async function () {
+  const urls = makeAllCtx(function () { return { list: [], total: 0 } })
+  const result = await getAllProducts('EXPRESS')
+  assert.equal(urls.length, 1)
+  assert.deepEqual(result.list, [])
+})
+
+test('getAllProducts：20 页上限保护，超量时截断并告警', async function () {
+  const urls = makeAllCtx(function () {
+    return { list: new Array(50).fill(0).map(function () { return { id: 1 } }), total: 99999 }
+  })
+  const warn = console.warn
+  let warnCalls = 0
+  console.warn = function () { warnCalls++ }
+  let result
+  try {
+    result = await getAllProducts('LOCAL')
+  } finally {
+    console.warn = warn
+  }
+  assert.equal(urls.length, ALL_MAX_PAGES)
+  assert.equal(result.truncated, true)
+  assert.equal(result.list.length, ALL_PAGE_SIZE * ALL_MAX_PAGES)
+  assert.equal(warnCalls, 1)
+})
+
+test('getAllProducts：渠道显式带上；脏值回落 EXPRESS', async function () {
+  const urlsExpress = makeAllCtx(function () { return { list: [{ id: 1 }], total: 1 } })
+  await getAllProducts('EXPRESS')
+  urlsExpress.forEach(function (u) { assert.ok(u.indexOf('channel=EXPRESS') !== -1, u) })
+
+  const urlsDirty = makeAllCtx(function () { return { list: [{ id: 1 }], total: 1 } })
+  await getAllProducts('local')
+  urlsDirty.forEach(function (u) { assert.ok(u.indexOf('channel=EXPRESS') !== -1, u) })
 })

@@ -44,10 +44,36 @@ function getProducts(params) {
   return request({ url: buildProductsUrl(params) })
 }
 
+// 分组视图一次拉全本渠道的菜（2026-09-17 分组锚点设计 §5.2 / C4）：按页循环到没有为止，不写死总数。
+// 20 页（1000 条）上限只防接口异常时死循环——正常单渠道一百多道，触顶就是数据出了问题，要告警不要静默。
+var ALL_PAGE_SIZE = 50
+var ALL_MAX_PAGES = 20
+
+function getAllProducts(channel) {
+  var acc = []
+  function step(page) {
+    return getProducts({ channel: channel, page: page, pageSize: ALL_PAGE_SIZE }).then(function(data) {
+      var list = (data && data.list) || []
+      var total = (data && data.total) || 0
+      acc = acc.concat(list)
+      if (!list.length || acc.length >= total) return { list: acc, total: total, truncated: false }
+      if (page >= ALL_MAX_PAGES) {
+        console.warn('[catalog] 商品超过 ' + (ALL_PAGE_SIZE * ALL_MAX_PAGES) + ' 条，已截断')
+        return { list: acc, total: total, truncated: true }
+      }
+      return step(page + 1)
+    })
+  }
+  return step(1)
+}
+
 module.exports = {
   DEFAULT_PAGE_SIZE: DEFAULT_PAGE_SIZE,
+  ALL_PAGE_SIZE: ALL_PAGE_SIZE,
+  ALL_MAX_PAGES: ALL_MAX_PAGES,
   buildCategoriesUrl: buildCategoriesUrl,
   buildProductsUrl: buildProductsUrl,
   getCategories: getCategories,
   getProducts: getProducts,
+  getAllProducts: getAllProducts,
 }
