@@ -90,6 +90,7 @@
 | icon_url | VARCHAR(500) | NULL | 分类图标 URL |
 | sort_order | INT | DEFAULT 0 | 排序权重，升序 |
 | status | TINYINT | DEFAULT 1 | 1=显示, 0=隐藏 |
+| product_sort_mode | VARCHAR(16) | NOT NULL DEFAULT 'MANUAL' | 分类内商品排序方式：MANUAL=手动拖拽，SALES_30D=近 30 天销量降序（2026-09-17 分类内排序设计 §3.1） |
 | created_at | DATETIME | NOT NULL | 创建时间 |
 | updated_at | DATETIME | NOT NULL | 更新时间 |
 
@@ -120,6 +121,7 @@
 | status | VARCHAR(16) | DEFAULT 'ON_SHELF' | ON_SHELF=上架, OFF_SHELF=下架, DELETED=删除 |
 | delivery_type | VARCHAR(64) | DEFAULT 'EXPRESS' | EXPRESS=快递, LOCAL=同城, PICKUP=自提，逗号分隔多选 |
 | is_recommended | TINYINT | DEFAULT 0 | 1=推荐首页 |
+| sort_order | INT | NOT NULL DEFAULT 0 | 分类内手动排序值，同分类从小到大；与 categories.sort_order 无关（2026-09-17 分类内排序设计 §3.1） |
 | qr_scene | VARCHAR(64) | NULL | 小程序码 scene 参数（如 p_10001） |
 | qr_code_url | VARCHAR(500) | NULL | 小程序码图片 URL（存 COS） |
 | qr_generated_at | DATETIME | NULL | 二维码生成时间 |

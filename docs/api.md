@@ -166,7 +166,9 @@
         "unit": "份",
         "salesCount": 128,
         "stock": 50,
-        "status": "ON_SHELF"
+        "status": "ON_SHELF",
+        "categoryId": 1,
+        "sortOrder": 0
       }
     ],
     "total": 30,
@@ -175,6 +177,12 @@
   }
 }
 ```
+
+**排序规则**（2026-09-17 分类内排序设计 §4.1，`services/product-sort.ts` 唯一实现，公开列表与后台列表共用）：
+1. `isRecommended` 降序（推荐商品整个列表最前）；
+2. 分类 `sortOrder` 升序，相同再按 `categoryId` 升序；
+3. 分类内：该分类 `productSortMode=MANUAL` → 按商品 `sortOrder` 升序，相同按 `createdAt` 升序；`SALES_30D` → 按近 30 天销量降序，相同按 `sortOrder`、`createdAt` 升序；
+4. 最后一律按 `id` 升序兜底，保证分页稳定。
 
 ---
 
@@ -628,11 +636,27 @@
 
 #### PUT /api/admin/categories/:id
 
-编辑分类（字段同新增）。
+编辑分类（字段同新增；partial 更新，不带的字段不动）。可带 `productSortMode`，值域 `MANUAL`（手动排序，默认）/ `SALES_30D`（按近 30 天销量降序），非法值 40001。改了排序方式（值真的变化时）会清一次销量聚合缓存，让公开列表立刻按最新排序重排。
 
 #### DELETE /api/admin/categories/:id
 
 删除分类（检查是否有关联商品，有则拒绝或提示）。
+
+#### POST /api/admin/categories/:id/product-order
+
+保存某分类下商品的手动排序（拖拽/上下移一次即调一次）。
+
+**Request Body:**
+```json
+{ "ids": [12, 10, 11] }
+```
+
+`ids` 必须**正好**是该分类下全部未删除商品（顺序即目标顺序）；多、少、重复、混入其它分类的 id 一律 `40001`（文案：`商品列表与该分类当前商品不一致，请刷新后重试`）。成功后按数组下标把每个商品的 `sortOrder` 写成其下标（0-based），并清一次销量聚合缓存。
+
+**Response:**
+```json
+{ "code": 0, "data": { "updated": 3 } }
+```
 
 ---
 
@@ -649,7 +673,9 @@
 | status | ON_SHELF / OFF_SHELF |
 | keyword | 搜索关键词 |
 | page | 页码 |
-| pageSize | 每页数量 |
+| pageSize | 每页数量，默认 20，最大 **200**（选定分类拖拽排序要求一页取完该分类全集，2026-09-17 分类内排序设计 §5） |
+
+`categoryId` 有值时，列表顺序与顾客端 `GET /api/products` 一致（同一套 `sortProducts` 规则，见该接口文档的「排序规则」）；不带 `categoryId` 时顺序仍是 `createdAt desc`。每项都新增 `sortOrder`（分类内手动排序值）与 `sales30d`（近 30 天销量，整数，无销量为 0）。手动排序方式下的拖拽保存见 `POST /api/admin/categories/:id/product-order`。
 
 ---
 
