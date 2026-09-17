@@ -86,8 +86,11 @@ export default function PromotionSettings() {
   const rowErrors: (string | null)[] = rows.map((r, i) => {
     const min = toFen(r.minYuan), cut = toFen(r.cutYuan)
     if (min === null || cut === null) return '金额格式不正确（最多两位小数）'
-    // 服务端 sanitize 用 int(..., 1, 10_000_000) 兜住单档金额，越界的整行会被丢掉且没有任何提示：
+    // 服务端 sanitize 用 int(..., 1, 10_000_000) 兜住单档金额，出界的整行会被丢掉且没有任何提示：
     // 保存看起来成功，回查才发现少一档。这里先拦住，别让店员对着「存了又没存上」的页面猜。
+    // 两端都要盖：下界 1 漏掉的话，「满 ¥100 减 ¥0」会照样放行再被服务端静默丢行
+    // （minFen 那侧由下面的 cut >= min 顺手拦住，真正漏的是 cutFen = 0）。
+    if (min < 1 || cut < 1) return '门槛与减免都要大于 ¥0'
     if (min > TIER_FEN_MAX || cut > TIER_FEN_MAX) return '单档金额不能超过 ¥100,000'
     if (cut >= min) return '减的比门槛还多，这样配会亏本'
     if (rows.some((other, j) => j !== i && toFen(other.minYuan) === min)) return '门槛重复'

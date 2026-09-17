@@ -1993,11 +1993,13 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 |---|---|---|
 | `enabled` | boolean | 总开关，默认 `false`（存量生产库没有这个块，部署后活动关着，店主自己开）。 |
 | `name` | string | 活动名称，1–20 字，默认「全店满减」；空串回默认。 |
-| `startAt` / `endAt` | string(ISO 8601) \| null | 起止时间，`null` = 立即生效 / 长期有效。格式必须是带 `T` 分隔符的 ISO 8601（如 `2026-09-18T00:00:00+08:00`）——`2026/10/08` 这类斜杠日期会被 `Date.parse` 当本地时区悄悄解析成一个「看似正确」的时刻，因此格式闸门不能只查 `Date.parse` 是否有限，`validateRawLocalSettings` 与 sanitize 都用同一条更严格的正则。 |
+| `startAt` / `endAt` | string(ISO 8601) \| null | 起止时间，`null` = 立即生效 / 长期有效。格式必须是带 `T` 分隔符的 ISO 8601（如 `2026-09-18T00:00:00+08:00`）——`2026/10/08` 这类斜杠日期会被 `Date.parse` 当本地时区悄悄解析成一个「看似正确」的时刻，因此格式闸门不能只查 `Date.parse` 是否有限，`validateRawLocalSettings` 与 sanitize 都用同一条更严格的正则。**时区偏移必填**：结尾必须是 `Z` 或 `±HH:mm`，不带一律 40001——`new Date('2026-09-18T00:00')` 按进程 TZ 解析，服务端若不在 +08:00 运行，店主填的时刻会整体平移。 |
 | `channels` | `{ LOCAL, PICKUP, EXPRESS: boolean }` | 三个渠道各自的开关，默认 `{ LOCAL: true, PICKUP: false, EXPRESS: true }`（自取默认不勾，避免叠加自取折扣亏本）。 |
 | `tiers` | `{ minFen, cutFen }[]` | 按 `minFen` 升序、去重（同门槛只留 `cutFen` 更大的那条）、≤ 10 档，默认 `[]`。 |
 
 校验（`validateLocalSettings`，保存时）：任一档 `cutFen >= minFen` → 「满 ¥X 减 ¥Y：减的比门槛还多，这样配会亏本」；`startAt && endAt && startAt >= endAt` → 「活动结束时间须晚于开始时间」；`enabled && tiers.length === 0` → 「启用满减至少要配一档」。
+
+单档金额出界（`minFen`/`cutFen` 不在 1–10_000_000 分）不报错，而是在 sanitize 里被**整行丢弃**——保存返回 0、回查才发现少一档。后台页 `PromotionSettings.tsx` 的行内校验挡住了两端，直接调 API 时请自行注意。
 
 后台整包保存（`PUT /api/admin/settings/local-delivery`）里请求体不带 `promotion` 键时，从当前设置原样带回再 sanitize——与 `packing` 同一处理：不这样做的话，任何一个不认识这个块的整包保存页面（同城配送设置、到店自取设置……）一保存就会把活动静默关掉。
 
