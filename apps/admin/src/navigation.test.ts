@@ -29,7 +29,7 @@ test('defines the approved child tabs for every business center', () => {
   assert.deepEqual(centerTabs.catalog.map((tab) => tab.label), ['商品列表', '分类管理'])
   assert.deepEqual(centerTabs.orders.map((tab) => tab.label), ['同城配送', '全国邮寄'])
   assert.deepEqual(centerTabs.membership.map((tab) => tab.label), ['优惠券', '积分赠品', '会员设置'])
-  assert.deepEqual(centerTabs.settings.map((tab) => tab.label), ['全国邮寄设置', '同城配送设置', '到店自取设置', '营业时间'])
+  assert.deepEqual(centerTabs.settings.map((tab) => tab.label), ['全国邮寄设置', '同城配送设置', '到店自取设置', '营业时间', '满减活动'])
 })
 
 test('lists all nine top-level entries in navigation order', () => {

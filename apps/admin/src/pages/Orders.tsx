@@ -285,6 +285,12 @@ export default function Orders() {
       {order.remark && <p className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1">买家备注：{order.remark}</p>}
       {/* 会员优惠（M2）。放在支付时间之前：店员看这一段是为了核对「顾客到底付了多少、为什么」，
           优惠是这个问题的一部分，时间不是。两个字段服务端只在 >0 时才有意义，为 0 就不占一行 */}
+      {/* 满减在优惠券之前（2026-09-17 全店满减设计：小计 → 满减 → 券，与自取优惠同级）；邮寄渠道也参加满减 */}
+      {(order.promoDiscountAmount ?? 0) > 0 && (
+        <p className="text-xs text-gray-500">
+          满减：<span className="text-red-500">−¥{yuan(order.promoDiscountAmount!)}</span>
+        </p>
+      )}
       {(order.discountAmount ?? 0) > 0 && (
         <p className="text-xs text-gray-500">
           优惠券：<span className="text-red-500">−¥{yuan(order.discountAmount!)}</span>

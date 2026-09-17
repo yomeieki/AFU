@@ -222,6 +222,7 @@ export default function LocalOrders() {
                     </span>
                     <span>实付 ¥{yuan(o.actualAmount)}</span>
                     {!!o.packingFee && <span>打包费 ¥{yuan(o.packingFee)}</span>}
+                    {!!o.promoDiscountAmount && <span>满减 −¥{yuan(o.promoDiscountAmount)}</span>}
                     {o.tablewareMode && <span>{tablewareLabel(o.tablewareMode, o.tablewareCount)}</span>}
                     {o.refundedAmount > 0 && <span>已退 ¥{yuan(o.refundedAmount)}</span>}
                     {o.deliveryType === 'PICKUP' ? (

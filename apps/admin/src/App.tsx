@@ -14,6 +14,7 @@ import SystemStatus from './pages/SystemStatus'
 import ShopSettings from './pages/ShopSettings'
 import LocalSettings from './pages/LocalSettings'
 import PickupSettings from './pages/PickupSettings'
+import PromotionSettings from './pages/PromotionSettings'
 import BusinessHoursSettings from './pages/BusinessHoursSettings'
 import LocalOrders from './pages/LocalOrders'
 import PrinterSettings from './pages/PrinterSettings'
@@ -88,6 +89,7 @@ export default function App() {
             <Route path="local" element={<LocalSettings />} />
             <Route path="pickup" element={<PickupSettings />} />
             <Route path="hours" element={<BusinessHoursSettings />} />
+            <Route path="promotion" element={<PromotionSettings />} />
           </Route>
           <Route path="products" element={<LegacyRedirect />} />
           <Route path="categories" element={<LegacyRedirect />} />

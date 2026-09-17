@@ -202,6 +202,8 @@ export interface Order {
   pickupAt?: string | null
   pickupReadyAt?: string | null
   pickupDiscountAmount?: number
+  /** 满减（分），下单时快照（2026-09-17 全店满减设计）。非参加单为 0 */
+  promoDiscountAmount?: number
   createdAt: string
   items: OrderItem[]
   shipment?: Shipment | null
@@ -354,6 +356,24 @@ export interface PickupSettings {
   unpickedRemindAfterMin: number
 }
 
+/**
+ * 全店自动满减（与服务端 services/local-settings.ts 同构；2026-09-17 设计）。
+ * `channels` 的键直接用 `DeliveryType`（`LOCAL`/`PICKUP`/`EXPRESS`），不是设计稿草案的
+ * `LOCAL_DELIVERY`——00 规划定稿后店主对「冲突 5」的裁定，两套值域本来就一一对应。
+ */
+export interface PromotionTier { minFen: number; cutFen: number }
+export interface PromotionSettings {
+  enabled: boolean
+  name: string
+  /** ISO 8601（带时区）。null = 立即生效 */
+  startAt: string | null
+  /** ISO 8601（带时区）。null = 长期有效 */
+  endAt: string | null
+  channels: { LOCAL: boolean; PICKUP: boolean; EXPRESS: boolean }
+  /** 按 minFen 升序、去重、≤ 10 档 */
+  tiers: PromotionTier[]
+}
+
 /** 同城配送设置（与服务端 services/local-settings.ts 同构；金额分、坐标微度） */
 export interface LocalDeliverySettings {
   version: number
@@ -382,6 +402,8 @@ export interface LocalDeliverySettings {
   businessHours: { start: string; end: string }[]
   /** 打包费：整店默认每份多少钱，商品可各自覆盖（见 Product.packingFeeFen） */
   packing: { enabled: boolean; perItemFen: number }
+  /** 全店自动满减（2026-09-17 设计） */
+  promotion: PromotionSettings
   /** 平时备餐时长（分）。**从店员点接单开始算**，不含顾客下单到接单那一段 */
   prepMinutes: number
   /** 高峰时段：备餐排队。prepMin/prepMax 是范围——结算页如实给顾客看区间，算预计送达取上界 */

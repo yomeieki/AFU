@@ -60,6 +60,7 @@ export const centerTabs: Record<
     { to: '/settings/local', label: '同城配送设置' },
     { to: '/settings/pickup', label: '到店自取设置' },
     { to: '/settings/hours', label: '营业时间' },
+    { to: '/settings/promotion', label: '满减活动' },
   ],
   promotion: [
     { to: '/promotion/banners', label: '轮播图' },

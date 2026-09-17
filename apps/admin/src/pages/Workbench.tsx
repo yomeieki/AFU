@@ -2192,9 +2192,10 @@ export default function Workbench() {
               <div className="wb__line"><span>商品小计</span><span className="wb__amt">¥{yuan(o?.totalAmount ?? 0)}</span></div>
               {!!o?.packingFee && <div className="wb__line"><span>打包费</span><span className="wb__amt">¥{yuan(o.packingFee)}</span></div>}
               {/* 券在「小计」与「运费」之间——顺序与顾客在结算页看到的一致（小计→券→运费→实付），
-                  也与小票上那三行一致。店员三处对账时能逐行对上，不用换算。自取优惠在券之前——
-                  与小程序结算页一致（小计 → 自取优惠 → 券） */}
+                  也与小票上那三行一致。店员三处对账时能逐行对上，不用换算。自取优惠、满减都在券之前——
+                  与小程序结算页一致（小计 → 自取优惠 → 满减 → 券，2026-09-17 全店满减设计） */}
               {!!o?.pickupDiscountAmount && <div className="wb__line"><span>自取优惠</span><span className="wb__amt">-¥{yuan(o.pickupDiscountAmount)}</span></div>}
+              {!!o?.promoDiscountAmount && <div className="wb__line"><span>满减</span><span className="wb__amt">-¥{yuan(o.promoDiscountAmount)}</span></div>}
               {!!o?.discountAmount && <div className="wb__line"><span>优惠券</span><span className="wb__amt">-¥{yuan(o.discountAmount)}</span></div>}
               <div className="wb__line"><span>配送费/运费</span><span className="wb__amt">¥{yuan(o?.shippingFee ?? 0)}</span></div>
               <div className="wb__line"><span>顾客实付</span><span className="wb__amt">¥{yuan(o?.actualAmount ?? card.amountFen)}</span></div>
