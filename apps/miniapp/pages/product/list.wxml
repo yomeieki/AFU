@@ -47,9 +47,10 @@
 
 <view class="page {{channel === 'LOCAL' ? 'page-local' : ''}}">
 
-  <!-- 同城：紧凑门店头（只留店名 + 营业状态）。配送规则与阻塞通知在主页给过，
-       这一页寸土寸金，右侧商品列表要尽量高。 -->
-  <local-store-header wx:if="{{channel === 'LOCAL'}}" compact="{{true}}" meta="{{meta}}" mode="{{mode}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" />
+  <!-- 同城：完整门店头（店名 + 状态 + 配送规则行 + 打烊/阻塞通知），与主页一致。
+       2026-09-17 起不再用紧凑版：分类页也要能看到配送范围/起送/运费与打烊提示，
+       不能逼顾客切回主页才看得到。门店头变高后右侧商品列表相应变矮，属预期。 -->
+  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" />
 
   <!-- 邮寄：搜索框。同城菜单只有几十件、左侧分类一眼看完，不需要搜索。 -->
   <view wx:else class="search-bar">
