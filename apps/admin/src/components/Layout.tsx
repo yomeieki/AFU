@@ -17,19 +17,19 @@ import VersionBanner from './VersionBanner'
  * 工作台与订单管理必须是两个不同图标：上一版顶栏两者都用 ClipboardList，
  * 窄屏九宫格里只靠图标扫一眼时根本认不出是哪个。
  */
-// 键是各入口的 `to`（navigation.ts 里的默认子页地址）。改了那边的默认子页，
-// 这里必须跟着改——查不到就是 undefined，`<Icon />` 直接抛「type is invalid」白屏。
+// 键用各入口的 `prefix`（/promotion、/settings…），**不要用 `to`**。
+// `to` 是默认子页地址，换个默认子页就会变；这张表以前按 `to` 索引，2026-09-17 把推广运营
+// 默认子页从轮播图改成优惠券时漏改过一次，查不到就是 undefined，`<Icon />` 直接白屏。
+// `prefix` 是一个中心的身份，只有整个中心改名换路才会变，那种改动不可能漏掉这里。
 const navIcons: Record<string, LucideIcon> = {
   '/workbench': LayoutGrid,
   '/dashboard': LayoutDashboard,
-  '/catalog/products': Package,
-  '/orders/local': ClipboardList,
-  // 2026-09-17：会员营销并入推广运营，入口默认子页成了优惠券；沿用喇叭图标（推广），
-  // 原来那张券图标随「会员营销」一起退役。
-  '/promotion/coupons': Megaphone,
-  '/settings/express': Store,
+  '/catalog': Package,
+  '/orders': ClipboardList,
+  '/promotion': Megaphone,
+  '/settings': Store,
   '/users': Users,
-  '/system/printer': Wrench,
+  '/system': Wrench,
 }
 
 export default function Layout() {
@@ -44,15 +44,17 @@ export default function Layout() {
    * 徽标拆开（规格 §4.2）：改造前两处挂的是同一个总数，店员看到两个一样的数字
    * 不知道该点哪个。工作台管同城待接单，订单管理管邮寄待处理与售后。
    */
+  // 同 navIcons：按 `prefix` 索引而不是 `to`。按 `to` 索引时，谁把订单管理的默认子页
+  // 从同城改成邮寄，这里的徽标就会**静默消失**——比图标错还难发现。
   const navBadge: Record<string, number> = {
     '/workbench': localPendingCount,
-    '/orders/local': pendingCount + afterSaleCount,
+    '/orders': pendingCount + afterSaleCount,
   }
   const badgeTitle: Record<string, string> = {
     '/workbench': `同城待接单 ${localPendingCount}`,
-    '/orders/local': `待处理 ${pendingCount} · 售后 ${afterSaleCount}`,
+    '/orders': `待处理 ${pendingCount} · 售后 ${afterSaleCount}`,
   }
-  const badgeOf = (to: string) => navBadge[to] ?? 0
+  const badgeOf = (prefix: string) => navBadge[prefix] ?? 0
 
   // 面板展开时锁背景滚动：不锁的话手指在面板上滑会滚到下面的列表，收起后位置已经跑了
   useEffect(() => {
@@ -117,9 +119,9 @@ export default function Layout() {
             <nav(1240px) 去掉图标与「退出登录」文字，保证不换行也不横滚 */}
         <nav aria-label="主导航" className="hidden min-w-0 flex-1 items-center gap-0.5 navrow:flex">
           {mainNavigation.map((item) => {
-            const Icon = navIcons[item.to] ?? Megaphone // 兜底：改了默认子页忘了改这张表时降级成图标不对，而不是白屏
+            const Icon = navIcons[item.prefix]
             const active = location.pathname.startsWith(item.prefix)
-            const count = badgeOf(item.to)
+            const count = badgeOf(item.prefix)
             return (
               <NavLink
                 key={item.to}
@@ -135,7 +137,7 @@ export default function Layout() {
                 {item.label}
                 {count > 0 && (
                   <span
-                    title={badgeTitle[item.to]}
+                    title={badgeTitle[item.prefix]}
                     className="ml-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] leading-none text-white"
                   >
                     {count > 99 ? '99+' : count}
@@ -173,16 +175,16 @@ export default function Layout() {
           >
             <LayoutGrid className="h-4 w-4 shrink-0" strokeWidth={1.9} />
             {workbenchNav.label}
-            {badgeOf(workbenchNav.to) > 0 && (
+            {badgeOf(workbenchNav.prefix) > 0 && (
               <span
-                title={badgeTitle[workbenchNav.to]}
+                title={badgeTitle[workbenchNav.prefix]}
                 className={`ml-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] leading-none ${
                   location.pathname.startsWith(workbenchNav.prefix)
                     ? 'bg-white text-brand-600'
                     : 'bg-red-500 text-white'
                 }`}
               >
-                {badgeOf(workbenchNav.to) > 99 ? '99+' : badgeOf(workbenchNav.to)}
+                {badgeOf(workbenchNav.prefix) > 99 ? '99+' : badgeOf(workbenchNav.prefix)}
               </span>
             )}
           </NavLink>
@@ -228,9 +230,9 @@ export default function Layout() {
             375px 下每格 82×72，最窄的 360dp 安卓也有 78px，「接单工作台」五个字不折行（实测）。 */}
         <div className="grid grid-cols-4 gap-2">
           {topNavigation.map((item) => {
-            const Icon = navIcons[item.to] ?? Megaphone // 兜底：改了默认子页忘了改这张表时降级成图标不对，而不是白屏
+            const Icon = navIcons[item.prefix]
             const active = location.pathname.startsWith(item.prefix)
-            const count = badgeOf(item.to)
+            const count = badgeOf(item.prefix)
             return (
               <NavLink
                 key={item.to}

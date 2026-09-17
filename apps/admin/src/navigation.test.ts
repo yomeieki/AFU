@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { activeNavLabel, centerTabs, isChannel, legacyTarget, mainNavigation, readChannel, topNavigation, workbenchNav } from './navigation.ts'
 
@@ -33,19 +34,42 @@ test('defines the approved child tabs for every business center', () => {
   assert.deepEqual(centerTabs.promotion.map((tab) => tab.label), ['优惠券', '满减', '积分赠品', '轮播图', '会员设置'])
 })
 
-// 一级入口的 `to` 同时被 Layout 的 navIcons 当键用（查不到会白屏），也必须是该中心的
-// 落地页。2026-09-17 把推广运营默认子页从 /promotion/banners 改成 /promotion/coupons 时
-// 就漏改过 navIcons —— 这条断言锁住「入口地址 = 该中心第一个页签」，让两边不会再各走各的。
+// 入口地址必须是该中心的落地页，否则点进去会停在一个没有页签高亮的状态。
 test('every center entry points at its own first tab', () => {
   const centerOf: Record<string, keyof typeof centerTabs> = {
     '/catalog': 'catalog', '/orders': 'orders', '/promotion': 'promotion',
     '/settings': 'settings', '/system': 'system',
   }
+  // centerOf 是手写的，漏登记一个中心会让下面的循环静默跳过它。先钉住这张表本身：
+  // 有页签行的中心 = mainNavigation 里 to !== prefix 的那些（单页入口两者相同）。
+  assert.deepEqual(
+    Object.keys(centerOf).sort(),
+    mainNavigation.filter((i) => i.to !== i.prefix).map((i) => i.prefix).sort(),
+    'centerOf 漏登记了某个有页签的中心'
+  )
   for (const item of mainNavigation) {
     const key = centerOf[item.prefix]
     if (!key) continue // 经营概览、用户管理是单页，没有页签行
     assert.equal(item.to, centerTabs[key][0].to, `${item.label} 的入口地址应等于它第一个页签`)
   }
+})
+
+// Layout.tsx 是 tsx，node --test 跑不了，只能源码级比对。这两条挡的是真实踩过的坑：
+// navIcons 漏一个键 → `<Icon />` 收到 undefined → 整页白屏；navBadge 漏一个 → 徽标静默消失。
+// 两张表现在都按 prefix 索引（prefix 是中心身份，不随默认子页变），这里确认覆盖完整。
+test('Layout 的图标表覆盖每一个一级入口', () => {
+  const src = readFileSync(new URL('./components/Layout.tsx', import.meta.url), 'utf8')
+  const block = /const navIcons: Record<string, LucideIcon> = \{([\s\S]*?)\n\}/.exec(src)
+  assert.ok(block, '找不到 navIcons 定义')
+  const keys = [...block[1].matchAll(/'([^']+)':/g)].map((m) => m[1])
+  assert.deepEqual(keys.sort(), topNavigation.map((i) => i.prefix).sort(), 'navIcons 的键必须与一级入口的 prefix 一一对应')
+})
+
+// 扫码统计：店主 2026-09-17 决定收起入口、保留页面，以后再放回来。
+// 页签已经没有了，谁顺手把路由也删掉，光看测试是发现不了的——这条就是那个决定的锁。
+test('扫码统计的路由仍在（入口收起，地址仍可访问）', () => {
+  const src = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  assert.match(src, /<Route path="scan-stats" element=\{<ScanStats \/>\} \/>/, '扫码统计路由被删了：店主只要求收起入口，不是删功能')
 })
 
 test('lists all eight top-level entries in navigation order', () => {

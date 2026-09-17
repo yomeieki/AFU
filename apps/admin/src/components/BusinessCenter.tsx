@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useUnsavedSettings } from './UnsavedSettings'
 import type { CenterTab } from '../navigation'
 
 const CenterActionSlot = createContext<HTMLElement | null>(null)
@@ -22,14 +23,27 @@ interface BusinessCenterProps {
   title: string
   description: string
   tabs: CenterTab[]
-  /** 传了就接管页签跳转（店铺设置用它拦未保存的修改） */
-  onTabClick?: (to: string) => void
 }
 
-export default function BusinessCenter({ title, description, tabs, onTabClick }: BusinessCenterProps) {
+export default function BusinessCenter({ title, description, tabs }: BusinessCenterProps) {
   // ref 回调 + state 而非 useRef：portal 的目标必须是已挂载的真实节点，
   // useRef 在首次渲染时还是 null 且不会触发重渲染，按钮就永远不出现。
   const [actionSlot, setActionSlot] = useState<HTMLElement | null>(null)
+
+  // 未保存拦截内置在这里，而不是由各个中心自己传 onTabClick：
+  // dirty 是 UnsavedSettingsProvider 里的全局单例（Provider 挂在 App 的 Layout 层），
+  // 哪个中心有未保存的表单它就为真，所以守卫本来就该对所有中心一致生效。
+  // 2026-09-17 满减页从「店铺设置」搬到「推广运营」时就因为只有 SettingsCenter 传了
+  // onTabClick 而丢掉了这层保护——改动没保存点页签直接跳走、改动静默丢失。
+  // 没有脏数据时 confirmLeave 立即返回 true，不弹框，所以对其余中心零影响。
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { confirmLeave } = useUnsavedSettings()
+  const leave = async (to: string) => {
+    if (to === location.pathname) return
+    if (!(await confirmLeave())) return
+    navigate(to)
+  }
 
   return (
     <div className="space-y-5">
@@ -41,12 +55,15 @@ export default function BusinessCenter({ title, description, tabs, onTabClick }:
       {/* flex-wrap + nav 的 flex-auto（基准 = 页签实际宽度）：宽度够就页签与主操作同排，
           不够就让按钮整个落到第二行，而不是把最后一个页签挤进横向滚动区里看不见。
 
-          窄屏通栏（-mx-4 抵掉 main 的 p-4，md 起恢复常规卡片）：页签条被 main 的左右内边距
+          窄屏通栏（-mx-4 抵掉 main 的 p-4，sm(640) 起恢复常规卡片）：页签条被 main 的左右内边距
           各吃 16px、自己再吃 8px，一共 48px。375px 手机上「店铺设置」四项实测需要 404px、
           只剩 327px 可用——最后一个页签要横划才看得见，而这是改名之前就有的老问题。
           通栏把那 48px 还给页签，五个中心才能在手机上都一行装下、行为一致。
-          通栏条去掉圆角与左右边框（rounded-none border-x-0），否则贴边时边框会切在屏幕边上。 */}
-      <div className="-mx-4 flex flex-wrap items-center gap-2 border-y border-gray-200 bg-white px-2 shadow-sm md:mx-0 md:rounded-xl md:border">
+          通栏条只写 border-y 就够：Tailwind preflight 已把四边 border-width 置 0、圆角为 none，
+          所以贴边时天然没有左右边框和圆角（别以为有 rounded-none border-x-0 在兜着）。
+          退出断点用 sm(640) 而不是 md(768)：640 以上早就不缺这 48px，而 640–767 之间 main
+          仍是 p-4，mx-0 后条子与下方内容卡片正好对齐，不会出现「条贴边、卡片内缩」的断裂。 */}
+      <div className="-mx-4 flex flex-wrap items-center gap-2 border-y border-gray-200 bg-white px-2 shadow-sm sm:mx-0 sm:rounded-xl sm:border">
         <nav className="min-w-0 flex-auto overflow-x-auto" aria-label={`${title}功能导航`}>
           <div className="flex min-w-max" role="tablist">
             {tabs.map((tab) => (
@@ -55,18 +72,15 @@ export default function BusinessCenter({ title, description, tabs, onTabClick }:
                 to={tab.to}
                 end
                 role="tab"
-                onClick={
-                  onTabClick
-                    ? (event) => {
-                        event.preventDefault()
-                        onTabClick(tab.to)
-                      }
-                    : undefined
-                }
+                onClick={(event) => {
+                  event.preventDefault()
+                  void leave(tab.to)
+                }}
                 className={({ isActive }) =>
-                  // 手机上收一格内边距：会员营销是 3 个页签 + 新建按钮，px-4 时
-                  // 375px 差几像素放不下，最后一个页签会被挤进滚动区看不见
-                  `border-b-2 px-3 py-3 text-sm transition-colors sm:px-4 ${
+                  // 手机上收内边距：推广运营 5 个页签在 360dp 安卓上实测正好 344/344 卡满，
+                  // 零余量——字号、字体或系统文字放大任何一点变化都会掉进横划。
+                  // px-2.5 换来 10px 安全垫（5 个页签 × 左右各 1px）。触控高度不受影响（py-3 仍是 48px）。
+                  `border-b-2 px-2.5 py-3 text-sm transition-colors sm:px-4 ${
                     isActive
                       ? 'border-brand-500 text-brand-600 font-medium'
                       : 'border-transparent text-gray-600 hover:text-gray-900'
@@ -78,8 +92,10 @@ export default function BusinessCenter({ title, description, tabs, onTabClick }:
             ))}
           </div>
         </nav>
-        {/* py-1.5 让同排时这一格高度与 py-3 的页签一致（36+12 = 48），行高不被撑大 */}
-        <div ref={setActionSlot} className="ml-auto flex shrink-0 items-center gap-2 py-1.5 pl-2" />
+        {/* py-1.5 让同排时这一格高度与 py-3 的页签一致（36+12 = 48），行高不被撑大。
+            empty:hidden：没有主操作按钮的子页（满减、会员设置）这一格仍占 pl-2+gap-2 共 16px，
+            窄屏放不下就整格换行，把 48px 高的条子撑成 68px——底下多一截没有内容的空白。 */}
+        <div ref={setActionSlot} className="ml-auto flex shrink-0 items-center gap-2 py-1.5 pl-2 empty:hidden" />
       </div>
 
       <CenterActionSlot.Provider value={actionSlot}>

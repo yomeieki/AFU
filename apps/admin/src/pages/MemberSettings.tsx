@@ -303,14 +303,14 @@ export default function MemberSettings() {
           {newcomerHealth.level === 'warn' && (
             <>
               {' '}
-              请到 <Link to="/membership/coupons?source=NEWCOMER" className="underline">「优惠券」</Link> 页把它重新上架，
+              请到 <Link to="/promotion/coupons?source=NEWCOMER" className="underline">「优惠券」</Link> 页把它重新上架，
               或在上面改选别的模板 / 改成「不发新客券」。
             </>
           )}
         </div>
         {!tplFailed && !tplLoading && onTemplates.length === 0 && strayId === null && (
           <p className="text-xs text-gray-500">
-            还没有上架中的新客券模板。先到 <Link to="/membership/coupons?source=NEWCOMER" className="underline">「优惠券」</Link> 页新建一个来源为「新客券」的模板并上架，再回来选。
+            还没有上架中的新客券模板。先到 <Link to="/promotion/coupons?source=NEWCOMER" className="underline">「优惠券」</Link> 页新建一个来源为「新客券」的模板并上架，再回来选。
           </p>
         )}
       </section>

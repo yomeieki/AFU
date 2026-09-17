@@ -49,9 +49,13 @@ const tiersToRows = (tiers: PromotionTier[]): TierRow[] => tiers.map((t) => ({ m
 
 /**
  * 全店自动满减设置（2026-09-17 设计）。存储在 local_delivery.promotion，走既有
- * `getLocalSettings → 展开 → updateLocalSettings` 的整包保存——放「店铺设置」而不是
- * 「会员营销」：`useUnsavedSettings()` 只在 SettingsCenter 的 Provider 里可用，配置本体
- * 也在 local_delivery 里（本批实施计划裁定，见「spec 与现状差异④」）。
+ * `getLocalSettings → 展开 → updateLocalSettings` 的整包保存。
+ *
+ * 2026-09-18 起这一页在「推广运营」下（原在「店铺设置」）。原注释说「放店铺设置是因为
+ * useUnsavedSettings 只在 SettingsCenter 的 Provider 里可用」——那句话当时就不准确：
+ * Provider 挂在 App 的 Layout 层，全后台都拿得到。真正只在 SettingsCenter 的是切页签
+ * 前的拦截（onTabClick），搬家时正是因为轻信这句注释而漏掉了它，改动会被静默丢弃。
+ * 现在拦截已内置进 BusinessCenter，对所有中心一致生效。配置本体仍在 local_delivery 里。
  */
 export default function PromotionSettings() {
   const { setDirty } = useUnsavedSettings()

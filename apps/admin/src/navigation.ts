@@ -30,7 +30,7 @@ export const mainNavigation: NavItem[] = [
   { to: '/system/printer', prefix: '/system', label: '系统维护' },
 ]
 
-/** 九个入口的完整顺序，窄屏 3×3 九宫格按它渲染；工作台仍排第一格。 */
+/** 八个入口的完整顺序，窄屏 4 列网格按它渲染（8 项正好两行）；工作台仍排第一格。 */
 export const topNavigation: NavItem[] = [workbenchNav, ...mainNavigation]
 
 /** 窄屏顶栏要显示当前所在的一级入口名；认不出时退回「经营概览」，与根路由的落点一致 */
