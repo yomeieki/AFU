@@ -13,11 +13,15 @@ test('阻塞（休业/暂停/未开通）压过一切，按钮一句短文案', 
   assert.deepEqual(st.pickupCheckoutAction(on({ blockReason: '休息中，10月08日恢复' })),
     { disabled: true, text: '暂不可自取', amountState: 'blocked', action: 'none' })
 })
-test('没选时段 → 禁用；时段失效 → 可点但动作是重选，不是提交', function () {
-  assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false })),
-    { disabled: true, text: '请选择取餐时间', amountState: 'pending', action: 'none' })
+test('时段失效 → 可点但动作是重选，不是提交', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ slotStale: true })),
     { disabled: false, text: '重新选择时间', amountState: 'pending', action: 'reslot' })
+})
+// 2026-09-17 起进页不再自动预选第一个时段：与「未选餐具」同一套处理，
+// 按钮可点、文案是 NO_SLOT、动作是 slot（打开时段选择器），不是禁用、不是提交。
+test('没选时段（selected 为 null）→ 不禁用，文案「请选择取餐时间」，动作是打开时段选择器', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false })),
+    { disabled: false, text: '请选择取餐时间', amountState: 'pending', action: 'slot' })
 })
 test('手机号无效 → 禁用，但金额照常显示（顾客要先看到要付多少）', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ phoneValid: false })),
@@ -99,7 +103,7 @@ test('时段：默认选第一个可选格；今天为空时落到明天；已�
 test('优先级：阻塞 > 未选时段 > 时段失效 > 手机号 > 起送 > 金额未知 > 餐具 > 优惠重算 > 提交中', function () {
   const all = { blockReason: 'x', hasSlot: false, slotStale: true, phoneValid: false, belowMinGap: 500, hasTableware: false, benefitsLoading: true, submitting: true, payAmount: 100 }
   assert.equal(st.pickupCheckoutAction(all).text, '暂不可自取')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).text, '请选择取餐时间')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).action, 'slot')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true })).action, 'reslot')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false })).text, '请填写手机号')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true })).text, '还差 ¥5.00 起')

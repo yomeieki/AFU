@@ -5,8 +5,10 @@
 // 必然出现「文案改了但按钮还能点」。
 //
 // 优先级：阻塞 → 未选时段 → 时段失效 → 手机号 → 起送线 → 金额未知 → 餐具 → 优惠重算中 → 提交中。
-// 「时段失效」那一格按钮**可点**，动作是 reslot（重新拉时段并打开选择器），不是提交——
+// 「未选时段」与「时段失效」这两格按钮**都可点**：前者动作是 slot（打开时段选择器），
+// 后者是 reslot（重新拉时段并打开选择器）——都不是提交，与「未选餐具」同一套处理，
 // 页面必须按 action 分派，绝不能以「按钮没禁用」推断该提交。
+// 2026-09-17 起进页不再自动预选第一个时段（顾客自己选），所以「未选时段」不再禁用按钮。
 //
 // ⚠️ 本文件必须保持 ES5（scripts/check-miniapp-es5.mjs 把守）。
 
@@ -41,7 +43,8 @@ function result(disabled, text, amountState, action) {
 function pickupCheckoutAction(s) {
   var st = s || {}
   if (st.blockReason) return result(true, TEXT.BLOCKED, 'blocked', 'none')
-  if (!st.hasSlot) return result(true, TEXT.NO_SLOT, 'pending', 'none')
+  // 与「未选餐具」一致：按钮可点，动作是打开时段选择器，不是提交
+  if (!st.hasSlot) return result(false, TEXT.NO_SLOT, 'pending', 'slot')
   if (st.slotStale) return result(false, TEXT.SLOT_STALE, 'pending', 'reslot')
   if (!st.phoneValid) return result(true, TEXT.NO_PHONE, 'ready', 'none')
   if (st.belowMinGap > 0) return result(true, '还差 ¥' + formatPrice(st.belowMinGap) + ' 起', 'ready', 'none')

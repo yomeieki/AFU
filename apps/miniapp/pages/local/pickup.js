@@ -45,6 +45,7 @@ Page({
     slotStale: false,
     slotsLoading: true,
     slotsError: '',
+    hasAnySlot: false,     // 本轮时段里是否有任意一格可选（区分「还没选」与「真没时段」两种占位文案）
     pickerOpen: false,
     // 取餐人
     contactName: '',
@@ -67,7 +68,7 @@ Page({
     payAmount: null,
     belowMinGap: 0,
     submitting: false,
-    action: { disabled: true, text: '请选择取餐时间', amountState: 'pending', action: 'none' },
+    action: { disabled: false, text: '请选择取餐时间', amountState: 'pending', action: 'slot' },
     subscribeTemplateIds: [],
     payTimeoutMin: 15,
   },
@@ -152,7 +153,11 @@ Page({
           var dt = st.pickupDateText(d.date)
           return { date: d.date, label: d.label, monthDay: dt.monthDay, dateText: dt.monthDay + ' ' + dt.weekday, slots: d.slots || [], empty: !(d.slots && d.slots.length) }
         })
-        var patch = { days: days, slotsLoading: false }
+        var hasAnySlot = false
+        for (var i = 0; i < days.length; i++) {
+          if (!days[i].empty) { hasAnySlot = true; break }
+        }
+        var patch = { days: days, slotsLoading: false, hasAnySlot: hasAnySlot }
         var blocked = !!view.blocked
         if (blocked) {
           // 服务端说这会儿不能自取（休业/暂停/未开通）：清选择、阻塞提交，文案用它给的
@@ -167,8 +172,10 @@ Page({
           patch.blockReason = ''
           patch.activeDay = Math.min(self.data.activeDay || 0, Math.max(0, days.length - 1))
         } else {
+          // 2026-09-17 起不再自动预选第一个时段：进页/弹层要停在空态，顾客自己点。
+          // activeDay 仍落到第一个有时段的那天，省得顾客打开弹层还要自己翻页。
           var first = st.firstSlot(view)
-          patch.selected = first ? decorateSlot(first.slot, days[first.dayIndex]) : null
+          patch.selected = null
           patch.activeDay = first ? first.dayIndex : 0
           patch.slotStale = false
           patch.blockReason = ''
@@ -366,6 +373,10 @@ Page({
   onSubmit: function() {
     var act = this.data.action || {}
     var self = this
+    if (act.action === 'slot') {
+      this.openPicker()
+      return
+    }
     if (act.action === 'tableware') {
       this.openTableware()
       return
