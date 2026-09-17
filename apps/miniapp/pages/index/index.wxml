@@ -13,7 +13,7 @@
       <text class="navbar-title">阿福凉菜</text>
       <!-- 两个渠道共用同一套四栏导航，顾客很容易忘了自己在哪一边。
            这颗标识就说这一件事；点它回封面重选，与左侧返回箭头同一个去处。 -->
-      <text class="navbar-channel" hover-class="navbar-channel-hover" hover-stay-time="60" bindtap="goCover">{{channelLabel}}</text>
+      <text class="navbar-channel" hover-class="navbar-channel-hover" hover-stay-time="60" bindtap="goCover" style="{{channelRight ? 'right:' + channelRight + 'px' : ''}}">{{channelLabel}}</text>
     </view>
   </view>
   <view style="height:{{navTotal}}px"></view>

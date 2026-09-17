@@ -23,6 +23,7 @@ Page({
     navTotal: 88,
     channel: 'EXPRESS',
     channelLabel: '全国邮寄',
+    channelRight: 0,
     // LOCAL 专用
     meta: null,
     mode: 'DELIVERY',
@@ -47,16 +48,21 @@ Page({
     var info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
     var statusBarHeight = info.statusBarHeight || 20
     var navContent = 44
+    var menu = null
     if (wx.getMenuButtonBoundingClientRect) {
-      var menu = wx.getMenuButtonBoundingClientRect()
+      menu = wx.getMenuButtonBoundingClientRect()
       if (menu && menu.height && menu.top >= statusBarHeight) {
         navContent = (menu.top - statusBarHeight) * 2 + menu.height
       }
     }
+    // 渠道标识的右边距：胶囊左沿再往左 10px。桩/低版本库拿不到 left 时用 wxss 的 208rpx 兜底（不写 style）
+    var channelRight = 0
+    if (menu && menu.left > 0 && menu.left < info.windowWidth) channelRight = info.windowWidth - menu.left + 10
     this.setData({
       statusBarHeight: statusBarHeight,
       navContent: navContent,
       navTotal: statusBarHeight + navContent,
+      channelRight: channelRight,
     })
   },
 
