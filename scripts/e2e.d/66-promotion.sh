@@ -96,13 +96,13 @@ assert_eq "promoDiscountAmount=500（起送/免运不影响满减）" "$(jq -r .
 assert_eq "actualAmount=5500" "$(jq -r .data.actualAmount <<<"$R")" "5500"
 p66_put '.fee.minOrderAmount=0 | .fee.freeShipTiers=[]' >/dev/null
 
-echo "-- ⑦ 封顶：自取立减 5000 时满减降为 200（不超过小计）；立减 5800 时实付 0 → 42251 --"
+echo "-- ⑦ 封顶：自取立减 5000 时满减仍是 500（min(500, 6000−5000=1000) 未触顶）；立减 5800 时满减降为 200、实付 0 → 42251 --"
 p66_put '.pickup.discount={type:"FIXED",value:5000}' >/dev/null
 R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$P66_A,\"quantity\":2},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P66_SLOT\",\"pickupContact\":{\"phone\":\"13800009902\"}}")
 assert_eq "立减5000 下单 code 0" "$(code "$R")" "0"
 P66_O6=$(jq -r .data.orderId <<<"$R")
 assert_eq "pickupDiscountAmount=5000" "$(jq -r .data.pickupDiscountAmount <<<"$R")" "5000"
-assert_eq "promoDiscountAmount 封顶为 200" "$(jq -r .data.promoDiscountAmount <<<"$R")" "200"
+assert_eq "promoDiscountAmount=500（未触顶）" "$(jq -r .data.promoDiscountAmount <<<"$R")" "500"
 assert_eq "actualAmount=500" "$(jq -r .data.actualAmount <<<"$R")" "500"
 p66_put '.pickup.discount={type:"FIXED",value:5800}' >/dev/null
 R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$P66_A,\"quantity\":2},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P66_SLOT\",\"pickupContact\":{\"phone\":\"13800009903\"}}")
@@ -175,4 +175,8 @@ for t in ${P66_TID:-}; do req PUT "/api/admin/coupon-templates/$t" "$AT" '{"stat
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
 sql "DELETE FROM print_jobs WHERE order_id IN ($P66_O1,$P66_O2,$P66_O3,$P66_O4,$P66_O5,$P66_O6,$P66_O7,$P66_O8,$P66_O9,$P66_O10,$P66_O11);"
 sql "UPDATE orders SET is_test=1 WHERE id IN ($P66_O1,$P66_O2,$P66_O3,$P66_O4,$P66_O5,$P66_O6,$P66_O7,$P66_O8,$P66_O9,$P66_O10,$P66_O11);"
-assert_eq "本段没有留下待付款单" "$(sql "SELECT COUNT(*) FROM orders WHERE user_id=(SELECT user_id FROM orders WHERE id=$P66_O1) AND status='PENDING_PAYMENT';")" "0"
+# 只查本段自己建的这几张单，不查这个共用测试用户名下的全部订单——$UT 是整个 e2e.sh 共用的
+# 测试用户，其它分片（§49/62/63/64 等）各自有一套自己的待付款单生命周期管理，跟本段无关；
+# 查全表在「本段」运行的时点上会被别的分片当时尚未清理的单误伤，是这条自检本身的口径问题，
+# 不是本段有单没收干净（2026-09-17 实测踩到，见执行记录）。
+assert_eq "本段没有留下待付款单" "$(sql "SELECT COUNT(*) FROM orders WHERE id IN ($P66_O1,$P66_O2,$P66_O3,$P66_O4,$P66_O5,$P66_O6,$P66_O7,$P66_O8,$P66_O9,$P66_O10,$P66_O11) AND status='PENDING_PAYMENT';")" "0"
