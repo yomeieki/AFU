@@ -8,6 +8,7 @@
 import crypto from 'crypto'
 import prisma from '../utils/prisma'
 import { config } from '../config'
+import { publicPromotionView } from './promotion'
 
 export const LOCAL_SETTINGS_KEY = 'local_delivery'
 const CACHE_TTL_MS = 60 * 1000
@@ -49,6 +50,30 @@ export interface PackingSettings {
   enabled: boolean
   /** 全店默认每份打包费（分）。0–10_000（¥100）夹取，默认 100（¥1） */
   perItemFen: number
+}
+
+/**
+ * 全店自动满减（2026-09-17 设计 §3.1/§4）：达标自动减，不用领券。
+ *
+ * `channels` 的键**直接用 `DeliveryType`**（`LOCAL`/`PICKUP`/`EXPRESS`），不是 spec 草稿里的
+ * `LOCAL_DELIVERY`——两套值域本来就是一一对应，多一层映射只会多一处将来对不上的地方
+ * （00 规划定稿后由店主裁定，见本批实施计划「冲突 5」的裁定记录）。
+ */
+export const PROMO_CHANNELS = ['LOCAL', 'PICKUP', 'EXPRESS'] as const
+export type PromoChannel = (typeof PROMO_CHANNELS)[number]
+export interface PromotionTier { minFen: number; cutFen: number }
+export interface PromotionSettings {
+  enabled: boolean
+  /** 活动名称，1–20 字，默认「全店满减」 */
+  name: string
+  /** ISO 8601（带时区）。null = 立即生效 */
+  startAt: string | null
+  /** ISO 8601（带时区）。null = 长期有效 */
+  endAt: string | null
+  /** 三个渠道各自的开关；到店自取默认不勾——自取本身有折扣，叠加会亏本，交给店主自己算完再开 */
+  channels: Record<PromoChannel, boolean>
+  /** 按 minFen 升序、去重、≤ 10 档 */
+  tiers: PromotionTier[]
 }
 
 export interface LocalDeliverySettings {
@@ -124,6 +149,7 @@ export interface LocalDeliverySettings {
   holiday: { until: string | null; reason: string } | null
   pickup: PickupSettings
   packing: PackingSettings
+  promotion: PromotionSettings
   businessHours: BusinessHour[]
   /**
    * 平时的备餐时长（分钟）。**这段时间是从店员点「接单」开始算的**，不是从顾客下单开始——
@@ -260,6 +286,13 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
   },
   // 默认开、¥1/份（P2/P7）：新店直接生效，不用店主上线当天先记得来开一次开关。
   packing: { enabled: true, perItemFen: 100 },
+  // 默认关（P4/风险预案）：存量生产库没有这个块，回落到这份默认值——部署后活动关着，
+  // 店主自己去「满减活动」页开，不会出现「一部署就在悄悄打折」的意外。
+  promotion: {
+    enabled: false, name: '全店满减', startAt: null, endAt: null,
+    channels: { LOCAL: true, PICKUP: false, EXPRESS: true },
+    tiers: [],
+  },
   businessHours: [{ start: '09:00', end: '20:00' }],
   // 15 → 20（PO 2026-09-07）：15 是拍脑袋的初值。首单实测接单→取货 10.4 分钟，看着够，
   // 但那是晚上 8 点的单；而且原来的预计送达从**下单**起算，把「下单→付款→接单」那一段
@@ -297,6 +330,15 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
 
 // ── sanitize ────────────────────────────────────────────────
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+/**
+ * 满减 startAt/endAt 专用的格式闸门。**只用 `Number.isFinite(Date.parse(v))` 不够**——
+ * 实测 `Date.parse('2026/10/08')` 是有限数（JS 把斜杠日期当本地时区解析），
+ * 这正是本批 e2e §66 与 selftest 用来验证「格式不正确」的例子，若只查 Date.parse
+ * 会被它悄悄放过、变成一个「看似正确」的日期，而不是报错——同 F13 休业日期一个坑，
+ * 但更隐蔽。要求必须是 `YYYY-MM-DDTHH:mm[:ss][.sss](Z|±HH:mm)` 这种带 `T`、破折号分隔的
+ * ISO 8601 形状，`Date.parse` 只作二次确认。
+ */
+const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/
 const asObj = (v: unknown) => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {})
 const int = (v: unknown, fb: number, min = 0, max = Number.MAX_SAFE_INTEGER) => {
   const n = Number(v)
@@ -313,6 +355,11 @@ const intOrNull = (v: unknown, min: number, max: number) => {
   const n = Number(v)
   return Number.isInteger(n) && n >= min && n <= max ? n : null
 }
+// 满减 startAt/endAt 专用：非空字符串且能被 Date.parse 认出才存归一化后的 ISO，
+// 否则一律 null（= 立即生效 / 长期有效）——与 F13 休业日期同一类坑，打错的日期不该被静默接受，
+// 但这里是 sanitize（已经过 validateRawLocalSettings 拦过一轮格式），职责只是给出可用值。
+const isoOrNull = (v: unknown): string | null =>
+  typeof v === 'string' && ISO_DATETIME.test(v.trim()) && Number.isFinite(Date.parse(v)) ? new Date(v).toISOString() : null
 
 export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
   const o = asObj(raw)
@@ -334,6 +381,25 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
     : D.kd100.providers
   const pk = asObj(o.pickup), pkd = asObj(pk.discount)
   const pkg = asObj(o.packing)
+  const promo = asObj(o.promotion)
+  const promoChannels = asObj(promo.channels)
+  // 乱序 + 重复 minFen + 非法行 + 超过 10 档：先过滤掉任一字段为 -1（越界/非整数/缺字段）的行，
+  // 再按 minFen 升序、minFen 相同按 cutFen 降序排（这样同门槛第一条就是减得多的那条），
+  // 去重只留每个 minFen 的第一条，最后截到 10 档（P2：档位数量不限，但接口有上限）。
+  const promoTiers: PromotionTier[] = Array.isArray(promo.tiers)
+    ? (() => {
+        const rows = (promo.tiers as unknown[])
+          .map((t) => asObj(t))
+          .map((t) => ({ minFen: int(t.minFen, -1, 1, 10_000_000), cutFen: int(t.cutFen, -1, 1, 10_000_000) }))
+          .filter((t) => t.minFen !== -1 && t.cutFen !== -1)
+          .sort((a, b) => a.minFen - b.minFen || b.cutFen - a.cutFen)
+        const deduped: PromotionTier[] = []
+        for (const t of rows) {
+          if (deduped.length === 0 || deduped[deduped.length - 1].minFen !== t.minFen) deduped.push(t)
+        }
+        return deduped.slice(0, 10)
+      })()
+    : []
   const DATE = /^\d{4}-\d{2}-\d{2}$/
   const holiday = o.holiday && typeof o.holiday === 'object'
     ? (() => {
@@ -409,6 +475,18 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       enabled: bool(pkg.enabled, D.packing.enabled),
       perItemFen: int(pkg.perItemFen, D.packing.perItemFen, 0, 10_000),
     },
+    promotion: {
+      enabled: bool(promo.enabled, false),
+      name: str(promo.name, D.promotion.name, 20) || D.promotion.name,
+      startAt: isoOrNull(promo.startAt),
+      endAt: isoOrNull(promo.endAt),
+      channels: {
+        LOCAL: bool(promoChannels.LOCAL, D.promotion.channels.LOCAL),
+        PICKUP: bool(promoChannels.PICKUP, D.promotion.channels.PICKUP),
+        EXPRESS: bool(promoChannels.EXPRESS, D.promotion.channels.EXPRESS),
+      },
+      tiers: promoTiers,
+    },
     businessHours: hours,
     prepMinutes: int(o.prepMinutes, D.prepMinutes, 0, 180),
     peak: {
@@ -479,6 +557,17 @@ export function validateLocalSettings(s: LocalDeliverySettings): string[] {
   if (s.pickup.unpickedRemindAfterMin >= s.pickup.autoCompleteAfterMin) {
     errs.push(`「过时未取提醒」(${s.pickup.unpickedRemindAfterMin} 分钟) 须早于「自动完成」(${s.pickup.autoCompleteAfterMin} 分钟)`)
   }
+  for (const t of s.promotion.tiers) {
+    if (t.cutFen >= t.minFen) {
+      errs.push(`满 ¥${(t.minFen / 100).toFixed(2)} 减 ¥${(t.cutFen / 100).toFixed(2)}：减的比门槛还多，这样配会亏本`)
+    }
+  }
+  if (s.promotion.startAt && s.promotion.endAt && s.promotion.startAt >= s.promotion.endAt) {
+    errs.push('活动结束时间须晚于开始时间')
+  }
+  if (s.promotion.enabled && s.promotion.tiers.length === 0) {
+    errs.push('启用满减至少要配一档')
+  }
   return errs
 }
 
@@ -514,6 +603,17 @@ export function validateRawLocalSettings(raw: unknown): string[] {
     const until = asObj(o.holiday).until
     if (typeof until === 'string' && until.trim() !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(until.trim())) {
       errs.push(`休业恢复日期「${until}」格式不正确，应形如 2026-10-08；留空表示手动恢复`)
+    }
+  }
+  // 同一类坑：startAt/endAt 打错格式会被 sanitize 的 isoOrNull 静默变成 null
+  // （= 立即生效 / 长期有效），必须在原始请求体上拦住。
+  if (o.promotion && typeof o.promotion === 'object') {
+    const p = asObj(o.promotion)
+    if (typeof p.startAt === 'string' && p.startAt.trim() !== '' && !(ISO_DATETIME.test(p.startAt.trim()) && Number.isFinite(Date.parse(p.startAt)))) {
+      errs.push(`活动开始时间「${p.startAt}」格式不正确`)
+    }
+    if (typeof p.endAt === 'string' && p.endAt.trim() !== '' && !(ISO_DATETIME.test(p.endAt.trim()) && Number.isFinite(Date.parse(p.endAt)))) {
+      errs.push(`活动结束时间「${p.endAt}」格式不正确`)
     }
   }
   return errs
@@ -1005,6 +1105,7 @@ export function publicLocalMeta(s: LocalDeliverySettings, now: Date = new Date()
       daysAhead: s.pickup.daysAhead,
     },
     packing: { enabled: s.packing.enabled, perItemFen: s.packing.perItemFen },
+    promotion: publicPromotionView(s, now),
     holiday: isHolidayNow(s, now) ? { until: s.holiday?.until ?? null, reason: s.holiday?.reason ?? '' } : null,
   }
 }

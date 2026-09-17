@@ -8,9 +8,11 @@
  * 计费顺序是 spec §5.1 的产品决策，逐字执行，本文件不重新讨论：
  *
  *   小计 = Σ非赠品行
- *   折扣 = 券 ? min(券面额, 小计) : 0      ← 门槛比对的是**小计**
- *   运费 = 按**券前小计**判定（包邮/起送/同城起送）← 顾客不因为用券失去包邮
- *   实付 = 小计 − 折扣 + 运费
+ *   自取优惠 → 满减 → 券（2026-09-17 全店满减设计 §4.2/§4.3：满减插在自取优惠之后、券之前，
+ *     券的封顶相应改为「小计 − 自取优惠 − 满减」）
+ *   折扣 = 券 ? min(券面额, 小计 − 自取优惠 − 满减) : 0      ← 门槛比对的是**小计**（减前）
+ *   运费 = 按**券前、满减前小计**判定（包邮/起送/同城起送）← 顾客不因为用券或满减失去包邮
+ *   实付 = 小计 − 自取优惠 − 满减 − 折扣 + 运费 + 打包费
  *
  * ⚠️ 「运费按券前小计判定」这一条不在本文件里实现，而在 `routes/orders.ts`：那里的
  * `calcLocalFee(s, distanceM, totalAmount)` 与 `calcExpressFee(s, group, weightKg, quotes, totalAmount, locked)`
@@ -111,20 +113,28 @@ export function computeCheckout(i: {
   subtotal: number
   discount: number
   shippingFee: number
-  /** 自取优惠（分），只有 PICKUP 单非 0。顺序：小计 → 自取优惠 → 券 → 运费（spec 2026-09-11 P6） */
+  /** 自取优惠（分），只有 PICKUP 单非 0。顺序：小计 → 自取优惠 → 满减 → 券 → 运费（spec 2026-09-11 P6） */
   pickupDiscount?: number
   /**
-   * 打包费（分），默认 0，与 `shippingFee` 同一层相加——不参与起送门槛/券门槛/自取折扣，
+   * 满减（分），默认 0（2026-09-17 全店满减设计 §4.2/§4.3）。插在自取优惠之后、券之前——
+   * 调用方（`routes/orders.ts`）已经把它封顶到 `min(promoDiscountOf(...), subtotal - pickupDiscount)`，
+   * 这里只管三者相加不得超过小计。**不传与传 0 逐字节一致**：老调用点（未接满减前）行为不变。
+   */
+  promoDiscount?: number
+  /**
+   * 打包费（分），默认 0，与 `shippingFee` 同一层相加——不参与起送门槛/券门槛/自取折扣/满减，
    * 那些判定用的是券前商品小计（2026-09-13 打包费设计 §2.4）。
    */
   packingFee?: number
 }): { actualAmount: number } {
   const pickupDiscount = i.pickupDiscount ?? 0
+  const promoDiscount = i.promoDiscount ?? 0
   const packingFee = i.packingFee ?? 0
   if (pickupDiscount < 0) throw new Error(`自取优惠 ${pickupDiscount} 为负：调用方传错`)
+  if (promoDiscount < 0) throw new Error(`满减 ${promoDiscount} 为负：调用方传错`)
   if (packingFee < 0) throw new Error(`打包费 ${packingFee} 为负：调用方传错`)
-  if (pickupDiscount + i.discount > i.subtotal) {
-    throw new Error(`自取优惠 ${pickupDiscount} + 折扣 ${i.discount} 超过商品小计 ${i.subtotal}：调用方未按封顶逻辑算券`)
+  if (pickupDiscount + promoDiscount + i.discount > i.subtotal) {
+    throw new Error(`自取优惠 ${pickupDiscount} + 满减 ${promoDiscount} + 折扣 ${i.discount} 超过商品小计 ${i.subtotal}：调用方未按封顶逻辑算券`)
   }
-  return { actualAmount: i.subtotal - pickupDiscount - i.discount + i.shippingFee + packingFee }
+  return { actualAmount: i.subtotal - pickupDiscount - promoDiscount - i.discount + i.shippingFee + packingFee }
 }

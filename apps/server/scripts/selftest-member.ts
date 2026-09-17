@@ -249,6 +249,23 @@ t('computeCheckout 打包费为负 → 抛', () => {
   assert.throws(() => computeCheckout({ subtotal: 1000, discount: 0, shippingFee: 0, packingFee: -1 }))
 })
 
+// ── computeCheckout：满减（2026-09-17 全店满减设计 §4.2/§4.3：自取优惠 → 满减 → 券）──
+// 详细的取档/预览/设置块用例见 scripts/selftest-promotion.ts，这里只测 computeCheckout 本身。
+t('computeCheckout 不传 promoDiscount 与传 0 逐字节一致', () => {
+  assert.deepStrictEqual(computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 300 }), computeCheckout({ subtotal: 5000, discount: 500, shippingFee: 300, promoDiscount: 0 }))
+})
+t('computeCheckout 自取优惠 + 满减 + 券 + 运费 + 打包费叠加', () => {
+  assert.deepStrictEqual(
+    computeCheckout({ subtotal: 6000, pickupDiscount: 300, promoDiscount: 500, discount: 200, shippingFee: 300, packingFee: 100 }),
+    { actualAmount: 5400 })
+})
+t('computeCheckout 自取优惠 + 满减 + 券 三者之和超过小计 → 抛', () => {
+  assert.throws(() => computeCheckout({ subtotal: 1000, pickupDiscount: 400, promoDiscount: 400, discount: 300, shippingFee: 0 }))
+})
+t('computeCheckout 满减为负 → 抛', () => {
+  assert.throws(() => computeCheckout({ subtotal: 1000, discount: 0, shippingFee: 0, promoDiscount: -1 }))
+})
+
 // ── 票面：优惠与赠品的两联分工（M2 Task 9）────────────────────────────────
 //
 // 这个项目**没有任何小票的自动化测试**——apps/server/scripts/ 下没有 ticket selftest，
