@@ -68,6 +68,11 @@ export const updateCategory = (id: number, data: Partial<Category>) =>
 export const deleteCategory = (id: number) =>
   client.delete<ApiResponse<null>>(`/admin/categories/${id}`)
 
+// 拖拽/上下移保存分类内商品手动排序（2026-09-17 分类内排序设计 §4.2）：
+// ids 必须正好是该分类当前全部商品，服务端按下标写 sortOrder。
+export const reorderCategoryProducts = (id: number, ids: number[]) =>
+  client.post<ApiResponse<{ updated: number }>>(`/admin/categories/${id}/product-order`, { ids })
+
 // Products
 export const getProducts = (params?: {
   page?: number

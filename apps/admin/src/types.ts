@@ -17,6 +17,10 @@ export interface PaginatedData<T> {
   pageSize: number
 }
 
+/** 分类内商品排序方式（2026-09-17 分类内排序设计 §S2）：MANUAL=手动拖拽，SALES_30D=近 30 天销量降序 */
+export const PRODUCT_SORT_MODES = ['MANUAL', 'SALES_30D'] as const
+export type ProductSortMode = (typeof PRODUCT_SORT_MODES)[number]
+
 export interface Category {
   id: number
   name: string
@@ -24,6 +28,7 @@ export interface Category {
   sortOrder: number
   status: number
   channel: Channel
+  productSortMode: ProductSortMode
   createdAt: string
   _count?: { products: number }
 }
@@ -66,6 +71,10 @@ export interface Product {
   packingFeeFen: number | null
   isRecommended: number
   salesCount: number
+  /** 分类内手动排序值，同分类从小到大（2026-09-17 分类内排序设计 §3.1） */
+  sortOrder: number
+  /** 近 30 天销量；仅 GET /api/admin/products 返回，其它接口（如创建/更新响应）没有这个字段 */
+  sales30d?: number
   qrScene: string | null
   qrCodeUrl: string | null
   qrGeneratedAt: string | null

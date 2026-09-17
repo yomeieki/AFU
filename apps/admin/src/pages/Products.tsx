@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Search, Download, QrCode } from 'lucide-react'
-import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus, getLocalSettings } from '../api/admin'
+import { Plus, Search, Download, QrCode, GripVertical, ArrowUp, ArrowDown } from 'lucide-react'
+import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus, getLocalSettings, updateCategory, reorderCategoryProducts } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
 import { CenterAction } from '../components/BusinessCenter'
 import SpecEditor, { type SkuRow } from '../components/SpecEditor'
@@ -10,12 +10,13 @@ import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
 import ChannelTabs from '../components/ui/ChannelTabs'
-import { CHANNEL_LABEL, type Product, type Category, type SpecDimension, type Channel } from '../types'
+import { CHANNEL_LABEL, type Product, type Category, type SpecDimension, type Channel, type ProductSortMode } from '../types'
 import { toast } from '../components/ui/Toast'
 import QRCodeLib from 'qrcode'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import { fmtDateTime } from '../utils/time'
 import { readChannel } from '../navigation'
+import { moveItem, moveAdjacent } from '../utils/reorder'
 
 const emptyForm = {
   categoryId: 0,
@@ -50,6 +51,12 @@ export default function Products() {
   const [filterCategoryId, setFilterCategoryId] = useState('')
   const [filterKeyword, setFilterKeyword] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  // 分类内排序区：只在「选定了某个分类、关键词为空、状态为全部」时启用——
+  // 保存接口要求 ids 是该分类的全集，列表不是全集时拖拽保存必被服务端判为非法（2026-09-17 分类内排序设计 §5）。
+  const sortCategory = filterCategoryId ? channelCategories.find((c) => String(c.id) === filterCategoryId) : undefined
+  const sortActive = !!sortCategory && !filterKeyword && !filterStatus
+  const sortModeSales = sortActive && sortCategory!.productSortMode === 'SALES_30D'
+  const [sortModeSaving, setSortModeSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
@@ -77,12 +84,14 @@ export default function Products() {
     }, { replace: true })
   }
 
+  // 排序区一页取完该分类全集（拖拽保存要求 ids 是全集）；其余情形维持原分页（20/页）。
+  const effectivePageSize = sortActive ? 200 : pageSize
   const load = (p = page) => {
     setLoading(true)
     setLoadFailed(false)
     getProducts({
-      page: p,
-      pageSize,
+      page: sortActive ? 1 : p,
+      pageSize: effectivePageSize,
       categoryId: filterCategoryId ? Number(filterCategoryId) : undefined,
       keyword: filterKeyword || undefined,
       status: filterStatus || undefined,
@@ -95,6 +104,8 @@ export default function Products() {
       .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false))
   }
+  // 该分类商品超过一页取完的上限（200）：拖拽保存做不到「一次改全集」，禁用排序控件、只提示。
+  const sortOverLimit = sortActive && total > list.length
 
   useEffect(() => {
     getCategories().then((res) => setCategories(res.data.data))
@@ -107,6 +118,51 @@ export default function Products() {
   const handleSearch = () => {
     setPage(1)
     load(1)
+  }
+
+  // 切排序方式：select 的 value 直接绑定 sortCategory.productSortMode（来自 categories 状态），
+  // 失败时不改 categories，select 自然回到切换前的值——不需要额外的「回退」代码。
+  const handleSortModeChange = async (next: ProductSortMode) => {
+    if (!sortCategory) return
+    setSortModeSaving(true)
+    try {
+      await updateCategory(sortCategory.id, { productSortMode: next })
+      setCategories((cs) => cs.map((c) => (c.id === sortCategory.id ? { ...c, productSortMode: next } : c)))
+      toast.success('已切换，顾客端最多 60 秒内生效')
+      load(1)
+    } catch (err: unknown) {
+      toast.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '切换失败'
+      )
+    } finally {
+      setSortModeSaving(false)
+    }
+  }
+
+  // 拖拽/上下移共用的保存：先乐观更新本地顺序，失败则回滚。next 与 list 同一引用（越界/同位）时不发请求。
+  const applyOrder = async (next: Product[]) => {
+    if (!sortCategory || next === list) return
+    const prev = list
+    setList(next)
+    try {
+      await reorderCategoryProducts(sortCategory.id, next.map((p) => p.id))
+      toast.success('顺序已保存')
+    } catch (err: unknown) {
+      setList(prev)
+      toast.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '保存失败，已恢复原顺序'
+      )
+    }
+  }
+
+  const manualDragActive = sortActive && !sortModeSales && !sortOverLimit
+  const dragIndexRef = useRef<number | null>(null)
+  const handleRowDragStart = (index: number) => { dragIndexRef.current = index }
+  const handleRowDrop = (index: number) => {
+    const from = dragIndexRef.current
+    dragIndexRef.current = null
+    if (from == null) return
+    applyOrder(moveItem(list, from, index))
   }
 
   const openCreate = () => {
@@ -411,6 +467,26 @@ export default function Products() {
             <option value="OFF_SHELF">下架</option>
           </select>
         </div>
+        {sortActive && sortCategory && (
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">排序方式</label>
+            <select
+              value={sortCategory.productSortMode}
+              disabled={sortModeSaving}
+              onChange={(e) => handleSortModeChange(e.target.value as ProductSortMode)}
+              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm disabled:opacity-50"
+            >
+              <option value="MANUAL">手动排序</option>
+              <option value="SALES_30D">按近 30 天销量</option>
+            </select>
+            {sortModeSales && (
+              <p className="text-xs text-gray-400 mt-1">当前按销量自动排序，如需手动请切回手动排序</p>
+            )}
+            {sortOverLimit && (
+              <p className="text-xs text-amber-600 mt-1">本分类商品超过 200 道，暂不支持拖拽</p>
+            )}
+          </div>
+        )}
         <Button variant="secondary" size="sm" onClick={handleSearch}>
           <Search className="w-4 h-4" />
           搜索
@@ -435,17 +511,18 @@ export default function Products() {
           </div>
         ) : (
         <Table
-          columns={8}
+          columns={sortActive ? 9 : 8}
           loading={loading}
           isEmpty={list.length === 0}
           emptyText="暂无商品"
           head={
             <tr>
+              {sortActive && <th className="w-8 px-2 py-3" />}
               <th className="text-left px-4 py-3">商品名称</th>
               <th className="text-left px-4 py-3">分类</th>
               <th className="text-right px-4 py-3">价格</th>
               <th className="text-right px-4 py-3">库存</th>
-              <th className="text-right px-4 py-3">销量</th>
+              <th className="text-right px-4 py-3">{sortModeSales ? '近 30 天销量' : '销量'}</th>
               <th className="text-right px-4 py-3">状态</th>
               <th className="text-right px-4 py-3">二维码</th>
               <th className="text-right px-4 py-3">操作</th>
@@ -453,7 +530,7 @@ export default function Products() {
           }
           mobileCards={
             <>
-              {list.map((p) => (
+              {list.map((p, idx) => (
                 <div key={p.id} className="border border-gray-100 rounded-lg p-3 flex gap-3">
                   {p.coverImage ? (
                     <img src={p.coverImage} alt="" className="w-12 h-12 rounded object-cover bg-gray-100 shrink-0" />
@@ -514,6 +591,26 @@ export default function Products() {
                         <button onClick={() => setQrModal(p)} className="text-indigo-500">查看</button>
                       )}
                       <button onClick={() => handleDelete(p)} className="text-red-500">删除</button>
+                      {sortActive && (
+                        <>
+                          <button
+                            onClick={() => applyOrder(moveAdjacent(list, idx, -1))}
+                            disabled={!manualDragActive || idx === 0}
+                            title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '上移'}
+                            className="text-gray-500 disabled:opacity-30"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            onClick={() => applyOrder(moveAdjacent(list, idx, 1))}
+                            disabled={!manualDragActive || idx === list.length - 1}
+                            title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '下移'}
+                            className="text-gray-500 disabled:opacity-30"
+                          >
+                            ↓
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -521,8 +618,24 @@ export default function Products() {
             </>
           }
         >
-          {list.map((p) => (
-            <tr key={p.id} className="hover:bg-gray-50">
+          {list.map((p, idx) => (
+            <tr
+              key={p.id}
+              className="hover:bg-gray-50"
+              draggable={manualDragActive}
+              onDragStart={manualDragActive ? () => handleRowDragStart(idx) : undefined}
+              onDragOver={manualDragActive ? (e) => e.preventDefault() : undefined}
+              onDrop={manualDragActive ? () => handleRowDrop(idx) : undefined}
+            >
+              {sortActive && (
+                <td className="px-2 py-3 text-center">
+                  <span title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '拖拽调整顺序'}>
+                    <GripVertical
+                      className={`w-4 h-4 inline-block ${manualDragActive ? 'text-gray-400 cursor-grab' : 'text-gray-200'}`}
+                    />
+                  </span>
+                </td>
+              )}
               <td className="px-4 py-3 text-gray-800">
                 {p.name}
                 {(p.skus?.length ?? 0) > 0 && (
@@ -555,7 +668,7 @@ export default function Products() {
                   {(p.skus?.length ?? 0) > 0 && <span className="ml-0.5 text-xs text-gray-400">规</span>}
                 </button>
               </td>
-              <td className="px-4 py-3 text-right text-gray-600">{p.salesCount}</td>
+              <td className="px-4 py-3 text-right text-gray-600">{sortModeSales ? (p.sales30d ?? 0) : p.salesCount}</td>
               <td className="px-4 py-3 text-right">
                 <button
                   onClick={() => handleToggleStatus(p)}
@@ -579,6 +692,26 @@ export default function Products() {
                 </span>
               </td>
               <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
+                {sortActive && (
+                  <>
+                    <button
+                      onClick={() => applyOrder(moveAdjacent(list, idx, -1))}
+                      disabled={!manualDragActive || idx === 0}
+                      title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '上移'}
+                      className="text-gray-500 hover:text-gray-700 disabled:opacity-30"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5 inline" />
+                    </button>
+                    <button
+                      onClick={() => applyOrder(moveAdjacent(list, idx, 1))}
+                      disabled={!manualDragActive || idx === list.length - 1}
+                      title={sortModeSales ? '当前按销量自动排序，如需手动请切回手动排序' : '下移'}
+                      className="text-gray-500 hover:text-gray-700 disabled:opacity-30"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5 inline" />
+                    </button>
+                  </>
+                )}
                 <button onClick={() => openEdit(p)} className="text-blue-500 hover:text-blue-700">编辑</button>
                 <button
                   onClick={() => handleGenerateQr(p)}
@@ -596,7 +729,9 @@ export default function Products() {
           ))}
         </Table>
         )}
-        {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+        {!loading && !loadFailed && (
+          <Pagination page={sortActive ? 1 : page} total={total} pageSize={effectivePageSize} onChange={setPage} />
+        )}
       </div>
 
       {/* 新增/编辑弹窗 */}
