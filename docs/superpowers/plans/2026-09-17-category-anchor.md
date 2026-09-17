@@ -483,3 +483,10 @@ catalogLoading: false, // 分组视图拉全量中 → 骨架屏
   5. `pages/product/list.js` 现状不是纯 ES5（第 7 行 `const` + 解构），ES5 闸门只对新建文件生效（`scripts/check-miniapp-es5.mjs` 文件头已说明）；本批新增代码仍按 ES5 写。
   6. 本仓库小程序此前从未用过 `createSelectorQuery`，本批首次引入（上报触发条件 2 据此列出）。
   7. 与 `2026-09-17-category-product-sort-design.md`（分类内排序）的交集只有 `products.ts` 的 `select` 加 `categoryId`：两批谁先合都行，后合的一方 rebase 时该行取并集即可。
+
+- **2026-09-17 工序 01 · sonnet 执行记录**（worktree `.claude/worktrees/category-anchor-miniapp`，分支 `claude/category-anchor-miniapp`）：
+  1. **按上级指示跳过 Task 1**：本批不改 `apps/server/**` 与 `docs/api.md`，`categoryId` 字段由并行的「后台排序」批交付。Task 2–6 全部完成。白名单被上级进一步收窄为 `apps/miniapp/**` / `tests/miniapp/**` / 本计划文件本身（比原计划白名单更窄，不含 `docs/miniapp-release-checklist.md`）——曾误加一行到该文件，发现越界后已 `git checkout` 撤销，未提交。
+  2. Task 2（`utils/catalog-groups.js` + 单测，commit `333feaa`）、Task 3（`api/catalog.js` 加 `getAllProducts` + 单测，commit `c3cb425`）、Task 4（页面数据流改分组视图，commit `8579143`）、Task 5（滚动联动，commit `973c4e8`）均按计划伪代码逐字落地，未发现需要偏离计划的新情况。
+  3. 验收 A1、A4、A5、A7、A9、A10 全部按命令实测通过（输出见工序 01 回报）；A2（server tsc）、A3（curl 生产）、A6（`categoryId: true` 计数）因 Task 1 跳过而对本批不适用，只做了 A2 的知情性核对（`apps/server` 未改，tsc 仍通过）。A8 用 `git diff --name-only 9753a3e..HEAD` 会带出 00 规划阶段两条纯文档提交（`b76898f`、`a92d4a3`，均在本批开工前已产生），本批自身改动（`git diff --name-only 333feaa~1..HEAD`）逐行落在收窄后的白名单内。
+  4. B 类真机/开发者工具验收未执行（本环境无微信开发者工具），如实标注留给人工，建议 02/店主按验收标准 B1–B10 补测。
+  5. 未命中任何「命中即停」触发条件。
