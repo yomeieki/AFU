@@ -13,8 +13,10 @@ import {
   getLocalSettings, publicLocalMeta, isOpenNow, isPaused, nextOpenText, closedKind,
   billableDistanceM, haversineM, calcLocalFee, tableBaseFee, quoteBaseFee, estimateMinutesRange, signQuote, quoteExpiresAt,
 } from '../services/local-settings'
+import { promoPreviewOf } from '../services/promotion'
 import { measureRoadQuote } from '../services/delivery/quote'
 import { buildPickupSlots } from '../services/pickup'
+import { deliveryTypeSchema } from '../utils/channel'
 
 const router = Router()
 
@@ -85,6 +87,9 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
     // 两次调用之间的毫秒差会让客户端算出的过期时刻比 token 里的 e 早或晚，
     // 边界上会出现「页面以为还新鲜、服务端已经拒了」。
     const issuedAt = new Date()
+    // 全店满减（2026-09-17 设计 §4.4）：结算页/购物车条要显示「本单减多少 / 还差多少到下一档」，
+    // 与 quote 同一批返回，避免多一次请求。用 LOCAL 渠道、body.subtotal（券前、满减前商品小计）。
+    const promoPreview = promoPreviewOf(s, body.subtotal, 'LOCAL', issuedAt)
     success(res, {
       enabled: s.enabled,
       isOpen: isOpenNow(s),
@@ -125,7 +130,27 @@ router.post('/quote', localQuoteLimiter, optionalUserAuth, async (req: Request, 
       // 没签 token 就没有「过期」可言（匿名报价、超范围）——给 null 而不是给一个
       // 悬空的时刻，免得客户端拿它去判一张根本不存在的凭证还新不新鲜。
       quoteExpiresAt: q.inRange && addressId > 0 ? quoteExpiresAt(issuedAt).toISOString() : null,
+      promoDiscountFen: promoPreview.discountFen,
+      nextTierGapFen: promoPreview.nextTierGapFen,
     })
+  } catch (e) {
+    next(e)
+  }
+})
+
+const promoPreviewSchema = z.object({
+  deliveryType: deliveryTypeSchema,
+  subtotal: z.coerce.number().int().min(0).max(100_000_000),
+})
+
+// 公开、不登录、无限流：自取结算页与购物车条唯一能拿到「本单减多少 / 还差多少」的地方——
+// 自取没有报价接口，购物车阶段也没有地址报不了 LOCAL 的价（2026-09-17 全店满减设计 §4.4）。
+// subtotal 是顾客传的展示用值，真正下单时服务端自己按 totalAmount 重算（同
+// member/checkout-options 的说明：前端展示可以信任传参，落库金额永远服务端说了算）。
+router.get('/promo-preview', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { deliveryType, subtotal } = promoPreviewSchema.parse(req.query)
+    success(res, promoPreviewOf(await getLocalSettings(), subtotal, deliveryType, new Date()))
   } catch (e) {
     next(e)
   }

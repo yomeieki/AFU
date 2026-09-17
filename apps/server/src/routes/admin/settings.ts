@@ -101,9 +101,22 @@ router.put('/local-delivery', async (req, res, next) => {
     // packing.enabled 是设置里唯一「缺字段=开」的布尔：deploy 前的旧后台整包保存页面
     // 不认识 packing 字段，请求体里就没有它，sanitize 会把「没填」当默认值补上
     // （开、¥1），把店主关掉的打包费静默打开。body 没带 packing 就从当前设置原样带回去。
+    //
+    // promotion 是同一类坑（2026-09-17 全店满减设计）：老后台整包保存页面（同城配送设置、
+    // 到店自取设置……）不认识这个块，请求体里没有它，sanitize 会把「没填」当默认值补上
+    // （enabled:false），把店主刚配好的满减活动静默关掉。body 没带 promotion 也从当前设置
+    // 原样带回去——这是「满减活动」页之外任何一个整包保存页面不至于把活动关掉的唯一保障。
     const body = req.body
-    const mergedBody = (body && typeof body === 'object' && !Array.isArray(body) && (body as Record<string, unknown>).packing == null)
-      ? { ...(body as Record<string, unknown>), packing: (await getLocalSettings()).packing }
+    const current = (body && typeof body === 'object' && !Array.isArray(body)
+      && (((body as Record<string, unknown>).packing == null) || ((body as Record<string, unknown>).promotion == null)))
+      ? await getLocalSettings()
+      : null
+    const mergedBody = (body && typeof body === 'object' && !Array.isArray(body))
+      ? {
+          ...(body as Record<string, unknown>),
+          ...((body as Record<string, unknown>).packing == null ? { packing: current!.packing } : {}),
+          ...((body as Record<string, unknown>).promotion == null ? { promotion: current!.promotion } : {}),
+        }
       : body
     const next_ = sanitizeLocalSettings(mergedBody)
     const errs = Array.from(new Set([

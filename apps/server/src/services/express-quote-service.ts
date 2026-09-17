@@ -12,6 +12,7 @@ import { getExpressProvider } from './delivery/kd100-express'
 import { loadOrderLines, assertLinesSellable, DirectItemInput } from './order-lines'
 import { loadGiftLines } from './member/checkout'
 import { getLocalSettings } from './local-settings'
+import { promoPreviewOf } from './promotion'
 import { notifySystemAlert } from './notify'
 
 /** 顾客在结算页等报价的上限，与同城顾客侧一致 */
@@ -71,6 +72,8 @@ export interface QuoteResult {
   freeShipMinFen: number; freeShip: boolean; belowMin: boolean; minOrderAmountFen: number; subtotalFen: number
   /** 回价家数（含无价的家）；各家成本价不下发顾客，只签进凭证 */
   quoteCount: number; quoteToken: string; quoteExpiresAt: string
+  /** 全店满减（2026-09-17 设计 §4.4）：按 EXPRESS 渠道、subtotalFen 算的本单预览，供结算页显示 */
+  promoDiscountFen: number; nextTierGapFen: number | null
 }
 
 export async function quoteExpress(req: QuoteRequest, now: Date = new Date()): Promise<QuoteResult> {
@@ -97,9 +100,12 @@ export async function quoteExpress(req: QuoteRequest, now: Date = new Date()): P
     addressId: address.id, addressHash: addressHash(address.fullAddress), itemsHash: itemsHash(lines, gifts), weightKg,
     feeFen: fee.feeFen, quotedFeeFen: fee.quotedFeeFen, feeSource: fee.feeSource, groupName: group.name, quotes: snapshot,
   }, now)
+  const ls = await getLocalSettings()
+  const promoPreview = promoPreviewOf(ls, subtotalFen, 'EXPRESS', now)
   return {
     feeFen: fee.feeFen, quotedFeeFen: fee.quotedFeeFen, feeSource: fee.feeSource, weightKg, groupName: group.name,
     freeShipMinFen: group.freeShipMinFen, freeShip: fee.freeShip, belowMin: fee.belowMin, minOrderAmountFen: s.minOrderAmountFen, subtotalFen,
     quoteCount: (quotes ?? []).length, quoteToken, quoteExpiresAt: expressQuoteExpiresAt(now).toISOString(),
+    promoDiscountFen: promoPreview.discountFen, nextTierGapFen: promoPreview.nextTierGapFen,
   }
 }
