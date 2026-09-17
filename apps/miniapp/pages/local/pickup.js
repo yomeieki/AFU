@@ -68,7 +68,8 @@ Page({
     payAmount: null,
     belowMinGap: 0,
     submitting: false,
-    action: { disabled: false, text: '请选择取餐时间', amountState: 'pending', action: 'slot' },
+    // 首屏时段还没拉回来（slotsLoading 初值即 true），此刻不该可点
+    action: { disabled: true, text: '请选择取餐时间', amountState: 'pending', action: 'none' },
     subscribeTemplateIds: [],
     payTimeoutMin: 15,
   },
@@ -173,6 +174,8 @@ Page({
           patch.activeDay = Math.min(self.data.activeDay || 0, Math.max(0, days.length - 1))
         } else {
           // 2026-09-17 起不再自动预选第一个时段：进页/弹层要停在空态，顾客自己点。
+          // patch.selected 保持 null——不要把这行改回 decorateSlot(first.slot, ...)，
+          // 那等于撤销整个「顾客自己选」的需求（护栏见 tests/miniapp/pickup-page.test.cjs）。
           // activeDay 仍落到第一个有时段的那天，省得顾客打开弹层还要自己翻页。
           var first = st.firstSlot(view)
           patch.selected = null
@@ -187,7 +190,7 @@ Page({
       })
       .catch(function(err) {
         if (seq !== self._slotSeq) return
-        self.setData({ slotsLoading: false, slotsError: (err && err.message) || '取餐时段获取失败' })
+        self.setData({ slotsLoading: false, slotsError: (err && err.message) || '取餐时段获取失败', hasAnySlot: false })
         self.recompute()
       })
   },
@@ -215,6 +218,9 @@ Page({
       belowMinGap: gap,
       action: st.pickupCheckoutAction({
         blockReason: d.blockReason,
+        slotsLoading: d.slotsLoading,
+        slotsError: !!d.slotsError,
+        noSlots: !d.slotsLoading && !d.slotsError && !d.hasAnySlot,
         hasSlot: !!d.selected,
         slotStale: d.slotStale,
         phoneValid: st.isValidPhone(d.contactPhone),
@@ -229,7 +235,7 @@ Page({
 
   // ── 时段选择器 ──────────────────────────────────────────────
   openPicker: function() {
-    if (this.data.blockReason) return
+    if (this.data.blockReason || this.data.slotsLoading || this.data.slotsError) return
     this.setData({ pickerOpen: true })
   },
   closePicker: function() {

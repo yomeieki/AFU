@@ -1,4 +1,4 @@
-<view class="store-head {{compact ? 'store-head-compact' : ''}}">
+<view class="store-head">
   <!-- 第一行只有三样东西：图标、店名、状态胶囊。原来这里还有个「我的订单 ›」，
        改版后订单统一从底部「我的」进（Spec §4.1）。 -->
   <view class="store-title-row">
@@ -9,14 +9,12 @@
     <text class="status-pill status-pill-{{tone}}">{{label}}</text>
   </view>
 
-  <block wx:if="{{!compact}}">
-    <view wx:if="{{rulesText}}" class="delivery-rules-row" bindtap="onOpenStore">
-      <text class="delivery-rules">{{rulesText}}</text>
-      <text wx:if="{{canNavigate}}" class="delivery-rules-arrow">›</text>
-    </view>
-    <view wx:if="{{notice}}" class="head-notice {{noticeBlocking ? '' : 'head-notice-soft'}}">
-      <text class="head-notice-text">{{notice}}</text>
-      <view wx:if="{{noticeBlocking}}" class="head-notice-action" bindtap="onAction">{{altLabel}}</view>
-    </view>
-  </block>
+  <view wx:if="{{rulesText}}" class="delivery-rules-row" bindtap="onOpenStore">
+    <text class="delivery-rules">{{rulesText}}</text>
+    <text wx:if="{{canNavigate}}" class="delivery-rules-arrow">›</text>
+  </view>
+  <view wx:if="{{notice}}" class="head-notice {{noticeBlocking ? '' : 'head-notice-soft'}}">
+    <text class="head-notice-text">{{notice}}</text>
+    <view wx:if="{{noticeBlocking}}" class="head-notice-action" bindtap="onAction">{{altLabel}}</view>
+  </view>
 </view>

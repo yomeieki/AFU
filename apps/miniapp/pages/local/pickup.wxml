@@ -35,7 +35,7 @@
     </view>
     <view wx:elif="{{blockReason}}" class="slot-muted">{{blockReason}}</view>
     <view wx:elif="{{hasAnySlot}}" class="slot-muted">请选择取餐时间 ›</view>
-    <view wx:else class="slot-muted">今日已无可取时段，请选择其它日期 ›</view>
+    <view wx:else class="slot-muted">暂无可取时段</view>
     <text class="slot-hint">最早可取时间已含备餐时长；到店凭手机尾号取餐</text>
   </view>
 

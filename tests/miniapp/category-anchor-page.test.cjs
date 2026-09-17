@@ -411,6 +411,10 @@ test('图片加载去抖：连续调用只重量一次', async function () {
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
+  // afterGroupsRendered 在 nextTick 之外还挂了一个 ~200ms 的二次 measureOffsets
+  // 保险（返工 #6，与 onImageLoad 同款幂等），等它先落地，别把它算进本用例要测的
+  // 「onImageLoad 去抖」窗口里
+  await wait(220)
   const before = ctx.getSelectorQueryCalls()
   for (let i = 0; i < 5; i++) page.onImageLoad.call(page)
   await wait(350)

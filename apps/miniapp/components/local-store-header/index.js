@@ -1,4 +1,4 @@
-// 同城门店头。主页用完整版（店名 + 状态 + 规则行 + 通知），分类页用紧凑版（compact，只留第一行），
+// 同城门店头。主页与分类页共用同一套完整版（店名 + 状态 + 规则行 + 通知），
 // 两页共用同一份状态判定与同一套排版规则。
 //
 // 存在的理由是排版而不只是复用：原来这一行是 `justify-content: space-between`，
@@ -18,8 +18,6 @@ Component({
   },
   properties: {
     meta: { type: null, value: null },
-    // 紧凑版：只画第一行（图标 + 店名 + 状态），不画规则行与通知
-    compact: { type: Boolean, value: false },
     // 同城子模式 'DELIVERY' | 'PICKUP'
     mode: { type: String, value: 'DELIVERY' },
   },

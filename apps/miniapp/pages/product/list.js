@@ -207,12 +207,17 @@ Page({
     this.setData({ rightScrollTop: this.data.rightScrollTop === 0 ? 0.5 : 0 })
   },
 
-  // 分段渲染完成后（或右侧高度可能变化后）量一次锚点位置
+  // 分段渲染完成后（或右侧高度可能变化后）量一次锚点位置。
+  // 完整门店头的高度由子组件二次 setData 决定（营业状态/通知条这类异步字段），
+  // 头由高变矮时（店主恢复营业、通知条消失）nextTick 那次量可能量早了：与 onImageLoad
+  // 同款的幂等保险，200ms 后再补量一次；量两次数值一样也无所谓，setData 会自己去重。
   afterGroupsRendered() {
     var self = this
     var run = function() { self.measureOffsets() }
     if (wx.nextTick) wx.nextTick(run)
     else setTimeout(run, 0)
+    if (this._remeasureTimer) clearTimeout(this._remeasureTimer)
+    this._remeasureTimer = setTimeout(run, 200)
   },
 
   // 量各段顶部位置（相对 scroll-view 内容顶）与最后一段的补白。只在分段渲染完成后调，滚动时只做数值比较。
@@ -275,6 +280,7 @@ Page({
   _clearTimers() {
     if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null }
     if (this._imgTimer) { clearTimeout(this._imgTimer); this._imgTimer = null }
+    if (this._remeasureTimer) { clearTimeout(this._remeasureTimer); this._remeasureTimer = null }
   },
 
   // 搜索结果分页（仅搜索模式生效；分组视图下右侧一次拉全，不走分页）

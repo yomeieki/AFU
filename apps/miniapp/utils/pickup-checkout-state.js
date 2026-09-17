@@ -4,11 +4,15 @@
 // 「能不能点 / 写什么 / 金额显示成什么 / 点了干什么」，散在页面里拼三元表达式
 // 必然出现「文案改了但按钮还能点」。
 //
-// 优先级：阻塞 → 未选时段 → 时段失效 → 手机号 → 起送线 → 金额未知 → 餐具 → 优惠重算中 → 提交中。
+// 优先级：阻塞 → 时段加载中 → 时段获取失败 → 无可取时段 → 未选时段 → 时段失效 →
+// 手机号 → 起送线 → 金额未知 → 餐具 → 优惠重算中 → 提交中。
 // 「未选时段」与「时段失效」这两格按钮**都可点**：前者动作是 slot（打开时段选择器），
 // 后者是 reslot（重新拉时段并打开选择器）——都不是提交，与「未选餐具」同一套处理，
 // 页面必须按 action 分派，绝不能以「按钮没禁用」推断该提交。
 // 2026-09-17 起进页不再自动预选第一个时段（顾客自己选），所以「未选时段」不再禁用按钮。
+// 「时段加载中 / 获取失败 / 无可取时段」这三格禁用提交（没格子可选，点了也白点），
+// 但金额（amountState）不因为这三格而降级——顾客的应付金额只看 payAmount 算不算得出来，
+// 与时段是否加载完成无关；这三格与「未选时段」共用同一条 amt 计算，回归缺陷见下。
 //
 // ⚠️ 本文件必须保持 ES5（scripts/check-miniapp-es5.mjs 把守）。
 
@@ -17,6 +21,8 @@ var formatPrice = require('./format').formatPrice
 var TEXT = {
   BLOCKED: '暂不可自取',
   NO_SLOT: '请选择取餐时间',
+  SLOT_LOADING_ERROR: '取餐时段获取失败',
+  NO_SLOTS: '暂无可取时段',
   SLOT_STALE: '重新选择时间',
   NO_PHONE: '请填写手机号',
   NO_TABLEWARE: '请选择餐具',
@@ -31,6 +37,9 @@ function result(disabled, text, amountState, action) {
 /**
  * @param {Object} s
  *   blockReason     业务阻塞（休业/暂停/未开通），非空即阻塞
+ *   slotsLoading    时段列表正在拉取中
+ *   slotsError      时段列表拉取失败
+ *   noSlots         时段列表已拉到但没有任何一格可选（区分「还没选」与「真没时段」）
  *   hasSlot         已选中一个取餐时段
  *   slotStale       已选的那格已不在最新时段列表里（过期或店主改了设置）
  *   phoneValid      取餐人手机号合法
@@ -43,8 +52,13 @@ function result(disabled, text, amountState, action) {
 function pickupCheckoutAction(s) {
   var st = s || {}
   if (st.blockReason) return result(true, TEXT.BLOCKED, 'blocked', 'none')
+  // 金额与时段是否加载完成无关：能算出来就照常显示，别因为时段没格子就把底栏压成「待计算」
+  var amt = st.payAmount === null || st.payAmount === undefined ? 'pending' : 'ready'
+  if (st.slotsLoading) return result(true, TEXT.NO_SLOT, amt, 'none')
+  if (st.slotsError) return result(true, TEXT.SLOT_LOADING_ERROR, amt, 'none')
+  if (st.noSlots) return result(true, TEXT.NO_SLOTS, amt, 'none')
   // 与「未选餐具」一致：按钮可点，动作是打开时段选择器，不是提交
-  if (!st.hasSlot) return result(false, TEXT.NO_SLOT, 'pending', 'slot')
+  if (!st.hasSlot) return result(false, TEXT.NO_SLOT, amt, 'slot')
   if (st.slotStale) return result(false, TEXT.SLOT_STALE, 'pending', 'reslot')
   if (!st.phoneValid) return result(true, TEXT.NO_PHONE, 'ready', 'none')
   if (st.belowMinGap > 0) return result(true, '还差 ¥' + formatPrice(st.belowMinGap) + ' 起', 'ready', 'none')

@@ -19,9 +19,28 @@ test('时段失效 → 可点但动作是重选，不是提交', function () {
 })
 // 2026-09-17 起进页不再自动预选第一个时段：与「未选餐具」同一套处理，
 // 按钮可点、文案是 NO_SLOT、动作是 slot（打开时段选择器），不是禁用、不是提交。
-test('没选时段（selected 为 null）→ 不禁用，文案「请选择取餐时间」，动作是打开时段选择器', function () {
+// 金额照常显示（顾客要先看到要付多少）——这是返工修的回归：改动前时段自动预填，
+// 顾客一进页就看得见合计；改成必须自己选之后，这一格若给 'pending' 会让底栏金额
+// 在选时间前全变「待计算」，是缺陷不是设计。
+test('没选时段（selected 为 null）→ 不禁用，文案「请选择取餐时间」，动作是打开时段选择器，金额照常显示', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false })),
+    { disabled: false, text: '请选择取餐时间', amountState: 'ready', action: 'slot' })
+})
+test('没选时段且金额还没算出来（车没回来）→ 金额待计算', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, payAmount: null })),
     { disabled: false, text: '请选择取餐时间', amountState: 'pending', action: 'slot' })
+})
+test('时段加载中 → 禁用，文案「请选择取餐时间」，金额照常显示', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, slotsLoading: true })),
+    { disabled: true, text: '请选择取餐时间', amountState: 'ready', action: 'none' })
+})
+test('时段获取失败 → 禁用，文案「取餐时段获取失败」', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, slotsError: true })),
+    { disabled: true, text: '取餐时段获取失败', amountState: 'ready', action: 'none' })
+})
+test('时段拉到了但一格都没有 → 禁用，文案「暂无可取时段」', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, noSlots: true })),
+    { disabled: true, text: '暂无可取时段', amountState: 'ready', action: 'none' })
 })
 test('手机号无效 → 禁用，但金额照常显示（顾客要先看到要付多少）', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ phoneValid: false })),
@@ -89,7 +108,7 @@ test('打包费：Σ quantity × 单份打包费；每份 packingFeeEach=0 → �
     { pickupDiscount: 250, couponDiscount: 500, packingFee: 300, payAmount: 4550 })
 })
 
-test('时段：默认选第一个可选格；今天为空时落到明天；已选格不在最新列表里即视为失效', function () {
+test('firstSlot：找第一个可选格（页面只用它决定弹层默认落到哪一天）；今天为空时落到明天；已选格不在最新列表里即视为失效', function () {
   const view = { days: [
     { date: '2026-09-11', label: '今天', slots: [] },
     { date: '2026-09-12', label: '明天', slots: [{ startAt: 'A', endAt: 'B', label: '10:00–10:30' }] },
@@ -100,16 +119,19 @@ test('时段：默认选第一个可选格；今天为空时落到明天；已�
   assert.equal(st.firstSlot({ days: [] }), null)
   assert.equal(st.firstSlot(null), null)
 })
-test('优先级：阻塞 > 未选时段 > 时段失效 > 手机号 > 起送 > 金额未知 > 餐具 > 优惠重算 > 提交中', function () {
-  const all = { blockReason: 'x', hasSlot: false, slotStale: true, phoneValid: false, belowMinGap: 500, hasTableware: false, benefitsLoading: true, submitting: true, payAmount: 100 }
+test('优先级：阻塞 > 时段加载中 > 时段获取失败 > 无可取时段 > 未选时段 > 时段失效 > 手机号 > 起送 > 金额未知 > 餐具 > 优惠重算 > 提交中', function () {
+  const all = { blockReason: 'x', slotsLoading: true, slotsError: true, noSlots: true, hasSlot: false, slotStale: true, phoneValid: false, belowMinGap: 500, hasTableware: false, benefitsLoading: true, submitting: true, payAmount: 100 }
   assert.equal(st.pickupCheckoutAction(all).text, '暂不可自取')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).action, 'slot')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true })).action, 'reslot')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false })).text, '请填写手机号')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true })).text, '还差 ¥5.00 起')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0 })).text, '请选择餐具')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, hasTableware: true })).text, '提交订单')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, hasTableware: true, benefitsLoading: false })).text, '提交中')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).text, '请选择取餐时间')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false })).text, '取餐时段获取失败')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false })).text, '暂无可取时段')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false })).action, 'slot')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false, hasSlot: true })).action, 'reslot')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false, hasSlot: true, slotStale: false })).text, '请填写手机号')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false, hasSlot: true, slotStale: false, phoneValid: true })).text, '还差 ¥5.00 起')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false, hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0 })).text, '请选择餐具')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false, hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, hasTableware: true })).text, '提交订单')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false, hasSlot: true, slotStale: false, phoneValid: true, belowMinGap: 0, hasTableware: true, benefitsLoading: false })).text, '提交中')
 })
 
 test('pickupDateText：月日 + 星期按日历日算，非法输入给空', function () {

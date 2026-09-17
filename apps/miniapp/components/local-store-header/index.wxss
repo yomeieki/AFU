@@ -2,7 +2,6 @@
   background: var(--card, #fff);
   padding: 24rpx 24rpx 20rpx;
 }
-.store-head-compact { padding-bottom: 14rpx; }
 
 /* Spec §4.1 的三条排版铁律，改这里之前先读组件 js 的文件头：
    ① 整行左对齐——原来的 space-between 会把胶囊推到远处；
