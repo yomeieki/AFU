@@ -13,10 +13,20 @@ const readSrc = (rel) => require('node:fs')
   .readFileSync(path.join(__dirname, '../../apps/miniapp', rel), 'utf8')
   .replace(/<!--[\s\S]*?-->/g, '')
 
+// 顶栏那一段（<view class="navbar"> … </view>）。店名断言必须只看这一段：
+// 主页别处（分享卡、空态文案）将来正当出现店名是允许的，扫全文会误红。
+const navbarOf = (src) => {
+  const i = src.indexOf('<view class="navbar"')
+  assert.ok(i !== -1, '找不到 navbar 容器')
+  const end = src.indexOf('<view style="height:', i)
+  assert.ok(end > i, '找不到 navbar 容器的结尾占位块')
+  return src.slice(i, end)
+}
+
 test('主页顶栏：店名节点已删除，两个渠道都不再显示店名', function () {
-  const src = readSrc('pages/index/index.wxml')
-  assert.ok(src.indexOf('navbar-title') === -1, '不应再有 navbar-title 节点：' + src)
-  assert.ok(src.indexOf('阿福凉菜') === -1, '顶栏内不应再硬编码店名：' + src)
+  const bar = navbarOf(readSrc('pages/index/index.wxml'))
+  assert.ok(bar.indexOf('navbar-title') === -1, '顶栏不应再有 navbar-title 节点：' + bar)
+  assert.ok(bar.indexOf('阿福凉菜') === -1, '顶栏内不应再硬编码店名：' + bar)
 })
 
 test('主页顶栏：渠道标识只在邮寄（EXPRESS）渲染，同城不渲染', function () {
