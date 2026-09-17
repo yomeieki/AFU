@@ -55,7 +55,10 @@ Page({
         navContent = (menu.top - statusBarHeight) * 2 + menu.height
       }
     }
-    // 渠道标识的右边距：胶囊左沿再往左 10px。桩/低版本库拿不到 left 时用 wxss 的 208rpx 兜底（不写 style）
+    // 渠道标识（现在只有邮寄渠道会渲染，见 index.wxml 的 wx:if）的右边距：胶囊左沿再往左 10px；
+    // 桩/低版本库拿不到 left 时这里算出 0，交给 wxss 的 115px 兜底（不写 style）。
+    // 同城不渲染这颗标识，但 computeNavBar 在 onLoad 就跑、loadData 还没定下渠道，无从短路，
+    // 算出来的值对同城只是空转，不是遗留死代码。
     var channelRight = 0
     if (menu && menu.left > 0 && menu.left < info.windowWidth) channelRight = info.windowWidth - menu.left + 10
     this.setData({

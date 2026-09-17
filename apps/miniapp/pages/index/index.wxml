@@ -10,10 +10,10 @@
       <view class="navbar-back" hover-class="navbar-back-hover" hover-stay-time="60" bindtap="goCover">
         <view class="navbar-back-icon"></view>
       </view>
-      <text class="navbar-title">阿福凉菜</text>
-      <!-- 两个渠道共用同一套四栏导航，顾客很容易忘了自己在哪一边。
-           这颗标识就说这一件事；点它回封面重选，与左侧返回箭头同一个去处。 -->
-      <text class="navbar-channel" hover-class="navbar-channel-hover" hover-stay-time="60" bindtap="goCover" style="{{channelRight ? 'right:' + channelRight + 'px' : ''}}">{{channelLabel}}</text>
+      <!-- 店名与渠道标识都与下方门店头重复，店主要求精简：同城下方已有 local-store-header
+           （店名 + 营业状态 + 配送规则），顶栏只留返回箭头。邮寄没有门店头，去掉标识会让顾客
+           看不出自己在哪个渠道，所以邮寄侧保留这颗标识；点它回封面重选，与左侧返回箭头同一个去处。 -->
+      <text wx:if="{{channel === 'EXPRESS'}}" class="navbar-channel" hover-class="navbar-channel-hover" hover-stay-time="60" bindtap="goCover" style="{{channelRight ? 'right:' + channelRight + 'px' : ''}}">{{channelLabel}}</text>
     </view>
   </view>
   <view style="height:{{navTotal}}px"></view>
