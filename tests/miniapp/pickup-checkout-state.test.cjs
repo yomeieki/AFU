@@ -48,6 +48,13 @@ test('时段拉到了但一格都没有 → 禁用，文案「暂无可取时段
   assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, noSlots: true })),
     { disabled: true, text: '暂无可取时段', amountState: 'ready', action: 'none' })
 })
+// 回归护栏：noSlots 这格故意不加 !hasSlot——已选时段的顾客一返回本页，刷新回来
+// 一格都没有时，已选的那格必然也失效了，此时仍要禁用提交、文案「暂无可取时段」，
+// 不能因为 hasSlot 仍是 true 就被上面「已选时段」那格截胡。
+test('已选时段但刷新后一格都没有 → 仍禁用，文案「暂无可取时段」', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ noSlots: true })),
+    { disabled: true, text: '暂无可取时段', amountState: 'ready', action: 'none' })
+})
 test('手机号无效 → 禁用，但金额照常显示（顾客要先看到要付多少）', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ phoneValid: false })),
     { disabled: true, text: '请填写手机号', amountState: 'ready', action: 'none' })

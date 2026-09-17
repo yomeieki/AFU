@@ -24,7 +24,7 @@
   <view class="section card slot-section" bindtap="openPicker">
     <view class="section-title">取餐时间</view>
     <view wx:if="{{slotsLoading && !selected}}" class="slot-muted">正在获取可取时段…</view>
-    <view wx:elif="{{slotsError}}" class="slot-error">
+    <view wx:elif="{{slotsError && !selected}}" class="slot-error">
       <text>{{slotsError}}</text>
       <view class="retry-inline" catchtap="onRetrySlots">重试</view>
     </view>
