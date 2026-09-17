@@ -57,10 +57,10 @@
 ### 5.2 页面（`pages/product/list`）
 
 - **拉数据**：进页 / 切渠道时循环调 `getProducts({ channel, page, pageSize: 50 })`，直到 `已拉条数 >= total`，再 `groupByCategory` 得到 `groups`。上限保护：最多 20 页（1000 条）后停下并打日志，防止接口异常时死循环。
-- **左侧**：渲染 `groups`（无「全部」）。点击设置 `scrollIntoView = 'g-' + id`，并**立刻**把高亮设成被点的分类。
+- **左侧**：渲染 `groups`（无「全部」）。点击设置 `scrollIntoView = 'g-' + id`，并**立刻**把高亮设成被点的分类。注意 `scroll-into-view` 设成**同一个值不会再次触发**——顾客滑走后再点同一个分类会没反应，所以要先置空再设新值。
 - **右侧**：`scroll-view` 里按段渲染，每段一个锚点 `<view id="g-{{id}}" class="group-anchor">`，段头显示分类名。
 - **吸顶段头**：不用 CSS `position: sticky`（`scroll-view` 内各端表现不一致），改为在右侧顶部覆盖一条「当前分类」浮动条，内容跟着高亮段变。
-- **滚动联动**：`bindscroll` 拿 `scrollTop`，与预先量好的 `offsets` 比对，**节流 100ms**。`offsets` 在 `groups` 渲染完后用 `createSelectorQuery().selectAll('.group-anchor').boundingClientRect()` + `.scrollOffset()` 量一次；切渠道、退出搜索、图片首次撑开高度后（`onImageLoad` 去抖 300ms）重量一次。
+- **滚动联动**：`bindscroll` 拿 `scrollTop`，与预先量好的 `offsets` 比对，**节流 100ms**。`offsets` 在 `groups` 渲染完后用 `createSelectorQuery().selectAll('.group-anchor').boundingClientRect()` + `.scrollOffset()` 量一次；切渠道、退出搜索后重量一次。**真正会改变右侧高度的是同城门店头首次渲染完成与外送/自取切换**（商品图是固定 160rpx 的盒子，图片加载不改布局），所以 `loadMeta` 回来与切模式后各重量一次；`onImageLoad` 去抖 300ms 仍留作保险。
 - **点击与滚动打架**：点左侧后滚动动画进行中，`bindscroll` 会把高亮改成中间经过的分类。做法：点击时记 `lockUntil = Date.now() + 500`，锁定期内忽略滚动事件的高亮计算。
 - **最后一段顶不上去**：最后一段之后补一块空白，高度 = 右侧可视高度 − 最后一段高度（不足则为 0），保证最后一个分类能被滚到顶、能被高亮。
 - **从首页进来**：`app.globalData.pendingCategoryId` 仍然有效，数据到位后滚到该段（原来的 `applyCategory` 语义改为「定位」）。
