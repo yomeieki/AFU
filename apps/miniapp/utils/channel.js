@@ -39,6 +39,19 @@ function setShoppingChannel(value) {
   return channel
 }
 
+// 「上次用过的渠道」——给封面底部四栏用（2026-09-17 设计 N7）。
+// 与 getShoppingChannel() 刻意不同：那边是冷启动兜底（无记录 → EXPRESS），
+// 这边要能分辨「从没选过」——无记录 / 脏值 / 读失败一律 null，由调用方决定默认值（封面默认同城）。
+function getRememberedChannel() {
+  var raw = ''
+  try {
+    raw = wx.getStorageSync(STORAGE_KEY)
+  } catch (err) {
+    return null
+  }
+  return raw === 'LOCAL' || raw === 'EXPRESS' ? raw : null
+}
+
 // 商品、分类、购物车、订单的请求一律显式带渠道，不依赖服务端默认值。
 // 服务端 /categories、/products、/cart 的 channel 缺省是 EXPRESS，
 // 漏传的表现是「同城模式下看到邮寄的货」——不报错、不好发现。
@@ -80,6 +93,7 @@ module.exports = {
   normalizeChannel: normalizeChannel,
   getShoppingChannel: getShoppingChannel,
   setShoppingChannel: setShoppingChannel,
+  getRememberedChannel: getRememberedChannel,
   channelQuery: channelQuery,
   MODE_STORAGE_KEY: MODE_STORAGE_KEY,
   normalizeLocalMode: normalizeLocalMode,

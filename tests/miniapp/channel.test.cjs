@@ -79,3 +79,27 @@ test('storage 读模式抛错时回落 DELIVERY', function () {
   const channel = load({ getStorageSync: function () { throw new Error('boom') } })
   assert.equal(channel.getLocalMode(), 'DELIVERY')
 })
+
+// getRememberedChannel：给封面底部四栏用（2026-09-17 设计 N7），与 getShoppingChannel()
+// 刻意不同——那边是冷启动兜底（无记录 → EXPRESS），这边要能分辨「从没选过」，
+// 无记录 / 脏值 / 读失败一律 null，由调用方决定默认值（封面默认同城）。
+test('getRememberedChannel：storage 恰为 LOCAL/EXPRESS 时原样返回', function () {
+  const localChannel = load({ getStorageSync: function () { return 'LOCAL' } })
+  assert.equal(localChannel.getRememberedChannel(), 'LOCAL')
+  const expressChannel = load({ getStorageSync: function () { return 'EXPRESS' } })
+  assert.equal(expressChannel.getRememberedChannel(), 'EXPRESS')
+})
+
+test('getRememberedChannel：空值/脏值/undefined 一律 null，不是 EXPRESS', function () {
+  const emptyChannel = load({ getStorageSync: function () { return '' } })
+  assert.equal(emptyChannel.getRememberedChannel(), null)
+  const otherChannel = load({ getStorageSync: function () { return 'OTHER' } })
+  assert.equal(otherChannel.getRememberedChannel(), null)
+  const undefinedChannel = load({ getStorageSync: function () { return undefined } })
+  assert.equal(undefinedChannel.getRememberedChannel(), null)
+})
+
+test('getRememberedChannel：storage 读抛错时返回 null，不向上抛', function () {
+  const channel = load({ getStorageSync: function () { throw new Error('storage unavailable') } })
+  assert.equal(channel.getRememberedChannel(), null)
+})
