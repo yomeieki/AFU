@@ -873,7 +873,13 @@ model PointsGood {
 model OrderNoSeq {
   dayKey    String   @id @map("day_key") @db.Char(8)
   seq       Int      @default(0) @db.UnsignedInt
-  updatedAt DateTime @updatedAt @map("updated_at")
+  // 全表唯一一个带 @default(now()) 的 updated_at，**不是冗余，别删**：别处的 updated_at
+  // 都由 Prisma 在写入时填值，只有这张表是 order-no.ts 用原生 SQL 写的，INSERT 里不带
+  // updated_at，列又是 NOT NULL —— 全靠建表时的 DEFAULT CURRENT_TIMESTAMP(3) 兜底。
+  // 删掉库侧默认值（或出迁移把它 DROP 掉）会让每天第一单当场报
+  // `Field 'updated_at' doesn't have a default value`，即下单失败；已在本地库复现过。
+  // 写成 @default(now()) 只是让 schema 如实描述库（ON UPDATE 那半边 Prisma 不建模）。
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@map("order_no_seq")
 }
