@@ -15,6 +15,8 @@ function toFen(input: string): number | null {
   const [yuan, dec = ''] = v.split('.')
   return Number(yuan) * 100 + Number(dec.padEnd(2, '0'))
 }
+// 单档金额上限，与服务端 sanitizeLocalSettings 里 int(..., 1, 10_000_000) 的上界一致（¥100,000）
+const TIER_FEN_MAX = 10_000_000
 const inputCls = 'w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400'
 const Field = ({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) => (
   <div>
@@ -84,6 +86,9 @@ export default function PromotionSettings() {
   const rowErrors: (string | null)[] = rows.map((r, i) => {
     const min = toFen(r.minYuan), cut = toFen(r.cutYuan)
     if (min === null || cut === null) return '金额格式不正确（最多两位小数）'
+    // 服务端 sanitize 用 int(..., 1, 10_000_000) 兜住单档金额，越界的整行会被丢掉且没有任何提示：
+    // 保存看起来成功，回查才发现少一档。这里先拦住，别让店员对着「存了又没存上」的页面猜。
+    if (min > TIER_FEN_MAX || cut > TIER_FEN_MAX) return '单档金额不能超过 ¥100,000'
     if (cut >= min) return '减的比门槛还多，这样配会亏本'
     if (rows.some((other, j) => j !== i && toFen(other.minYuan) === min)) return '门槛重复'
     return null

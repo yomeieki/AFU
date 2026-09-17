@@ -149,6 +149,17 @@ t('validateRaw：合法值 / 空串 → 无错', () => {
   assert.deepStrictEqual(validateRawLocalSettings({ promotion: { startAt: '2026-09-18T00:00:00+08:00', endAt: '' } }), [])
 })
 
+// 时区偏移必填。不带 Z/±HH:mm 的串 new Date() 会按进程 TZ 解析，而本仓库没有固定 process.env.TZ：
+// 生产若跑在 UTC，店主填的「18 号零点开始」要到北京时间 8 点才生效，满减是钱，不能取决于服务器时区。
+t('validateRaw：startAt 不带时区（2026-09-18T00:00）→ 格式不正确', () => {
+  const errs = validateRawLocalSettings({ promotion: { startAt: '2026-09-18T00:00' } })
+  assert.ok(errs.some((e) => e.includes('格式不正确')), `实际: ${JSON.stringify(errs)}`)
+})
+
+t('validateRaw：Z 结尾的 UTC 写法照样接受（时区是显式的）', () => {
+  assert.deepStrictEqual(validateRawLocalSettings({ promotion: { startAt: '2026-09-17T16:00:00Z' } }), [])
+})
+
 // ── promoDiscountOf：取档规则 ───────────────────────────────────────────────
 
 const NOW = new Date('2026-09-18T04:00:00Z')

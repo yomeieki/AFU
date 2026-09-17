@@ -337,8 +337,13 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
  * 会被它悄悄放过、变成一个「看似正确」的日期，而不是报错——同 F13 休业日期一个坑，
  * 但更隐蔽。要求必须是 `YYYY-MM-DDTHH:mm[:ss][.sss](Z|±HH:mm)` 这种带 `T`、破折号分隔的
  * ISO 8601 形状，`Date.parse` 只作二次确认。
+ *
+ * 时区偏移**必填**（不带 `Z`/`±HH:mm` 一律拒）：`new Date('2026-09-18T00:00')` 按**进程 TZ**
+ * 解析，而仓库里没有任何地方固定 `process.env.TZ`，生产若跑在 UTC 下，店主填的「18 号零点开始」
+ * 会变成北京时间 8 点才生效——满减是钱，不能让它取决于服务器时区。后台页的 joinIso 一律拼
+ * `+08:00`，所以这条只拦直接调 API 的写法，不影响店主操作。
  */
-const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/
+const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
 const asObj = (v: unknown) => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {})
 const int = (v: unknown, fb: number, min = 0, max = Number.MAX_SAFE_INTEGER) => {
   const n = Number(v)
