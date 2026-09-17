@@ -19,7 +19,7 @@ export interface NavItem {
  */
 export const workbenchNav: NavItem = { to: '/workbench', prefix: '/workbench', label: '接单工作台' }
 
-/** 顶栏左侧那一串（不含工作台）。窄屏九宫格用的是下面的 topNavigation。 */
+/** 顶栏左侧那一串（不含工作台）。窄屏入口网格用的是下面的 topNavigation。 */
 export const mainNavigation: NavItem[] = [
   { to: '/dashboard', prefix: '/dashboard', label: '经营概览' },
   { to: '/catalog/products', prefix: '/catalog', label: '商品管理' },

@@ -67,6 +67,20 @@ test('Layout 的图标表覆盖每一个一级入口', () => {
 
 // 扫码统计：店主 2026-09-17 决定收起入口、保留页面，以后再放回来。
 // 页签已经没有了，谁顺手把路由也删掉，光看测试是发现不了的——这条就是那个决定的锁。
+// 徽标表故意只覆盖 8 个入口里的 2 个（工作台、订单管理），做不了一一对应，
+// 但键必须都是真实存在的 prefix：写错一个不会崩，只会让红点数字静默消失。
+test('Layout 的徽标表只用真实存在的入口 prefix', () => {
+  const src = readFileSync(new URL('./components/Layout.tsx', import.meta.url), 'utf8')
+  const prefixes = topNavigation.map((i) => i.prefix)
+  for (const name of ['navBadge', 'badgeTitle']) {
+    const block = new RegExp(`const ${name}: Record<string, [^>]+> = \\{([\\s\\S]*?)\\n  \\}`).exec(src)
+    assert.ok(block, `找不到 ${name} 定义`)
+    const keys = [...block[1].matchAll(/'([^']+)':/g)].map((m) => m[1])
+    assert.ok(keys.length > 0, `${name} 没解析出键`)
+    for (const k of keys) assert.ok(prefixes.includes(k), `${name} 的键 ${k} 不是任何一级入口的 prefix`)
+  }
+})
+
 test('扫码统计的路由仍在（入口收起，地址仍可访问）', () => {
   const src = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   assert.match(src, /<Route path="scan-stats" element=\{<ScanStats \/>\} \/>/, '扫码统计路由被删了：店主只要求收起入口，不是删功能')

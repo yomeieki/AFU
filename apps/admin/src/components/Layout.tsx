@@ -8,14 +8,17 @@ import { useAuthStore } from '../store/auth'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useUnsavedSettings } from './UnsavedSettings'
 import { activeNavLabel, mainNavigation, topNavigation, workbenchNav } from '../navigation'
+import { isModifiedLinkClick } from '../utils/link-click'
 import VersionBanner from './VersionBanner'
 
 /**
- * 图标按 to 取，不写进 navigation.ts —— 那个模块要能被 node --test 直接加载，
+ * 图标表放在这里而不是 navigation.ts —— 那个模块要能被 node --test 直接加载，
  * 一旦 import 了 lucide-react（含 JSX 运行时）测试就跑不起来。
+ * 代价是它与 navigation.ts 会各走各的，所以 navigation.test.ts 用源码级断言
+ * 锁住「navIcons 的键 = 一级入口的 prefix」。（键为什么用 prefix 见下面那段。）
  *
  * 工作台与订单管理必须是两个不同图标：上一版顶栏两者都用 ClipboardList，
- * 窄屏九宫格里只靠图标扫一眼时根本认不出是哪个。
+ * 窄屏那张入口网格里只靠图标扫一眼时根本认不出是哪个。
  */
 // 键用各入口的 `prefix`（/promotion、/settings…），**不要用 `to`**。
 // `to` 是默认子页地址，换个默认子页就会变；这张表以前按 `to` 索引，2026-09-17 把推广运营
@@ -90,6 +93,9 @@ export default function Layout() {
       setPanelOpen(false)
       return
     }
+    // 与页签行同一判据：Cmd+点击顶栏入口是要开新标签，不离开本页，不该被守卫吞掉。
+    // 少了这一条就会出现「同一屏上点页签能开新标签、点顶栏不能」的不一致。
+    if (isModifiedLinkClick(event)) return
     event.preventDefault()
     void confirmLeave().then((confirmed) => {
       if (!confirmed) return
@@ -148,7 +154,7 @@ export default function Layout() {
           })}
         </nav>
 
-        {/* <1000px：顶栏只留当前页名 + 箭头，点开九宫格（规格 §4.3） */}
+        {/* <1000px：顶栏只留当前页名 + 箭头，点开入口网格（规格 §4.3，8 个入口 4 列两行） */}
         <button
           onClick={() => setPanelOpen((v) => !v)}
           aria-expanded={panelOpen}

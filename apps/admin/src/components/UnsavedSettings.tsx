@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { confirmDialog } from './ui/ConfirmDialog'
 
@@ -20,7 +20,16 @@ export function UnsavedSettingsProvider({ children }: { children: ReactNode }) {
   // beforeunload 拦一下。拦截本身发生在 navigate 之前（confirmLeave 确认后自己会置
   // false），所以能走到这里说明页面已经真的换了，此时清零不会吞掉任何一次拦截；
   // 未被守卫覆盖的离开方式（浏览器前进/后退）也一并收口。
+  //
+  // 用 ref 记住上一次的 pathname、只在**真的换了**时清零，而不是每次 effect 都清：
+  // Provider 的 passive effect 排在子页之后，无条件清零会把子页在 mount effect 里设的
+  // setDirty(true) 静默吃掉；更麻烦的是 StrictMode 的二次调用刚好把它补回来，于是
+  // 这个 bug 只在生产环境复现、开发时看不见。当前五个设置页的 setDirty(true) 全部来自
+  // 用户事件，今天碰不到，但不该把这种雷留给下一个人。
+  const lastPath = useRef(pathname)
   useEffect(() => {
+    if (lastPath.current === pathname) return
+    lastPath.current = pathname
     setDirty(false)
   }, [pathname])
 
