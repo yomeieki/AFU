@@ -203,7 +203,7 @@ Page({
     this.setData({ rightScrollTop: this.data.rightScrollTop === 0 ? 0.5 : 0 })
   },
 
-  // 量各段顶部位置与最后一段的补白。本任务先留空实现，Task 5 填充。
+  // 分段渲染完成后（或右侧高度可能变化后）量一次锚点位置
   afterGroupsRendered() {
     var self = this
     var run = function() { self.measureOffsets() }
@@ -211,8 +211,66 @@ Page({
     else setTimeout(run, 0)
   },
 
+  // 量各段顶部位置（相对 scroll-view 内容顶）与最后一段的补白。只在分段渲染完成后调，滚动时只做数值比较。
   measureOffsets() {
-    // Task 5 填充：量 .group-anchor 位置、算 tailHeight。
+    if (this.data.searchKeyword || !this.data.groups.length || !wx.createSelectorQuery) return
+    var self = this
+    wx.createSelectorQuery()
+      .select('.prod-panel').boundingClientRect()
+      .select('.prod-panel').scrollOffset()
+      .selectAll('.group-anchor').boundingClientRect()
+      .exec(function(res) {
+        var panel = res[0], scroll = res[1], rects = res[2] || []
+        if (!panel || !scroll || !rects.length) return
+        var offsets = []
+        for (var i = 0; i < rects.length; i++) {
+          var gid = rects[i].dataset && rects[i].dataset.gid
+          if (typeof gid === 'string' && gid !== 'other' && gid !== '' && !isNaN(Number(gid))) gid = Number(gid)
+          offsets.push({ id: gid, top: rects[i].top - panel.top + scroll.scrollTop })
+        }
+        self._offsets = offsets
+        // 最后一段顶不上去就永远亮不了：补白 = 可视高 − 最后段高。可视高取 scroll-view 自身高与「窗口底到面板顶」的较小值
+        // （同城下 .prod-panel 有给购物车条让位的 padding-bottom，盒子比可视区高，多补一点空白无害，少补才是 bug）
+        var win = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
+        var visible = Math.min(panel.height, win.windowHeight - panel.top)
+        var tail = Math.max(0, Math.round(visible - rects[rects.length - 1].height))
+        if (tail !== self.data.tailHeight) self.setData({ tailHeight: tail })
+      })
+  },
+
+  // 尾随节流 100ms：保证最后一次滚动位置一定被处理
+  onRightScroll(e) {
+    if (this.data.searchKeyword) return
+    this._pendingScrollTop = e.detail.scrollTop
+    if (this._scrollTimer) return
+    var self = this
+    this._scrollTimer = setTimeout(function() {
+      self._scrollTimer = null
+      if (Date.now() < (self._lockUntil || 0)) return // 点左侧后的滚动动画期间不让中间经过的段抢高亮
+      var id = catalogGroups.activeGroupOf(self._offsets, self._pendingScrollTop, 2)
+      if (id != null && id !== self.data.activeGroupId) self.setActiveGroup(id)
+    }, 100)
+  },
+
+  // 商品图盒子是固定 160rpx 方盒，图片加载一般不改变布局；这里去抖重量只是按 spec §5.2 留的保险。
+  onImageLoad() {
+    var self = this
+    if (this._imgTimer) clearTimeout(this._imgTimer)
+    this._imgTimer = setTimeout(function() { self.measureOffsets() }, 300)
+  },
+
+  onHide() {
+    this._clearTimers()
+  },
+
+  onUnload() {
+    this._clearTimers()
+  },
+
+  // tabBar 页 onUnload 基本不触发，onHide 必须清，否则定时器在别的 tab 上 setData
+  _clearTimers() {
+    if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null }
+    if (this._imgTimer) { clearTimeout(this._imgTimer); this._imgTimer = null }
   },
 
   // 搜索结果分页（仅搜索模式生效；分组视图下右侧一次拉全，不走分页）

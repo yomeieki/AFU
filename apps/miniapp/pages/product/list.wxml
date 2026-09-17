@@ -15,6 +15,7 @@
         src="{{item.coverImage}}"
         mode="aspectFill"
         lazy-load="{{true}}"
+        bindload="onImageLoad"
       />
       <view wx:else class="product-row-img-placeholder img-placeholder"></view>
     </view>
@@ -100,14 +101,20 @@
     <!-- Right: product panel -->
     <view class="prod-wrap">
 
+      <!-- 吸顶浮动条：不用 CSS sticky（scroll-view 内表现不一致），画一条覆盖在顶部 -->
+      <view wx:if="{{!searchKeyword && !catalogLoading && activeGroupName}}" class="group-head group-float">{{activeGroupName}}</view>
+
       <scroll-view
         class="prod-panel"
         scroll-y
         enhanced="{{true}}"
         show-scrollbar="{{false}}"
         scroll-top="{{rightScrollTop}}"
+        scroll-into-view="{{scrollIntoView}}"
+        scroll-with-animation="{{true}}"
         lower-threshold="120"
         bindscrolltolower="onScrollToLower"
+        bindscroll="onRightScroll"
       >
         <!-- 分组视图：拉全量中骨架屏 → 空 → 分段 -->
         <block wx:if="{{!searchKeyword}}">

@@ -74,24 +74,27 @@ function makeCtx(channel, opts) {
     showNavigationBarLoading() {}, hideNavigationBarLoading() {},
     nextTick: (fn) => setTimeout(fn, 0),
     createSelectorQuery: () => {
+      selectorQueryCalls++
       const q = {
         in: () => q,
         select: () => q,
         selectAll: () => q,
         boundingClientRect: () => q,
         scrollOffset: () => q,
-        exec: (cb) => cb([{ top: 0, height: 600 }, { scrollTop: 0 }, []]),
+        exec: (cb) => cb(opts.selectorQueryResult || [{ top: 0, height: 600 }, { scrollTop: 0 }, []]),
       }
       return q
     },
   }
-  return { app, wx, urls }
+  let selectorQueryCalls = 0
+  return { app, wx, urls, getSelectorQueryCalls: () => selectorQueryCalls }
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
 async function settleAll(n) {
   for (let i = 0; i < (n || 6); i++) await settle()
 }
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function makeProduct(id, categoryId) {
   return { id: id, categoryId: categoryId, name: 'p' + id, price: 1000, stock: 5, hasSkus: false }
@@ -285,4 +288,94 @@ test('findProduct：分组视图按 id 在全量里找；搜索模式优先在 l
   const foundSearch = page.findProduct.call(page, 999)
   assert.ok(foundSearch)
   assert.equal(foundSearch.name, '搜索结果')
+})
+
+// ── Task 5：滚动联动（量锚点 / 节流高亮 / 点击锁 / 图片去抖） ──
+
+test('量锚点：offsets 与 tailHeight 按量出来的位置计算', async function () {
+  const rects = [
+    { dataset: { gid: 1 }, top: 100, height: 300 },
+    { dataset: { gid: 2 }, top: 400, height: 250 },
+    { dataset: { gid: 3 }, top: 650, height: 120 },
+  ]
+  const ctx = makeCtx('EXPRESS', {
+    categories: CATEGORIES_3,
+    respond: pagedRespond(pagesFor60(), 60),
+    selectorQueryResult: [{ top: 100, height: 600 }, { scrollTop: 40 }, rects],
+  })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  assert.deepEqual(page._offsets, [{ id: 1, top: 40 }, { id: 2, top: 340 }, { id: 3, top: 590 }])
+  assert.equal(page.data.tailHeight, 480)
+})
+
+test('量锚点：最后一段比可视区高时 tailHeight 为 0', async function () {
+  const rects = [{ dataset: { gid: 1 }, top: 0, height: 900 }]
+  const ctx = makeCtx('EXPRESS', {
+    categories: [{ id: 1, name: 'A' }],
+    respond: pagedRespond([[makeProduct(1, 1)]], 1),
+    selectorQueryResult: [{ top: 0, height: 812 }, { scrollTop: 0 }, rects],
+  })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  assert.equal(page.data.tailHeight, 0)
+})
+
+test('滚动 → 高亮跟随（节流 100ms 后才生效，连续滚动只 setData 一次）', async function () {
+  const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  page._offsets = [{ id: 1, top: 0 }, { id: 2, top: 340 }, { id: 3, top: 590 }]
+  page._patches.length = 0
+  for (let i = 0; i < 10; i++) {
+    page.onRightScroll.call(page, { detail: { scrollTop: 340 + i } })
+  }
+  assert.equal(page.data.activeGroupId, 1, '节流期间不该立刻变')
+  await wait(150)
+  assert.equal(page.data.activeGroupId, 2)
+  const activeGroupPatches = page._patches.filter((p) => Object.prototype.hasOwnProperty.call(p, 'activeGroupId'))
+  assert.equal(activeGroupPatches.length, 1, '连续滚动只应触发一次 setData：' + JSON.stringify(page._patches))
+})
+
+test('点击锁：点左侧后 500ms 内滚动不改高亮，锁过期后恢复联动', async function () {
+  const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  page._offsets = [{ id: 1, top: 0 }, { id: 2, top: 340 }, { id: 3, top: 590 }]
+  page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 3 } } })
+  assert.equal(page.data.activeGroupId, 3)
+  page.onRightScroll.call(page, { detail: { scrollTop: 345 } })
+  await wait(150)
+  assert.equal(page.data.activeGroupId, 3, '点击锁定期内滚动不该抢高亮')
+  page._lockUntil = 0
+  page.onRightScroll.call(page, { detail: { scrollTop: 345 } })
+  await wait(150)
+  assert.equal(page.data.activeGroupId, 2)
+})
+
+test('搜索模式下 onRightScroll 不联动', async function () {
+  const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  page._offsets = [{ id: 1, top: 0 }, { id: 2, top: 340 }, { id: 3, top: 590 }]
+  page.setData({ searchKeyword: '兔' })
+  page.onRightScroll.call(page, { detail: { scrollTop: 345 } })
+  await wait(150)
+  assert.equal(page.data.activeGroupId, 1, '搜索模式下不该联动')
+})
+
+test('图片加载去抖：连续调用只重量一次', async function () {
+  const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  const before = ctx.getSelectorQueryCalls()
+  for (let i = 0; i < 5; i++) page.onImageLoad.call(page)
+  await wait(350)
+  assert.equal(ctx.getSelectorQueryCalls() - before, 1)
 })
