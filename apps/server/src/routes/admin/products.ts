@@ -8,6 +8,8 @@ import { generateProductQrCode } from '../../services/qrcode'
 import { channelSchema, parseChannelQuery } from '../../utils/channel'
 import { channelOfCategory, assertNoUnpaidAndPurgeCarts } from '../../services/product-channel'
 import { Channel } from '../../utils/channel'
+import { sortProducts, type CategorySortInfo, type ProductSortMode } from '../../services/product-sort'
+import { getSales30d } from '../../services/product-sales'
 
 const router = Router()
 
@@ -126,7 +128,8 @@ const skuInclude = {
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1)
-    const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 20))
+    // 上限从 50 提到 200：选定分类时拖拽排序要求一页取完该分类全集（2026-09-17 分类内排序设计 §5）。
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20))
     const categoryId = req.query.categoryId ? Number(req.query.categoryId) : undefined
     const keyword = req.query.keyword as string | undefined
     const status = req.query.status as string | undefined
@@ -140,20 +143,47 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       ...(keyword ? { name: { contains: keyword } } : {}),
     }
 
-    const [list, total] = await prisma.$transaction([
-      prisma.product.findMany({
+    const sales = await getSales30d()
+    const withSales = <T extends { id: number }>(rows: T[]) => rows.map((p) => ({ ...p, sales30d: sales.get(p.id) ?? 0 }))
+
+    let list: unknown[]
+    let total: number
+
+    if (categoryId) {
+      // 选定分类：顺序与顾客端一致（同一套 sortProducts），一次取该分类全集再内存分页。
+      const category = await prisma.category.findUnique({ where: { id: categoryId }, select: { sortOrder: true, productSortMode: true } })
+      const rows = await prisma.product.findMany({
         where,
         include: {
           category: { select: { id: true, name: true } },
           images: { select: { imageUrl: true }, orderBy: { sortOrder: 'asc' } },
           skus: { orderBy: { sortOrder: 'asc' } },
         },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      prisma.product.count({ where }),
-    ])
+      })
+      const catMap = new Map<number, CategorySortInfo>(
+        category ? [[categoryId, { sortOrder: category.sortOrder, productSortMode: category.productSortMode as ProductSortMode }]] : [],
+      )
+      const sorted = sortProducts(rows, catMap, sales)
+      total = sorted.length
+      list = withSales(sorted.slice((page - 1) * pageSize, page * pageSize))
+    } else {
+      const [rows, count] = await prisma.$transaction([
+        prisma.product.findMany({
+          where,
+          include: {
+            category: { select: { id: true, name: true } },
+            images: { select: { imageUrl: true }, orderBy: { sortOrder: 'asc' } },
+            skus: { orderBy: { sortOrder: 'asc' } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        prisma.product.count({ where }),
+      ])
+      total = count
+      list = withSales(rows)
+    }
 
     paginate(res, list, total, page, pageSize)
   } catch (e) {
@@ -170,10 +200,18 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
     const { dims, skuList } = validateSpecs(specDimensions, skus)
 
+    // 新建商品排到本分类最后（S6）：取该分类当前最大 sortOrder + 1；空分类得 0。
+    const { _max } = await prisma.product.aggregate({
+      where: { categoryId: rest.categoryId, deletedAt: null },
+      _max: { sortOrder: true },
+    })
+    const sortOrder = (_max.sortOrder ?? -1) + 1
+
     const product = await prisma.product.create({
       data: {
         ...rest,
         channel,
+        sortOrder,
         ...(dims ? aggregateFromSkus(skuList) : {}),
         specDimensions: dims ?? Prisma.DbNull,
         ...(imageUrls?.length
@@ -317,13 +355,22 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
 
       // 换分类时渠道跟随新分类。若跨了渠道，必须走与「分类改渠道」同一套防线：
       // 否则这个入口能绕过待付款订单校验，并让顾客购物车里的行静默换渠道（刷新后商品无声消失）。
-      let channelPatch: { channel?: Channel } = {}
+      let channelPatch: { channel?: Channel; sortOrder?: number } = {}
       if (rest.categoryId !== undefined) {
         const nextChannel = await channelOfCategory(tx, rest.categoryId)
         if (nextChannel !== exists.channel) {
           await assertNoUnpaidAndPurgeCarts(tx, [id])
         }
         channelPatch = { channel: nextChannel }
+        // 换到另一个分类时，旧的 sortOrder（多为 0）会让它跳到新分类最前；
+        // 取新分类当前最大值 +1，视觉上排到新分类最后（S6 精神，spec 未写换分类场景）。
+        if (rest.categoryId !== exists.categoryId) {
+          const { _max } = await tx.product.aggregate({
+            where: { categoryId: rest.categoryId, deletedAt: null },
+            _max: { sortOrder: true },
+          })
+          channelPatch.sortOrder = (_max.sortOrder ?? -1) + 1
+        }
       }
       return tx.product.update({
         where: { id },

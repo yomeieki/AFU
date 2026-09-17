@@ -5,17 +5,23 @@ import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { channelSchema, parseChannelQuery } from '../../utils/channel'
 import { changeCategoryChannel } from '../../services/product-channel'
+import { PRODUCT_SORT_MODES } from '../../services/product-sort'
+import { clearProductSalesCache } from '../../services/product-sales'
 
 const router = Router()
 
 // 同 products.ts：.partial() 不会剥离 .default()，默认值只能加在创建路径上，
 // 否则部分更新会把请求里没带的 sortOrder/status 静默重置。
+// productSortMode 不用 .default()、用 .optional()：创建时不带则 Prisma 不写这个 key，
+// 交给库的 DEFAULT 'MANUAL' 兜底（而不是在应用层硬编码一份默认值）；部分更新不带这个
+// 字段时同样不会动它，不会把已设的值静默重置。
 const categoryBaseSchema = z.object({
   name: z.string().min(1, '分类名称不能为空').max(64),
   iconUrl: z.string().max(500).nullable().optional(),
   sortOrder: z.number().int(),
   status: z.number().int().min(0).max(1),
   channel: channelSchema,
+  productSortMode: z.enum(PRODUCT_SORT_MODES).optional(),
 })
 
 const categoryCreateSchema = categoryBaseSchema.extend({
@@ -64,7 +70,44 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
       await changeCategoryChannel(id, channel)
     }
     const category = await prisma.category.update({ where: { id }, data })
+    // 排序方式真的变了才清缓存：切换会立刻影响公开列表的排序结果（销量聚合本身没变）。
+    if (data.productSortMode !== undefined && data.productSortMode !== exists.productSortMode) {
+      clearProductSalesCache()
+    }
     success(res, category)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/categories/:id/product-order
+// body { ids: number[] }：按数组下标写 sort_order = index；ids 必须正好是该分类下全部
+// 未删除商品（多、少、重复、跨分类一律 40001），事务内查全集+批量更新，防止并发编辑打架
+// （2026-09-17 分类内排序设计 §4.2）。
+const productOrderSchema = z.object({ ids: z.array(z.number().int().positive()) })
+router.post('/:id/product-order', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const category = await prisma.category.findUnique({ where: { id } })
+    if (!category) throw new AppError(40401, '分类不存在', 404)
+
+    const { ids } = productOrderSchema.parse(req.body)
+
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.product.findMany({ where: { categoryId: id, deletedAt: null }, select: { id: true } })
+      const existingIds = new Set(existing.map((p) => p.id))
+      const uniqueIds = new Set(ids)
+      const isSameSet = ids.length === existingIds.size && uniqueIds.size === ids.length && ids.every((pid) => existingIds.has(pid))
+      if (!isSameSet) {
+        throw new AppError(40001, '商品列表与该分类当前商品不一致，请刷新后重试')
+      }
+      for (let i = 0; i < ids.length; i++) {
+        await tx.product.update({ where: { id: ids[i] }, data: { sortOrder: i } })
+      }
+    })
+
+    clearProductSalesCache()
+    success(res, { updated: ids.length })
   } catch (e) {
     next(e)
   }
