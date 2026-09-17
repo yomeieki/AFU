@@ -7,6 +7,8 @@
 // 版式基准 750 × 1333（旧版是 750 × 1624）。热区与跳转契约见 config/cover-entries.js。
 
 var ENTRIES = require('../../config/cover-entries.js')
+var coverNav = require('../../utils/cover-nav.js')
+var channelUtil = require('../../utils/channel.js')
 
 var DESIGN_W = 750           // 设计画板宽
 var BG_W = 941               // 背景原图尺寸
@@ -20,12 +22,22 @@ var CONTENT_BOTTOM = 964     // 冷链热区底边
 var CLEARANCE = 24           // 内容与青瓦之间至少留出的间距
 var MIN_SCALE = 0.86
 var CAPSULE_GAP = 8          // 胶囊按钮下方额外留白（px）
+var TAB_BAR_PX = 49          // 自绘四栏内容高，与系统标签栏一致；底部安全区另算
 
 var app = getApp()
+
+// 底部安全区（px）。iPhone X 系为 34，SE / 安卓多为 0；取不到 safeArea 时按 0——
+// 与 index.wxss 里 env(safe-area-inset-bottom) 的取值口径一致，两边必须同一个数，否则墙与栏之间会露缝或压住。
+function bottomInsetPx(info) {
+  var sa = info && info.safeArea
+  if (sa && info.screenHeight && sa.bottom) return Math.max(0, info.screenHeight - sa.bottom)
+  return 0
+}
 
 Page({
   data: {
     entries: ENTRIES,
+    tabs: coverNav.TABS,
     stageOffset: 0,
     stageScale: 1,
   },
@@ -43,11 +55,13 @@ Page({
   // 不会出现「视觉动了热区没动」：
   //   stageOffset —— 整体下移，让开微信胶囊按钮，保证 Logo 不被遮挡；
   //   stageScale  —— 只有极短屏（如 iPhone SE）内容仍会压到青瓦时才启用的等比兜底。
+  // 自绘四栏占掉底部 49px + 安全区，墙随之上移，可用高度按扣掉之后的算。
   layout: function () {
     var info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
     var rpx = DESIGN_W / info.windowWidth       // 1px = rpx 个 rpx
     var screenH = info.windowHeight * rpx
-    var wallTop = screenH - BG_H_RPX + WALL_TOP_IN_BG_RPX
+    var navRpx = (TAB_BAR_PX + bottomInsetPx(info)) * rpx
+    var wallTop = screenH - BG_H_RPX + WALL_TOP_IN_BG_RPX - navRpx
 
     var capsuleBottom
     try {
@@ -119,6 +133,28 @@ Page({
   onNavFail: function (entry, err) {
     console.error('[cover] 跳转失败', entry.id, entry.route, err)
     wx.showToast({ title: '页面暂时打不开，请稍后再试', icon: 'none' })
+  },
+
+  // 底部四栏。主页/分类/购物车按「上次用过的渠道」进，没有记录默认同城（设计 N7）；「我的」与渠道无关。
+  // 同城仍走 app 的门（位置许可 → 定渠道 → switchTab 到目标 tab），页面不自己定渠道、不自己问许可。
+  onTapTab: function (e) {
+    var id = e.currentTarget.dataset.id
+    var decision = coverNav.decideCoverTab(id, channelUtil.getRememberedChannel())
+    if (!decision) {
+      console.error('[cover] 未知的底栏 data-id：', id)
+      return
+    }
+    this.track(decision.event, id)
+    if (decision.channel === 'LOCAL') {
+      app.enterLocalChannel(decision.url)
+      return
+    }
+    if (decision.channel === 'EXPRESS') app.setShoppingChannel('EXPRESS')
+    var that = this
+    wx.switchTab({
+      url: decision.url,
+      fail: function (err) { that.onNavFail({ id: id, route: decision.url }, err) },
+    })
   },
 
   // 埋点出口。本仓库目前没有统一埋点层，先收敛成这一个函数：

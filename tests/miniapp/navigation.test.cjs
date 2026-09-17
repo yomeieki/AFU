@@ -46,9 +46,9 @@ function makeCtx(opts) {
     getShoppingChannel() { return app.globalData.shoppingChannel },
     getLocalMode: () => app.globalData.localMode || 'DELIVERY',
     setLocalMode: (v) => { app.globalData.localMode = v; return v },
-    enterLocalChannel() {
-      // 真实实现在 app.js；这里的桩只记录「页面确实走了这条统一出口」
-      calls.push('enterLocal')
+    enterLocalChannel(url) {
+      // 真实实现在 app.js；这里的桩只记录「页面确实走了这条统一出口」，并记下带没带目标 tab
+      calls.push('enterLocal' + (url ? ':' + url : ''))
       return Promise.resolve()
     },
     updateCartCount() {},
@@ -60,7 +60,8 @@ function makeCtx(opts) {
     getWindowInfo: () => ({ windowWidth: 375, windowHeight: 812, statusBarHeight: 44 }),
     getSystemInfoSync: () => ({ windowWidth: 375, windowHeight: 812, statusBarHeight: 44 }),
     getMenuButtonBoundingClientRect: () => ({ bottom: 80 }),
-    getStorageSync: () => '',
+    // 按 key 分发：封面四栏读的是 shoppingChannel，opts.storedChannel 缺省为 ''（无记录）
+    getStorageSync: (k) => (k === 'shoppingChannel' ? ((opts && opts.storedChannel) || '') : ''),
     setStorageSync: () => {},
     reLaunch: (o) => { calls.push('reLaunch:' + o.url) },
   }
@@ -68,6 +69,7 @@ function makeCtx(opts) {
 }
 
 const tap = (page, id) => page.onTapEntry.call(page, { currentTarget: { dataset: { id } } })
+const tapTab = (page, id) => page.onTapTab.call(page, { currentTarget: { dataset: { id } } })
 const tick = () => new Promise((r) => setImmediate(r))
 
 test('封面点「同城配送」：走统一出口，不自己 navigateTo', async function () {
@@ -95,6 +97,75 @@ test('「全国冷链配送」与「全国邮寄」落到同一个渠道与同�
   tap(page, 'cold_chain')
   await tick(); await tick()
   assert.deepEqual(ctx.calls, ['setChannel:EXPRESS', 'switchTab:/pages/index/index'])
+})
+
+// ── 封面底部自绘四栏（2026-09-17 设计 N6/N7）────────────────────────────────
+// 主页/分类/购物车按「上次用过的渠道」进，没有记录默认同城；「我的」与渠道无关。
+// 同城仍走 app 的门（位置许可 → 定渠道 → switchTab 到目标 tab），页面不自己定渠道、不自己问许可。
+
+test('四栏：无记录点「分类」→ 默认同城，经统一出口带目标 tab（定渠道在门里做，页面不碰）', async function () {
+  const ctx = makeCtx({ storedChannel: '' })
+  const page = loadPage('../../apps/miniapp/pages/cover/index.js', ctx)
+  tapTab(page, 'category')
+  await tick(); await tick()
+  assert.deepEqual(ctx.calls, ['enterLocal:/pages/product/list'])
+})
+
+test('四栏：记忆邮寄点「购物车」→ 定渠道 EXPRESS 后 switchTab', async function () {
+  const ctx = makeCtx({ storedChannel: 'EXPRESS' })
+  const page = loadPage('../../apps/miniapp/pages/cover/index.js', ctx)
+  tapTab(page, 'cart')
+  await tick(); await tick()
+  assert.deepEqual(ctx.calls, ['setChannel:EXPRESS', 'switchTab:/pages/cart/index'])
+})
+
+test('四栏：记忆同城点「主页」→ 经统一出口带目标 tab', async function () {
+  const ctx = makeCtx({ storedChannel: 'LOCAL' })
+  const page = loadPage('../../apps/miniapp/pages/cover/index.js', ctx)
+  tapTab(page, 'home')
+  await tick(); await tick()
+  assert.deepEqual(ctx.calls, ['enterLocal:/pages/index/index'])
+})
+
+test('四栏：脏值按无记录处理（默认同城，不按邮寄）', async function () {
+  const ctx = makeCtx({ storedChannel: 'OTHER' })
+  const page = loadPage('../../apps/miniapp/pages/cover/index.js', ctx)
+  tapTab(page, 'home')
+  await tick(); await tick()
+  assert.deepEqual(ctx.calls, ['enterLocal:/pages/index/index'])
+})
+
+test('四栏：点「我的」不碰渠道，直接 switchTab', async function () {
+  const ctx = makeCtx({ storedChannel: 'EXPRESS' })
+  const page = loadPage('../../apps/miniapp/pages/cover/index.js', ctx)
+  tapTab(page, 'user')
+  await tick(); await tick()
+  assert.deepEqual(ctx.calls, ['switchTab:/pages/user/index'])
+})
+
+test('版式：375×812 有安全区不缩放（stageScale 1，stageOffset 41）', function () {
+  const ctx = makeCtx()
+  ctx.wx.getWindowInfo = () => ({
+    windowWidth: 375, windowHeight: 812, screenHeight: 812, statusBarHeight: 44,
+    safeArea: { bottom: 778 },
+  })
+  ctx.wx.getMenuButtonBoundingClientRect = () => ({ bottom: 80 })
+  const page = loadPage('../../apps/miniapp/pages/cover/index.js', ctx)
+  page.onLoad.call(page)
+  assert.equal(page.data.stageScale, 1)
+  assert.equal(page.data.stageOffset, 41)
+})
+
+test('版式：iPhone SE 无安全区，允许缩到下限且 stageOffset 为 0', function () {
+  const ctx = makeCtx()
+  ctx.wx.getWindowInfo = () => ({
+    windowWidth: 375, windowHeight: 667, screenHeight: 667, statusBarHeight: 20,
+  })
+  ctx.wx.getMenuButtonBoundingClientRect = () => ({ bottom: 56 })
+  const page = loadPage('../../apps/miniapp/pages/cover/index.js', ctx)
+  page.onLoad.call(page)
+  assert.ok(page.data.stageScale >= 0.86 && page.data.stageScale < 0.9, 'stageScale=' + page.data.stageScale)
+  assert.equal(page.data.stageOffset, 0)
 })
 
 test('会员三个入口不碰渠道（它们与买什么无关）', async function () {
