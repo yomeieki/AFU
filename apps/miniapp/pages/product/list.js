@@ -63,8 +63,12 @@ Page({
       g.pendingCategoryAll = false
       g.pendingCategoryId = null
       g.pendingCategoryName = null
-      if (this.data.searchKeyword) this.clearSearch()
-      this.resetRightScroll()
+      if (this.data.searchKeyword) {
+        this.clearSearch()
+      } else {
+        this.setData({ scrollIntoView: '' })
+        this.resetRightScroll()
+      }
       if (this.data.groups.length) this.setActiveGroup(this.data.groups[0].id)
       else this._pendingLocateId = null
       return
@@ -355,6 +359,7 @@ Page({
       page: 1,
       total: 0,
       hasMore: true,
+      scrollIntoView: '',
     })
     this.resetRightScroll()
     if (this.data.groups.length) this.setActiveGroup(this.data.groups[0].id)

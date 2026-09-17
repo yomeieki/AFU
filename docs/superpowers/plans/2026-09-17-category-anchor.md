@@ -490,3 +490,10 @@ catalogLoading: false, // 分组视图拉全量中 → 骨架屏
   3. 验收 A1、A4、A5、A7、A9、A10 全部按命令实测通过（输出见工序 01 回报）；A2（server tsc）、A3（curl 生产）、A6（`categoryId: true` 计数）因 Task 1 跳过而对本批不适用，只做了 A2 的知情性核对（`apps/server` 未改，tsc 仍通过）。A8 用 `git diff --name-only 9753a3e..HEAD` 会带出 00 规划阶段两条纯文档提交（`b76898f`、`a92d4a3`，均在本批开工前已产生），本批自身改动（`git diff --name-only 333feaa~1..HEAD`）逐行落在收窄后的白名单内。
   4. B 类真机/开发者工具验收未执行（本环境无微信开发者工具），如实标注留给人工，建议 02/店主按验收标准 B1–B10 补测。
   5. 未命中任何「命中即停」触发条件。
+
+- **2026-09-17 工序 01 · sonnet（返工轮）执行记录**（02 复核 + 03 回判后修复）：
+  1. **勘误**：`clearSearch()` 与 `onShow()` 的 `pendingCategoryAll` 分支都漏了清空 `scrollIntoView`。属 00 规划遗漏——本计划 Task 4 的动作序列里没写这一步；`reloadForChannel()` 里本来就清了，唯独这两处漏了。`scroll-into-view` 优先级高于 `scroll-top`，残留的旧段 id 会让「清掉搜索」/「回全部」停在旧段而不是回顶，与已改成第一段的左侧高亮对不上（违反验收 B7/B8）。02 复核发现、03 回判判成立，本轮已在 `apps/miniapp/pages/product/list.js` 补上，并顺带去掉 `pendingCategoryAll` 分支里 `clearSearch()` 之外多余的第二次 `resetRightScroll()` 调用（两次净值不变，若被合并到同一次渲染反而不回顶）。
+  2. **上线顺序**：服务端 `GET /api/products` 的 `categoryId` 字段由并行的「后台排序」批交付。**在那一批合 main 并部署生产之前，本包（分类页分组锚点）不能传体验版**——否则左侧各分类都在，但因取不到 `categoryId` 全部商品都落到「其他」段，各分类点开都显示「该分类暂无商品」。
+  3. **验收判据订正**：验收标准 A8 的白名单逐行核对应改用 `git diff --name-only 333feaa~1..HEAD`（从本批第一个代码提交算起），而不是原文的 `9753a3e..HEAD`——后者会把 00 规划阶段自身产生的纯文档提交（`b76898f`、`a92d4a3`）也计入，误判为越界。这是验收命令的写法问题，不改验收标准本身。
+  4. 改动范围：`apps/miniapp/pages/product/list.js`、`apps/miniapp/pages/product/list.wxss`（可选项，加 `.group-float { box-sizing: border-box }` 让浮动条与段头实高一致，已做）、`tests/miniapp/category-anchor-page.test.cjs`（补 2 条新用例 + 2 处既有用例内断言）、本计划文件（本节）。未动 `apps/server/**`、`apps/admin/**`、`pages/index/**`、`tools/miniapp-preview/**`、`docs/superpowers/specs/**`。
+  5. 未命中任何「命中即停」触发条件。

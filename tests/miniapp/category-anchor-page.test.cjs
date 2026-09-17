@@ -196,6 +196,7 @@ test('首页意图 → 定位（pendingCategoryId / pendingCategoryAll）', asyn
   page.onShow.call(page)
   assert.equal(page.data.activeGroupId, 1)
   assert.equal(page.data.searchKeyword, '')
+  assert.equal(page.data.scrollIntoView, '', '回「全部」要清掉残留的段 id，否则 scroll-into-view 优先级压过 scroll-top，页面停在旧段')
   assert.equal(ctx.app.globalData.pendingCategoryAll, false)
   assert.equal(ctx.app.globalData.pendingCategoryId, null)
   assert.equal(ctx.app.globalData.pendingCategoryName, null)
@@ -230,13 +231,49 @@ test('搜索模式保留分页且与分组视图互不干扰（仅邮寄）', as
   await settleAll()
   assert.ok(ctx.urls.some((u) => u.indexOf('keyword=%E5%85%94') !== -1 && u.indexOf('page=2') !== -1), ctx.urls.join(' '))
 
+  page.setData({ scrollIntoView: 'g-3' }) // 模拟搜索前残留的旧段 id
   page.clearSearch.call(page)
   await settleAll()
   assert.equal(page.data.searchKeyword, '')
   assert.deepEqual(page.data.list, [])
   assert.equal(page.data.activeGroupId, 1)
+  assert.equal(page.data.scrollIntoView, '', '清搜索要顺带清掉残留的段 id，否则 scroll-into-view 优先级压过 scroll-top，页面停在旧段而不回顶')
   const catalogUrlCountAfter = ctx.urls.filter((u) => u.indexOf('pageSize=50') !== -1).length
   assert.equal(catalogUrlCountAfter, catalogUrlCountBefore, 'clearSearch 不该重新拉全量')
+})
+
+// 返工（02 复核 + 03 回判判成立）：clearSearch / pendingCategoryAll 两处漏清 scrollIntoView，
+// scroll-into-view 优先级高于 scroll-top，残留旧段会让「清掉搜索」/「回全部」停在旧段而不回顶。
+test('返工：clearSearch 清掉残留的段 id，否则 scroll-into-view 压过 scroll-top 回不了顶', async function () {
+  const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 3 } } })
+  assert.equal(page.data.scrollIntoView, 'g-3')
+  page.setData({ keyword: '兔' })
+  page.onSearchConfirm.call(page)
+  await settleAll()
+  page.clearSearch.call(page)
+  await settleAll()
+  assert.equal(page.data.scrollIntoView, '', 'clearSearch 后残留的 g-3 没清掉，回搜索前会停在旧段而不是回顶')
+})
+
+test('返工：pendingCategoryAll（非搜索路径）清掉残留段 id，且只回顶一次', async function () {
+  const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
+  const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
+  page.onLoad.call(page)
+  await settleAll()
+  page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 3 } } })
+  assert.equal(page.data.scrollIntoView, 'g-3')
+  const rightScrollTopBefore = page.data.rightScrollTop
+  page._patches.length = 0
+  ctx.app.globalData.pendingCategoryAll = true
+  page.onShow.call(page)
+  assert.equal(page.data.scrollIntoView, '', 'pendingCategoryAll 回「全部」要清掉残留段 id，否则回不了顶')
+  const rightScrollTopPatches = page._patches.filter((p) => Object.prototype.hasOwnProperty.call(p, 'rightScrollTop'))
+  assert.equal(rightScrollTopPatches.length, 1, 'resetRightScroll 只该调一次；调两次净值不变，回顶会失效：' + JSON.stringify(page._patches))
+  assert.notEqual(page.data.rightScrollTop, rightScrollTopBefore, '应该真的回顶了')
 })
 
 test('分组视图下 onScrollToLower 不发请求', async function () {

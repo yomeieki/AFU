@@ -283,4 +283,4 @@
 .skeleton-shine { animation: skeleton-breath 1.2s ease-in-out infinite; }
 @keyframes skeleton-breath { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 /* 吸顶浮动条：尺寸继承 .group-head，两者必须一样高，否则滚到 0 时露出双层段头 */
-.group-float { position: absolute; top: 0; left: 0; right: 0; z-index: 5; border-bottom: 1rpx solid var(--divider); }
+.group-float { position: absolute; top: 0; left: 0; right: 0; z-index: 5; border-bottom: 1rpx solid var(--divider); box-sizing: border-box; }
