@@ -1,0 +1,1 @@
+<view class="channel-badge" hover-class="channel-badge-hover" hover-stay-time="60" bindtap="onTap" aria-role="button" aria-label="切换购物方式，当前{{label}}"><text class="channel-badge-text">{{label}}</text><text class="channel-badge-caret">▾</text></view>

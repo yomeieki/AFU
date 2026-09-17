@@ -1,0 +1,9 @@
+:host { display: inline-flex; flex-shrink: 0; }
+.channel-badge {
+  display: inline-flex; align-items: center; gap: 4rpx;
+  padding: 7rpx 16rpx; border-radius: 999rpx;
+  background: var(--brand-bg, #fef4f0); color: var(--brand, #e5441e);
+  font-size: 22rpx; line-height: 1; white-space: nowrap;
+}
+.channel-badge-hover { background: var(--brand-bg-deep, #fde5dc); }
+.channel-badge-caret { font-size: 20rpx; }
