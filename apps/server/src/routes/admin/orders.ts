@@ -48,6 +48,7 @@ const orderListSelect = {
   pickupAt: true,
   pickupReadyAt: true,
   pickupDiscountAmount: true,
+  promoDiscountAmount: true,
   // 会员优惠（M2）。userId 是 M3「发赔偿券」要用的——发券端点按用户维度，列表里没有它
   // 就得先点进详情再回来，店员在售后场景下最不需要的就是多两次跳转。
   userId: true,

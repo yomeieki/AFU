@@ -23,6 +23,7 @@ import {
   isHolidayNow, isPickupPaused, LocalDeliverySettings,
 } from '../services/local-settings'
 import { calcPackingFee } from '../services/packing-fee'
+import { promoDiscountOf } from '../services/promotion'
 import { isValidPickupSlot, prepStartAt, pickupDiscountOf, pickupSlotLabel } from '../services/pickup'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage, getSubscribeTemplateGroups } from '../services/subscribe-message'
 import { DELIVERY_STATUS_LABEL, providerLabel } from '../services/delivery/state'
@@ -206,6 +207,7 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
     subscribeTemplateIds: getSubscribeTemplateIds(),
     pickupAt: order.pickupAt ?? null,
     pickupDiscountAmount: order.pickupDiscountAmount,
+    promoDiscountAmount: order.promoDiscountAmount,
     subscribeTemplates: getSubscribeTemplateGroups(),
   }
 }
@@ -275,6 +277,17 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       pickupSnapshot = { pickupAt: at, pickupDiscountAmount: pickupDiscount }
       localStore = s.store
     }
+    // ── 全店满减（2026-09-17 设计 §4.2/§4.3）：插在自取优惠之后、券之前 ─────────────
+    // 三个渠道（LOCAL/PICKUP/EXPRESS）共用同一份 `local_delivery.promotion` 配置——邮寄也参加，
+    // 只是可以单独关（P3）。`getLocalSettings()` 有 60 秒进程内缓存，PICKUP 单在上面已经取过
+    // 一次，这里再取一次成本可忽略，换来的是这段代码不依赖上面那个 if 分支的内部变量。
+    // 与 `totalAmount − pickupDiscount` 取小：三者相加（自取优惠 + 满减 + 券）不得把商品金额
+    // 减成负数——满减让位给自取折扣（自取折扣先算，是「渠道属性」；这一处裁定见本批实施计划
+    // 「spec 与现状差异②」）。起送 / 免运判定仍然只看 `totalAmount`，这里不动它们一个字（P7）。
+    const promoDiscount = Math.min(
+      promoDiscountOf(await getLocalSettings(), totalAmount, deliveryType, new Date()),
+      totalAmount - pickupDiscount,
+    )
     // ── 会员优惠（M2）：券与赠品的**只读**校验，必须在 totalAmount 成形之后 ──────────
     //
     // 放在这里而不是更早：券的门槛判定要比对商品小计，而小计是上面那段 map 累加出来的。
@@ -285,10 +298,12 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
     // 券必须紧跟在这里：loadGiftLines 之后、下面「赠品聚合库存校验」之前——这是老渠道
     // （LOCAL/EXPRESS）从一开始就有的位置，报错优先级（券过期 vs 打烊/超范围等）依赖这个顺序，
-    // 不能因为加了自取渠道就往后挪。自取单额外传第 5 参数，把面额封顶到「小计 − 自取优惠」；
-    // 非自取传 undefined，与改动前逐字节一致。
+    // 不能因为加了自取渠道就往后挪。三个渠道现在都传第 5 参数，把面额封顶到
+    // 「小计 − 自取优惠 − 满减」（2026-09-17 全店满减设计 §4.2）：无满减、非自取时
+    // `pickupDiscount === 0 && promoDiscount === 0`，`maxDiscount === totalAmount`，
+    // 与改动前「非自取传 undefined」（等价于封顶到小计）逐字节一致。
     const coupon = couponId
-      ? await loadCouponForOrder(userId, couponId, channel, totalAmount, deliveryType === 'PICKUP' ? { maxDiscount: totalAmount - pickupDiscount } : undefined)
+      ? await loadCouponForOrder(userId, couponId, channel, totalAmount, { maxDiscount: totalAmount - pickupDiscount - promoDiscount })
       : null
 
     // ⚠️ 赠品与付费行指向同一商品时，上面两处库存校验各自独立通过（付费行判 1 件、赠品判 1 件），
@@ -469,19 +484,20 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         expressWeightG: Math.round(pricedWeightKg * 1000),
       }
     }
-    // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 自取优惠 → 券（已在上面 loadGiftLines 之后
-    // 算出，按「小计 − 自取优惠」封顶）→ 运费（**按券前小计**判包邮/起送）→ 打包费（2026-09-13
-    // 打包费设计 §2.4：同城外送/到店自取按份收，全国邮寄恒 0，不参与门槛/免运/券封顶的任何判定，
+    // 计价顺序是 spec §5.1 的产品决策，逐字执行：小计 → 自取优惠 → 满减（2026-09-17 全店满减设计
+    // §4.2，已在上面算出）→ 券（已在上面 loadGiftLines 之后算出，按「小计 − 自取优惠 − 满减」
+    // 封顶）→ 运费（**按券前、满减前小计**判包邮/起送）→ 打包费（2026-09-13 打包费设计 §2.4：
+    // 同城外送/到店自取按份收，全国邮寄恒 0，不参与门槛/免运/券封顶/满减档位的任何判定，
     // 只在这里与运费同一层相加）→ 实付。
     // 上面两条渠道分支里的 calcLocalFee / calcExpressFee / belowMin / minOrderAmount
-    // 收到的都是券前 totalAmount，**一个字都没动**——顾客不因为用券失去包邮或跌破起送线。
+    // 收到的都是券前、满减前 totalAmount，**一个字都没动**——顾客不因为用券或满减失去包邮或跌破起送线。
     const discount = coupon?.discount ?? 0
     const packingFee = calcPackingFee(
       await getLocalSettings(),
       deliveryType,
       lines.map((l) => ({ packingFeeFen: l.product.packingFeeFen, quantity: l.quantity }))
     )
-    const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee, pickupDiscount, packingFee })
+    const { actualAmount } = computeCheckout({ subtotal: totalAmount, discount, shippingFee, pickupDiscount, promoDiscount, packingFee })
     // 0 元订单走不了微信支付，会掉进「没有支付回调」的死角（spec §5.1 与 §10 风险表第一行）。
     // 这一步必须在这里拒——computeCheckout 是纯函数，它只负责算对，拒不拒是业务判断。
     // F10：自取单没用券也能被自取优惠单独抵到 0（老文案「该券金额已超过本单可抵扣范围」在
@@ -546,6 +562,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
           ...pickupSnapshot,
           couponId: coupon?.id ?? null,
           discountAmount: discount,
+          promoDiscountAmount: promoDiscount,
           pointsUsed,
           items: { create: [...orderItemsData, ...giftItemsData] },
         },

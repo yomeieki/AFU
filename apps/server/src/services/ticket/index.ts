@@ -168,6 +168,9 @@ type OrderForTicket = {
   // ── 自取（PICKUP）专属──
   pickupAt: Date | null
   pickupDiscountAmount: number
+  // 全店满减（2026-09-17 设计 §6）。同样是 TicketOrderInput 的**唯一生产者**，漏列不会有
+  // 编译错误，只会让票面永远打不出满减行。
+  promoDiscountAmount: number
 }
 
 const ORDER_SELECT = {
@@ -178,7 +181,7 @@ const ORDER_SELECT = {
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
   discountAmount: true, pointsUsed: true, cancelRequestNote: true,
   tablewareMode: true, tablewareCount: true,
-  pickupAt: true, pickupDiscountAmount: true,
+  pickupAt: true, pickupDiscountAmount: true, promoDiscountAmount: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
 
@@ -212,6 +215,7 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderI
     pickupSlotLabel: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).text : null,
     pickupDayStamp: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).stamp : null,
     pickupDiscountAmount: order.pickupDiscountAmount,
+    promoDiscountAmount: order.promoDiscountAmount,
   }
 }
 
