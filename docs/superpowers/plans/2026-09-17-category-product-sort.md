@@ -316,4 +316,10 @@ docs/superpowers/plans/2026-09-17-category-product-sort.md                    �
 
 ## 勘误与验收记录（执行时追加）
 
-（空）
+**01 执行 · sonnet，2026-09-17：**
+
+- **A3 放行记录**：`prisma migrate diff --exit-code` 在本批全程唯一差异是 `order_no_seq.updated_at` 的 DEFAULT（`20260910000000_order_no_daily_seq` 建表用手写 SQL、`schema.prisma` 的 `model OrderNoSeq` 只有 `@updatedAt` 没有 `@default(now())`，两者对 Prisma 自省的口径不一致），经协调方独立核对确认早于本批、与本批无关，已放行：**A3 判据收窄为「差异仅限 order_no_seq.updated_at 这一处，出现任何其它表/列差异才算 FAIL」**。本批全程复跑过三次（Task 1 提交前、Task 4 后、Task 7 最终 sweep），差异内容逐字相同，未新增。
+- **A11 勘误（已修复）**：`sortProducts` 是带泛型的函数签名（`sortProducts<T extends SortableProduct>(...)`），定义处字面量不含连续的 `sortProducts(`，导致 `grep -rln "sortProducts(" apps/server/src` 起初只命中两处调用点（`routes/products.ts`、`routes/admin/products.ts`），漏了定义文件 `services/product-sort.ts` 本身。已在该文件头注释补一行调用示例（`sortProducts(rows, categoryMap, salesMap)`），不改变任何运行时行为；修复后 grep 命中恰好三个文件，符合 A11 字面要求（commit `b2d6691`）。
+- **A13 勘误（口径需要标注，非违规）**：`git diff 9753a3e..HEAD -- apps/server/src/routes/admin/products.ts | grep -c "..."` 默认 3 行上下文会把改动附近**未改动**的 `validateSpecs`/`aggregateFromSkus`/`assertNoUnpaidAndPurgeCarts` 等上下文行也计入，实测命中 5，但逐行核对（`grep -E "^[+-].*..."`）确认这 5 处全部是未加 `+`/`-` 前缀的上下文行，没有一处真正被改动；改用零上下文（`git diff -U0 9753a3e..HEAD -- ... | grep -c "..."`）命中 **0**，符合 A13 意图（排序无关逻辑确实未动）。建议 04 机械核对时用 `-U0` 版本的命令，或在判定时人工排除纯上下文行。
+- **A12 勘误（基线 SHA 早于实际起点，非本批引入）**：本计划头部写的基线是 `9753a3e`，但本 worktree 分支在我开工前已经领先该基线两个提交——`b76898f`（后台排序实施计划本身）与 `a92d4a3`（分类联动实施计划），这两个提交新增/改了 `docs/superpowers/plans/2026-09-17-category-anchor.md` 与 `docs/superpowers/specs/2026-09-17-category-anchor-design.md`（分类联动那批的计划与设计文档，属于另一个并行窗口的产物，不在本计划白名单内）。因此 `git diff --name-only 9753a3e..HEAD` 会把这两个文件也列出来，但 `git diff --name-only a92d4a3..HEAD`（我实际开工时的分支尖端）里没有这两个文件——已核实我从未改动过它们。建议 02/04 用 `a92d4a3..HEAD` 或直接核对本报告列出的各 Task 提交 diff 来判定白名单合规，而不是机械跑 `9753a3e..HEAD`。
+- 其余 A1/A2/A4–A10/A14 均按命令原样跑通，详见 01 执行报告。
