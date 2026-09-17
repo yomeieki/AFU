@@ -64,6 +64,8 @@ model Category {
   status    Int      @default(1) @db.TinyInt
   // 渠道：EXPRESS=全国邮寄 LOCAL=同城配送。一个分类只属于一个渠道，商品随分类归属
   channel   String   @default("EXPRESS") @db.VarChar(16)
+  // MANUAL=按 products.sort_order 手动排；SALES_30D=近 30 天销量降序（2026-09-17 分类内排序设计 §3.1）
+  productSortMode String @default("MANUAL") @map("product_sort_mode") @db.VarChar(16)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -104,6 +106,8 @@ model Product {
   // 打包费（分）：null=跟随同城设置的全店默认值，0=本菜不收，>0=本菜每份打包费（2026-09-13 打包费设计 §2.1）
   packingFeeFen  Int?      @map("packing_fee_fen")
   isRecommended  Int       @default(0) @map("is_recommended") @db.TinyInt
+  // 分类内手动排序值，同分类从小到大；与 category.sortOrder 无关（2026-09-17 分类内排序设计 §3.1）
+  sortOrder      Int       @default(0) @map("sort_order")
   qrScene        String?   @map("qr_scene") @db.VarChar(64)
   qrCodeUrl      String?   @map("qr_code_url") @db.VarChar(500)
   qrGeneratedAt  DateTime? @map("qr_generated_at")
