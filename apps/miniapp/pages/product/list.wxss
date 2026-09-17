@@ -129,10 +129,15 @@
   font-weight: 600;
 }
 
-/* Right: product list */
-.prod-panel {
+/* Right: product panel wrapper（给 Task 5 的吸顶浮动条一个定位父级） */
+.prod-wrap {
   flex: 1;
   min-width: 0;
+  position: relative;
+  height: 100%;
+}
+.prod-panel {
+  width: 100%;
   height: 100%;
   background-color: var(--card);
 }
@@ -261,3 +266,19 @@
 .page-local .prod-panel {
   padding-bottom: calc(132rpx + env(safe-area-inset-bottom));
 }
+
+/* 分段：段头与 Task 5 的浮动条尺寸必须完全一致，滚到 0 时两者重叠得看不出是两层 */
+.group-anchor { padding-bottom: 8rpx; }
+.group-head { height: 64rpx; line-height: 64rpx; padding: 0 20rpx; font-size: 26rpx; font-weight: 600; color: var(--text-1); background-color: var(--card); }
+/* 空段要有高度：太矮的话滚过去后「段顶 <= scrollTop」立刻被下一段接管，高亮停不住 */
+.group-empty { min-height: 200rpx; display: flex; align-items: center; justify-content: center; font-size: 24rpx; color: var(--text-disabled); }
+.group-tail { width: 100%; }
+/* 骨架屏（样式从 pages/index/index.wxss 抄，页面样式互不可见） */
+.skeleton-list { padding: 16rpx 20rpx; display: flex; flex-direction: column; gap: 16rpx; }
+.skeleton-row { display: flex; gap: 20rpx; padding: 16rpx; border: 1rpx solid var(--divider); border-radius: var(--radius-lg); }
+.skeleton-img { width: 160rpx; height: 160rpx; border-radius: var(--radius-md); background: var(--divider); flex-shrink: 0; }
+.skeleton-lines { flex: 1; }
+.skeleton-line { height: 28rpx; border-radius: 8rpx; background: var(--divider); margin-top: 8rpx; }
+.skeleton-line-short { width: 55%; margin-top: 16rpx; }
+.skeleton-shine { animation: skeleton-breath 1.2s ease-in-out infinite; }
+@keyframes skeleton-breath { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }

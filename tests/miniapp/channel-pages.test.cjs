@@ -50,6 +50,8 @@ function makeCtx(channel) {
     getMenuButtonBoundingClientRect: () => ({ top: 48, height: 32 }),
     stopPullDownRefresh() {}, showToast() {}, switchTab() {}, navigateTo() {}, reLaunch() {},
     showNavigationBarLoading() {}, hideNavigationBarLoading() {},
+    nextTick: (fn) => setTimeout(fn, 0),
+    createSelectorQuery: () => { const q = { in: () => q, select: () => q, selectAll: () => q, boundingClientRect: () => q, scrollOffset: () => q, exec: (cb) => cb([{ top: 0, height: 600 }, { scrollTop: 0 }, []]) }; return q },
   }
   return { app, wx, urls }
 }
@@ -124,7 +126,7 @@ test('分类页 LOCAL / EXPRESS 各自带对渠道', async function () {
 test('分类页的请求钥匙里必须含渠道，否则切渠道时在途响应会串货', function () {
   const ctx = makeCtx('LOCAL')
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
-  page.setData({ channel: 'LOCAL', activeCategoryId: 3, searchKeyword: '' })
+  page.setData({ channel: 'LOCAL', searchKeyword: '牛肉' })
   const keyLocal = page.buildQueryKey.call(page)
   page.setData({ channel: 'EXPRESS' })
   const keyExpress = page.buildQueryKey.call(page)
@@ -136,11 +138,11 @@ test('分类页切渠道会清空分类、商品与搜索词', async function ()
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settle(); await settle()
-  page.setData({ list: [{ id: 1 }], searchKeyword: '牛肉', activeCategoryId: 3, categories: [{ id: null }, { id: 3 }] })
+  page.setData({ list: [{ id: 1 }], searchKeyword: '牛肉', groups: [{ id: 3, name: 'x', items: [] }], activeGroupId: 3 })
   ctx.app.globalData.shoppingChannel = 'LOCAL'
   page.reloadForChannel.call(page)
   assert.deepEqual(page.data.list, [])
   assert.equal(page.data.searchKeyword, '')
-  assert.equal(page.data.activeCategoryId, null, '旧渠道的分类 id 会指向一个新渠道没有的分类')
-  assert.deepEqual(page.data.categories.map((c) => c.id), [null])
+  assert.equal(page.data.activeGroupId, null, '旧渠道的分类 id 会指向一个新渠道没有的分类')
+  assert.deepEqual(page.data.groups, [])
 })

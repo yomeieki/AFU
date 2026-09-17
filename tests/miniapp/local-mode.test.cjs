@@ -58,6 +58,8 @@ function makeCtx(channel, mode, meta, cart) {
     navigateTo: (o) => { nav.push('navigateTo:' + o.url) },
     switchTab: (o) => { nav.push('switchTab:' + o.url) },
     stopPullDownRefresh() {}, showToast() {}, showModal() {}, reLaunch() {},
+    nextTick: (fn) => setTimeout(fn, 0),
+    createSelectorQuery: () => { const q = { in: () => q, select: () => q, selectAll: () => q, boundingClientRect: () => q, scrollOffset: () => q, exec: (cb) => cb([{ top: 0, height: 600 }, { scrollTop: 0 }, []]) }; return q },
   }
   return { app, wx, urls, nav }
 }

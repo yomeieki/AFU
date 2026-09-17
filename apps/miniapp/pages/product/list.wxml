@@ -1,4 +1,49 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
+
+<!-- 商品行：分组视图与搜索视图共用一份，用 template 引用，避免维护两份 wxml -->
+<template name="product-row">
+  <view
+    class="product-row"
+    hover-class="product-row-hover"
+    bindtap="goToDetail"
+    data-id="{{item.id}}"
+  >
+    <view class="product-row-img-wrap">
+      <image
+        wx:if="{{item.coverImage}}"
+        class="product-row-img"
+        src="{{item.coverImage}}"
+        mode="aspectFill"
+        lazy-load="{{true}}"
+      />
+      <view wx:else class="product-row-img-placeholder img-placeholder"></view>
+    </view>
+    <view class="product-row-info">
+      <text class="product-row-name">{{item.name}}</text>
+      <text class="product-row-subtitle" wx:if="{{item.subtitle}}">{{item.subtitle}}</text>
+      <view class="product-row-meta">
+        <text class="product-row-stock">{{item.stockLabel}}</text>
+        <text wx:if="{{item.salesCount > 0}}" class="product-row-sales">已售{{item.salesCount}}</text>
+      </view>
+      <view class="product-row-bottom">
+        <text class="price-symbol">¥</text>
+        <text class="price-int product-row-price-int">{{pricefmt.int(item.priceText)}}</text>
+        <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
+        <text wx:if="{{item.hasSkus}}" class="product-row-price-from">起</text>
+        <text class="product-row-unit">/ {{item.unit}}</text>
+        <!-- catchtap 而不是 bindtap：不 catch 的话点击会冒泡到整行的 goToDetail，
+             顾客按一下加购、页面却跳进了详情页。 -->
+        <view
+          wx:if="{{channel === 'LOCAL'}}"
+          class="add-btn {{item.stock <= 0 ? 'add-btn-disabled' : ''}}"
+          catchtap="onAddToCart"
+          data-id="{{item.id}}"
+        >+</view>
+      </view>
+    </view>
+  </view>
+</template>
+
 <view class="page {{channel === 'LOCAL' ? 'page-local' : ''}}">
 
   <!-- 同城：紧凑门店头（只留店名 + 营业状态）。配送规则与阻塞通知在主页给过，
@@ -24,7 +69,7 @@
     </view>
   </view>
 
-  <!-- Active search chip（搜索模式：点 × 清除并回到分类模式） -->
+  <!-- Active search chip（搜索模式：点 × 清除并回到分组视图） -->
   <view class="category-tag-bar" wx:if="{{searchKeyword}}">
     <view class="category-tag">
       <text class="category-tag-text">搜索：{{searchKeyword}}</text>
@@ -37,12 +82,12 @@
   <!-- Two-column body -->
   <view class="body">
 
-    <!-- Left: category sidebar -->
+    <!-- Left: category sidebar（无「全部」项，进页默认停在第一项） -->
     <scroll-view class="cat-panel" scroll-y enhanced="{{true}}" show-scrollbar="{{false}}">
       <view
-        wx:for="{{categories}}"
-        wx:key="name"
-        class="cat-item {{!searchKeyword && activeCategoryId === item.id ? 'active' : ''}}"
+        wx:for="{{groups}}"
+        wx:key="id"
+        class="cat-item {{!searchKeyword && activeGroupId === item.id ? 'active' : ''}}"
         hover-class="cat-item-hover"
         bindtap="onSelectCategory"
         data-id="{{item.id}}"
@@ -52,75 +97,50 @@
       </view>
     </scroll-view>
 
-    <!-- Right: product list -->
-    <scroll-view
-      class="prod-panel"
-      scroll-y
-      enhanced="{{true}}"
-      show-scrollbar="{{false}}"
-      scroll-top="{{rightScrollTop}}"
-      lower-threshold="120"
-      bindscrolltolower="onScrollToLower"
-    >
-      <empty-state
-        wx:if="{{list.length === 0 && !loading}}"
-        type="product"
-        text="{{searchKeyword ? '没有找到相关商品' : (channel === 'LOCAL' && categories.length <= 1 ? '同城菜单还在准备中' : '该分类暂无商品')}}"
-      />
+    <!-- Right: product panel -->
+    <view class="prod-wrap">
 
-      <view class="product-list">
-        <view
-          wx:for="{{list}}"
-          wx:key="id"
-          class="product-row"
-          hover-class="product-row-hover"
-          bindtap="goToDetail"
-          data-id="{{item.id}}"
-        >
-          <view class="product-row-img-wrap">
-            <image
-              wx:if="{{item.coverImage}}"
-              class="product-row-img"
-              src="{{item.coverImage}}"
-              mode="aspectFill"
-              lazy-load="{{true}}"
-            />
-            <view wx:else class="product-row-img-placeholder img-placeholder"></view>
-          </view>
-          <view class="product-row-info">
-            <text class="product-row-name">{{item.name}}</text>
-            <text class="product-row-subtitle" wx:if="{{item.subtitle}}">{{item.subtitle}}</text>
-            <view class="product-row-meta">
-              <text class="product-row-stock">{{item.stockLabel}}</text>
-              <text wx:if="{{item.salesCount > 0}}" class="product-row-sales">已售{{item.salesCount}}</text>
-            </view>
-            <view class="product-row-bottom">
-              <text class="price-symbol">¥</text>
-              <text class="price-int product-row-price-int">{{pricefmt.int(item.priceText)}}</text>
-              <text class="price-dec">{{pricefmt.dec(item.priceText)}}</text>
-              <text wx:if="{{item.hasSkus}}" class="product-row-price-from">起</text>
-              <text class="product-row-unit">/ {{item.unit}}</text>
-              <!-- catchtap 而不是 bindtap：不 catch 的话点击会冒泡到整行的 goToDetail，
-                   顾客按一下加购、页面却跳进了详情页。 -->
-              <view
-                wx:if="{{channel === 'LOCAL'}}"
-                class="add-btn {{item.stock <= 0 ? 'add-btn-disabled' : ''}}"
-                catchtap="onAddToCart"
-                data-id="{{item.id}}"
-              >+</view>
+      <scroll-view
+        class="prod-panel"
+        scroll-y
+        enhanced="{{true}}"
+        show-scrollbar="{{false}}"
+        scroll-top="{{rightScrollTop}}"
+        lower-threshold="120"
+        bindscrolltolower="onScrollToLower"
+      >
+        <!-- 分组视图：拉全量中骨架屏 → 空 → 分段 -->
+        <block wx:if="{{!searchKeyword}}">
+          <view wx:if="{{catalogLoading}}" class="skeleton-list">
+            <view class="skeleton-row" wx:for="{{[1,2,3,4,5]}}" wx:key="*this">
+              <view class="skeleton-img skeleton-shine"></view>
+              <view class="skeleton-lines"><view class="skeleton-line skeleton-shine"></view><view class="skeleton-line skeleton-line-short skeleton-shine"></view></view>
             </view>
           </view>
-        </view>
-      </view>
+          <empty-state wx:elif="{{groups.length === 0}}" type="product" text="{{channel === 'LOCAL' ? '同城菜单还在准备中' : '暂无商品'}}" />
+          <block wx:else>
+            <view wx:for="{{groups}}" wx:key="id" wx:for-item="g" id="g-{{g.id}}" data-gid="{{g.id}}" class="group-anchor">
+              <view class="group-head">{{g.name}}</view>
+              <view wx:if="{{g.items.length === 0}}" class="group-empty">该分类暂无商品</view>
+              <view wx:else class="product-list">
+                <template wx:for="{{g.items}}" wx:key="id" is="product-row" data="{{item: item, channel: channel}}" />
+              </view>
+            </view>
+            <view class="group-tail" style="height: {{tailHeight}}px;"></view>
+          </block>
+        </block>
+        <!-- 搜索视图（仅邮寄）：平铺 + 翻页，原样保留 -->
+        <block wx:else>
+          <empty-state wx:if="{{list.length === 0 && !loading}}" type="product" text="没有找到相关商品" />
+          <view class="product-list">
+            <template wx:for="{{list}}" wx:key="id" is="product-row" data="{{item: item, channel: channel}}" />
+          </view>
+          <view wx:if="{{loading}}" class="footer-tip"><text>加载中...</text></view>
+          <view wx:elif="{{!hasMore && list.length > 0}}" class="footer-tip"><text>- 没有更多了 -</text></view>
+        </block>
+      </scroll-view>
 
-      <!-- Footer -->
-      <view wx:if="{{loading}}" class="footer-tip">
-        <text>加载中...</text>
-      </view>
-      <view wx:elif="{{!hasMore && list.length > 0}}" class="footer-tip">
-        <text>- 没有更多了 -</text>
-      </view>
-    </scroll-view>
+    </view>
 
   </view>
 
