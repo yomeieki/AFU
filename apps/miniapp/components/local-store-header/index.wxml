@@ -1,12 +1,13 @@
 <view class="store-head">
-  <!-- 第一行只有三样东西：图标、店名、状态胶囊。原来这里还有个「我的订单 ›」，
-       改版后订单统一从底部「我的」进（Spec §4.1）。 -->
+  <!-- 第一行：左侧一组 [图标 店名 状态胶囊] 紧挨着（N9），右端渠道标识（N1）。
+       店名可收缩可省略；胶囊与标识不可收缩、不换行——店名再长也是店名先省略。 -->
   <view class="store-title-row">
     <view class="store-name-wrap">
       <view class="icon icon-shop store-icon"></view>
       <text class="store-name">{{meta.store.name || '同城配送'}}</text>
+      <text class="status-pill status-pill-{{tone}}">{{label}}</text>
     </view>
-    <text class="status-pill status-pill-{{tone}}">{{label}}</text>
+    <channel-badge wx:if="{{channel}}" channel="{{channel}}" bind:switch="onTapChannel" />
   </view>
 
   <view wx:if="{{rulesText}}" class="delivery-rules-row" bindtap="onOpenStore">

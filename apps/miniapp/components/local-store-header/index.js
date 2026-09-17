@@ -1,10 +1,8 @@
 // 同城门店头。主页与分类页共用同一套完整版（店名 + 状态 + 规则行 + 通知），
 // 两页共用同一份状态判定与同一套排版规则。
 //
-// 存在的理由是排版而不只是复用：原来这一行是 `justify-content: space-between`，
-// 中间还挂着一个「我的订单 ›」。店名一长，space-between 会把状态胶囊推到远处、
-// 并把它压扁——绿色底色跟着文字一起被截断，看起来像渲染坏了。
-// 规格 §4.1 因此钉死了三条：整行左对齐、店名可收缩可省略、胶囊不可收缩不换行。
+// 2026-09-17 起第一行改回 `space-between`，但左侧一组是 `[图标 店名 状态胶囊]`、右端只有渠道标识：
+// 胶囊跟着店名走，不会再被推到远处；店名仍可收缩可省略，胶囊与标识不可收缩不换行。
 //
 // 2026-09-11 起按同城子模式（外送 / 自取）切换胶囊、规则行与通知；切换控件本身不在这里，
 // 在独立的 local-mode-bar 组件（页头之下、分类区之上）。
@@ -20,6 +18,8 @@ Component({
     meta: { type: null, value: null },
     // 同城子模式 'DELIVERY' | 'PICKUP'
     mode: { type: String, value: 'DELIVERY' },
+    // 渠道标识：空 = 不画（主页用顶栏那枚，不重复画）；分类页传当前渠道 'LOCAL' | 'EXPRESS'
+    channel: { type: String, value: '' },
   },
   data: {
     tone: 'closed',
@@ -69,6 +69,10 @@ Component({
     },
     onGoExpress: function() {
       this.triggerEvent('goexpress')
+    },
+    // 右端渠道标识被点了：切换动作在页面里（两侧共用一个弹层），组件只负责转发
+    onTapChannel: function() {
+      this.triggerEvent('switchchannel')
     },
     // 自取规则行的「›」：打开地图导航到门店。没坐标就不可点（canNavigate=false，wxml 不渲染箭头）
     onOpenStore: function() {

@@ -3,15 +3,15 @@
   padding: 24rpx 24rpx 20rpx;
 }
 
-/* Spec §4.1 的三条排版铁律，改这里之前先读组件 js 的文件头：
-   ① 整行左对齐——原来的 space-between 会把胶囊推到远处；
+/* 2026-09-17 排版铁律，改这里之前先读组件 js 的文件头：
+   ① 左侧一组 [图标 店名 状态胶囊] 靠左、渠道标识靠右——space-between 只推标识，不再推胶囊；
    ② 店名可收缩、可省略（flex: 0 1 auto + min-width: 0，缺一不可，
       没有 min-width:0 的 flex 子项不会收缩到内容以下，省略号永远不出现）；
-   ③ 胶囊不可收缩、不换行、按内容自适应——它被压扁时绿色底会跟着文字一起截断。 */
+   ③ 胶囊与渠道标识都不可收缩、不换行、按内容自适应——被压扁时底色会跟着文字一起截断。 */
 .store-title-row {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 12rpx;
 }
 .store-name-wrap {
