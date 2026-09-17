@@ -73,6 +73,10 @@ export default function BusinessCenter({ title, description, tabs }: BusinessCen
                 end
                 role="tab"
                 onClick={(event) => {
+                  // 带修饰键的点击交还给浏览器：Cmd/Ctrl+点击开新标签、Shift+点击开新窗口、
+                  // 中键点击，都不会离开当前页，没有「未保存改动会丢」的问题，拦下来反而
+                  // 把这些习惯用法废掉了。守卫内置到所有中心之后这个面扩大了，必须放行。
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return
                   event.preventDefault()
                   void leave(tab.to)
                 }}
