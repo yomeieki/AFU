@@ -13,6 +13,11 @@
 // 「时段加载中 / 获取失败 / 无可取时段」这三格禁用提交（没格子可选，点了也白点），
 // 但金额（amountState）不因为这三格而降级——顾客的应付金额只看 payAmount 算不算得出来，
 // 与时段是否加载完成无关；这三格与「未选时段」共用同一条 amt 计算，回归缺陷见下。
+// 「时段加载中 / 获取失败」这两格只在「尚未选中时段」（!hasSlot）时才生效：已经选好时段
+// 与餐具的顾客一返回本页，onShow 会并发重拉 meta 与 slots，slotsLoading 先同步置 true，
+// 若这里不加 !hasSlot，按钮会从「提交订单」瞬间翻成禁用态——回归见下方 2026-09-17 记录。
+// 「无可取时段」（noSlots）这格反而不能加 !hasSlot：刷新回来一格都没有时，已选的那格
+// 必然也不在新列表里了，此时该禁用提交、文案「暂无可取时段」，而不是继续显示旧选择。
 //
 // ⚠️ 本文件必须保持 ES5（scripts/check-miniapp-es5.mjs 把守）。
 
@@ -21,6 +26,7 @@ var formatPrice = require('./format').formatPrice
 var TEXT = {
   BLOCKED: '暂不可自取',
   NO_SLOT: '请选择取餐时间',
+  SLOT_LOADING: '正在获取时段…',
   SLOT_LOADING_ERROR: '取餐时段获取失败',
   NO_SLOTS: '暂无可取时段',
   SLOT_STALE: '重新选择时间',
@@ -54,8 +60,8 @@ function pickupCheckoutAction(s) {
   if (st.blockReason) return result(true, TEXT.BLOCKED, 'blocked', 'none')
   // 金额与时段是否加载完成无关：能算出来就照常显示，别因为时段没格子就把底栏压成「待计算」
   var amt = st.payAmount === null || st.payAmount === undefined ? 'pending' : 'ready'
-  if (st.slotsLoading) return result(true, TEXT.NO_SLOT, amt, 'none')
-  if (st.slotsError) return result(true, TEXT.SLOT_LOADING_ERROR, amt, 'none')
+  if (st.slotsLoading && !st.hasSlot) return result(true, TEXT.SLOT_LOADING, amt, 'none')
+  if (st.slotsError && !st.hasSlot) return result(true, TEXT.SLOT_LOADING_ERROR, amt, 'none')
   if (st.noSlots) return result(true, TEXT.NO_SLOTS, amt, 'none')
   // 与「未选餐具」一致：按钮可点，动作是打开时段选择器，不是提交
   if (!st.hasSlot) return result(false, TEXT.NO_SLOT, amt, 'slot')

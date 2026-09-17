@@ -30,13 +30,19 @@ test('没选时段且金额还没算出来（车没回来）→ 金额待计算'
   assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, payAmount: null })),
     { disabled: false, text: '请选择取餐时间', amountState: 'pending', action: 'slot' })
 })
-test('时段加载中 → 禁用，文案「请选择取餐时间」，金额照常显示', function () {
+test('时段加载中 → 禁用，文案「正在获取时段…」，金额照常显示', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, slotsLoading: true })),
-    { disabled: true, text: '请选择取餐时间', amountState: 'ready', action: 'none' })
+    { disabled: true, text: '正在获取时段…', amountState: 'ready', action: 'none' })
 })
 test('时段获取失败 → 禁用，文案「取餐时段获取失败」', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, slotsError: true })),
     { disabled: true, text: '取餐时段获取失败', amountState: 'ready', action: 'none' })
+})
+// 返工回归护栏：onShow 并发重拉 meta 与 slots 时，slotsLoading/slotsError 会先于新列表
+// 落地——已经选好时段的顾客这一刻绝不能被这两格截胡退回禁用态。
+test('已选时段时，时段加载中/获取失败都不截胡：仍走后面几格判定（提交订单）', function () {
+  assert.deepEqual(st.pickupCheckoutAction(on({ slotsLoading: true })), st.pickupCheckoutAction(READY))
+  assert.deepEqual(st.pickupCheckoutAction(on({ slotsError: true })), st.pickupCheckoutAction(READY))
 })
 test('时段拉到了但一格都没有 → 禁用，文案「暂无可取时段」', function () {
   assert.deepEqual(st.pickupCheckoutAction(on({ hasSlot: false, noSlots: true })),
@@ -122,7 +128,7 @@ test('firstSlot：找第一个可选格（页面只用它决定弹层默认落�
 test('优先级：阻塞 > 时段加载中 > 时段获取失败 > 无可取时段 > 未选时段 > 时段失效 > 手机号 > 起送 > 金额未知 > 餐具 > 优惠重算 > 提交中', function () {
   const all = { blockReason: 'x', slotsLoading: true, slotsError: true, noSlots: true, hasSlot: false, slotStale: true, phoneValid: false, belowMinGap: 500, hasTableware: false, benefitsLoading: true, submitting: true, payAmount: 100 }
   assert.equal(st.pickupCheckoutAction(all).text, '暂不可自取')
-  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).text, '请选择取餐时间')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '' })).text, '正在获取时段…')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false })).text, '取餐时段获取失败')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false })).text, '暂无可取时段')
   assert.equal(st.pickupCheckoutAction(Object.assign({}, all, { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false })).action, 'slot')

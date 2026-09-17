@@ -46,6 +46,14 @@ function makeCtx(opts) {
   }
   const contact = opts.contact === undefined ? { name: '', phone: '13800001234' } : opts.contact
   const orderMeta = opts.orderMeta || { subscribeTemplateIds: [], payTimeoutMin: 15 }
+  // holdSlots：把 /local/pickup-slots 的响应挂起，模拟「时段请求在途」这个窗口
+  // （1-C 护栏要在顾客已选好时段之后再开，所以是 ctx 上的可变开关，不是 opts 常量）。
+  const held = []
+  const ctx = { app, urls, requests, holdSlots: !!opts.holdSlots }
+  ctx.release = function () {
+    const pending = held.splice(0, held.length)
+    pending.forEach(function (respond) { respond() })
+  }
   const wx = {
     getStorageSync: () => '',
     setStorageSync: () => {},
@@ -65,11 +73,15 @@ function makeCtx(opts) {
         return
       }
       if (/\/local\/pickup-slots/.test(url)) {
-        if (opts.slotsFail) {
-          o.success({ statusCode: 200, data: { code: 50001, message: '系统开小差了' } })
-          return
+        const respond = function () {
+          if (opts.slotsFail) {
+            o.success({ statusCode: 200, data: { code: 50001, message: '系统开小差了' } })
+            return
+          }
+          o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: opts.slots || { blocked: null, days: [] } } })
         }
-        o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: opts.slots || { blocked: null, days: [] } } })
+        if (ctx.holdSlots) { held.push(respond); return }
+        respond()
         return
       }
       if (/\/local\/meta/.test(url)) {
@@ -95,7 +107,8 @@ function makeCtx(opts) {
       o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: {} } })
     },
   }
-  return { app, wx, urls, requests, getSelectorQueryCalls: () => 0 }
+  ctx.wx = wx
+  return ctx
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
@@ -179,11 +192,12 @@ test('/local/pickup-slots 报错：禁用提交，文案「取餐时段获取失
   assert.equal(page.data.action.text, '取餐时段获取失败')
 })
 
-test('首屏（时段还没回来）：按钮禁用、动作是 none', function () {
+test('首屏（时段还没回来）：按钮禁用、动作是 none、文案「正在获取时段…」', function () {
   const { page } = loadPickup({ slots: slotsWithOneSlot() })
   // 不 settle：模拟请求在途时的首屏状态
   assert.equal(page.data.action.disabled, true)
   assert.equal(page.data.action.action, 'none')
+  assert.equal(page.data.action.text, '正在获取时段…')
 })
 
 test('openPicker 在时段加载中 / 出错时不打开弹层', async function () {
@@ -191,4 +205,38 @@ test('openPicker 在时段加载中 / 出错时不打开弹层', async function 
   await settleAll()
   page.openPicker.call(page)
   assert.equal(page.data.pickerOpen, false)
+})
+
+// 1-B 护栏：days 全空（拉到了但一格都没有）时，整张卡片点了也不该弹出空弹层。
+test('days 全空：openPicker 不打开弹层', async function () {
+  const { page } = loadPickup({ slots: slotsEmpty() })
+  await settleAll()
+  assert.equal(page.data.hasAnySlot, false)
+  page.openPicker.call(page)
+  assert.equal(page.data.pickerOpen, false)
+})
+
+// 1-C 护栏（返工回归实测复现）：已选好时段与餐具的顾客离开又回到本页，onShow 并发
+// 重拉 meta 与 slots，slotsLoading 先落地——这个窗口里按钮绝不能从「提交订单」翻成
+// 禁用态；手上还有上一轮的旧列表，点「取餐时间」也照常能打开弹层。
+test('已选时段+餐具后 onShow 复检（时段请求在途）：按钮仍是可提交的「提交订单」', async function () {
+  const { ctx, page } = loadPickup({ slots: slotsWithOneSlot() })
+  await settleAll()
+  page.selectSlot.call(page, { currentTarget: { dataset: { idx: 0 } } })
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  assert.equal(page.data.action.action, 'submit')
+  assert.equal(page.data.action.disabled, false)
+
+  ctx.holdSlots = true
+  page.onShow.call(page)
+  await settleAll()
+  assert.equal(page.data.action.action, 'submit')
+  assert.equal(page.data.action.disabled, false)
+
+  page.openPicker.call(page)
+  assert.equal(page.data.pickerOpen, true)
+
+  ctx.release()
+  await settleAll()
+  assert.equal(page.data.action.action, 'submit')
 })

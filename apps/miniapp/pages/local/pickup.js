@@ -69,7 +69,7 @@ Page({
     belowMinGap: 0,
     submitting: false,
     // 首屏时段还没拉回来（slotsLoading 初值即 true），此刻不该可点
-    action: { disabled: true, text: '请选择取餐时间', amountState: 'pending', action: 'none' },
+    action: st.pickupCheckoutAction({ slotsLoading: true }),
     subscribeTemplateIds: [],
     payTimeoutMin: 15,
   },
@@ -235,7 +235,10 @@ Page({
 
   // ── 时段选择器 ──────────────────────────────────────────────
   openPicker: function() {
-    if (this.data.blockReason || this.data.slotsLoading || this.data.slotsError) return
+    // 阻塞、或本轮压根没有任何一格可选（noSlots/初次还没拉到）时，整张卡片点了也不该弹出空
+    // 弹层；时段请求在途但手上还有上一轮的旧列表（hasAnySlot 仍真）时照常能打开——
+    // 与按钮判定用的 !hasSlot 口径不同，这里看的是「弹层里有没有格子可翻」。
+    if (this.data.blockReason || !this.data.hasAnySlot) return
     this.setData({ pickerOpen: true })
   },
   closePicker: function() {
