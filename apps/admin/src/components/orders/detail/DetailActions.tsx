@@ -2,15 +2,15 @@ import { useState } from 'react'
 import { Printer } from 'lucide-react'
 import Button from '../../ui/Button'
 import { toast } from '../../ui/Toast'
-import RefundDialog from '../../RefundDialog'
 import { reprintOrder } from '../../../api/admin'
 import type { OrderDetail } from '../../../types'
 
 interface Props {
   order: OrderDetail
-  /** 同城外送单传配送成本，传给 RefundDialog 展示参考行 */
-  deliveryCostFen?: number
-  onReload: () => void
+  /** 点「退款/重试退款/发起退款」时触发；退款弹窗由页面（OrderDetail.tsx）唯一持有，
+   * 不在这里渲染——本组件在 <md 下被放进 `position:fixed` 的底部操作栏，那本身是一个新的
+   * 层叠上下文，弹窗在其中渲染会被顶栏压在下面（需改 3）。 */
+  onRefund: () => void
   className?: string
 }
 
@@ -19,8 +19,7 @@ interface Props {
  * 不放宽——详情页不做接单/出餐/呼叫骑手/发货/标记完成/发赔偿券/取消，那些仍然只在
  * 对应列表页 / 工作台做（见实施计划 §1 T3③ DetailActions.tsx）。
  */
-export default function DetailActions({ order, deliveryCostFen, onReload, className = '' }: Props) {
-  const [refundOpen, setRefundOpen] = useState(false)
+export default function DetailActions({ order, onRefund, className = '' }: Props) {
   const [reprinting, setReprinting] = useState(false)
 
   const handleReprint = async () => {
@@ -46,7 +45,7 @@ export default function DetailActions({ order, deliveryCostFen, onReload, classN
     if (['PAID', 'PREPARING', 'SHIPPED', 'COMPLETED'].includes(order.status)) {
       if (order.remainingRefundable <= 0) return null
       return (
-        <Button variant="danger" disabled={refundActive} title={refundActive ? '有退款处理中' : ''} onClick={() => setRefundOpen(true)} className="flex-1 md:flex-none">
+        <Button variant="danger" disabled={refundActive} title={refundActive ? '有退款处理中' : ''} onClick={onRefund} className="flex-1 md:flex-none">
           {order.refundedAmount > 0 ? `再退款（还可退 ¥${(order.remainingRefundable / 100).toFixed(2)}）` : `退款（还可退 ¥${(order.remainingRefundable / 100).toFixed(2)}）`}
         </Button>
       )
@@ -55,7 +54,7 @@ export default function DetailActions({ order, deliveryCostFen, onReload, classN
     return (
       <>
         {!refundActive && (
-          <Button variant="danger" onClick={() => setRefundOpen(true)} className="flex-1 md:flex-none">
+          <Button variant="danger" onClick={onRefund} className="flex-1 md:flex-none">
             {r ? '重试退款' : '发起退款'}
           </Button>
         )}
@@ -69,27 +68,14 @@ export default function DetailActions({ order, deliveryCostFen, onReload, classN
   })()
 
   return (
-    <>
-      <div className={`flex items-center gap-2 ${className}`}>
-        {order.status !== 'PENDING_PAYMENT' && (
-          <Button variant="secondary" loading={reprinting} onClick={handleReprint} className="flex-1 md:flex-none" title="重打该单小票">
-            <Printer className="w-4 h-4" />
-            重打小票
-          </Button>
-        )}
-        {refundButton}
-      </div>
-      {refundOpen && (
-        <RefundDialog
-          order={order}
-          deliveryCostFen={deliveryCostFen}
-          onClose={() => setRefundOpen(false)}
-          onDone={() => {
-            setRefundOpen(false)
-            onReload()
-          }}
-        />
+    <div className={`flex items-center gap-2 ${className}`}>
+      {order.status !== 'PENDING_PAYMENT' && (
+        <Button variant="secondary" loading={reprinting} onClick={handleReprint} className="flex-1 md:flex-none" title="重打该单小票">
+          <Printer className="w-4 h-4" />
+          重打小票
+        </Button>
       )}
-    </>
+      {refundButton}
+    </div>
   )
 }

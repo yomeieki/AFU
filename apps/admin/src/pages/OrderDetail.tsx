@@ -4,6 +4,7 @@ import { ChevronLeft } from 'lucide-react'
 import { getOrder, getOrderDelivery, getExpressBooking } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 import Spinner from '../components/ui/Spinner'
+import RefundDialog from '../components/RefundDialog'
 import DetailHero from '../components/orders/detail/DetailHero'
 import DetailTimeline from '../components/orders/detail/DetailTimeline'
 import DetailCustomer from '../components/orders/detail/DetailCustomer'
@@ -30,6 +31,7 @@ export default function OrderDetail() {
   const [order, setOrder] = useState<OrderDetailData | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [refundOpen, setRefundOpen] = useState(false)
 
   const [localData, setLocalData] = useState<LocalData>(null)
   const [localLoading, setLocalLoading] = useState(false)
@@ -118,7 +120,7 @@ export default function OrderDetail() {
             {backLabel}
           </button>
           <div className="hidden md:flex">
-            <DetailActions order={order} deliveryCostFen={costFen} onReload={load} />
+            <DetailActions order={order} onRefund={() => setRefundOpen(true)} />
           </div>
         </div>
 
@@ -179,8 +181,22 @@ export default function OrderDetail() {
 
       {/* <md 底部固定操作栏 */}
       <div className="md:hidden fixed inset-x-0 bottom-0 bg-white border-t border-gray-100 px-3 pt-2" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
-        <DetailActions order={order} deliveryCostFen={costFen} onReload={load} className="w-full" />
+        <DetailActions order={order} onRefund={() => setRefundOpen(true)} className="w-full" />
       </div>
+
+      {/* RefundDialog 只在这里渲染一份，不在上面的 fixed 底栏容器内——那是个新的层叠
+          上下文，弹窗在里面会被 Layout.tsx 的顶栏压在下面（需改 3）。 */}
+      {refundOpen && (
+        <RefundDialog
+          order={order}
+          deliveryCostFen={costFen}
+          onClose={() => setRefundOpen(false)}
+          onDone={() => {
+            setRefundOpen(false)
+            load()
+          }}
+        />
+      )}
     </div>
   )
 }
