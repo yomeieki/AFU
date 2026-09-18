@@ -147,7 +147,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   </button>
                 </div>
               </td>
-              <td className="px-4 py-3 text-gray-600 max-w-[320px] truncate">{itemsSummary(o.items)}</td>
+              <td className="px-4 py-3 text-gray-600 max-w-[160px] lg:max-w-[320px] truncate">{itemsSummary(o.items)}</td>
               <td className="px-4 py-3 text-right font-semibold text-brand-600">
                 ¥{yuan(o.actualAmount)}
                 {o.refundedAmount > 0 && <div className="text-xs font-normal text-red-500">已退 ¥{yuan(o.refundedAmount)}</div>}
@@ -163,7 +163,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                 {line2 && <div className="text-gray-400">{line2}</div>}
               </td>
               {renderActions && (
-                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-wrap gap-x-3 gap-y-1">{renderActions(o)}</div>
                 </td>
               )}
