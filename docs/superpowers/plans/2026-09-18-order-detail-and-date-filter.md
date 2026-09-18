@@ -735,3 +735,100 @@ const ov=[...document.querySelectorAll('div.fixed.inset-0')].find(e=>e.className
 
 - **上报条件 6（改了 `components/ui/StatusBadge.tsx`）→ 接受。** R9 由 03 回判明确要求给 `StatusBadge` 加 `size`，避免另起一套状态配色表。统筹方核对 diff：新增可选 `size?: 'sm' | 'lg'`，默认 `'sm'` 的类名（`text-xs px-2 py-0.5`）与改前逐字相同；全仓 8 处调用中只有详情页 1 处传 `size`，其余 7 处行为不变。视为本批白名单的明确例外，仅限这一个可选 prop。
 - **待 02b 复核评估**：R8 追加提交 `c180874` 把 768–1023 下列表商品列上限从 160px 收到 90px 以腾出操作列（实测行高 140→93px）。代价是 iPad 竖屏商品摘要约只显示一道菜名。请复核判断是否可接受或有更好的排法。
+
+## 03b 回判与第二修补轮（fable · Fable 5.1，2026-09-18）
+
+> 工序声明：**03b 回判 · fable**（修补轮回判，L 级）。只判断、不写业务代码。逐条亲自打开 `f194400` 的代码核对了 02b 复核（opus，新会话）的 1 条需改与 5 条建议；复核方的 768/1023 实测数值我没有重新量，判定依据是代码结构与已确认预览，实测数值只作旁证。
+> 第二修补轮链路：**01'' 执行 · sonnet（R15–R19）→ 02b' 复核 · opus（新会话：只给「需求要点 + 本节 + 修补 diff」）→ 03b' 回判 · fable → 04 机械核对 · haiku**。本节不新增、不放宽第 2 节任何验收标准。
+
+### 一、对 [需改] 的判定
+
+| # | 判定 | 核对依据 |
+|---|---|---|
+| 需改：`c180874` 把 <lg 商品列收到 90px，与已确认预览不符 | **成立** | ① `OrderListTable.tsx:157` `<td className="px-4 py-3 … max-w-[90px] lg:max-w-[320px] truncate">`：`truncate` 是 nowrap，td 对列最小宽的贡献被 `max-w` 钉在 90px，减去 `px-4` 的 32px 内边距，文字只剩 58px ≈ 4 个 14px 汉字——不用量也知道「口水鸡×1」（5 字）放不下。② `:87` 的 `w-[190px]` 是自动布局表格里的宽度**提示**，只在表格总宽超过各列最小宽之和时才有余量可分；<lg 可见 7 列（订单/顾客/商品/实付/状态/操作/›）的最小宽之和已把 705px 吃满，提示必然被削——与复核方量到的操作列 137px 一致。③ 已确认预览 `2026-09-18-order-detail-wide.html:338` 的 iPad 竖屏表头是 `订单/顾客/商品/实付/状态/（›）` **6 列**，`:343` 把「去工作台 ›」放在商品摘要下面的 `.sub` 里，商品摘要 `max-width:215px`——`c180874` 在 768–1023 下多出一列「操作」，商品摘要又比预览窄一半以上，两处都偏离店主确认稿。④ 同城页 `LocalOrders.tsx:202-215` 的 `renderActions` 最多两个按钮（去工作台 / 退款），90px 上限对这页只有代价没有收益。⑤ 根因是 R8 任务文本把「操作列」当成 768 档必有的一列去挤，而店主确认的 6 列稿本来就没有这一列——责任在 03 回判写 R8 时没对照预览，不在执行方。 |
+
+**复核方的排法：合适，采纳，附四点修正。** 与预览逐项对得上（6 列、「去工作台」在商品摘要下、商品摘要拿回宽度）；与店主「手机优先、UI 统一」一致（<lg 表格行的操作区排法与手机卡片一样「在内容下面一行」，≥lg 维持桌面态不动）；只改一个文件。修正：
+
+1. **≥lg 恢复 R8 原文**：操作列 `<td>` 回到 `px-4 py-3`，按钮容器回到 `gap-x-3 gap-y-1`。`c180874` 压 padding/gap 是为了在 768 挤空间，改排法后 ≥lg 没有这个压力，顺手把 [建议 5] 第三项消掉。
+2. **<lg 操作容器带 `data-testid="order-row-actions"`**。原 R8 的验证选择器 `td:nth-last-child(2) button` 在新排法下选到的是 `display:none` 的操作 td，`offsetHeight` 全 0，`every(<30)` 会空真——验证必须改选可见容器。
+3. **商品摘要内层 `<div>` 在 <lg 不设上限**（只 `truncate`），`lg:max-w-[320px]` 只在 ≥lg 生效。1023 宽下商品列应把剩余宽度用掉，而不是留给状态列大片空白；≥lg 仍是 320px，不回归。
+4. **`max-w-0` 的说明**：CSS 2.1 对表格单元格的 `max-width` 未定义，但 Blink/WebKit 都认「`w-full` + `max-w-0` + 内层 `truncate`」这一惯用法（Tailwind 社区通用；iPad Safari 与 Chrome 同属 WebKit/Blink 系）。执行方在 Chrome 768 实测即可；**若**任一引擎下商品列塌成 0 宽，退路是 td 只留 `w-full lg:w-auto`、内层改 `<div className="truncate w-0 min-w-full lg:w-auto lg:min-w-0 lg:max-w-[320px]">`，并在记录里写明。
+
+代价如实记：≥md 每一行的 `renderActions` 会渲染两份（操作 td 一份、商品列下一份）+ 手机卡片一份，靠 CSS 显隐；与 `ui/Table` 卡片/表格双渲染、详情页多份 DOM 同一惯例（B-i 已在遗留清单）。`renderActions` 是纯渲染函数、不含 hooks，多渲染一份没有状态副作用；`display:none` 的那份不可聚焦，不影响键盘走查。
+
+### 二、对 [建议 1–5] 的取舍
+
+| # | 取舍 | 理由 |
+|---|---|---|
+| 建议 1 `time.ts:116-117` `sameDayKey` 注释例子说反 | **纳入**（R16） | 核对属实：`slice(0,10)` 取 UTC 日，北京 23:30 / 次日 00:30（UTC 15:30 / 16:30）是 UTC **同日**，会被**误判同一天**；北京 07:30 / 09:00（UTC 前日 23:30 / 当日 01:00）UTC **跨日**，会被**误判不同天**。注释把两例各写反了一次。R5 本批引入；纯注释、白名单内。单测（`time.test.ts`）本身方向正确，不动。 |
+| 建议 2 `DetailTimeline.tsx:32` 时间列 `w-16` 放不下「9-18 00:40」 | **纳入**（R17） | `fmtMonthDayTime` 输出 `M-DD HH:mm`，最长「12-31 00:40」11 字符；`w-16` = 64px，`text-xs` 下放不下，且 span 没有 `whitespace-nowrap`，会在空格处折成两行。R5 修好后这条路径才真正被走到（修补轮记录里 id 1 的跨月夹具就是这种），属本批引入。 |
+| 建议 3 `OrderDetail.tsx:103,122` 失败页「返回订单管理」写死 `/orders/express` | **纳入**（R18） | `:96` 的 `backTo` 在两个提前 return 之前就算好了：有 `location.state.from` 时用它，没有且 `order` 为 null 时才落 `/orders/express`——从同城列表进来失败，`from` 是有的，直接用 `backTo`/`backLabel` 就对。R11 本批引入；两处各换一个变量。直接在地址栏打开且加载失败时仍落邮寄页（渠道未知），可接受。 |
+| 建议 4 R4 场景（自选缺一端）首次打开显示「暂无订单 / 共 0 条」 | **纳入**（R19） | R4 把「骨架永不退」修成了「空态 + 共 0 条」，后者仍会让店员以为真没单。`LocalOrders.tsx:190` / `Orders.tsx:375` 已经在 `dateErr` 时藏掉「共 N 单」，空态文案与分页条没跟着藏，是同一处遗漏。两页各改一行 `emptyText`，分页条只在「`dateErr` 且列表为空」时藏——列表非空时（B6 的「列表不变」场景）行与分页条都原样保留，B6 判据不动。 |
+| 建议 5-① R14 主用例「还可退 = 订单字段」在夹具下恒真 | **不纳入** | 部分退款夹具已能抓错（修补轮记录里的回退验证证明了这一点），主用例改夹具只是让同一件事被抓两次。记遗留。 |
+| 建议 5-② 375 宽同时有售后小标与备注时卡片首行折两行 | **不纳入** | 首行容器是 `flex-wrap`，折行是有意为之（信息全显优先于单行），复核方也判可接受。单号 `truncate` 缺 `min-w-0` 不影响折行结果。记遗留。 |
+| 建议 5-③ 操作列 `gap-x-3→gap-x-2` 与 R8 原文不一致 | **随 R15 消失** | 见上「修正 1」。 |
+
+### 三、第二修补轮任务清单（R15–R19；01'' 执行 · sonnet）
+
+通用约束同 Global Constraints 与「三、修补轮任务清单」开头一段；只允许改本节点名的 5 个文件（都在白名单内）。**不得**再动 `StatusBadge.tsx` 或任何 `components/ui/*`。每条修完自己跑一遍对应验证，把真实输出贴进本节末尾「第二修补轮记录」。
+
+**R15（需改）768–1023 表格改回预览的 6 列，操作按钮放到商品摘要下** — 文件：`apps/admin/src/components/orders/OrderListTable.tsx`（只此一个）
+- 期望（对照已确认预览 `previews/2026-09-18-order-detail-wide.html:338-343`）：
+  - 表头 `操作` 的 `<th>`：`hidden lg:table-cell`，**去掉** `w-[190px] lg:w-auto`；对应 `<td>` 同样 `hidden lg:table-cell`，恢复 `px-4 py-3 whitespace-nowrap`，内层容器恢复 `flex flex-wrap gap-x-3 gap-y-1`；`onClick` 的 `stopPropagation` 保留。
+  - 商品列 `<td>`：`px-4 py-3 text-gray-600 w-full max-w-0 lg:w-auto lg:max-w-none`（去掉 `truncate` 与 `max-w-[90px]`）；内容改为 `<div className="truncate lg:max-w-[320px]">{itemsSummary(o.items)}</div>`，其后 `{renderActions && <div data-testid="order-row-actions" className="lg:hidden mt-1 flex flex-wrap gap-x-3 gap-y-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>{renderActions(o)}</div>}`。
+  - 订单列 `:141-142` 渠道标签与时间两个 `<span>` 加 `whitespace-nowrap shrink-0`；实付列 `:160` 「已退 ¥…」的 `<div>` 加 `whitespace-nowrap`。
+  - `:54` 的 `columns` 计数与 `:86` 注释改成「配送·取餐、操作两列 <lg 隐藏但仍计数」；数值不变。
+  - 手机卡片（`mobileCards`）与 `≥lg` 的 DOM 结构、类名除上面点名的以外一字不动。
+- 验证（Browser，后台 5178 → 3115；夹具：一张 `status=PAID` 的邮寄单（接单/直接发货/退款/发赔偿券/重打小票 5 按钮）、一张有「售后待处理」的邮寄单、一张有「已退」的单；同城页一张今天 PAID 的外送单（去工作台+退款）。每个宽度用 `resize_window` 取顶层视口）：
+  - **768×1024 邮寄列表 `status=PAID`**，对 5 按钮那一行 `row` 执行：
+    ```js
+    const td = [...row.children]; const ops = row.querySelector('[data-testid="order-row-actions"]');
+    const items = row.children[2].firstElementChild;
+    [document.documentElement.scrollWidth <= innerWidth,                     // ① 不溢出
+     getComputedStyle(row.querySelector('td.hidden')).display === 'none',    // ② 操作 td 藏了
+     ops && getComputedStyle(ops).display !== 'none',                        // ③ 商品下的操作区可见
+     [...ops.querySelectorAll('button, a')].every(b => b.offsetHeight < 30), // ④ 按钮内部不折行
+     ops.offsetHeight <= 48,                                                 // ⑤ 5 个按钮 ≤ 2 行
+     row.offsetHeight <= 100,                                                // ⑥ R8 原阈值
+     items.clientWidth >= 140,                                               // ⑦ 商品摘要 ≥ 10 个 14px 汉字
+     [...row.querySelectorAll('td:first-child span')].every(s => s.offsetHeight < 24)] // ⑧ 渠道标签/时间不竖排
+    ```
+    期望 8 项全 `true`。再对「售后待处理」那一行：状态列里该小标 `offsetHeight < 24`；对「已退」那一行：`已退` 所在 `div.offsetHeight < 20`。表头可见 `<th>` 数 = `[...document.querySelectorAll('thead th')].filter(t => getComputedStyle(t).display !== 'none').length === 6`。
+  - **1023×768 邮寄列表**：同上 8 项，且 ⑦ 改为 `items.clientWidth >= 300`（商品列把剩余宽度用掉），⑤ 改为 `ops.offsetHeight <= 24`（1 行）。
+  - **768×1024 与 1023×768 同城列表**（外送，日期=全部）：① ② ③ ⑥ ⑧ 同上；`ops` 内同时有「去工作台 ›」与「退款」且 `ops.offsetHeight <= 24`；「今天 HH:mm」所在 span `offsetHeight < 20`。
+  - **B8 复测在 768 与 1280 各做一次**：点「接单」不进详情（URL 不变）、点行空白处进详情——两个宽度各自命中不同的容器，两处 `stopPropagation` 都要真验。
+  - **≥1024 不回归**（1024×768 与 1280×800，邮寄 PAID 行与同城行各一）：`getComputedStyle(ops).display === 'none'`；操作 `td` `display === 'table-cell'`；`getComputedStyle(items).maxWidth === '320px'`；操作 td 的按钮容器 `getComputedStyle(...).columnGap === '12px'`（gap-x-3）；`row.offsetHeight` 与改前（在 `f194400` 同夹具同宽度量一次，先记下来）相差 ≤ 2px；`scrollWidth <= innerWidth`。
+  - **<md 不回归**：375 同城/邮寄列表 B4 ① 复测 `true`；卡片首行仍有「备注」小标（R13）。
+  - `grep -c "w-\[190px\]\|max-w-\[90px\]\|gap-x-2" apps/admin/src/components/orders/OrderListTable.tsx` = 0；`grep -c "order-row-actions" …` = 1；A2、A4 绿。
+- **上报**：若 768 下 5 按钮行按新排法 `row.offsetHeight` 仍 > 100，或商品摘要 `clientWidth` < 140——停下报，**不得**再给商品列加上限或把按钮改小。
+
+**R16（建议 1）`sameDayKey` 注释纠正** — 文件：`apps/admin/src/utils/time.ts`
+- 期望：`:116-117` 两句改为「那是取 ISO 字符串的 UTC 日，北京 23:30 与次日 00:30（UTC 同日）会被判成**同一天**（实已跨上海日），北京 07:30 与 09:00（UTC 跨日）会被判成**不同日**（实为上海同一天）」。只改注释，函数体与测试不动。
+- 验证：`git diff --stat -- apps/admin/src/utils/time.ts` 只有注释行；`grep -c "会被判成不同日（实为同一天" apps/admin/src/utils/time.ts` = 0；A3 绿、A4 闸门绿。
+
+**R17（建议 2）时间线时间列不折行** — 文件：`apps/admin/src/components/orders/detail/DetailTimeline.tsx`
+- 期望：`:32` 的时间 `<span>` 改为 `text-xs text-gray-400 shrink-0 whitespace-nowrap w-[4.75rem] tabular-nums`（76px；执行方若实测 `12-31 00:40` 在 `text-xs` + `tabular-nums` 下 72px 已够，可用 `w-[4.5rem]`，以实测为准并写进记录）。列宽固定是为了同一条时间线内标签左对齐，不要改成自适应宽。
+- 验证：Browser 375×812 与 1280×800，打开修补轮记录里那张 `created_at` 在上个月的单（时间线节点为 `M-DD HH:mm`）：`[...document.querySelectorAll('ol li > span:nth-child(2)')].every(s => s.scrollWidth <= s.clientWidth && s.offsetHeight < 20)` 为 `true`；再用控制台把任一节点文本临时改成 `12-31 00:40` 复测一次同样为 `true`。一张当天单（节点为 `HH:mm`）时间线仍左对齐、无溢出。B4 详情页 ① 375 复测 `true`。
+
+**R18（建议 3）失败页返回链接用 `backTo`** — 文件：`apps/admin/src/pages/OrderDetail.tsx`
+- 期望：`:103`（订单不存在）与 `:122`（加载失败）两处 `<Link to="/orders/express">‹ 返回订单管理</Link>` 改为 `<Link to={backTo}>‹ {backLabel}</Link>`。`backTo`/`backLabel` 已在 `:96-97` 算好，不改它们。
+- 验证：从 `/orders/local?range=today` 点一张单进详情，停掉 3115 → 点顶部刷新或重进 → 失败页上链接 `document.querySelector('a[href^="/orders/local"]')` 非空且文本「‹ 返回同城订单」；直接在地址栏打开 `/orders/detail/<id>`（无 state）加载失败 → 链接 `href` 为 `/orders/express`、文本「‹ 返回全国邮寄」；对不存在的 id（`/orders/detail/999999`）→「订单不存在」页链接同上规则。`grep -c 'to="/orders/express"' apps/admin/src/pages/OrderDetail.tsx` = 0。B7 复测通过。
+
+**R19（建议 4）自选缺一端时空态说清楚** — 文件：`apps/admin/src/pages/LocalOrders.tsx`、`apps/admin/src/pages/Orders.tsx`
+- 期望：两页 `emptyText` 改为 `dateErr ? '选好起止日期后显示' : <原文案>`；`Pagination` 的渲染条件由 `!loading && !loadFailed` 改为 `!loading && !loadFailed && !(dateErr && list.length === 0)`。其它不动（`dateErr` 时「共 N 单」已藏、`load()` 已提前 return）。
+- 验证：Browser 直接开 `/orders/local?range=custom&startDate=2026-09-01` 与 `/orders/express?range=custom&endDate=2026-09-10`：页面同时出现「请选完整的起止日期」与「选好起止日期后显示」，`document.body.textContent` 不含「暂无」也不含「共 0 条」；再从 `range=all`（列表非空）切「自选」只填开始日期：行数与切换前相同、分页条仍在（B6「列表不变」不动）。`grep -c "选好起止日期后显示" apps/admin/src/pages/LocalOrders.tsx apps/admin/src/pages/Orders.tsx` 各 = 1。
+
+### 四、第二修补轮完成判据（02b' 复核与 04 机械核对用）
+
+- A1–A5、A7–A18 按第 2 节（A3 按修订写法）重新执行贴输出；本轮无服务端改动，`git diff f194400..HEAD --name-only -- apps/server scripts` 必须为空（非空即偏离，上报），A6 沿用既有记录。
+- `git diff f194400..HEAD --name-only` 只允许出现本节点名的 5 个文件 + 本方案文件。
+- B4（375 两列表 + 详情页）、B7、B8（768 与 1280 各一次）复测；B1 三档肉眼一眼核对未动。
+- R15 的 768 / 1023 / 1024 / 1280 × 同城 / 邮寄 全部判据贴真实输出；R15 的「改前 `row.offsetHeight`」要写明在哪个 sha、哪张单、哪个宽度量的。
+- 02b' 复核重点：① R15 的 <lg 操作区 `stopPropagation` 在 768 实点验证过，不是只看代码；② `≥lg` 的 DOM 与类名是否与 `d2e83ab`（R8 第一版）逐字一致（除 `whitespace-nowrap` 保留外）——即 `c180874` 的挤压全部撤回；③ 是否有本节之外的改动。
+
+### 五、遗留清单（本节新增，非本轮修）
+
+- R14 主用例「还可退 = 订单字段」在全额退款夹具下恒真，靠部分退款夹具抓错（建议 5-①）。
+- 375 宽卡片首行在「售后小标 + 备注 + 长单号」同时出现时 `flex-wrap` 折两行；单号 `truncate` 缺 `min-w-0`（建议 5-②）。
+- ≥md 每行 `renderActions` 渲染两份靠 CSS 显隐（R15 引入，与 B-i 同类）。
+- 详情页直接在地址栏打开且加载失败时，返回链接落邮寄页（渠道未知，R18 不解决）。
