@@ -100,7 +100,7 @@ export default function OrderDetail() {
     return (
       <div className="max-w-2xl mx-auto p-4 text-center space-y-3">
         <p className="text-gray-500">订单不存在</p>
-        <Link to="/orders/express" className="text-brand-600 hover:underline">‹ 返回订单管理</Link>
+        <Link to={backTo} className="text-brand-600 hover:underline">‹ {backLabel}</Link>
       </div>
     )
   }
@@ -119,7 +119,7 @@ export default function OrderDetail() {
         <p className="text-gray-500">订单加载失败</p>
         <div className="flex items-center justify-center gap-3">
           <button onClick={load} className="text-brand-600 hover:underline text-sm">重试</button>
-          <Link to="/orders/express" className="text-brand-600 hover:underline text-sm">‹ 返回订单管理</Link>
+          <Link to={backTo} className="text-brand-600 hover:underline text-sm">‹ {backLabel}</Link>
         </div>
       </div>
     )
