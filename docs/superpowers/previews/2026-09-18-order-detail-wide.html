@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>订单详情与日期筛选 · iPad 与电脑</title>
+<style>
+  :root{
+    --brand:#e5441e; --brand-600:#c33514; --brand-50:#fef4f0; --brand-100:#fde5dc;
+    --g50:#f9fafb; --g100:#f3f4f6; --g200:#e5e7eb; --g300:#d1d5db; --g400:#9ca3af; --g500:#6b7280; --g600:#4b5563; --g700:#374151; --g800:#1f2937;
+    --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#dfe2e6;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',sans-serif;color:var(--g800)}
+  .hd{background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;padding:18px 28px}
+  .hd h1{margin:0;font-size:18px}
+  .hd p{margin:5px 0 0;font-size:13px;opacity:.93;line-height:1.6}
+  .wrap{padding:20px 28px 70px}
+  .part{margin-top:32px}
+  .part>h2{font-size:15px;margin:0 0 5px}
+  .part>.note{font-size:13px;color:#5c6670;margin:0 0 14px;line-height:1.75;max-width:980px}
+  .dev{flex-shrink:0;background:#f3f4f6;border:1px solid #c9ced4;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.07)}
+  .dev.pc{width:1280px}
+  .dev.pad{width:768px}
+  .devcap{font-size:12px;padding:7px 12px;background:#fff;border-bottom:1px solid var(--g200);color:var(--g600)}
+  .devcap b{color:var(--g800)}
+  .row{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+
+  /* 顶栏 */
+  .topbar{height:56px;background:#fff;border-bottom:1px solid var(--g100);display:flex;align-items:center;gap:6px;padding:0 16px;box-shadow:var(--shadow)}
+  .logo{font-weight:700;color:var(--brand);font-size:15px;margin-right:10px}
+  .nv{font-size:14px;color:var(--g600);padding:7px 9px;border-radius:8px;white-space:nowrap}
+  .nv.on{background:var(--brand-50);color:var(--brand-600);font-weight:500}
+  .wb{margin-left:auto;background:var(--brand);color:#fff;font-size:14px;font-weight:600;border-radius:8px;padding:7px 12px}
+  .crumb{font-size:14px;font-weight:500;display:flex;gap:3px;align-items:center}
+  .crumb i{font-style:normal;color:var(--g400);font-size:11px}
+  .main{padding:24px}
+  .ttl{font-size:20px;font-weight:600;margin:0}
+  .desc{font-size:13px;color:var(--g500);margin:4px 0 0}
+  .tabcard{margin-top:18px;background:#fff;border:1px solid var(--g200);border-radius:12px;display:flex;padding:0 8px;box-shadow:var(--shadow)}
+  .tabcard span{padding:12px 16px;font-size:14px;color:var(--g600);border-bottom:2px solid transparent}
+  .tabcard span.on{color:var(--brand-600);border-color:var(--brand);font-weight:500}
+
+  /* 筛选 */
+  .filters{background:#fff;border-radius:8px;box-shadow:var(--shadow);padding:12px 14px;margin-top:14px;display:flex;flex-direction:column;gap:10px}
+  .frow{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .fgrp{display:flex;align-items:center;gap:8px}
+  .fl{font-size:12px;color:var(--g400);white-space:nowrap}
+  .seg{display:flex;gap:6px;flex-wrap:nowrap}
+  .chip{font-size:12.5px;padding:4px 10px;border-radius:999px;background:var(--g100);color:var(--g600);white-space:nowrap}
+  .chip.on{background:var(--brand);color:#fff}
+  .vsep{width:1px;height:20px;background:var(--g200)}
+  .dinput{border:1px solid var(--g300);border-radius:6px;padding:4px 8px;font-size:13px;color:var(--g800);background:#fff;width:118px}
+  .in{border:1px solid var(--g300);border-radius:6px;padding:6px 10px;font-size:13px;color:var(--g400);width:230px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:6px;font-size:13px;padding:6px 12px;border:1px solid transparent;white-space:nowrap}
+  .btn.ghost{background:#fff;border-color:var(--g300);color:var(--g700)}
+  .btn.dan{background:#fff;border-color:#fca5a5;color:#dc2626}
+  .new{outline:1.5px dashed #16a34a;outline-offset:3px;border-radius:8px}
+  .result{font-size:12px;color:var(--g500);margin:12px 2px 8px}
+  .result b{color:var(--g800)}
+
+  /* 表格 */
+  .tbl{background:#fff;border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{font-weight:500;color:var(--g500);font-size:12px;text-align:left;padding:10px 12px;background:var(--g50);border-bottom:1px solid var(--g200);white-space:nowrap}
+  td{padding:11px 12px;border-bottom:1px solid var(--g100);vertical-align:top;color:var(--g700)}
+  tr:last-child td{border-bottom:0}
+  tr.hov td{background:#fffaf7}
+  .r{text-align:right}
+  .no{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--g600)}
+  .sub{font-size:11.5px;color:var(--g400);margin-top:2px}
+  .items{color:var(--g600);max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .amt{font-weight:600;color:var(--g800);font-variant-numeric:tabular-nums}
+  .refd{font-size:11.5px;color:#dc2626;font-weight:400}
+  .badge{font-size:11.5px;padding:1px 7px;border-radius:4px;white-space:nowrap}
+  .b-done{background:#f0fdf4;color:#16a34a}
+  .b-prep{background:#fff7e8;color:#b45309}
+  .tag{font-size:11px;padding:1px 6px;border-radius:4px;white-space:nowrap}
+  .t-local{background:#fff7ed;color:#c2410c}
+  .t-pick{background:#f0fdfa;color:#0f766e}
+  .t-exp{background:#eef2ff;color:#4338ca}
+  .chev{color:var(--g300);font-size:18px;text-align:center;width:28px}
+  .wblink{font-size:12px;color:var(--brand-600);border:1px solid var(--brand-100);background:var(--brand-50);padding:1px 7px;border-radius:999px;white-space:nowrap}
+  .tel{color:var(--brand-600);text-decoration:none}
+
+  /* 详情 */
+  .dhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .back{font-size:13px;color:var(--g500);display:inline-flex;align-items:center;gap:2px}
+  .dh-t{font-size:19px;font-weight:600}
+  .dh-acts{margin-left:auto;display:flex;gap:8px}
+  .dh-acts .btn{padding:8px 14px;font-size:13.5px}
+  .grid2{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;margin-top:16px;align-items:start}
+  .col{display:flex;flex-direction:column;gap:14px}
+  .single{max-width:672px;margin:16px auto 0;display:flex;flex-direction:column;gap:12px}
+  .blk{background:#fff;border-radius:10px;box-shadow:var(--shadow);padding:14px 16px}
+  .blk-t{font-size:13.5px;font-weight:600;color:var(--g800);margin-bottom:10px;display:flex;align-items:center}
+  .blk-t .s{margin-left:auto;font-weight:400;font-size:12px;color:var(--g400)}
+  .hero .st{font-size:19px;font-weight:600;color:#16a34a}
+  .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--g500)}
+  .copy{font-size:11.5px;color:var(--brand-600);border:1px solid var(--brand-100);border-radius:4px;padding:0 6px;background:var(--brand-50)}
+  .kv{display:flex;font-size:13px;line-height:1.5;padding:3px 0;gap:10px}
+  .kv .k{width:62px;flex-shrink:0;color:var(--g400)}
+  .kv .v{flex:1;color:var(--g700);min-width:0}
+  .remark{background:#fff7ed;color:#9a3412;border-radius:6px;padding:7px 9px;font-size:13px}
+  .tl{list-style:none;margin:0;padding:0 0 0 2px}
+  .tl li{position:relative;padding:0 0 10px 16px;font-size:12.5px;color:var(--g600);display:flex;gap:8px}
+  .tl li:before{content:"";position:absolute;left:0;top:5px;width:7px;height:7px;border-radius:50%;background:#16a34a}
+  .tl li:after{content:"";position:absolute;left:3px;top:13px;bottom:-2px;width:1px;background:var(--g200)}
+  .tl li:last-child:after{display:none}
+  .tl .t{color:var(--g400);width:62px;flex-shrink:0;font-variant-numeric:tabular-nums}
+  .itbl th{background:none;padding:0 0 7px;border-bottom:1px solid var(--g100)}
+  .itbl td{padding:8px 0;border-bottom:1px dashed var(--g100);font-variant-numeric:tabular-nums}
+  .gone{color:var(--g400);text-decoration:line-through}
+  .flag{font-size:11px;color:#dc2626;background:#fef2f2;border-radius:3px;padding:0 4px;margin-left:5px;display:inline-block;text-decoration:none}
+  .mr{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:var(--g600);font-variant-numeric:tabular-nums}
+  .mr .d{color:#dc2626}
+  .mr .h{color:var(--g400);font-size:11.5px;margin-left:5px}
+  .sum{border-top:1px solid var(--g100);margin-top:6px;padding-top:8px;font-size:15.5px;font-weight:600;color:var(--g800)}
+  .money{max-width:420px;margin-left:auto}
+  .rrow{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--g100);font-size:12.5px}
+  .rrow:last-child{border-bottom:0}
+  .rrow b{font-size:13.5px;width:70px}
+  .ok{font-size:11px;background:#f0fdf4;color:#16a34a;border-radius:3px;padding:0 5px}
+  .fail{font-size:11px;background:#fef2f2;color:#dc2626;border-radius:3px;padding:0 5px}
+  .rm{color:var(--g500);flex:1}
+  .muted{color:var(--g400);font-size:12px}
+  .fold{font-size:12px;color:var(--g500);margin-top:4px}
+  .anno{font-size:12px;color:#7a5b00;background:#fff8e1;border-left:3px solid #f0b400;padding:7px 11px;border-radius:4px;line-height:1.6;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="hd">
+  <h1>订单详情 + 日期筛选 · iPad 与电脑</h1>
+  <p>三档：手机（窄于 768）已定；<b>iPad 竖屏</b>（768–1023）；<b>iPad 横屏与电脑</b>（1024 及以上）。每个框都是真实宽度。<br>订单内容是编的示例数据；绿色虚线框 = 这次新加的东西。</p>
+</div>
+<div class="wrap">
+
+<!-- ═══════════════ 电脑：列表 ═══════════════ -->
+<div class="part">
+  <h2>① 电脑 · 订单列表（1280 宽）</h2>
+  <p class="note">
+    宽屏上用<b>表格</b>：一屏能看十几单，一行一单，眼睛竖着扫得快。<b>同城和邮寄两页用同一套列</b>——现在邮寄页是表格、同城页是卡片，这次统一。
+    整行可点，进详情；「去工作台」只挂在今天没完成的单上。筛选收成两行：上面状态和方式，下面日期和搜索。
+  </p>
+  <div class="dev pc">
+    <div class="devcap"><b>电脑 1280</b> · 同城订单</div>
+    <div class="topbar">
+      <span class="logo">阿福凉菜</span>
+      <span class="nv">经营概览</span><span class="nv">商品管理</span><span class="nv on">订单管理</span><span class="nv">推广运营</span><span class="nv">店铺设置</span><span class="nv">用户管理</span><span class="nv">系统维护</span>
+      <span class="wb">接单工作台</span>
+    </div>
+    <div class="main">
+      <h2 class="ttl">订单管理</h2>
+      <p class="desc">同城与邮寄订单的历史检索、退款与售后。</p>
+      <div class="tabcard"><span class="on">同城配送</span><span>全国邮寄</span></div>
+
+      <div class="filters">
+        <div class="frow">
+          <div class="fgrp"><span class="fl">状态</span><div class="seg"><span class="chip on">全部</span><span class="chip">待接单</span><span class="chip">备餐中</span><span class="chip">配送中/待取餐</span><span class="chip">已完成</span><span class="chip">已退款</span></div></div>
+          <span class="vsep"></span>
+          <div class="fgrp"><span class="fl">方式</span><div class="seg"><span class="chip on">全部</span><span class="chip">外送</span><span class="chip">自取</span></div></div>
+        </div>
+        <div class="frow">
+          <div class="fgrp new"><span class="fl">下单日期</span><div class="seg"><span class="chip">全部</span><span class="chip">今日</span><span class="chip">昨日</span><span class="chip">近7天</span><span class="chip">近30天</span><span class="chip on">自选</span></div>
+            <span class="dinput">2026-09-01</span><span class="fl">至</span><span class="dinput">2026-09-10</span></div>
+          <div class="fgrp" style="margin-left:auto"><span class="in">订单号 / 手机号 / 收货人</span><span class="btn ghost">搜索</span></div>
+        </div>
+      </div>
+
+      <div class="result">9月1日 – 9月10日 · 共 <b>412</b> 单</div>
+      <div class="tbl new">
+        <table>
+          <thead><tr>
+            <th>订单</th><th>顾客</th><th>商品</th><th class="r">实付</th><th>状态</th><th>配送 / 取餐</th><th></th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="no">L2609101215</div><div class="sub"><span class="tag t-local">外送</span> 9月10日 12:15</div></td>
+              <td>赵先生<div class="sub"><a class="tel">135****0907</a></div></td>
+              <td><div class="items">红油耳叶×1，凉拌耳片×1，钵钵鸡[微辣]×1</div></td>
+              <td class="r"><span class="amt">¥92.00</span><div class="refd">已退 ¥28.00</div></td>
+              <td><span class="badge b-done">已完成</span></td>
+              <td>骑手 张师傅<div class="sub">成本 ¥7.40</div></td>
+              <td class="chev">›</td>
+            </tr>
+            <tr class="hov">
+              <td><div class="no">L2609101148</div><div class="sub"><span class="tag t-pick">自取</span> 9月10日 11:48</div></td>
+              <td>周女士<div class="sub"><a class="tel">186****3345</a></div></td>
+              <td><div class="items">凉拌三丝×1，蒜泥白肉×1</div></td>
+              <td class="r"><span class="amt">¥45.60</span></td>
+              <td><span class="badge b-done">已完成</span></td>
+              <td>取餐 12:30<div class="sub">12:34 取走</div></td>
+              <td class="chev" style="color:var(--brand)">›</td>
+            </tr>
+            <tr>
+              <td><div class="no">L2609091902</div><div class="sub"><span class="tag t-local">外送</span> 9月9日 19:02</div></td>
+              <td>陈先生<div class="sub"><a class="tel">158****7720</a></div></td>
+              <td><div class="items">凉拌牛肉×2，红油毛肚×1，白水兔×1，凉拌三丝×1</div></td>
+              <td class="r"><span class="amt">¥168.00</span></td>
+              <td><span class="badge b-done">已完成</span></td>
+              <td>骑手 刘师傅<div class="sub">成本 ¥9.10</div></td>
+              <td class="chev">›</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="anno">鼠标移到一行上整行变浅橙（第二行是悬停效果），点任意位置进详情。电话点了能直接拨（电脑上会唤起关联的通话软件）。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ 电脑：详情 ═══════════════ -->
+<div class="part">
+  <h2>② 电脑 · 订单详情（1280 宽）：左右两栏</h2>
+  <p class="note">
+    <b>左栏放「钱」</b>：商品、金额明细、退款记录、售后——核对一单时最常看、也最占地方的部分，给宽的一栏。<br>
+    <b>右栏放「人和过程」</b>：状态、进度、收货信息、配送——窄栏够用。<br>
+    手机上那条底部按钮栏，在宽屏上挪到<b>标题右边</b>：「重打小票」「退款」一直在眼前，不用滚到底。
+  </p>
+  <div class="dev pc">
+    <div class="devcap"><b>电脑 1280</b> · 同城外送单详情</div>
+    <div class="topbar">
+      <span class="logo">阿福凉菜</span>
+      <span class="nv">经营概览</span><span class="nv">商品管理</span><span class="nv on">订单管理</span><span class="nv">推广运营</span><span class="nv">店铺设置</span><span class="nv">用户管理</span><span class="nv">系统维护</span>
+      <span class="wb">接单工作台</span>
+    </div>
+    <div class="main">
+      <div class="dhead">
+        <span class="back">‹ 返回同城订单</span>
+      </div>
+      <div class="dhead" style="margin-top:8px">
+        <span class="dh-t">订单详情</span>
+        <span class="no" style="font-size:13px">L2609101215</span><span class="copy">复制</span>
+        <span class="tag t-local">同城外送</span>
+        <div class="dh-acts new"><span class="btn ghost">重打小票</span><span class="btn dan">退款（还可退 ¥64.00）</span></div>
+      </div>
+
+      <div class="grid2">
+        <div class="col">
+          <div class="blk">
+            <div class="blk-t">商品<span class="s">3 种 · 3 份</span></div>
+            <table class="itbl">
+              <thead><tr><th>商品</th><th class="r">单价</th><th class="r">数量</th><th class="r">小计</th></tr></thead>
+              <tbody>
+                <tr><td>红油耳叶</td><td class="r">¥32.00</td><td class="r">1</td><td class="r">¥32.00</td></tr>
+                <tr><td>凉拌耳片</td><td class="r">¥36.00</td><td class="r">1</td><td class="r">¥36.00</td></tr>
+                <tr><td><span class="gone">钵钵鸡 [微辣]</span><span class="flag">已退</span></td><td class="r gone">¥28.00</td><td class="r gone">1</td><td class="r gone">¥28.00</td></tr>
+              </tbody>
+            </table>
+            <div class="money" style="margin-top:14px">
+              <div class="mr"><span>商品小计</span><span>¥96.00</span></div>
+              <div class="mr"><span>打包费</span><span>¥3.00</span></div>
+              <div class="mr"><span>满减<span class="h">满 90 减 8</span></span><span class="d">−¥8.00</span></div>
+              <div class="mr"><span>优惠券<span class="h">新客券 · 系统发放</span></span><span class="d">−¥5.00</span></div>
+              <div class="mr"><span>运费</span><span>¥6.00</span></div>
+              <div class="mr sum"><span>实付</span><span>¥92.00</span></div>
+              <div class="mr"><span>已退</span><span class="d">¥28.00</span></div>
+              <div class="mr"><span>还可退</span><span>¥64.00</span></div>
+            </div>
+          </div>
+
+          <div class="blk new">
+            <div class="blk-t">退款记录<span class="s">全部 2 笔</span></div>
+            <div class="rrow"><b>¥28.00</b><span class="ok">已到账</span><span class="rm">钵钵鸡缺货 · 操作人 店长</span><span class="muted">9-10 14:20</span></div>
+            <div class="rrow"><b>¥28.00</b><span class="fail">失败</span><span class="rm">微信返回：商户余额不足 · 操作人 店长</span><span class="muted">9-10 14:18</span></div>
+          </div>
+
+          <div class="blk">
+            <div class="blk-t">售后</div>
+            <div class="muted" style="font-size:13px">没有售后申请</div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="blk hero">
+            <div class="st">已完成</div>
+            <div class="meta" style="margin-top:4px">下单 2026-09-10 12:15:08</div>
+          </div>
+          <div class="blk">
+            <div class="blk-t">进度</div>
+            <ol class="tl">
+              <li><span class="t">12:15:08</span><span>下单</span></li>
+              <li><span class="t">12:15:21</span><span>支付成功（微信支付）</span></li>
+              <li><span class="t">12:16:40</span><span>接单 · 店员 小刘</span></li>
+              <li><span class="t">12:38:02</span><span>骑手取货</span></li>
+              <li><span class="t">13:02:55</span><span>已送达</span></li>
+              <li><span class="t">14:20:10</span><span>部分退款 ¥28.00</span></li>
+            </ol>
+          </div>
+          <div class="blk">
+            <div class="blk-t">收货信息</div>
+            <div class="kv"><span class="k">收货人</span><span class="v">赵先生　<a class="tel">135 0000 0907</a></span></div>
+            <div class="kv"><span class="k">地址</span><span class="v">汇东路 88 号 3 栋 1204 <span class="copy">复制</span></span></div>
+            <div class="kv"><span class="k">餐具</span><span class="v">需要 2 套</span></div>
+            <div class="kv"><span class="k">备注</span><span class="v"><div class="remark">毛肚少放辣，谢谢</div></span></div>
+          </div>
+          <div class="blk">
+            <div class="blk-t">配送<span class="s">达达</span></div>
+            <div class="kv"><span class="k">骑手</span><span class="v">张师傅　<a class="tel">186 0000 1234</a></span></div>
+            <div class="kv"><span class="k">配送成本</span><span class="v">¥7.40</span></div>
+            <div class="fold">▾ 展开配送轨迹（6 条）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ iPad 竖屏 ═══════════════ -->
+<div class="part">
+  <h2>③ iPad 竖屏（768 宽）</h2>
+  <p class="note">
+    <b>列表</b>也用表格，但少一列：去掉「配送 / 取餐」，那些信息点进详情看——768 宽塞 7 列会把商品那列挤得只剩几个字。<br>
+    <b>详情</b>用单栏，跟手机的顺序一样；内容限宽居中（不会拉成一条长条）。按钮和电脑一样放标题右边，不用底部固定栏。<br>
+    顶栏在 1000 宽以下会收成「当前页名 ▼」，点开是入口网格——这是现有行为，不变。
+  </p>
+  <div class="row">
+    <div class="dev pad">
+      <div class="devcap"><b>iPad 竖屏 768</b> · 列表</div>
+      <div class="topbar"><span class="logo">阿福凉菜</span><span class="crumb">订单管理 <i>▼</i></span></div>
+      <div class="main">
+        <h2 class="ttl">订单管理</h2>
+        <div class="tabcard"><span class="on">同城配送</span><span>全国邮寄</span></div>
+        <div class="filters">
+          <div class="frow">
+            <div class="fgrp"><span class="fl">状态</span><div class="seg"><span class="chip on">全部</span><span class="chip">待接单</span><span class="chip">备餐中</span><span class="chip">配送中/待取餐</span><span class="chip">已完成</span><span class="chip">已退款</span></div></div>
+          </div>
+          <div class="frow">
+            <div class="fgrp"><span class="fl">方式</span><div class="seg"><span class="chip on">全部</span><span class="chip">外送</span><span class="chip">自取</span></div></div>
+            <span class="vsep"></span>
+            <div class="fgrp new"><span class="fl">下单日期</span><div class="seg"><span class="chip on">全部</span><span class="chip">今日</span><span class="chip">昨日</span><span class="chip">近7天</span><span class="chip">近30天</span><span class="chip">自选</span></div></div>
+          </div>
+          <div class="frow"><span class="in" style="flex:1">订单号 / 手机号 / 收货人</span><span class="btn ghost">搜索</span></div>
+        </div>
+        <div class="result">共 <b>1,284</b> 单</div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>订单</th><th>顾客</th><th>商品</th><th class="r">实付</th><th>状态</th><th></th></tr></thead>
+            <tbody>
+              <tr>
+                <td><div class="no">L2609181142</div><div class="sub"><span class="tag t-local">外送</span> 今天 11:42</div></td>
+                <td>王先生<div class="sub"><a class="tel">138****5678</a></div></td>
+                <td><div class="items" style="max-width:215px">凉拌牛肉×1，红油毛肚×2，蒜泥白肉×1</div><div class="sub"><span class="wblink">去工作台 ›</span></div></td>
+                <td class="r"><span class="amt">¥124.00</span></td>
+                <td><span class="badge b-prep">备餐中</span></td>
+                <td class="chev">›</td>
+              </tr>
+              <tr>
+                <td><div class="no">L2609171830</div><div class="sub"><span class="tag t-pick">自取</span> 昨天 18:30</div></td>
+                <td>李女士<div class="sub"><a class="tel">139****2211</a></div></td>
+                <td><div class="items" style="max-width:215px">白水兔×1，凉拌三丝×1</div></td>
+                <td class="r"><span class="amt">¥61.20</span></td>
+                <td><span class="badge b-done">已完成</span></td>
+                <td class="chev">›</td>
+              </tr>
+              <tr>
+                <td><div class="no">L2609101215</div><div class="sub"><span class="tag t-local">外送</span> 9月10日 12:15</div></td>
+                <td>赵先生<div class="sub"><a class="tel">135****0907</a></div></td>
+                <td><div class="items" style="max-width:215px">红油耳叶×1，凉拌耳片×1，钵钵鸡×1</div></td>
+                <td class="r"><span class="amt">¥92.00</span><div class="refd">已退 ¥28.00</div></td>
+                <td><span class="badge b-done">已完成</span></td>
+                <td class="chev">›</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="dev pad">
+      <div class="devcap"><b>iPad 竖屏 768</b> · 详情（单栏，限宽居中）</div>
+      <div class="topbar"><span class="logo">阿福凉菜</span><span class="crumb">订单管理 <i>▼</i></span></div>
+      <div class="main">
+        <div class="single" style="margin-top:0">
+          <span class="back">‹ 返回同城订单</span>
+          <div class="dhead">
+            <span class="dh-t">订单详情</span>
+            <span class="no">L2609101215</span><span class="copy">复制</span>
+            <div class="dh-acts new"><span class="btn ghost">重打小票</span><span class="btn dan">退款</span></div>
+          </div>
+          <div class="blk hero"><div class="st">已完成</div><div class="meta" style="margin-top:4px"><span class="tag t-local">同城外送</span>下单 2026-09-10 12:15:08</div></div>
+          <div class="blk">
+            <div class="blk-t">进度</div>
+            <ol class="tl">
+              <li><span class="t">12:15:08</span><span>下单</span></li>
+              <li><span class="t">12:16:40</span><span>接单 · 店员 小刘</span></li>
+              <li><span class="t">13:02:55</span><span>已送达</span></li>
+            </ol>
+          </div>
+          <div class="blk">
+            <div class="blk-t">收货信息</div>
+            <div class="kv"><span class="k">收货人</span><span class="v">赵先生　<a class="tel">135 0000 0907</a></span></div>
+            <div class="kv"><span class="k">地址</span><span class="v">汇东路 88 号 3 栋 1204 <span class="copy">复制</span></span></div>
+          </div>
+          <div class="blk">
+            <div class="blk-t">商品<span class="s">3 种 · 3 份</span></div>
+            <table class="itbl">
+              <thead><tr><th>商品</th><th class="r">单价</th><th class="r">数量</th><th class="r">小计</th></tr></thead>
+              <tbody>
+                <tr><td>红油耳叶</td><td class="r">¥32.00</td><td class="r">1</td><td class="r">¥32.00</td></tr>
+                <tr><td>凉拌耳片</td><td class="r">¥36.00</td><td class="r">1</td><td class="r">¥36.00</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="muted" style="text-align:center">…金额明细 / 配送 / 退款记录 / 售后，顺序同手机…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="part">
+  <h2>④ 三档规则一览</h2>
+  <div>
+    <table style="width:auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:var(--shadow)">
+      <thead><tr><th></th><th>手机（&lt;768）</th><th>iPad 竖屏（768–1023）</th><th>iPad 横屏 / 电脑（≥1024）</th></tr></thead>
+      <tbody>
+        <tr><td><b>订单列表</b></td><td>卡片</td><td>表格 · 6 列</td><td>表格 · 7 列（多一列配送/取餐）</td></tr>
+        <tr><td><b>筛选</b></td><td>竖排，日期一行</td><td>三行</td><td>两行</td></tr>
+        <tr><td><b>详情排版</b></td><td>单栏</td><td>单栏 · 限宽居中</td><td>左右两栏（左：钱；右：人和过程）</td></tr>
+        <tr><td><b>重打小票 / 退款</b></td><td>底部固定按钮栏</td><td>标题右边</td><td>标题右边</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

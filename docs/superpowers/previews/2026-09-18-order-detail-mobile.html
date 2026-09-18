@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>订单详情与日期筛选 · 预览</title>
+<style>
+  :root{
+    --brand:#e5441e; --brand-600:#c33514; --brand-50:#fef4f0; --brand-100:#fde5dc;
+    --g50:#f9fafb; --g100:#f3f4f6; --g200:#e5e7eb; --g300:#d1d5db; --g400:#9ca3af; --g500:#6b7280; --g600:#4b5563; --g700:#374151; --g800:#1f2937;
+    --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#e9ebee;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',sans-serif;color:var(--g800)}
+  .hd{background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;padding:18px 28px}
+  .hd h1{margin:0;font-size:18px}
+  .hd p{margin:5px 0 0;font-size:13px;opacity:.93;line-height:1.6}
+  .wrap{padding:20px 28px 70px}
+  .sec{margin-top:30px}
+  .sec>h2{font-size:15px;margin:0 0 5px}
+  .sec>.note{font-size:13px;color:#5c6670;margin:0 0 14px;line-height:1.75;max-width:900px}
+  .phones{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+  .phone{width:375px;flex-shrink:0;background:#f3f4f6;border:1px solid #cdd2d8;border-radius:18px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.06);position:relative}
+  .cap{font-size:12px;padding:7px 12px;background:#fff;border-bottom:1px solid var(--g200);color:var(--g600)}
+  .cap b{color:var(--g800)}
+  .anno{font-size:11.5px;color:#7a5b00;background:#fff8e1;border-left:3px solid #f0b400;padding:6px 10px;margin:8px 12px;border-radius:4px;line-height:1.55}
+
+  /* ── 后台外壳 ── */
+  .topbar{height:56px;background:#fff;border-bottom:1px solid var(--g100);display:flex;align-items:center;gap:10px;padding:0 12px;box-shadow:var(--shadow)}
+  .logo{font-weight:700;color:var(--brand);font-size:15px}
+  .crumb{font-size:14px;font-weight:500;color:var(--g800);display:flex;align-items:center;gap:3px}
+  .crumb i{font-style:normal;color:var(--g400);font-size:11px}
+  .main{padding:16px}
+  .ttl{font-size:20px;font-weight:600;margin:0}
+  .desc{font-size:13px;color:var(--g500);margin:4px 0 0}
+  .tabbar{margin:16px -16px 0;background:#fff;border-top:1px solid var(--g200);border-bottom:1px solid var(--g200);display:flex;padding:0 8px}
+  .tabbar span{padding:12px 10px;font-size:14px;color:var(--g600);border-bottom:2px solid transparent}
+  .tabbar span.on{color:var(--brand-600);border-color:var(--brand);font-weight:500}
+
+  /* ── 筛选区 ── */
+  .filters{background:#fff;border-radius:8px;box-shadow:var(--shadow);padding:10px;margin-top:14px;display:flex;flex-direction:column;gap:9px}
+  .seg{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:12.5px;padding:4px 10px;border-radius:999px;background:var(--g100);color:var(--g600);white-space:nowrap}
+  .chip.on{background:var(--brand);color:#fff}
+  .row-l{font-size:11.5px;color:var(--g400);margin-bottom:-3px}
+  .datechip{outline:1.5px dashed #16a34a;outline-offset:2px;border-radius:10px}
+  .datechip .seg{flex-wrap:nowrap}
+  .datechip .chip{padding:4px 8px}
+  .daterow{display:flex;gap:6px;align-items:center;font-size:12.5px;color:var(--g500)}
+  .dinput{flex:1;border:1px solid var(--g300);border-radius:6px;padding:5px 8px;font-size:13px;color:var(--g800);background:#fff}
+  .search{display:flex;gap:6px}
+  .search .in{flex:1;border:1px solid var(--g300);border-radius:6px;padding:6px 10px;font-size:13px;color:var(--g400)}
+  .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:6px;font-size:13px;padding:6px 12px;border:1px solid transparent;white-space:nowrap}
+  .btn.ghost{background:#fff;border-color:var(--g300);color:var(--g700)}
+  .btn.pri{background:var(--brand);color:#fff}
+  .btn.dan{background:#fff;border-color:#fca5a5;color:#dc2626}
+  .result{font-size:12px;color:var(--g500);margin:10px 2px 6px}
+  .result b{color:var(--g800)}
+
+  /* ── 订单卡 ── */
+  .list{background:#fff;border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
+  .card{padding:12px 12px 12px 14px;border-bottom:1px solid var(--g100);display:flex;gap:8px;align-items:stretch}
+  .card:last-child{border-bottom:0}
+  .card .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+  .card .chev{color:var(--g300);font-size:20px;align-self:center}
+  .l1{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .badge{font-size:11.5px;padding:1px 7px;border-radius:4px}
+  .b-done{background:#f0fdf4;color:#16a34a}
+  .b-prep{background:#fff7e8;color:#b45309}
+  .b-paid{background:#eff6ff;color:#2563eb}
+  .b-ref{background:var(--g100);color:var(--g500)}
+  .tag{font-size:11px;padding:1px 6px;border-radius:4px}
+  .t-local{background:#fff7ed;color:#c2410c}
+  .t-pick{background:#f0fdfa;color:#0f766e}
+  .t-exp{background:#eef2ff;color:#4338ca}
+  .no{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--g500)}
+  .time{margin-left:auto;font-size:11.5px;color:var(--g400)}
+  .l2{font-size:13.5px;color:var(--g700);display:flex;gap:10px;align-items:baseline}
+  .l2 .amt{margin-left:auto;font-weight:600;color:var(--g800)}
+  .l2 .amt small{font-weight:400;color:var(--g400);font-size:11px;margin-right:2px}
+  .l3{font-size:12px;color:var(--g500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .l4{display:flex;gap:10px;font-size:12px;color:var(--g500);align-items:center}
+  .wblink{margin-left:auto;font-size:12px;color:var(--brand-600);border:1px solid var(--brand-100);background:var(--brand-50);padding:2px 8px;border-radius:999px}
+  .refunded{color:#dc2626}
+
+  /* ── 详情页 ── */
+  .dtop{height:52px;background:#fff;border-bottom:1px solid var(--g100);display:flex;align-items:center;padding:0 6px;position:sticky;top:0;z-index:2}
+  .back{width:40px;height:40px;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--g700)}
+  .dtitle{font-size:16px;font-weight:600}
+  .dbody{padding:12px 12px 92px;display:flex;flex-direction:column;gap:10px}
+  .blk{background:#fff;border-radius:10px;box-shadow:var(--shadow);padding:12px 14px}
+  .blk-t{font-size:13px;font-weight:600;color:var(--g800);margin-bottom:9px;display:flex;align-items:center}
+  .blk-t .sub{margin-left:auto;font-weight:400;font-size:12px;color:var(--g400)}
+  .hero{display:flex;flex-direction:column;gap:6px}
+  .hero .st{font-size:19px;font-weight:600;color:#16a34a}
+  .hero .meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12.5px;color:var(--g500)}
+  .copy{font-size:11.5px;color:var(--brand-600);border:1px solid var(--brand-100);border-radius:4px;padding:0 6px;background:var(--brand-50)}
+  .kv{display:flex;font-size:13px;line-height:1.5;padding:3px 0;gap:10px}
+  .kv .k{width:62px;flex-shrink:0;color:var(--g400)}
+  .kv .v{flex:1;color:var(--g700);min-width:0}
+  .tel{color:var(--brand-600);text-decoration:none;font-weight:500}
+  .remark{background:#fff7ed;color:#9a3412;border-radius:6px;padding:7px 9px;font-size:13px;margin-top:4px}
+  .nonote{color:var(--g400);font-size:13px}
+  .tl{list-style:none;margin:0;padding:0 0 0 2px}
+  .tl li{position:relative;padding:0 0 10px 16px;font-size:12.5px;color:var(--g600);display:flex;gap:8px}
+  .tl li:before{content:"";position:absolute;left:0;top:5px;width:7px;height:7px;border-radius:50%;background:var(--g300)}
+  .tl li:after{content:"";position:absolute;left:3px;top:13px;bottom:-2px;width:1px;background:var(--g200)}
+  .tl li:last-child:after{display:none}
+  .tl li.on:before{background:#16a34a}
+  .tl .t{color:var(--g400);width:62px;flex-shrink:0;font-variant-numeric:tabular-nums}
+  .item{display:flex;align-items:baseline;gap:8px;padding:6px 0;border-bottom:1px dashed var(--g100);font-size:13.5px}
+  .item:last-child{border-bottom:0}
+  .item .n{flex:1;color:var(--g800)}
+  .item .n small{color:var(--g400);font-size:12px;margin-left:3px}
+  .item .q{color:var(--g500);font-size:12.5px;width:78px;text-align:right;font-variant-numeric:tabular-nums}
+  .item .s{width:58px;text-align:right;font-variant-numeric:tabular-nums;color:var(--g800)}
+  .item.gone .n{color:var(--g400);text-decoration:line-through}
+  .item .flag{font-size:11px;color:#dc2626;background:#fef2f2;border-radius:3px;padding:0 4px;margin-left:4px;text-decoration:none;display:inline-block}
+  .money .mr{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:var(--g600);font-variant-numeric:tabular-nums}
+  .money .mr .d{color:#dc2626}
+  .money .mr .hint{color:var(--g400);font-size:11.5px;margin-left:5px}
+  .money .sum{border-top:1px solid var(--g100);margin-top:5px;padding-top:7px;font-size:15px;font-weight:600;color:var(--g800)}
+  .money .ref{font-size:13px}
+  .money .ref .d{font-weight:500}
+  .rrow{display:flex;flex-direction:column;gap:2px;padding:7px 0;border-bottom:1px solid var(--g100);font-size:12.5px}
+  .rrow:last-child{border-bottom:0}
+  .rrow .a{display:flex;align-items:center;gap:7px}
+  .rrow .a b{font-size:13.5px;color:var(--g800)}
+  .ok{font-size:11px;background:#f0fdf4;color:#16a34a;border-radius:3px;padding:0 5px}
+  .fail{font-size:11px;background:#fef2f2;color:#dc2626;border-radius:3px;padding:0 5px}
+  .rrow .m{color:var(--g500)}
+  .actbar{position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--g200);padding:10px 12px 22px;display:flex;gap:10px;box-shadow:0 -2px 8px rgba(0,0,0,.04)}
+  .actbar .btn{flex:1;padding:10px 0;font-size:14px}
+  .fold{font-size:12px;color:var(--g500);margin-top:4px}
+  .muted{color:var(--g400);font-size:12px}
+  .onlyhere{outline:1.5px dashed #16a34a;outline-offset:3px;border-radius:6px}
+  .legend{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--g600);background:#fff;border-radius:6px;padding:4px 9px;margin-right:8px}
+  .legend i{display:inline-block;width:16px;height:10px;border:1.5px dashed #16a34a;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="hd">
+  <h1>订单详情页 + 日期筛选 · 预览</h1>
+  <p>每一屏都是 375px 手机宽度；配色、圆角、阴影照后台现有规范。<br>订单内容是编的示例数据，只为看版式。<span style="opacity:.85">绿色虚线框 = 这次新加的东西。</span></p>
+</div>
+<div class="wrap">
+
+<div class="sec">
+  <h2>① 订单列表：加日期筛选，卡片统一，点整张卡进详情</h2>
+  <p class="note">
+    日期默认<b>「全部」</b>——跟现在一样，打开就是所有订单、最新在上；选了日期才缩小范围，搜手机号找老顾客不会被挡住。按<b>下单日期</b>算，上海时间自然日。<br>
+    卡片只留一眼要看的：状态、渠道、单号、顾客、实付、商品摘要；右边的 › 表示整张卡可点。<b>「去工作台」只在今天还没完成的单上出现</b>，历史单不再有这个死路按钮。
+  </p>
+  <div class="phones">
+
+    <div class="phone">
+      <div class="cap"><b>同城订单</b> · 默认状态（日期=全部）</div>
+      <div class="topbar"><span class="logo">阿福凉菜</span><span class="crumb">订单管理 <i>▼</i></span></div>
+      <div class="main">
+        <h2 class="ttl">订单管理</h2>
+        <p class="desc">同城与邮寄订单的历史检索、退款与售后。</p>
+        <div class="tabbar"><span class="on">同城配送</span><span>全国邮寄</span></div>
+
+        <div class="filters">
+          <div class="row-l">状态</div>
+          <div class="seg">
+            <span class="chip on">全部</span><span class="chip">待接单</span><span class="chip">备餐中</span><span class="chip">配送中/待取餐</span><span class="chip">已完成</span><span class="chip">已退款</span>
+          </div>
+          <div class="row-l">方式</div>
+          <div class="seg"><span class="chip on">全部</span><span class="chip">外送</span><span class="chip">自取</span></div>
+          <div class="datechip">
+            <div class="row-l" style="margin-bottom:6px">下单日期</div>
+            <div class="seg"><span class="chip on">全部</span><span class="chip">今日</span><span class="chip">昨日</span><span class="chip">近7天</span><span class="chip">近30天</span><span class="chip" title="选日期"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span></div>
+          </div>
+          <div class="search"><div class="in">订单号 / 手机号 / 收货人</div><span class="btn ghost">搜索</span></div>
+        </div>
+
+        <div class="result">共 <b>1,284</b> 单</div>
+        <div class="list">
+          <div class="card">
+            <div class="body">
+              <div class="l1"><span class="badge b-prep">备餐中</span><span class="tag t-local">外送</span><span class="no">L2609181142</span><span class="time">今天 11:42</span></div>
+              <div class="l2"><span>王先生 138****5678</span><span class="amt"><small>实付</small>¥124.00</span></div>
+              <div class="l3">凉拌牛肉×1，红油毛肚×2，蒜泥白肉[微辣]×1</div>
+              <div class="l4"><span>骑手 张师傅</span><span class="wblink onlyhere">去工作台 ›</span></div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+          <div class="card">
+            <div class="body">
+              <div class="l1"><span class="badge b-done">已完成</span><span class="tag t-pick">自取</span><span class="no">L2609171830</span><span class="time">昨天 18:30</span></div>
+              <div class="l2"><span>李女士 139****2211</span><span class="amt"><small>实付</small>¥61.20</span></div>
+              <div class="l3">白水兔×1，凉拌三丝×1</div>
+              <div class="l4"><span>取餐 昨天 19:00</span></div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+          <div class="card">
+            <div class="body">
+              <div class="l1"><span class="badge b-done">已完成</span><span class="tag t-local">外送</span><span class="no">L2609101215</span><span class="time">9月10日 12:15</span></div>
+              <div class="l2"><span>赵先生 135****0907</span><span class="amt"><small>实付</small>¥92.00</span></div>
+              <div class="l3">红油耳叶×1，凉拌耳片×1，钵钵鸡×1</div>
+              <div class="l4"><span class="refunded">已退 ¥28.00</span></div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="phone">
+      <div class="cap"><b>同城订单</b> · 点了日历图标（自选起止）</div>
+      <div class="topbar"><span class="logo">阿福凉菜</span><span class="crumb">订单管理 <i>▼</i></span></div>
+      <div class="main">
+        <div class="tabbar" style="margin-top:0"><span class="on">同城配送</span><span>全国邮寄</span></div>
+        <div class="filters">
+          <div class="row-l">状态</div>
+          <div class="seg">
+            <span class="chip on">全部</span><span class="chip">待接单</span><span class="chip">备餐中</span><span class="chip">配送中/待取餐</span><span class="chip">已完成</span><span class="chip">已退款</span>
+          </div>
+          <div class="row-l">方式</div>
+          <div class="seg"><span class="chip on">全部</span><span class="chip">外送</span><span class="chip">自取</span></div>
+          <div class="datechip">
+            <div class="row-l" style="margin-bottom:6px">下单日期</div>
+            <div class="seg"><span class="chip">全部</span><span class="chip">今日</span><span class="chip">昨日</span><span class="chip">近7天</span><span class="chip">近30天</span><span class="chip on" title="选日期"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span></div>
+            <div class="daterow" style="margin-top:8px"><span class="dinput">2026-09-10</span><span>至</span><span class="dinput">2026-09-10</span></div>
+          </div>
+          <div class="search"><div class="in">订单号 / 手机号 / 收货人</div><span class="btn ghost">搜索</span></div>
+        </div>
+        <div class="result">9月10日 · 共 <b>38</b> 单</div>
+        <div class="list">
+          <div class="card">
+            <div class="body">
+              <div class="l1"><span class="badge b-done">已完成</span><span class="tag t-local">外送</span><span class="no">L2609101215</span><span class="time">9月10日 12:15</span></div>
+              <div class="l2"><span>赵先生 135****0907</span><span class="amt"><small>实付</small>¥92.00</span></div>
+              <div class="l3">红油耳叶×1，凉拌耳片×1，钵钵鸡×1</div>
+              <div class="l4"><span class="refunded">已退 ¥28.00</span></div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+          <div class="card">
+            <div class="body">
+              <div class="l1"><span class="badge b-done">已完成</span><span class="tag t-pick">自取</span><span class="no">L2609101148</span><span class="time">9月10日 11:48</span></div>
+              <div class="l2"><span>周女士 186****3345</span><span class="amt"><small>实付</small>¥45.60</span></div>
+              <div class="l3">凉拌三丝×1，蒜泥白肉×1</div>
+              <div class="l4"><span>取餐 9月10日 12:30</span></div>
+            </div>
+            <span class="chev">›</span>
+          </div>
+        </div>
+        <div class="anno">日期和状态、方式、搜索是叠加的：比如「9月10日 + 已退款」就能直接找出那天退过款的单。</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="sec">
+  <h2>② 订单详情页（同城外送单）</h2>
+  <p class="note">
+    一个独立页面，有自己的网址，刷新不丢、能返回。从上到下按「核对一单」的顺序排：状态 → 时间线 → 顾客 → 商品 → 金额 → 配送 → 退款售后。<br>
+    底部只有<b>事后处理</b>：重打小票、退款。接单、出餐、呼叫骑手这些仍然只在工作台做。电话点了直接拨，单号和地址点「复制」。
+  </p>
+  <div class="phones">
+
+    <div class="phone" style="height:1520px">
+      <div class="cap"><b>详情页</b> · 上半屏</div>
+      <div class="dtop"><span class="back">‹</span><span class="dtitle">订单详情</span></div>
+      <div class="dbody">
+
+        <div class="blk hero">
+          <div class="st">已完成</div>
+          <div class="meta"><span class="tag t-local">同城外送</span><span class="no">L2609101215</span><span class="copy">复制</span></div>
+          <div class="meta">下单 2026-09-10 12:15:08</div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t">进度</div>
+          <ol class="tl">
+            <li class="on"><span class="t">12:15:08</span><span>下单</span></li>
+            <li class="on"><span class="t">12:15:21</span><span>支付成功（微信支付）</span></li>
+            <li class="on"><span class="t">12:16:40</span><span>接单 · 店员 小刘</span></li>
+            <li class="on"><span class="t">12:38:02</span><span>骑手取货</span></li>
+            <li class="on"><span class="t">13:02:55</span><span>已送达</span></li>
+            <li class="on"><span class="t">14:20:10</span><span>部分退款 ¥28.00</span></li>
+          </ol>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t">收货信息</div>
+          <div class="kv"><span class="k">收货人</span><span class="v">赵先生　<a class="tel">135 0000 0907</a></span></div>
+          <div class="kv"><span class="k">地址</span><span class="v">汇东路 88 号 3 栋 1204 <span class="copy">复制</span></span></div>
+          <div class="kv"><span class="k">餐具</span><span class="v">需要 2 套</span></div>
+          <div class="kv"><span class="k">备注</span><span class="v"><div class="remark">毛肚少放辣，谢谢</div></span></div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t">商品<span class="sub">3 种 · 3 份</span></div>
+          <div class="item"><span class="n">红油耳叶</span><span class="q">¥32.00 × 1</span><span class="s">¥32.00</span></div>
+          <div class="item"><span class="n">凉拌耳片</span><span class="q">¥36.00 × 1</span><span class="s">¥36.00</span></div>
+          <div class="item gone"><span class="n">钵钵鸡<small>[微辣]</small><span class="flag">已退</span></span><span class="q">¥28.00 × 1</span><span class="s">¥28.00</span></div>
+        </div>
+
+        <div class="blk money onlyhere">
+          <div class="blk-t">金额明细<span class="sub">顺序与小票一致</span></div>
+          <div class="mr"><span>商品小计</span><span>¥96.00</span></div>
+          <div class="mr"><span>打包费</span><span>¥3.00</span></div>
+          <div class="mr"><span>满减<span class="hint">满 90 减 8</span></span><span class="d">−¥8.00</span></div>
+          <div class="mr"><span>优惠券<span class="hint">新客券 · 系统发放</span></span><span class="d">−¥5.00</span></div>
+          <div class="mr"><span>运费</span><span>¥6.00</span></div>
+          <div class="mr sum"><span>实付</span><span>¥92.00</span></div>
+          <div class="mr ref"><span>已退</span><span class="d">¥28.00</span></div>
+          <div class="mr ref"><span>还可退</span><span>¥64.00</span></div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t">配送<span class="sub">达达</span></div>
+          <div class="kv"><span class="k">骑手</span><span class="v">张师傅　<a class="tel">186 0000 1234</a></span></div>
+          <div class="kv"><span class="k">配送成本</span><span class="v">¥7.40</span></div>
+          <div class="fold">▾ 展开配送轨迹（6 条）</div>
+        </div>
+
+        <div class="blk onlyhere">
+          <div class="blk-t">退款记录<span class="sub">全部 2 笔</span></div>
+          <div class="rrow">
+            <div class="a"><b>¥28.00</b><span class="ok">已到账</span><span class="muted" style="margin-left:auto">9-10 14:20</span></div>
+            <div class="m">钵钵鸡缺货 · 操作人 店长</div>
+          </div>
+          <div class="rrow">
+            <div class="a"><b>¥28.00</b><span class="fail">失败</span><span class="muted" style="margin-left:auto">9-10 14:18</span></div>
+            <div class="m">微信返回：商户余额不足 · 操作人 店长</div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t">售后</div>
+          <div class="nonote">没有售后申请</div>
+        </div>
+
+      </div>
+      <div class="actbar"><span class="btn ghost">重打小票</span><span class="btn dan">退款（还可退 ¥64）</span></div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px">
+      <div class="phone">
+        <div class="cap"><b>自取单</b>详情 · 与外送不同的部分</div>
+        <div class="dtop"><span class="back">‹</span><span class="dtitle">订单详情</span></div>
+        <div class="dbody" style="padding-bottom:14px">
+          <div class="blk hero">
+            <div class="st">已完成</div>
+            <div class="meta"><span class="tag t-pick">到店自取</span><span class="no">L2609171830</span><span class="copy">复制</span></div>
+          </div>
+          <div class="blk">
+            <div class="blk-t">取餐信息</div>
+            <div class="kv"><span class="k">顾客</span><span class="v">李女士　<a class="tel">139 0000 2211</a></span></div>
+            <div class="kv"><span class="k">预约取餐</span><span class="v">9月17日 19:00</span></div>
+            <div class="kv"><span class="k">备好</span><span class="v">18:52</span></div>
+            <div class="kv"><span class="k">取走</span><span class="v">19:04</span></div>
+            <div class="kv"><span class="k">备注</span><span class="v nonote">无备注</span></div>
+          </div>
+          <div class="blk money">
+            <div class="blk-t">金额明细</div>
+            <div class="mr"><span>商品小计</span><span>¥68.00</span></div>
+            <div class="mr"><span>自取优惠<span class="hint">9 折</span></span><span class="d">−¥6.80</span></div>
+            <div class="mr sum"><span>实付</span><span>¥61.20</span></div>
+          </div>
+        </div>
+        <div class="anno">自取单没有「配送」那一块，换成取餐信息；金额里多一行自取优惠。</div>
+      </div>
+
+      <div class="phone">
+        <div class="cap"><b>邮寄单</b>详情 · 与同城不同的部分</div>
+        <div class="dtop"><span class="back">‹</span><span class="dtitle">订单详情</span></div>
+        <div class="dbody" style="padding-bottom:14px">
+          <div class="blk hero">
+            <div class="st" style="color:#0e7490">已发货</div>
+            <div class="meta"><span class="tag t-exp">全国邮寄</span><span class="no">E2609151020</span><span class="copy">复制</span></div>
+          </div>
+          <div class="blk">
+            <div class="blk-t">物流</div>
+            <div class="kv"><span class="k">快递</span><span class="v">顺丰　SF1234 5678 9012 <span class="copy">复制</span></span></div>
+            <div class="kv"><span class="k">取件</span><span class="v">9月15日 14:00–16:00 · 已取件</span></div>
+            <div class="kv"><span class="k">重量</span><span class="v">1.8 kg（计费 2 kg）</span></div>
+            <div class="kv"><span class="k">运费</span><span class="v">顾客付 ¥12 · 实扣 ¥11.50</span></div>
+            <div class="fold">▾ 展开物流轨迹（9 条）</div>
+          </div>
+        </div>
+        <div class="anno">邮寄单把「配送」换成「物流」：单号、上门取件、计费重量、运费实扣都在这里，不用再去别处找。</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="sec">
+  <h2>③ 这次不动的</h2>
+  <p class="note">
+    <b>工作台</b>一行不改——它营业时段天天在用，这次不把它牵进来。<br>
+    <b>全国邮寄</b>订单页同样加日期筛选、卡片改成跟同城一样的长相，原来那个「展开详情」收掉（跟详情页重复）。
+  </p>
+</div>
+
+</div>
+</body>
+</html>
