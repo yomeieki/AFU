@@ -27,13 +27,16 @@ interface Props {
   onOpen: (o: Order) => void
   /** 传入则多一列/多一行「操作」按钮组；调用方自己 stopPropagation */
   renderActions?: (o: Order) => ReactNode
+  /** 传入则「售后待处理/售后处理中」小标可点（跳售后页签），且卡片/表格都渲染；
+   * 不传则退回不可点的 <span>（如同城列表本就没有售后处理入口） */
+  onAfterSaleTag?: (o: Order) => void
 }
 
 /**
  * 两个订单列表（同城 / 邮寄）共用的表格 + 卡片。查账用列表点整行/整卡进详情页，
  * `renderActions` 承接各页原有的业务按钮（保留原顺序与行为，不在这里新增/删减）。
  */
-export default function OrderListTable({ list, loading, loadFailed, emptyText, now, onOpen, renderActions }: Props) {
+export default function OrderListTable({ list, loading, loadFailed, emptyText, now, onOpen, renderActions, onAfterSaleTag }: Props) {
   if (loadFailed) {
     return (
       <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
@@ -43,6 +46,22 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
   }
 
   const columns = (renderActions ? 6 : 5) + 2 // 基础列 + 配送·取餐(≥lg 才显示但仍占位) + 末尾箭头列
+
+  const afterSaleTag = (o: Order) => {
+    if (!o.afterSale || !['PENDING', 'APPROVED'].includes(o.afterSale.status)) return null
+    const cls = `px-2 py-0.5 rounded-full text-xs ${o.afterSale.status === 'PENDING' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`
+    const text = `售后${AFTER_SALE_STATUS_LABEL[o.afterSale.status]}`
+    if (!onAfterSaleTag) return <span className={cls}>{text}</span>
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onAfterSaleTag(o) }}
+        className={`${cls} hover:opacity-80`}
+      >
+        {text}
+      </button>
+    )
+  }
 
   return (
     <Table
@@ -72,6 +91,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
               <div key={o.id} onClick={() => onOpen(o)} className="border border-gray-100 rounded-lg p-3 cursor-pointer active:bg-gray-50">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <StatusBadge status={o.status} deliveryType={o.deliveryType} />
+                  {afterSaleTag(o)}
                   <span className={`text-xs px-1.5 py-0.5 rounded ${CHANNEL_TONE[tag.tone]}`}>{tag.label}</span>
                   <span className="font-mono text-xs text-gray-500 truncate">{o.orderNo}</span>
                   <span className="ml-auto text-xs text-gray-400 shrink-0">{fmtListTime(o.createdAt, now)}</span>
@@ -135,11 +155,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
               <td className="px-4 py-3">
                 <span className="inline-flex items-center gap-1.5 flex-wrap">
                   <StatusBadge status={o.status} deliveryType={o.deliveryType} />
-                  {o.afterSale && ['PENDING', 'APPROVED'].includes(o.afterSale.status) && (
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${o.afterSale.status === 'PENDING' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
-                      售后{AFTER_SALE_STATUS_LABEL[o.afterSale.status]}
-                    </span>
-                  )}
+                  {afterSaleTag(o)}
                 </span>
               </td>
               <td className="px-4 py-3 hidden lg:table-cell text-xs text-gray-500">
