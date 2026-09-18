@@ -832,3 +832,92 @@ const ov=[...document.querySelectorAll('div.fixed.inset-0')].find(e=>e.className
 - 375 宽卡片首行在「售后小标 + 备注 + 长单号」同时出现时 `flex-wrap` 折两行；单号 `truncate` 缺 `min-w-0`（建议 5-②）。
 - ≥md 每行 `renderActions` 渲染两份靠 CSS 显隐（R15 引入，与 B-i 同类）。
 - 详情页直接在地址栏打开且加载失败时，返回链接落邮寄页（渠道未知，R18 不解决）。
+
+### 第二修补轮记录（01'' 执行 · sonnet，2026-09-18）
+
+**开工尖端**：`9de5e71`（= 03b 回判提交）。提交列表（5 个，逐条对应 R15–R19）：
+```
+2657a82 fix(admin): 768–1023 表格改回预览的 6 列，操作按钮放到商品摘要下（R15）
+c82cc48 fix(admin): sameDayKey 注释举例纠正（R16）
+3c48063 fix(admin): 时间线时间列不折行（R17）
+6ee6c31 fix(admin): 失败页返回链接改用已算好的 backTo/backLabel（R18）
+7af74ab fix(admin): 自选日期缺一端时空态文案说清楚（R19）
+```
+`git diff 9de5e71..HEAD -- apps/server scripts apps/miniapp` 为空；`git diff f194400..HEAD --name-only` 只含本节点名的 5 个文件 + 本方案文件。
+
+**环境**：DB `food_shop_fix3`（新建，已 DROP）、服务端 3118、后台 5182；登录态用自设 `ADMIN_JWT_SECRET` 签 JWT 注入 `localStorage`，未在任何表单输入密码。夹具用 SQL 直接插入 4 张单（EXPRESS PAID 5 按钮单、EXPRESS 售后待处理单、EXPRESS 部分退款单、LOCAL 今天 PAID 单），覆盖 R15 验证所需场景。收尾已停两个进程、`DROP DATABASE food_shop_fix3`。
+
+**偏离（唯一一处，已在 R15 提交信息与下方注明）**：R15 在 03b 给定的 classNames 之外，给 ≥lg 操作列 `<td>` 额外加了 `lg:min-w-[150px]`。原因：3b 的「修正 1（≥lg 恢复 R8 原文 px-4/gap-x-3）」逐字实现后，在 1024×768（`lg` 断点边界）实测一张 5 按钮 PAID 单 `row.offsetHeight` 从预期的「与 `f194400` 基线相差 ≤2px」变成 **141 vs 93（差 48px）**——`px-4`+`gap-x-3` 比squeeze 前的 `px-2`+`gap-x-2` 多占用横向空间，1024 处两个用于其它列的空间已经很紧，5 个按钮被压到一行一个（5 行）。补一个 `lg:min-w-[150px]` 后 1024 复测 `row.offsetHeight` 精确回到 93（与基线 0 差），1280 不受影响（89，与基线 0 差），768/1023 不受影响（min-w 只在 `lg:` 生效）。此调整未改变 03b 指定的 padding/gap 字面值，只补了一个未在原文里出现的 min-width，仍是本节点名文件内的改动，未触及白名单外任何文件。
+
+#### R15–R19 各条验证（真实输出）
+
+**R15**：
+- 768×1024 邮寄 `status=PAID` 5 按钮行（FIX3EXPPAID001）：`scrollWidthOk=true`；操作 `td.hidden` 的 `display==='none'`；`data-testid="order-row-actions"` 可见；5 个按钮 `offsetHeight` 均 20（<30）；`ops.offsetHeight=44`（≤48，2 行）；`row.offsetHeight=93`（≤100）；商品摘要 `clientWidth=179`（≥140）；订单列 span 高度 `[12,20,16]`（均<24）；表头可见 `<th>` 数 = 6。「售后待处理」小标（FIX3EXPAFTS002，切到「已完成」页签）`offsetHeight=36`——**未达 03b 预期的 <24**，但经与 `f194400`（03b 自己的基线）同宽度同夹具对比得出同样是 36（状态列自身宽度未被本节改动触及，此前就会折两行），确认是先于本轮存在的旧问题，不属于 R15 引入的回归，未在本轮修（不在允许改动的列范围内）。「已退」行（FIX3EXPREFD003）`offsetHeight=16`（<20 ✓）。
+- 1023×768 邮寄同一行：8 项判据全 true；`ops.offsetHeight=20`（≤24，1 行）；商品摘要 `clientWidth=434`（≥300）。
+- 768×1024 与 1023×768 同城列表（FIX3LOCPAID004，日期=全部）：`scrollWidthOk`/`actionTdHidden`/`opsVisible`/`rowHeight≤100`/span 高度 均达标；`ops` 同时含「去工作台 ›」与「退款」，文案正确；**`ops.offsetHeight=32`**（两宽度一致）——03b 预期 `≤24`，实测因为同城页 `renderActions` 用的是 `components/ui/Button` 组件（自带 padding，比邮寄页纯文字 `<button>` 高），与 R15 改动的列宽/padding 无关（`Button` 组件不在本节允许改动范围内，未动）；行高 66/80，均 ≤100，功能与视觉上单行不折行（已截图核对）。
+- `≥1024 不回归`：1024×768 与 1280×800，邮寄 PAID 行与同城行各一。1024：加 `lg:min-w-[150px]` 前 `row.offsetHeight=141`（相对 `f194400` 基线 93 差 48px，不达标）；加之后 `=93`（差 0）。1280：`=89`，与基线 `89` 差 0。`opsDisplay==='table-cell'`；商品摘要内层 div `maxWidth==='320px'`；操作按钮容器 `columnGap==='12px'`；`scrollWidthOk=true`。同城行 1024/1280 `rowHeight` 均 `66`，与基线 `66` 差 0。
+- `<md` 不回归：375 邮寄/同城列表 `scrollWidthOk=true`；卡片首行「备注」小标仍在（`.text-orange-600` 命中）。
+- `grep -c "w-\[190px\]\|max-w-\[90px\]\|gap-x-2"` = 0；`grep -c "order-row-actions"` = 1；A2/A4 见下方全量回归，均绿。
+- B8 复测（768 与 1280 各一次）：768 点「接单」→ 该单从 PAID 列表消失（操作生效）且 URL 不变（`/orders/express?status=PAID`）；点订单号空白处 → 跳 `/orders/detail/3`。1280 点「接单」→ URL 不变（`/orders/express?status=PAID`）；点订单号空白处 → 跳 `/orders/detail/3`。
+- **未触发「停下报」条件**：768 行高最终 93（≤100）；商品摘要最终 179px（≥140）。
+
+**R16**：`git diff --stat -- apps/admin/src/utils/time.ts` 只有注释两行；`grep -c "会被判成不同日（实为同一天" apps/admin/src/utils/time.ts` = 0；A3/A4 见下方，均绿。
+
+**R17**：375×812 与 1280×800，跨月单（id=3，`created_at` 改到 `2026-08-10`）时间线：`[...document.querySelectorAll('ol li > span:nth-child(2)')].every(s => s.scrollWidth <= s.clientWidth && s.offsetHeight < 20)` 中 `scrollWidth<=clientWidth` 全部 true（无折行，实测 `sw:76,cw:76`）；**`offsetHeight` 实测 20，未满足 `<20`**——核对是父 `<li className="flex gap-2 text-sm">` 未设 `items-center`，默认 `align-items:stretch` 把时间 `span`（`text-xs`/16px 行高）拉伸到与同行标签 `span`（`text-sm`/20px 行高）等高，这个 flex 结构是改动前就有的（不在 R17 允许改动范围内），`offsetHeight=20` 恰好证明**没有折成两行**（折行会是 ~36–40px），功能目标达成，只是与 03b 给的像素阈值字面不符。截图核对时间线四行左对齐、无重叠、无溢出。B4 详情页 375 复测 `scrollWidthOk=true`。
+
+**R18**：三种场景全部实测：① 从 `/orders/local?range=today` 点卡片进详情（id=4），服务端断开后用浏览器 history back/forward 触发重新挂载（不做整页刷新，因为整页刷新本身就会丢 `location.state`，不是本场景要测的东西）→ 失败页链接 `href="/orders/local?range=today"`、文本「‹ 返回同城订单」。② 直接在地址栏打开 `/orders/detail/3`（无 state）+ 服务端断开 → 链接 `href="/orders/express"`、文本「‹ 返回全国邮寄」。③ 打开不存在的 `/orders/detail/999999`（服务端已恢复，404）→「订单不存在」页链接同样是「‹ 返回全国邮寄」。`grep -c 'to="/orders/express"' apps/admin/src/pages/OrderDetail.tsx` = 0。
+
+**R19**：`/orders/local?range=custom&startDate=2026-09-01`（缺止日）与 `/orders/express?range=custom&endDate=2026-09-10`（缺起日）：页面同时含「请选完整的起止日期」与「选好起止日期后显示」，不含「暂无」、不含「共 0」。列表不变场景：`status=PREPARING`（2 条非空列表）切「自选」只填开始日期后，行数仍是 2、「共 2 条」与分页条仍在（截图核对）。`grep -c "选好起止日期后显示" apps/admin/src/pages/LocalOrders.tsx apps/admin/src/pages/Orders.tsx` 各 = 1。
+
+#### 回退验证（R15，红后已还原）
+
+把 `[data-testid="order-row-actions"]` 容器的 `onClick={(e) => e.stopPropagation()}` 去掉 → 768 宽邮寄 PAID 行点「重打小票」时 `location.pathname` 从 `/orders/express` 变成 `/orders/detail/1`（B8 判据：点操作按钮不应进详情——**红**）。还原 `stopPropagation` 后同一操作 `location.pathname` 保持 `/orders/express`（**绿**）。`git diff --stat -- apps/admin/src/components/orders/OrderListTable.tsx` 还原后为空，`git status --porcelain` 全局为空。
+
+#### 全量回归（真实输出）
+
+- `npx tsc --noEmit -p apps/server/tsconfig.json` → 无输出，退出码 0。
+- `npx tsc --noEmit -p apps/admin/tsconfig.json` → 无输出，退出码 0（含回退验证还原后的复查）。
+- `npm test --workspace=apps/admin` → `ℹ tests 99 / ℹ pass 99 / ℹ fail 0`。
+- A3 五个文件逐个 `node --test`（`apps/admin` 下）：
+  - `src/utils/order-date-range.test.ts` → `tests 14 / pass 14 / fail 0`
+  - `src/utils/order-list.test.ts` → `tests 14 / pass 14 / fail 0`
+  - `src/utils/order-detail.test.ts` → `tests 17 / pass 17 / fail 0`
+  - `src/utils/time.test.ts` → `tests 8 / pass 8 / fail 0`
+  - `src/navigation.test.ts` → `tests 17 / pass 17 / fail 0`
+- `npm run build --workspace=apps/admin` → 先打印 `✔ 管理端时间渲染全部走 Asia/Shanghai（无本地时区解读）`，随后 `vite build` 成功（`✓ built in 1.13s`）。
+- `npm run build --workspace=apps/server`（= A1）→ 无输出，退出码 0。
+- 服务端日期自测：`TZ=Asia/Shanghai npx ts-node --transpile-only scripts/selftest-local-day.ts` → 9 例全 `✔`，退出码 0；`TZ=Asia/Tokyo` 复跑 → 输出「本自测必须以 TZ=Asia/Shanghai 运行」，退出码 1。
+- A6：本轮无服务端改动（`git diff 9de5e71..HEAD -- apps/server scripts apps/miniapp` 为空），沿用既有干净库 e2e 记录，未重跑。
+- A7/A8/A9：`git diff --name-only 5255d34...HEAD` 分别 grep `Workbench\.(tsx|css)$`、`^apps/server/prisma/`、`^apps/miniapp/` 均为空。
+- A11：`'/orders': '/orders/express'` 命中；`App.tsx` 三条 `path="local"|path="express"|path="orders/detail/:id"` 均命中。
+- A12：对 `pages/Orders.tsx` 逐项 `grep -c` 全部 ≥1（17 项列表见上）；`展开|收起` = 0。
+- A13：`OrderListTable` 在 `Orders.tsx`/`LocalOrders.tsx` 各 2 处引用；两页均 `<table` = 0；`LocalOrders.tsx` 无「配送时间线」。
+- A14：`utils/order-*.ts` + `date-range.ts` 的 `from 'react'|lucide-react|\.tsx'` 检索为空。
+- A15：三处 `parseLocalDayStart` 各 4 处引用（本轮未改服务端，延续基线）。
+- A16：`git diff 5255d34...HEAD -- apps/server/src/services/refund.ts apps/admin/src/components/RefundDialog.tsx` 为空。
+- A17：`startDate=2026-02-30` → `40001`；`startDate=2026-09-18&endDate=2026-09-17` → `40001`；不带日期 → `code 0` 且 `latestDelivery` 键存在；`GET .../express/orders/3/booking` 的 `data` 有 `track` 键——均实测通过。
+- A18：`git log 9de5e71..HEAD --format=%B | grep -c "Co-Authored-By: Claude "` = `5`，提交数 = `5`，逐条覆盖。
+
+#### 浏览器实测补充（B 类复测）
+
+- **B1**：1280×800 详情页（id=3）截图核对：左栏 商品+金额同卡 → 退款记录 → 售后；右栏 订单头 → 进度 → 收货 → 物流；时间线四条节点左对齐无溢出（对应 R17）。375/768 三档结构未受本轮改动触及，未见异常（未系统性截图复测，仅在测 R15/R19 时顺带核对同城/邮寄列表 375 无横向溢出）。
+- **B4**：375 同城/邮寄列表 `scrollWidthOk=true`；详情页（id=3、375）时间线不折行、无溢出。
+- **B7**：R18 三场景已完整复测（见上）。
+- **B8**：768 与 1280 各一次，均确认「点操作按钮不进详情、点空白进详情」（见上 R15 记录）。
+
+#### 是否命中上报触发条件
+
+未命中任何一条。逐项核对：① 无新增迁移；② 重打小票历史单场景本轮未涉及（沿用既有结论）；③ 未改 `Workbench.tsx`/`.css`；④ 未改退款计算或 `RefundDialog` 入参语义（`git diff 5255d34...HEAD -- services/refund.ts components/RefundDialog.tsx` 为空）；⑤ 本轮不涉及新数据字段；⑥ **白名单内**——R15 的 `lg:min-w-[150px]` 附加改动仍在 `OrderListTable.tsx`（本节点名文件）内，未触碰 `components/ui/*` 或任何白名单外文件；⑦ 邮寄既有按钮集合未动（A12 全部 ≥1）；⑧ 本轮未改 `stats/shared.ts`/`scan-stats.ts`；⑨ 手机 360 宽日期 chip 行本轮未改动，未复测（上一轮已通过，本轮改动不涉及该组件）；⑩ 未 ssh 生产机；⑪ `npm test`/`build:admin` 开工前已确认基线绿（`9de5e71` 即上一轮绿态）；⑫ 未跑 e2e（服务端零改动），无「无关红」可核对。
+
+R15 的 `768 行高仍 >100 或商品摘要 <140px` 停报条件：**未触发**——最终实测行高 93（含 min-w 修补后）、商品摘要 179px，均达标，全程未再压缩商品列本身（商品列的 `max-w` 设置从头到尾按 03b 原文，只在操作列上加了 `min-w`）。
+
+#### 偏离说明
+
+除上方「偏离」一节记录的 R15 `lg:min-w-[150px]` 附加调整外，本轮严格按 R15–R19 逐条执行，未做任何本节之外的改动。
+
+#### 收尾清理确认
+
+- 已停止本轮自建的服务端（3118）与后台 vite（5182）进程。
+- 已 `DROP DATABASE food_shop_fix3`，`SHOW DATABASES LIKE 'food_shop_fix3'` 确认为空。
+- 未修改 `.claude/launch.json`（该文件为其它历史 worktree 会话遗留的未跟踪文件，本轮未新增条目、未提交）。
+- `git status --porcelain` 全局为空，working tree clean。
