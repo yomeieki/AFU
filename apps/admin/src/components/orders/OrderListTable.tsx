@@ -156,7 +156,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                 </div>
               </td>
               <td className="px-4 py-3 text-gray-600 w-full max-w-0 xl:w-auto xl:max-w-none">
-                <div className="truncate lg:max-w-[320px]">{itemsSummary(o.items)}</div>
+                <div className="truncate lg:max-w-[288px]">{itemsSummary(o.items)}</div>
                 {renderActions && (
                   <div data-testid="order-row-actions" className="xl:hidden mt-1 flex flex-wrap gap-x-3 gap-y-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     {renderActions(o)}
