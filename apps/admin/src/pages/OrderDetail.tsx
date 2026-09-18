@@ -32,6 +32,7 @@ export default function OrderDetail() {
   const [order, setOrder] = useState<OrderDetailData | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [refundOpen, setRefundOpen] = useState(false)
 
   const [localData, setLocalData] = useState<LocalData>(null)
@@ -69,18 +70,23 @@ export default function OrderDetail() {
       return
     }
     setLoading(true)
+    setLoadFailed(false)
     getOrder(orderId)
       .then((res) => {
         const o = withLatestRefund(res.data.data)
         setOrder(o)
         setNotFound(false)
+        setLoadFailed(false)
         if (o.deliveryType === 'LOCAL') loadLocal()
         if (o.deliveryType === 'EXPRESS') loadExpress()
       })
       .catch((err: unknown) => {
         const status = (err as { response?: { status?: number } })?.response?.status
         if (status === 404) setNotFound(true)
-        else toast.error('订单加载失败，请重试')
+        else {
+          setLoadFailed(true)
+          toast.error('订单加载失败，请重试')
+        }
       })
       .finally(() => setLoading(false))
   }
@@ -107,7 +113,27 @@ export default function OrderDetail() {
     )
   }
 
-  if (!order) return null
+  if (loadFailed && !order) {
+    return (
+      <div className="max-w-2xl mx-auto p-4 text-center space-y-3">
+        <p className="text-gray-500">订单加载失败</p>
+        <div className="flex items-center justify-center gap-3">
+          <button onClick={load} className="text-brand-600 hover:underline text-sm">重试</button>
+          <Link to="/orders/express" className="text-brand-600 hover:underline text-sm">‹ 返回订单管理</Link>
+        </div>
+      </div>
+    )
+  }
+
+  // 理论上到这里 order 必已就绪（loading/loadFailed 两个失败态都在上面提前 return 了）；
+  // 保留这层只是给 TS 做类型收窄，不是一个真的可达分支。
+  if (!order) {
+    return (
+      <div className="flex items-center justify-center py-16 text-gray-400">
+        <Spinner className="w-6 h-6" />
+      </div>
+    )
+  }
 
   const nodes = timelineNodes(order, { delivery: localData?.delivery, booking: expressData?.booking })
   const costFen = localData?.costFen

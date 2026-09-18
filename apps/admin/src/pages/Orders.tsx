@@ -384,6 +384,7 @@ export default function Orders() {
               onOpen={handleOpen}
               renderActions={(o) => renderActions(o, actionCls)}
               onAfterSaleTag={() => handleTabChange('AFTER_SALE')}
+              onRetry={() => load()}
             />
             {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
           </div>

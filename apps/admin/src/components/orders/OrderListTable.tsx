@@ -1,6 +1,7 @@
 import { Fragment, ReactNode } from 'react'
 import { ChevronRight, Copy, Phone } from 'lucide-react'
 import Table from '../ui/Table'
+import Button from '../ui/Button'
 import StatusBadge from '../ui/StatusBadge'
 import { AFTER_SALE_STATUS_LABEL } from '../../types'
 import { fmtListTime } from '../../utils/time'
@@ -30,17 +31,22 @@ interface Props {
   /** 传入则「售后待处理/售后处理中」小标可点（跳售后页签），且卡片/表格都渲染；
    * 不传则退回不可点的 <span>（如同城列表本就没有售后处理入口） */
   onAfterSaleTag?: (o: Order) => void
+  /** 传入则加载失败态多一个「重试」按钮 */
+  onRetry?: () => void
 }
 
 /**
  * 两个订单列表（同城 / 邮寄）共用的表格 + 卡片。查账用列表点整行/整卡进详情页，
  * `renderActions` 承接各页原有的业务按钮（保留原顺序与行为，不在这里新增/删减）。
  */
-export default function OrderListTable({ list, loading, loadFailed, emptyText, now, onOpen, renderActions, onAfterSaleTag }: Props) {
+export default function OrderListTable({ list, loading, loadFailed, emptyText, now, onOpen, renderActions, onAfterSaleTag, onRetry }: Props) {
   if (loadFailed) {
     return (
       <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
         <span>订单列表加载失败，当前显示的不是真实数据</span>
+        {onRetry && (
+          <Button size="sm" variant="secondary" onClick={onRetry}>重试</Button>
+        )}
       </div>
     )
   }

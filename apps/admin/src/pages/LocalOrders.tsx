@@ -213,6 +213,7 @@ export default function LocalOrders() {
               )}
             </>
           )}
+          onRetry={() => load()}
         />
         {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
       </div>
