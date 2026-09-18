@@ -166,9 +166,16 @@ export function timelineNodes(
     const at = r.successTime ?? r.createdAt
     const amt = `¥${(r.amount / 100).toFixed(2)}`
     const isBad = r.status === 'FAILED' || r.status === 'ABNORMAL'
-    const label = r.status === 'SUCCESS' ? `退款 ${amt}` : isBad ? `退款失败 ${amt}` : `退款处理中 ${amt}`
+    // CLOSED 是终态（services/refund.ts markRefundClosed 置 activeOrderId:null，提示可在
+    // 后台重试退款），不是「处理中」；单独标注，不然店员会一直以为它还在走。
+    const label =
+      r.status === 'SUCCESS' ? `退款 ${amt}` :
+      isBad ? `退款失败 ${amt}` :
+      r.status === 'CLOSED' ? `退款关闭 ${amt}` :
+      `退款处理中 ${amt}`
     const detail = [r.reason, r.operator ?? '系统'].filter(Boolean).join(' · ')
-    nodes.push({ at, label, detail: detail || undefined, tone: r.status === 'SUCCESS' ? 'ok' : isBad ? 'bad' : 'muted' })
+    const tone: TimelineNode['tone'] = r.status === 'SUCCESS' ? 'ok' : isBad ? 'bad' : 'muted'
+    nodes.push({ at, label, detail: detail || undefined, tone })
   }
   for (const a of o.afterSales ?? []) {
     push(a.createdAt, '售后申请', { detail: AFTER_SALE_REASON_LABEL[a.reason] })

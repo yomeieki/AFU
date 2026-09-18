@@ -138,6 +138,17 @@ test('timelineNodes：退款失败节点 tone bad', () => {
   assert.equal(n!.tone, 'bad')
 })
 
+test('timelineNodes：CLOSED 退款单独标注「退款关闭」，tone muted，不与「退款处理中」混同', () => {
+  const nodes = timelineNodes(
+    { ...baseOrder, refunds: [{ id: 1, status: 'CLOSED', outRefundNo: 'x', amount: 500, mode: 'MOCK', errorMessage: null, createdAt: '2026-09-18T03:00:00Z', reason: '超时关闭', operator: '系统', successTime: null, errorCode: null, afterSaleId: null }] },
+    {}
+  )
+  const n = nodes.find((x) => x.label.startsWith('退款关闭'))
+  assert.ok(n)
+  assert.equal(n!.tone, 'muted')
+  assert.ok(!nodes.some((x) => x.label.startsWith('退款处理中')))
+})
+
 test('timelineNodes：同城单不出现「已发货」', () => {
   const nodes = timelineNodes(baseOrder, {})
   assert.ok(!nodes.some((n) => n.label === '已发货'))
