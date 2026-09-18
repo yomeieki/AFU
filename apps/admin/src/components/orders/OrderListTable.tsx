@@ -38,6 +38,7 @@ interface Props {
 /**
  * 两个订单列表（同城 / 邮寄）共用的表格 + 卡片。查账用列表点整行/整卡进详情页，
  * `renderActions` 承接各页原有的业务按钮（保留原顺序与行为，不在这里新增/删减）。
+ * 三档列数：768–1023 六列、1024–1279 七列（操作在商品摘要下）、≥1280 有操作时八列。
  */
 export default function OrderListTable({ list, loading, loadFailed, emptyText, now, onOpen, renderActions, onAfterSaleTag, onRetry }: Props) {
   if (loadFailed) {
@@ -51,7 +52,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
     )
   }
 
-  const columns = (renderActions ? 6 : 5) + 2 // 基础列 + 配送·取餐、操作两列 <lg 隐藏但仍计数 + 末尾箭头列
+  const columns = (renderActions ? 6 : 5) + 2 // 基础列 + 配送·取餐 <lg 隐藏、操作 <xl 隐藏，两列都仍计数 + 末尾箭头列
 
   const afterSaleTag = (o: Order) => {
     if (!o.afterSale || !['PENDING', 'APPROVED'].includes(o.afterSale.status)) return null
@@ -83,8 +84,8 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
           <th className="text-right px-4 py-3">实付</th>
           <th className="text-left px-4 py-3">状态</th>
           <th className="text-left px-4 py-3 hidden lg:table-cell">配送·取餐</th>
-          {/* 上面这列在 <lg 隐藏，columns 计数已含它——loading 骨架行只是视觉占位，多一列不影响可读性 */}
-          {renderActions && <th className="text-left px-4 py-3 hidden lg:table-cell">操作</th>}
+          {/* 配送·取餐 <lg 隐藏、操作 <xl 隐藏，两列都仍计数——loading 骨架行只是视觉占位，多一列不影响可读性 */}
+          {renderActions && <th className="text-left px-4 py-3 hidden xl:table-cell">操作</th>}
           <th className="px-2 py-3" />
         </tr>
       }
@@ -154,10 +155,10 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   </button>
                 </div>
               </td>
-              <td className="px-4 py-3 text-gray-600 w-full max-w-0 lg:w-auto lg:max-w-none">
+              <td className="px-4 py-3 text-gray-600 w-full max-w-0 xl:w-auto xl:max-w-none">
                 <div className="truncate lg:max-w-[320px]">{itemsSummary(o.items)}</div>
                 {renderActions && (
-                  <div data-testid="order-row-actions" className="lg:hidden mt-1 flex flex-wrap gap-x-3 gap-y-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  <div data-testid="order-row-actions" className="xl:hidden mt-1 flex flex-wrap gap-x-3 gap-y-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     {renderActions(o)}
                   </div>
                 )}
@@ -172,12 +173,12 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   {afterSaleTag(o)}
                 </span>
               </td>
-              <td className="px-4 py-3 hidden lg:table-cell text-xs text-gray-500">
+              <td className="px-4 py-3 hidden lg:table-cell text-xs text-gray-500 whitespace-nowrap xl:whitespace-normal">
                 <div>{line1}</div>
                 {line2 && <div className="text-gray-400">{line2}</div>}
               </td>
               {renderActions && (
-                <td className="hidden lg:table-cell lg:min-w-[150px] px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                <td className="hidden xl:table-cell px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-wrap gap-x-3 gap-y-1">{renderActions(o)}</div>
                 </td>
               )}
