@@ -136,7 +136,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
               <td className="px-4 py-3">
                 <div className="font-mono text-gray-700">
                   {o.orderNo}
-                  {o.remark && <span className="ml-1.5 text-[10px] text-orange-600 bg-orange-50 rounded px-1" title={o.remark}>备注</span>}
+                  {o.remark && <span className="ml-1.5 text-[10px] text-orange-600 bg-orange-50 rounded px-1 whitespace-nowrap" title={o.remark}>备注</span>}
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5">
                   <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 ${CHANNEL_TONE[tag.tone]}`}>{tag.label}</span>
