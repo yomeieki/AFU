@@ -84,7 +84,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
           <th className="text-left px-4 py-3">状态</th>
           <th className="text-left px-4 py-3 hidden lg:table-cell">配送·取餐</th>
           {/* 上面这列在 <lg 隐藏，columns 计数已含它——loading 骨架行只是视觉占位，多一列不影响可读性 */}
-          {renderActions && <th className="text-left px-4 py-3">操作</th>}
+          {renderActions && <th className="text-left px-4 py-3 w-[190px] lg:w-auto">操作</th>}
           <th className="px-2 py-3" />
         </tr>
       }
@@ -154,7 +154,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   </button>
                 </div>
               </td>
-              <td className="px-4 py-3 text-gray-600 max-w-[160px] lg:max-w-[320px] truncate">{itemsSummary(o.items)}</td>
+              <td className="px-4 py-3 text-gray-600 max-w-[90px] lg:max-w-[320px] truncate">{itemsSummary(o.items)}</td>
               <td className="px-4 py-3 text-right font-semibold text-brand-600">
                 ¥{yuan(o.actualAmount)}
                 {o.refundedAmount > 0 && <div className="text-xs font-normal text-red-500">已退 ¥{yuan(o.refundedAmount)}</div>}
@@ -170,8 +170,8 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                 {line2 && <div className="text-gray-400">{line2}</div>}
               </td>
               {renderActions && (
-                <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex flex-wrap gap-x-3 gap-y-1">{renderActions(o)}</div>
+                <td className="px-2 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex flex-wrap gap-x-2 gap-y-1">{renderActions(o)}</div>
                 </td>
               )}
               <td className="px-2 py-3 text-gray-300">
