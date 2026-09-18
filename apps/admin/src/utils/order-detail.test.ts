@@ -46,9 +46,41 @@ test('moneyRows：含打包费/自取优惠/满减/券/运费的单，顺序与�
   }
   const rows = moneyRows(o)
   assert.deepEqual(rows.map((r) => r.key), ['subtotal', 'packing', 'pickupDiscount', 'promo', 'coupon', 'shipping', 'actual', 'refunded', 'remaining'])
-  assert.equal(rows.find((r) => r.key === 'refunded')!.fen, 0)
-  const sum = o.totalAmount + o.packingFee - o.pickupDiscountAmount - o.promoDiscountAmount - o.discountAmount + o.shippingFee
-  assert.equal(sum, o.actualAmount)
+
+  // ① 逐行断言 fen——不只断 key 顺序：把满减/券的 fen 互换、或哪一行算错了金额，这里都要能抓到
+  // （原先的「sum 全由夹具字段相加」自洽检查，sum 与 rows 完全无关，改哪行都不会红）。
+  const byKey = (k: string) => rows.find((r) => r.key === k)!.fen
+  assert.equal(byKey('subtotal'), 10000)
+  assert.equal(byKey('packing'), 200)
+  assert.equal(byKey('pickupDiscount'), 300)
+  assert.equal(byKey('promo'), 500)
+  assert.equal(byKey('coupon'), 800)
+  assert.equal(byKey('shipping'), 600)
+  assert.equal(byKey('actual'), 9200)
+  assert.equal(byKey('refunded'), 0)
+  assert.equal(byKey('remaining'), 9200)
+
+  // ② 按 kind 带符号求和，必须真的等于 actual 那一行——不是各自摆对了数就算过
+  const signedSum = rows
+    .filter((r) => r.kind === 'plus' || r.kind === 'minus')
+    .filter((r) => r.key !== 'refunded') // refunded 是「已退」，不参与「实付怎么算出来的」这条链
+    .reduce((s, r) => s + (r.kind === 'plus' ? r.fen : -r.fen), 0)
+  assert.equal(signedSum, byKey('actual'))
+
+  // ③ remaining/refunded 必须真的读自订单字段，不是巧合对上
+  assert.equal(byKey('remaining'), o.remainingRefundable)
+  assert.equal(byKey('refunded'), o.refundedAmount)
+})
+
+test('moneyRows：部分退款——已退/还可退分别读自 refundedAmount/remainingRefundable', () => {
+  const o = {
+    totalAmount: 10000, packingFee: 200, pickupDiscountAmount: 300, promoDiscountAmount: 500, discountAmount: 800,
+    shippingFee: 600, actualAmount: 9200, refundedAmount: 6000, remainingRefundable: 3200,
+    deliveryType: 'LOCAL', coupon: null,
+  }
+  const rows = moneyRows(o)
+  assert.equal(rows.find((r) => r.key === 'refunded')!.fen, 6000)
+  assert.equal(rows.find((r) => r.key === 'remaining')!.fen, 3200)
 })
 
 test('moneyRows：为 0 的优惠/费用行不出现', () => {
