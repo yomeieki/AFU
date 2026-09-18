@@ -100,6 +100,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   {afterSaleTag(o)}
                   <span className={`text-xs px-1.5 py-0.5 rounded ${CHANNEL_TONE[tag.tone]}`}>{tag.label}</span>
                   <span className="font-mono text-xs text-gray-500 truncate">{o.orderNo}</span>
+                  {o.remark && <span className="text-[10px] text-orange-600 bg-orange-50 rounded px-1 shrink-0" title={o.remark}>备注</span>}
                   <span className="ml-auto text-xs text-gray-400 shrink-0">{fmtListTime(o.createdAt, now)}</span>
                 </div>
                 <div className="mt-1.5 flex items-center justify-between gap-2">

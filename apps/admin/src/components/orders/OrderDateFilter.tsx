@@ -22,6 +22,7 @@ export default function OrderDateFilter({ value, onChange }: Props) {
               key={p.key}
               type="button"
               onClick={() => onChange(p.key === 'custom' ? { ...value, range: 'custom' } : { range: p.key, startDate: '', endDate: '' })}
+              aria-label={p.key === 'custom' ? '自选' : undefined}
               className={`rounded-full text-xs px-2 py-1 whitespace-nowrap shrink-0 ${active ? 'bg-brand-500 text-white' : 'bg-gray-100 text-gray-600'}`}
             >
               {p.key === 'custom' ? (
