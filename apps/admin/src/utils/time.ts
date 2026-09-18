@@ -112,6 +112,17 @@ export function shiftDayKey(n: number, now: Date = new Date()): string {
 }
 
 /**
+ * 判断两个时间戳是否落在上海时区的同一自然日——**不要**用 `at.slice(0, 10)` 比较：
+ * 那是取 ISO 字符串的 UTC 日，北京 23:30 与次日 00:30 会被判成不同日（实为同一天的
+ * 「今天」附近），北京 07:30 与 09:00 会被判成同一天（实为跨了 UTC 日边界但没跨上海日）。
+ * 任一端解析失败一律 false（不装作「同一天」）。
+ */
+export function sameDayKey(a: Input, b: Input): boolean {
+  const ka = fmtDate(a, '')
+  return ka !== '' && ka === fmtDate(b, '')
+}
+
+/**
  * 订单列表用的紧凑时间：上海今天 → `今天 HH:mm`；上海昨天 → `昨天 HH:mm`；
  * 同年 → `M月D日 HH:mm`；否则 `YYYY-MM-DD HH:mm`。`now` 显式传入以便测试钉时刻。
  */

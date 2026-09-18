@@ -1,4 +1,4 @@
-import { fmtHHmm, fmtMonthDayTime } from '../../../utils/time'
+import { fmtHHmm, fmtMonthDayTime, sameDayKey } from '../../../utils/time'
 import type { TimelineNode } from '../../../utils/order-detail'
 
 const TONE_CLASS: Record<TimelineNode['tone'], string> = {
@@ -18,8 +18,7 @@ const DOT_CLASS: Record<TimelineNode['tone'], string> = {
 /** 跨自然日的节点显示 M-DD HH:mm，同一天只显示 HH:mm——与工作台抽屉的紧凑写法一致 */
 function fmtNodeTime(at: string, first?: string): string {
   if (!first) return fmtHHmm(at)
-  const sameDay = at.slice(0, 10) === first.slice(0, 10)
-  return sameDay ? fmtHHmm(at) : fmtMonthDayTime(at)
+  return sameDayKey(at, first) ? fmtHHmm(at) : fmtMonthDayTime(at)
 }
 
 export default function DetailTimeline({ nodes }: { nodes: TimelineNode[] }) {
