@@ -5,7 +5,8 @@ import { channelLabel } from '../../../utils/order-detail'
 import { fmtDateTimeSec } from '../../../utils/time'
 import type { OrderDetail } from '../../../types'
 
-const CHANNEL_TONE: Record<string, string> = {
+/** 渠道标签配色，同城/自取/邮寄；OrderDetail.tsx ≥md 标题行也用它，避免两处各起一套颜色 */
+export const CHANNEL_TONE: Record<string, string> = {
   LOCAL: 'bg-orange-50 text-orange-700',
   PICKUP: 'bg-teal-50 text-teal-700',
   EXPRESS: 'bg-blue-50 text-blue-700',
@@ -16,11 +17,10 @@ export default function DetailHero({ order }: { order: OrderDetail }) {
     <div className="bg-white rounded-lg shadow-card p-3 md:p-4 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
         {/* 状态大字：颜色沿 StatusBadge 的语义，直接复用它而不是另起一套配色表 */}
-        <span className="text-base">
-          <StatusBadge status={order.status} deliveryType={order.deliveryType} />
-        </span>
+        <StatusBadge status={order.status} deliveryType={order.deliveryType} size="lg" />
       </div>
-      <div className="flex items-center gap-2 flex-wrap text-sm">
+      {/* ≥md 这行信息已经在 OrderDetail.tsx 的标题行里出现过一次，这里只在 <md 显示 */}
+      <div className="md:hidden flex items-center gap-2 flex-wrap text-sm">
         <span className={`px-1.5 py-0.5 rounded text-xs ${CHANNEL_TONE[order.deliveryType] ?? 'bg-gray-100 text-gray-600'}`}>
           {channelLabel(order.deliveryType)}
         </span>

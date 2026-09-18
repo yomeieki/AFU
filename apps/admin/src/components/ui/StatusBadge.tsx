@@ -40,12 +40,20 @@ interface StatusBadgeProps {
   /** 覆盖默认文案（如二维码「已生成/未生成」等临时场景请直接用 label+tone） */
   label?: string
   deliveryType?: string | null
+  /** 'sm'（默认，现状）| 'lg'（详情页状态大字，见 order-detail-and-date-filter 计划 R9）。
+   * 颜色始终来自 STATUS_MAP，不另起配色表——只是字号/内边距不同。 */
+  size?: 'sm' | 'lg'
 }
 
-export default function StatusBadge({ status, label, deliveryType }: StatusBadgeProps) {
+const SIZE_CLASS: Record<'sm' | 'lg', string> = {
+  sm: 'text-xs px-2 py-0.5',
+  lg: 'text-base font-semibold px-2.5 py-1',
+}
+
+export default function StatusBadge({ status, label, deliveryType, size = 'sm' }: StatusBadgeProps) {
   const conf = STATUS_MAP[status] ?? { label: status, className: 'bg-gray-100 text-gray-500' }
   return (
-    <span className={`inline-block px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${conf.className}`}>
+    <span className={`inline-block rounded-full whitespace-nowrap ${SIZE_CLASS[size]} ${conf.className}`}>
       {label ?? orderStatusLabel(status, deliveryType)}
     </span>
   )

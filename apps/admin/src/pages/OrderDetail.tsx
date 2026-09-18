@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Copy } from 'lucide-react'
 import { getOrder, getOrderDelivery, getExpressBooking } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 import Spinner from '../components/ui/Spinner'
 import RefundDialog from '../components/RefundDialog'
-import DetailHero from '../components/orders/detail/DetailHero'
+import DetailHero, { CHANNEL_TONE } from '../components/orders/detail/DetailHero'
+import { copyText } from '../components/orders/copyText'
 import DetailTimeline from '../components/orders/detail/DetailTimeline'
 import DetailCustomer from '../components/orders/detail/DetailCustomer'
 import DetailItems from '../components/orders/detail/DetailItems'
@@ -15,7 +16,7 @@ import DetailExpress from '../components/orders/detail/DetailExpress'
 import DetailRefunds from '../components/orders/detail/DetailRefunds'
 import DetailAfterSales from '../components/orders/detail/DetailAfterSales'
 import DetailActions from '../components/orders/detail/DetailActions'
-import { backTargetFor, timelineNodes, withLatestRefund } from '../utils/order-detail'
+import { backTargetFor, channelLabel, timelineNodes, withLatestRefund } from '../utils/order-detail'
 import type { DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView, ExpressTrack, OrderDetail as OrderDetailData } from '../types'
 
 type LocalData = { delivery: DeliveryInfo | null; events: DeliveryEventInfo[]; costFen: number } | null
@@ -114,17 +115,38 @@ export default function OrderDetail() {
   return (
     <div className="pb-24 md:pb-6">
       <div className="max-w-2xl lg:max-w-none mx-auto lg:mx-0 space-y-3">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
+        {/* <md：图标返回 + 可见标题，一行 */}
+        <div className="flex items-center gap-1 md:hidden">
+          <button
+            onClick={() => navigate(backTo)}
+            aria-label={backLabel}
+            className="inline-flex items-center justify-center w-10 h-10 -ml-2 shrink-0 text-gray-500 hover:text-gray-700"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <h1 className="text-base font-semibold text-gray-900">订单详情</h1>
+        </div>
+
+        {/* ≥md：两行——「‹ 返回…」文字链接 / 「订单详情 + 单号 + 复制 + 渠道标签」+ 右侧操作 */}
+        <div className="hidden md:block space-y-1">
           <button onClick={() => navigate(backTo)} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
             <ChevronLeft className="w-4 h-4" />
             {backLabel}
           </button>
-          <div className="hidden md:flex">
-            <DetailActions order={order} onRefund={() => setRefundOpen(true)} />
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-lg font-semibold text-gray-900">订单详情</h1>
+            <span className="font-mono text-sm text-gray-600">{order.orderNo}</span>
+            <button onClick={() => copyText(order.orderNo)} className="text-gray-400 hover:text-gray-600" title="复制单号" aria-label="复制单号">
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+            <span className={`px-1.5 py-0.5 rounded text-xs ${CHANNEL_TONE[order.deliveryType] ?? 'bg-gray-100 text-gray-600'}`}>
+              {channelLabel(order.deliveryType)}
+            </span>
+            <div className="ml-auto">
+              <DetailActions order={order} onRefund={() => setRefundOpen(true)} />
+            </div>
           </div>
         </div>
-
-        <h1 className="sr-only">订单详情</h1>
 
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-4 lg:items-start space-y-3 lg:space-y-0">
           {/* 手机/iPad 单栏顺序：订单头 → 进度 → 顾客 → 商品 → 金额 → 配送/取餐/物流 → 退款记录 → 售后 */}
