@@ -5,7 +5,7 @@ export default function OrderCenter() {
   return (
     <BusinessCenter
       title="订单管理"
-      description="同城配送用于查询配送历史，全国邮寄用于发货、退款和售后管理。"
+      description="同城与邮寄订单的历史检索、退款与售后。"
       tabs={centerTabs.orders}
     />
   )
