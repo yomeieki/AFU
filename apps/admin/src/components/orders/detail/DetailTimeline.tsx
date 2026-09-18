@@ -29,7 +29,7 @@ export default function DetailTimeline({ nodes }: { nodes: TimelineNode[] }) {
       {nodes.map((n, i) => (
         <li key={i} className="flex gap-2 text-sm">
           <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${DOT_CLASS[n.tone]}`} />
-          <span className="text-xs text-gray-400 shrink-0 w-16 tabular-nums">{fmtNodeTime(n.at, first)}</span>
+          <span className="text-xs text-gray-400 shrink-0 whitespace-nowrap w-[4.75rem] tabular-nums">{fmtNodeTime(n.at, first)}</span>
           <span className={TONE_CLASS[n.tone]}>
             {n.label}
             {n.detail && <span className="text-gray-400"> · {n.detail}</span>}
