@@ -196,7 +196,7 @@ export default function LocalOrders() {
           list={list}
           loading={loading}
           loadFailed={loadFailed}
-          emptyText={type === 'PICKUP' ? '暂无自取订单' : type === 'LOCAL' ? '暂无外送订单' : '暂无同城订单'}
+          emptyText={dateErr ? '选好起止日期后显示' : type === 'PICKUP' ? '暂无自取订单' : type === 'LOCAL' ? '暂无外送订单' : '暂无同城订单'}
           now={now}
           onOpen={handleOpen}
           renderActions={(o) => (
@@ -215,7 +215,7 @@ export default function LocalOrders() {
           )}
           onRetry={() => load()}
         />
-        {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+        {!loading && !loadFailed && !(dateErr && list.length === 0) && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
       </div>
 
       {refundTarget && (

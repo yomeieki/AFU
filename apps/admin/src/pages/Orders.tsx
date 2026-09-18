@@ -379,14 +379,14 @@ export default function Orders() {
               list={list}
               loading={loading}
               loadFailed={loadFailed}
-              emptyText="暂无订单"
+              emptyText={dateErr ? '选好起止日期后显示' : '暂无订单'}
               now={now}
               onOpen={handleOpen}
               renderActions={(o) => renderActions(o, actionCls)}
               onAfterSaleTag={() => handleTabChange('AFTER_SALE')}
               onRetry={() => load()}
             />
-            {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+            {!loading && !loadFailed && !(dateErr && list.length === 0) && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
           </div>
         </>
       )}
