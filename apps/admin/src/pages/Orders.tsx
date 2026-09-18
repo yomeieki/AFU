@@ -1,20 +1,21 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Copy, Phone, Printer, RefreshCw, Search, Truck } from 'lucide-react'
 import { getOrders, acceptOrder, shipOrder, cancelOrder, completeRefund, completeOrder, reprintOrder } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
-import Table from '../components/ui/Table'
 import Pagination from '../components/ui/Pagination'
-import StatusBadge from '../components/ui/StatusBadge'
 import RefundDialog from '../components/RefundDialog'
 import IssueCouponModal from '../components/IssueCouponModal'
 import AfterSalePanel from '../components/AfterSalePanel'
 import { usePendingOrders } from '../hooks/usePendingOrders'
-import { AFTER_SALE_STATUS_LABEL, type Order } from '../types'
-import { fmtDateTime } from '../utils/time'
+import type { Order } from '../types'
+import OrderListTable from '../components/orders/OrderListTable'
+import OrderDateFilter from '../components/orders/OrderDateFilter'
+import { orderDetailPath } from '../navigation'
+import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
 
 // 状态 Tab（含「全部」；REFUNDED 单量少，并入「退款」）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -29,24 +30,11 @@ const STATUS_TABS: { value: string; label: string }[] = [
   { value: 'AFTER_SALE', label: '售后' },
 ]
 
-const REFUND_LABEL: Record<string, string> = {
-  PENDING: '已发起',
-  PROCESSING: '微信处理中',
-  SUCCESS: '已退款',
-  ABNORMAL: '异常',
-  CLOSED: '已关闭',
-  FAILED: '发起失败',
-}
-
 // 快递公司：常用 + 「其他」手填
 const EXPRESS_COMPANIES = ['顺丰速运', '京东物流', '中通快递', '圆通速递', '韵达快递', '申通快递', '极兔速递', '邮政 EMS', '德邦快递']
 const OTHER = '__other__'
 
 const AUTO_REFRESH_MS = 30_000
-
-function yuan(fen: number) {
-  return (fen / 100).toFixed(2)
-}
 
 function copyText(text: string) {
   navigator.clipboard?.writeText(text).then(
@@ -56,6 +44,8 @@ function copyText(text: string) {
 }
 
 export default function Orders() {
+  const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const [list, setList] = useState<Order[]>([])
   const [total, setTotal] = useState(0)
@@ -63,9 +53,11 @@ export default function Orders() {
   const pageSize = 20
   const filterStatus = searchParams.get('status') ?? ''
   const isAfterSaleTab = filterStatus === 'AFTER_SALE'
+  const dateState = readOrderDate(searchParams)
+  const now = new Date()
+  const dateErr = orderDateError(dateState)
   const [keyword, setKeyword] = useState('')
   const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState<number | null>(null)
   const [shipModal, setShipModal] = useState<Order | null>(null)
   const [shipForm, setShipForm] = useState({ company: '', otherCompany: '', expressNo: '', remark: '' })
   const [shipError, setShipError] = useState('')
@@ -85,6 +77,7 @@ export default function Orders() {
 
   const load = (p = page, silent = false) => {
     if (isAfterSaleTab) return
+    if (dateErr) return
     if (!silent) { setLoading(true); setLoadFailed(false) }
     getOrders({
       page: p,
@@ -92,6 +85,7 @@ export default function Orders() {
       status: filterStatus || undefined,
       keyword: keyword.trim() || undefined,
       deliveryType: 'EXPRESS',
+      ...orderDateQuery(dateState, now),
     })
       .then((res) => {
         setList(res.data.data.list)
@@ -109,7 +103,8 @@ export default function Orders() {
   }
   const staleMinutes = silentFailCount > 0 && lastOkAt != null ? Math.floor((Date.now() - lastOkAt) / 60000) : null
 
-  useEffect(() => { load() }, [page, filterStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [page, filterStatus, searchParams.get('range'), searchParams.get('startDate'), searchParams.get('endDate')])
 
   // 30s 自动静默刷新：页面可见且没有弹窗打开时（避免打断操作）
   useEffect(() => {
@@ -119,7 +114,7 @@ export default function Orders() {
     }, AUTO_REFRESH_MS)
     return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, filterStatus, keyword, isAfterSaleTab])
+  }, [page, filterStatus, keyword, isAfterSaleTab, dateState.range, dateState.startDate, dateState.endDate])
 
   const handleSearch = () => {
     setPage(1)
@@ -128,7 +123,20 @@ export default function Orders() {
 
   const handleTabChange = (value: string) => {
     setPage(1)
-    setSearchParams(value ? { status: value } : {}, { replace: true })
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev)
+      if (value) p.set('status', value); else p.delete('status')
+      return p
+    }, { replace: true })
+  }
+
+  const handleDateChange = (s: Parameters<typeof writeOrderDate>[1]) => {
+    setPage(1)
+    setSearchParams((prev) => writeOrderDate(new URLSearchParams(prev), s), { replace: true })
+  }
+
+  const handleOpen = (order: Order) => {
+    navigate(orderDetailPath(order.id), { state: { from: location.pathname + location.search } })
   }
 
   const withToast = async (fn: () => Promise<unknown>, okMsg: string, failMsg: string) => {
@@ -220,7 +228,7 @@ export default function Orders() {
     }
   }
 
-  // 退款相关按钮（移动卡片与桌面表格共用）
+  // 退款相关按钮（卡片与表格共用同一套样式，见 renderActions 的说明）
   const renderRefundActions = (order: Order, cls: { danger: string; muted: string }) => {
     const r = order.latestRefund
     const active = r && ['PENDING', 'PROCESSING', 'ABNORMAL'].includes(r.status)
@@ -264,64 +272,9 @@ export default function Orders() {
     </span>
   )
 
-  const renderAfterSaleTag = (order: Order) =>
-    order.afterSale && ['PENDING', 'APPROVED'].includes(order.afterSale.status) ? (
-      <button
-        onClick={() => handleTabChange('AFTER_SALE')}
-        className={`px-2 py-0.5 rounded-full text-xs ${order.afterSale.status === 'PENDING' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}
-      >
-        售后{AFTER_SALE_STATUS_LABEL[order.afterSale.status]}
-      </button>
-    ) : null
-
-  const renderDetailLines = (order: Order) => (
-    <>
-      <p className="text-xs text-gray-500 flex items-start gap-1">
-        <span className="shrink-0">收货地址：{order.receiverDisplayAddress ?? order.receiverFullAddress}</span>
-        <button onClick={() => copyText(`${order.receiverName} ${order.receiverPhone} ${order.receiverFullAddress}`)} className="text-gray-400 hover:text-gray-600 shrink-0" title="复制收件信息" aria-label="复制收件信息">
-          <Copy className="w-3 h-3" />
-        </button>
-      </p>
-      {order.remark && <p className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1">买家备注：{order.remark}</p>}
-      {/* 会员优惠（M2）。放在支付时间之前：店员看这一段是为了核对「顾客到底付了多少、为什么」，
-          优惠是这个问题的一部分，时间不是。两个字段服务端只在 >0 时才有意义，为 0 就不占一行 */}
-      {/* 满减在优惠券之前（2026-09-17 全店满减设计：小计 → 满减 → 券，与自取优惠同级）；邮寄渠道也参加满减 */}
-      {(order.promoDiscountAmount ?? 0) > 0 && (
-        <p className="text-xs text-gray-500">
-          满减：<span className="text-red-500">−¥{yuan(order.promoDiscountAmount!)}</span>
-        </p>
-      )}
-      {(order.discountAmount ?? 0) > 0 && (
-        <p className="text-xs text-gray-500">
-          优惠券：<span className="text-red-500">−¥{yuan(order.discountAmount!)}</span>
-          <span className="ml-1 text-gray-400">（商品 ¥{yuan(order.totalAmount)} 运费 ¥{yuan(order.shippingFee)}）</span>
-        </p>
-      )}
-      {(order.pointsUsed ?? 0) > 0 && (
-        <p className="text-xs text-gray-500">赠品抵扣：{order.pointsUsed} 积分</p>
-      )}
-      {order.paidAt && <p className="text-xs text-gray-500">支付时间：{fmtDateTime(order.paidAt)}</p>}
-      {order.cancelReason && (order.status === 'CANCELLED' || order.status === 'REFUNDING' || order.status === 'REFUNDED') && (
-        <p className="text-xs text-gray-500">原因：{order.cancelReason}</p>
-      )}
-      {(order.refundedAmount > 0 || order.latestRefund) && (
-        <p className={`text-xs ${order.latestRefund && !['SUCCESS'].includes(order.latestRefund.status) ? 'text-red-500' : 'text-gray-500'}`}>
-          退款：已退 ¥{yuan(order.refundedAmount)}
-          {order.latestRefund && ` · 最近一笔 ${REFUND_LABEL[order.latestRefund.status]} ¥${yuan(order.latestRefund.amount)}`}
-          {order.latestRefund?.errorMessage && `（${order.latestRefund.errorMessage}）`}
-        </p>
-      )}
-      {order.shipment?.expressNo && (
-        <p className="text-xs text-gray-500">
-          物流：{order.shipment.expressCompany} {order.shipment.expressNo}
-          {order.shipment.shippedAt && `（${fmtDateTime(order.shipment.shippedAt)} 发货）`}
-          {order.shipment.remark && ` 备注：${order.shipment.remark}`}
-        </p>
-      )}
-    </>
-  )
-
-  const renderActions = (order: Order, cls: { primary: string; danger: string; muted: string; link: string }, expandLabel: [string, string]) => (
+  // 详情页整合了原来那块可折叠的行内明细（收货地址/优惠明细/支付时间/退款/物流等），
+  // 列表这里不再需要那个折叠开关——renderActions 只保留业务操作按钮，一字不改顺序。
+  const renderActions = (order: Order, cls: { primary: string; danger: string; muted: string }) => (
     <>
       {order.status === 'PAID' && (
         <>
@@ -347,11 +300,17 @@ export default function Orders() {
           {reprintingId === order.id ? '发送中...' : '重打小票'}
         </button>
       )}
-      <button onClick={() => setExpanded(expanded === order.id ? null : order.id)} className={cls.link}>
-        {expanded === order.id ? expandLabel[1] : expandLabel[0]}
-      </button>
     </>
   )
+
+  // 卡片与表格用同一套配色（桌面 hover 配色），不再需要分两套——按钮组里那个折叠开关已经去掉了
+  const actionCls = {
+    primary: 'text-brand-500 hover:text-brand-700 font-medium',
+    danger: 'text-red-500 hover:text-red-700 font-medium disabled:opacity-40',
+    muted: 'text-gray-500 hover:text-gray-700',
+  }
+
+  const summary = orderDateSummary(dateState, now)
 
   return (
     <div className="space-y-4">
@@ -383,24 +342,27 @@ export default function Orders() {
         <AfterSalePanel />
       ) : (
         <>
-          <div className="bg-white rounded-lg shadow-card p-3 md:p-4 flex gap-2 md:gap-3 items-end">
-            <div className="flex-1 min-w-0">
-              <label className="block text-xs text-gray-500 mb-1">搜索</label>
-              <input
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
-                placeholder="订单号 / 收货人 / 手机号"
-                className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-full"
-              />
+          <div className="bg-white rounded-lg shadow-card p-3 md:p-4 space-y-2">
+            <div className="flex gap-2 md:gap-3 items-end">
+              <div className="flex-1 min-w-0">
+                <label className="block text-xs text-gray-500 mb-1">搜索</label>
+                <input
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+                  placeholder="订单号 / 收货人 / 手机号"
+                  className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-full"
+                />
+              </div>
+              <Button variant="secondary" size="sm" className="shrink-0" onClick={handleSearch}>
+                <Search className="w-4 h-4" />
+                搜索
+              </Button>
+              <Button variant="ghost" size="sm" className="shrink-0" onClick={() => load()} title="刷新（每 30 秒自动刷新）">
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </Button>
             </div>
-            <Button variant="secondary" size="sm" className="shrink-0" onClick={handleSearch}>
-              <Search className="w-4 h-4" />
-              搜索
-            </Button>
-            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => load()} title="刷新（每 30 秒自动刷新）">
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            </Button>
+            <OrderDateFilter value={dateState} onChange={handleDateChange} />
           </div>
 
           {staleMinutes != null && !loadFailed && (
@@ -410,157 +372,18 @@ export default function Orders() {
             </div>
           )}
 
+          {!dateErr && <p className="text-xs text-gray-500">{summary ? `${summary} · ` : ''}共 {total} 单</p>}
+
           <div className="bg-white rounded-lg shadow-card overflow-hidden">
-            {loadFailed ? (
-              <div className="py-10 flex flex-col items-center gap-3 text-sm text-red-600">
-                <span>订单列表加载失败，当前显示的不是真实数据</span>
-                <Button size="sm" variant="secondary" onClick={() => load()}>重试</Button>
-              </div>
-            ) : (
-            <Table
-              columns={6}
+            <OrderListTable
+              list={list}
               loading={loading}
-              isEmpty={list.length === 0}
+              loadFailed={loadFailed}
               emptyText="暂无订单"
-              head={
-                <tr>
-                  <th className="text-left px-4 py-3">订单号</th>
-                  <th className="text-left px-4 py-3">收货人</th>
-                  <th className="text-right px-4 py-3">实付金额</th>
-                  <th className="text-right px-4 py-3">状态</th>
-                  <th className="text-right px-4 py-3">下单时间</th>
-                  <th className="text-right px-4 py-3">操作</th>
-                </tr>
-              }
-              mobileCards={
-                <>
-                  {list.map((order) => (
-                    <div key={order.id} className="border border-gray-100 rounded-lg p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-xs text-gray-600 truncate">{order.orderNo}</span>
-                        <span className="flex items-center gap-1.5 shrink-0">
-                          {renderAfterSaleTag(order)}
-                          <StatusBadge status={order.status} />
-                        </span>
-                      </div>
-                      <div className="mt-1.5 flex items-center justify-between gap-2">
-                        <span className="text-sm text-gray-800 flex items-center gap-1.5 min-w-0">
-                          <span className="truncate">{order.receiverName}</span>
-                          {renderPhone(order)}
-                        </span>
-                        <span className="text-base font-semibold text-brand-600 shrink-0">¥{yuan(order.actualAmount)}</span>
-                      </div>
-                      {order.remark && <p className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1 mt-1.5">备注：{order.remark}</p>}
-                      <p className="text-xs text-gray-400 mt-1">
-                        {fmtDateTime(order.createdAt)}
-                        {order.refundedAmount > 0 && <span className="ml-2 text-red-500">已退 ¥{yuan(order.refundedAmount)}</span>}
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1.5 text-sm">
-                        {renderActions(
-                          order,
-                          { primary: 'text-brand-500 font-medium', danger: 'text-red-500 font-medium disabled:opacity-40', muted: 'text-gray-500', link: 'text-blue-500' },
-                          ['详情', '收起']
-                        )}
-                      </div>
-                      {expanded === order.id && (
-                        <div className="mt-2 pt-2 border-t border-gray-100 space-y-1.5">
-                          {renderDetailLines(order)}
-                          {order.items.map((item, i) => (
-                            <div key={i} className="flex justify-between text-xs text-gray-700">
-                              <span className="truncate">
-                                {item.isGift && <span className="mr-1 text-[10px] text-orange-600 bg-orange-50 rounded px-1">赠</span>}
-                                {item.productName}
-                                {item.specText && <span className="text-gray-400"> [{item.specText}]</span>}
-                                {' '}× {item.quantity}
-                              </span>
-                              {/* 赠品行 subtotal 恒为 0，直接显示 ¥0.00 会被当成 0 元 bug；印出积分价才说得清 */}
-                              <span className="shrink-0">
-                                {item.isGift ? `积分 ${item.pointsCost ?? 0}` : `¥${yuan(item.subtotal)}`}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </>
-              }
-            >
-              {list.map((order) => (
-                <Fragment key={order.id}>
-                  <tr className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-mono text-gray-700">
-                      {order.orderNo}
-                      {order.remark && <span className="ml-1.5 text-[10px] text-orange-600 bg-orange-50 rounded px-1" title={order.remark}>备注</span>}
-                    </td>
-                    <td className="px-4 py-3 text-gray-800">
-                      {order.receiverName} {renderPhone(order)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-brand-600">
-                      ¥{yuan(order.actualAmount)}
-                      {order.refundedAmount > 0 && <div className="text-xs font-normal text-red-500">已退 ¥{yuan(order.refundedAmount)}</div>}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="inline-flex items-center gap-1.5">
-                        {renderAfterSaleTag(order)}
-                        <StatusBadge status={order.status} />
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-500">{fmtDateTime(order.createdAt)}</td>
-                    <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
-                      {renderActions(
-                        order,
-                        {
-                          primary: 'text-brand-500 hover:text-brand-700 font-medium',
-                          danger: 'text-red-500 hover:text-red-700 font-medium disabled:opacity-40',
-                          muted: 'text-gray-500 hover:text-gray-700',
-                          link: 'text-blue-500 hover:text-blue-700',
-                        },
-                        ['展开', '收起']
-                      )}
-                    </td>
-                  </tr>
-                  {expanded === order.id && (
-                    <tr>
-                      <td colSpan={6} className="px-4 py-3 bg-gray-50">
-                        <div className="space-y-1 mb-2">{renderDetailLines(order)}</div>
-                        <table className="w-full text-xs">
-                          <thead className="text-gray-500">
-                            <tr>
-                              <th className="text-left pb-1">商品</th>
-                              <th className="text-right pb-1">单价</th>
-                              <th className="text-right pb-1">数量</th>
-                              <th className="text-right pb-1">小计</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200">
-                            {order.items.map((item, i) => (
-                              <tr key={i}>
-                                <td className="py-1 text-gray-700">
-                                  {item.isGift && <span className="mr-1 text-[10px] text-orange-600 bg-orange-50 rounded px-1">赠</span>}
-                                  {item.productName}
-                                  {item.specText && <span className="ml-1.5 text-xs text-gray-400">[{item.specText}]</span>}
-                                </td>
-                                {/* 赠品的 productPrice/subtotal 恒为 0。显示 ¥0.00 会让人以为算错了，
-                                    单价栏印积分价、小计栏印「—」，才看得出这是一件不收钱的东西 */}
-                                <td className="py-1 text-right text-gray-600">
-                                  {item.isGift ? `积分 ${item.pointsCost ?? 0}` : `¥${yuan(item.productPrice)}`}
-                                </td>
-                                <td className="py-1 text-right text-gray-600">{item.quantity}</td>
-                                <td className="py-1 text-right text-gray-800">
-                                  {item.isGift ? '—' : `¥${yuan(item.subtotal)}`}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </Table>
-            )}
+              now={now}
+              onOpen={handleOpen}
+              renderActions={(o) => renderActions(o, actionCls)}
+            />
             {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
           </div>
         </>
