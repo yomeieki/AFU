@@ -1,6 +1,6 @@
 import { providerLabel } from './providers.ts'
 import { AFTER_SALE_REASON_LABEL, AFTER_SALE_STATUS_LABEL } from '../types.ts'
-import type { OrderDetail, DeliveryInfo, ExpressBookingView } from '../types.ts'
+import type { OrderDetail, DeliveryInfo, ExpressBookingView, RefundRecord } from '../types.ts'
 
 /** 与 pages/Orders.tsx 原来的 REFUND_LABEL 同一份文案，搬到这里供列表与详情共用 */
 export const REFUND_STATUS_LABEL: Record<string, string> = {
@@ -17,6 +17,14 @@ export const COUPON_SOURCE_LABEL: Record<string, string> = {
   POINTS: '积分兑换',
   CAMPAIGN: '活动',
   NEWCOMER: '新客',
+}
+
+/**
+ * 详情接口 `GET /orders/:id` 的 `refunds` 已按 `createdAt desc` 倒序返回，`[0]` 与列表接口
+ * `latestRefund` 同一条口径；服务端没有直接给这个字段（需改 1），前端映射一次补上。
+ */
+export function withLatestRefund<T extends { refunds?: RefundRecord[] }>(o: T): T & { latestRefund: RefundRecord | null } {
+  return { ...o, latestRefund: o.refunds?.[0] ?? null }
 }
 
 export function backTargetFor(deliveryType: string): '/orders/local' | '/orders/express' {

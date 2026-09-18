@@ -14,7 +14,7 @@ import DetailExpress from '../components/orders/detail/DetailExpress'
 import DetailRefunds from '../components/orders/detail/DetailRefunds'
 import DetailAfterSales from '../components/orders/detail/DetailAfterSales'
 import DetailActions from '../components/orders/detail/DetailActions'
-import { backTargetFor, timelineNodes } from '../utils/order-detail'
+import { backTargetFor, timelineNodes, withLatestRefund } from '../utils/order-detail'
 import type { DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView, ExpressTrack, OrderDetail as OrderDetailData } from '../types'
 
 type LocalData = { delivery: DeliveryInfo | null; events: DeliveryEventInfo[]; costFen: number } | null
@@ -68,7 +68,7 @@ export default function OrderDetail() {
     setLoading(true)
     getOrder(orderId)
       .then((res) => {
-        const o = res.data.data
+        const o = withLatestRefund(res.data.data)
         setOrder(o)
         setNotFound(false)
         if (o.deliveryType === 'LOCAL') loadLocal()

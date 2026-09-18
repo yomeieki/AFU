@@ -1,6 +1,25 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { moneyRows, refundedLineFlags, timelineNodes, backTargetFor, channelLabel } from './order-detail.ts'
+import { moneyRows, refundedLineFlags, timelineNodes, backTargetFor, channelLabel, withLatestRefund } from './order-detail.ts'
+import type { RefundStatus } from '../types.ts'
+
+const refundFixture = (status: RefundStatus, createdAt: string) => ({
+  id: 1, status, outRefundNo: 'x', amount: 100, mode: 'MOCK' as const, errorMessage: null, createdAt,
+  reason: null, operator: null, successTime: null, errorCode: null, afterSaleId: null,
+})
+
+test('withLatestRefund：取 refunds[0]（服务端已按 createdAt desc 排好）', () => {
+  const o = { refunds: [refundFixture('PROCESSING', '2026-09-18T02:00:00Z'), refundFixture('FAILED', '2026-09-18T01:00:00Z')] }
+  assert.equal(withLatestRefund(o).latestRefund!.status, 'PROCESSING')
+})
+
+test('withLatestRefund：refunds 为空数组 → null', () => {
+  assert.equal(withLatestRefund({ refunds: [] }).latestRefund, null)
+})
+
+test('withLatestRefund：refunds 缺省 → null', () => {
+  assert.equal(withLatestRefund({}).latestRefund, null)
+})
 
 test('backTargetFor / channelLabel', () => {
   assert.equal(backTargetFor('EXPRESS'), '/orders/express')
