@@ -26,6 +26,7 @@ import MemberSettings from './pages/MemberSettings'
 import Workbench from './pages/Workbench'
 import CatalogCenter from './pages/CatalogCenter'
 import OrderCenter from './pages/OrderCenter'
+import OrderDetail from './pages/OrderDetail'
 import SettingsCenter from './pages/SettingsCenter'
 import LegacyRedirect from './components/LegacyRedirect'
 import { UnsavedSettingsProvider } from './components/UnsavedSettings'
@@ -76,6 +77,11 @@ export default function App() {
             <Route path="local" element={<LocalOrders />} />
             <Route path="express" element={<Orders />} />
           </Route>
+          {/* 详情页是 orders 的兄弟静态路由，不是子路由：不吃 OrderCenter 的页签壳
+              （预览里详情页没有页签行）。/orders/detail/:id 与 local/express 同级，
+              不存在动态段抢先匹配的问题；顶栏高亮靠 pathname.startsWith('/orders')，
+              这里自然命中，navIcons/navBadge 不用改。 */}
+          <Route path="orders/detail/:id" element={<OrderDetail />} />
           <Route path="settings" element={<SettingsCenter />}>
             <Route index element={<LegacyRedirect />} />
             <Route path="express" element={<ShopSettings />} />
