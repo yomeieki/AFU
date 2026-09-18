@@ -51,7 +51,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
     )
   }
 
-  const columns = (renderActions ? 6 : 5) + 2 // 基础列 + 配送·取餐(≥lg 才显示但仍占位) + 末尾箭头列
+  const columns = (renderActions ? 6 : 5) + 2 // 基础列 + 配送·取餐、操作两列 <lg 隐藏但仍计数 + 末尾箭头列
 
   const afterSaleTag = (o: Order) => {
     if (!o.afterSale || !['PENDING', 'APPROVED'].includes(o.afterSale.status)) return null
@@ -84,7 +84,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
           <th className="text-left px-4 py-3">状态</th>
           <th className="text-left px-4 py-3 hidden lg:table-cell">配送·取餐</th>
           {/* 上面这列在 <lg 隐藏，columns 计数已含它——loading 骨架行只是视觉占位，多一列不影响可读性 */}
-          {renderActions && <th className="text-left px-4 py-3 w-[190px] lg:w-auto">操作</th>}
+          {renderActions && <th className="text-left px-4 py-3 hidden lg:table-cell">操作</th>}
           <th className="px-2 py-3" />
         </tr>
       }
@@ -138,8 +138,8 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   {o.remark && <span className="ml-1.5 text-[10px] text-orange-600 bg-orange-50 rounded px-1" title={o.remark}>备注</span>}
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5">
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${CHANNEL_TONE[tag.tone]}`}>{tag.label}</span>
-                  <span className="text-xs text-gray-400">{fmtListTime(o.createdAt, now)}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 ${CHANNEL_TONE[tag.tone]}`}>{tag.label}</span>
+                  <span className="text-xs text-gray-400 whitespace-nowrap shrink-0">{fmtListTime(o.createdAt, now)}</span>
                 </div>
               </td>
               <td className="px-4 py-3 text-gray-800">
@@ -154,10 +154,17 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   </button>
                 </div>
               </td>
-              <td className="px-4 py-3 text-gray-600 max-w-[90px] lg:max-w-[320px] truncate">{itemsSummary(o.items)}</td>
+              <td className="px-4 py-3 text-gray-600 w-full max-w-0 lg:w-auto lg:max-w-none">
+                <div className="truncate lg:max-w-[320px]">{itemsSummary(o.items)}</div>
+                {renderActions && (
+                  <div data-testid="order-row-actions" className="lg:hidden mt-1 flex flex-wrap gap-x-3 gap-y-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    {renderActions(o)}
+                  </div>
+                )}
+              </td>
               <td className="px-4 py-3 text-right font-semibold text-brand-600">
                 ¥{yuan(o.actualAmount)}
-                {o.refundedAmount > 0 && <div className="text-xs font-normal text-red-500">已退 ¥{yuan(o.refundedAmount)}</div>}
+                {o.refundedAmount > 0 && <div className="text-xs font-normal text-red-500 whitespace-nowrap">已退 ¥{yuan(o.refundedAmount)}</div>}
               </td>
               <td className="px-4 py-3">
                 <span className="inline-flex items-center gap-1.5 flex-wrap">
@@ -170,8 +177,8 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                 {line2 && <div className="text-gray-400">{line2}</div>}
               </td>
               {renderActions && (
-                <td className="px-2 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex flex-wrap gap-x-2 gap-y-1">{renderActions(o)}</div>
+                <td className="hidden lg:table-cell lg:min-w-[150px] px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">{renderActions(o)}</div>
                 </td>
               )}
               <td className="px-2 py-3 text-gray-300">
