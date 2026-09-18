@@ -769,15 +769,21 @@
 
 订单列表。
 
-**Query Params:**
+**Query Params（实际实现，2026-09-18 订单详情页 + 日期筛选核实并补齐）：**
 | 参数 | 说明 |
 |------|------|
-| status | 订单状态筛选 |
-| orderNo | 订单号搜索 |
-| startDate | 开始日期 |
-| endDate | 结束日期 |
-| page | 页码 |
-| pageSize | 每页数量 |
+| page | 页码，默认 1 |
+| pageSize | 每页数量，默认 20，上限 50 |
+| status | 订单状态筛选；逗号分隔可传多个（如 `REFUNDING,REFUNDED`） |
+| keyword | 订单号 / 收货人 / 手机号模糊（`orderNo` 为旧参数名，仍兼容） |
+| deliveryType | `EXPRESS` \| `LOCAL` \| `PICKUP` \| `ALL`，默认 `EXPRESS` |
+| channel | `LOCAL`（一次看外送+自取）\| `EXPRESS`；与 `deliveryType` 同传时以 `channel` 为准 |
+| startDate | 下单日期起（含），`YYYY-MM-DD`，**上海自然日**，按 `createdAt` 过滤，可选 |
+| endDate | 下单日期止（含），`YYYY-MM-DD`，同上，可选；只传其一表示「从/到该日起/止」 |
+
+日期参数各自可选、按上海自然日解释（进程本地时区，生产为 Asia/Shanghai）；格式不对、不是真实日历日（如 `2026-02-30`）、或起晚于止，一律 `40001`。不传日期 = 不限日期（默认全部历史）。
+
+**出参**（`data.list` 每项新增）：`latestDelivery`（最近一张配送单的 `{status, courierName, courierCompany, provider}`，非同城单为 `null`）。
 
 ---
 
@@ -971,6 +977,8 @@
 | 接口 | 说明 |
 |---|---|
 | `GET /api/admin/orders?keyword=` | 订单号 / 收货人 / 手机号模糊；列表增 `remark`、`refundedAmount`、`remainingRefundable`、`afterSale` |
+| `GET /api/admin/orders?startDate=&endDate=` | 2026-09-18：按上海自然日筛选下单日期（各自可选）；列表增 `latestDelivery`，详见 3.5 节 |
+| `GET /api/admin/express/orders/:id/booking` | 2026-09-18：响应增 `track`（`{updatedAt, signed, items[≤30]}` \| `null`），管理端订单详情页展开物流轨迹用，与顾客端同口径；`booking`/`events` 不变 |
 | `POST /api/admin/orders/:id/refund` | `amount` 可为部分（≤ 可退余额）；响应增 `isFull` |
 | `POST /api/admin/orders/:id/complete` | SHIPPED → COMPLETED |
 | `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`） |

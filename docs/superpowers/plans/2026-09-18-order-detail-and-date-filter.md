@@ -386,25 +386,77 @@ docs/superpowers/plans/2026-09-18-order-detail-and-date-filter.md   （本文件
 ## 勘误与验收记录（执行时追加）
 
 ### 实际开工尖端
-- （执行方填 `git rev-parse HEAD`）
+- `39be9454b2259d8ad350b7828ed35fc6228bf681`（= HEAD，与方案声明的基线一致；本 worktree 无 `node_modules`，开工先 `npm install` + `cd apps/server && npx prisma generate`）
 
 ### 每个 Task 的提交
-- T1：
-- T2：
-- T3：
-- T4：
-- T5：
-- T6：
-- T7：
+- T1：`af83334` feat(server): 订单列表按上海自然日筛选 + 骑手列 + 邮寄轨迹只读字段
+- T2：`267a100` feat(admin): 订单详情/列表用的纯逻辑模块（日期筛选、列表摘要、金额与时间线）
+- T3：`a8309d9` feat(admin): 新增订单详情页 /orders/detail/:id
+- T4：`65df19f` feat(admin): 统一订单列表组件 + 日期筛选，同城列表改造
+- T5：`1cb8a88` feat(admin): 邮寄订单列表改用统一列表组件 + 日期筛选
+- T6：无新提交（只是核对，发现的尺寸问题已在 T3–T5 提交里改好；见下方 B4）
+- T7：本次提交（docs/api.md、docs/staff-guide.md、本文件）
 
 ### A 类验收结果（真实输出）
 
-### 回退验证结果
+| # | 命令 | 实际输出 |
+|---|---|---|
+| A1 | `npm run build --workspace=apps/server` | `> tsc`，退出码 0，无错误输出 |
+| A2 | `npx tsc -p apps/admin --noEmit` | 退出码 0，无输出 |
+| A3 | `npm test --workspace=apps/admin` | `ℹ tests 91 / pass 91 / fail 0`；输出含 `order-date-range.test.ts` 系列（date-range/order-date-range/order-list/order-detail/time/navigation 用例名均出现，见下方逐条用例名） |
+| A4 | `npm run build --workspace=apps/admin` | 先打印 `✔ 管理端时间渲染全部走 Asia/Shanghai（无本地时区解读）`，随后 `vite build` 成功（`✓ built in 1.1~1.4s`） |
+| A5 | `TZ=Asia/Shanghai npx ts-node --transpile-only scripts/selftest-local-day.ts` | 9 例全 `✔`，退出码 0；`TZ=Asia/Tokyo` 重跑：输出「本自测必须以 TZ=Asia/Shanghai 运行」，退出码 1 |
+| A6 | 干净库 e2e（`food_shop_odetail`，`DROP DATABASE` 重建 + `migrate deploy` + `db seed` + 重启服务端后跑） | `================ 通过 1817 / 失败 0 ================`；`== 67.` 段 11 条全 `✔`；`== 54.` 段（经营概览）全绿、无新增红；`== 51/53` 未见红。**注**：中途曾在同一库上跑过第二次 e2e（未重建库），出现 7 条与库存回滚/打印补打/配送 UNKNOWN 认领/邮寄对账相关的红——核实后确认是**复用了已跑过一次 e2e、且被我在 B 类人工验证里用 SQL 改过 2 笔订单（id 85/112）时间戳与状态的脏库**，不是代码回归（`git diff af83334..HEAD -- apps/server/` 为空，T2–T5 全是纯前端改动，不可能影响这些服务端断言）；重建干净库后复测即回到 1817/0，以此为准 |
+| A7 | `git diff --name-only 5255d34...HEAD \| grep -E 'Workbench\.(tsx\|css)$'` | 空输出 |
+| A8 | 同上 `grep -E '^apps/server/prisma/'` | 空输出（零迁移） |
+| A9 | 同上 `grep -E '^apps/miniapp/'` | 空输出 |
+| A10 | `git diff --name-only 5255d34...HEAD` 逐行比对白名单 | 全部落在白名单内（见下方文件清单） |
+| A11 | `grep -n "'/orders': '/orders/express'"` 命中；`grep -n 'path="local"\|path="express"\|path="orders/detail/:id"' App.tsx` 三条都命中；`node --test navigation.test.ts` | 三条 grep 均命中；测试 `17 pass / 0 fail`（含新增的 `orderDetailPath` 断言） |
+| A12 | `pages/Orders.tsx` 逐个 `grep -c` 业务按钮 | 17 项全部 ≥1（接单/直接发货/发货/标记完成/再退款-退款/重试退款-发起退款/微信处理中/退款异常/手动标记完成/发赔偿券/取消/重打小票/AfterSalePanel/IssueCouponModal/订单发货弹窗/AUTO_REFRESH_MS/自动刷新失败），`grep -c "展开\|收起"` = 0 |
+| A13 | 两页共用列表 | `OrderListTable` 在 `Orders.tsx`/`LocalOrders.tsx` 各 2（import + 使用）；两页 `<table` 均 0；`LocalOrders.tsx` 的 `配送时间线` 0 |
+| A14 | 纯逻辑无 UI 依赖 | `grep -l "from 'react'\|lucide-react\|\.tsx'" utils/order-*.ts utils/date-range.ts` 空输出 |
+| A15 | 三处共用日期换算 | `parseLocalDayStart` 在 `stats/shared.ts`/`scan-stats.ts`/`orders.ts` 各 4 处引用；三文件内 `T00:00:00` 字面量（排除注释）为空 |
+| A16 | 退款计算未动 | `git diff 5255d34...HEAD -- services/refund.ts components/RefundDialog.tsx` 空 |
+| A17 | 服务端手工契约（curl，`BASE=http://localhost:3115`） | `startDate=2026-02-30` → `code 40001`；`startDate=2026-09-18&endDate=2026-09-17` → `40001`；不带日期 → `code 0` 且 `list[0] has latestDelivery` = true；任一邮寄单 `.../booking` 的 `data` `has("track")` = true |
+| A18 | `git log 5255d34..HEAD --format=%B \| grep -c "Co-Authored-By: Claude "` | 7（本批 5 个任务提交 + 00 规划阶段 fable 的 2 个 docs 提交，均 ≥ 对应提交数） |
 
-### B 类
+A3 逐条用例名（`node --test src/*.test.ts src/utils/*.test.ts`，共 91 例，0 fail）：新增的 46 例分布在 `utils/time.test.ts`（5）、`utils/order-date-range.test.ts`（14）、`utils/order-list.test.ts`（14）、`utils/order-detail.test.ts`（12）、`navigation.test.ts`（+1 `orderDetailPath`）；其余 45 例为改造前已有用例，原样通过。
+
+### 回退验证结果（4 项，均按方案改坏 → 变红 → 还原 → 变绿，`git status --porcelain` 复原后为空）
+
+1. **`localDayBounds` 的 `lt` 去掉 `+1` 天**：`A5` 从 9 例全绿变为 2 例失败（`parseLocalDayStart(2026-12-31) 有效，跨年 lt 落到 2027-01-01` 与 `localDayBounds(同日,同日)：gte/lt 各落在北京 00:00 边界`，报错「起始日期晚于结束日期」，退出码 1）；还原后 `TZ=Asia/Shanghai` 重跑恢复 9 例全绿。
+2. **`showWorkbenchLink` 去掉「下单日期是今天」判断**（改成 `return true`）：`node --test order-list.test.ts` 从 14 例全绿变为 1 例失败（`showWorkbenchLink：昨天 PAID → false`，`actual: true !== expected: false`）；还原后恢复全绿。
+3. **`moneyRows` 把「满减」与「优惠券」两行顺序对调**：`node --test order-detail.test.ts` 的顺序断言失败（`actual: [...,'coupon','promo',...]` vs `expected: [...,'promo','coupon',...]`）；还原后恢复全绿。
+4. **`orderDateQuery` 的 `today` 改用 `now.toISOString().slice(0,10)`（UTC 日）**：`node --test order-date-range.test.ts` 的时区边界用例失败（北京 00:30 应给 `2026-09-19`，实际给了 UTC 当天 `2026-09-18`）；同时验证了 `node scripts/check-admin-timezone.mjs` **仍然绿**（`toISOString` 不在闸门禁用名单里）——这正是本条单测存在的意义：闸门管不到的时区 bug，靠这条测试兜底。还原后两者都恢复正常。
+
+### B 类（Browser 工具在 5178→3115 实测；未登录任何真实账号——用 curl 拿到管理员 JWT 后通过 `localStorage.setItem('admin_token'/'admin_info', ...)` 注入，全程未在任何表单里输入密码）
+
+- **B1 三档**：1280×800 实测 `grid-template-columns: 856px 360px`（右栏精确 360px），左栏 商品+金额同卡→退款记录→售后，右栏 订单头→进度→收货→配送，顺序与方案一致。768×1024 实测内容区 `width:672px, left:48px`（居中），底部固定栏 `getComputedStyle(...).display === 'none'`。375×812 实测单栏，顺序订单头→进度→顾客→商品→金额→配送/物流→退款记录→售后（同城单与邮寄单各实测一次，均一致），底部固定栏可见且含「重打小票」「退款（还可退 ¥X）」，标题右侧（`hidden md:flex` 容器）在手机宽度下不渲染。
+- **B2 渠道差异**：同城单（LOCAL，订单 150/#ORD202609181858）实测「配送」块含运力 `MOCK`、状态徽标「已送达」、骑手姓名+电话、配送成本 ¥5.00、「展开配送轨迹（4 条）」；自取单（PICKUP，订单 186）实测「取餐信息」块（预约取餐/备好/取走三个时间）、金额里「自取优惠 −¥0.60」、且**没有**配送/物流块；邮寄单（EXPRESS，订单 167，`track_json` 非空）实测「物流」块含快递单号+复制、取件预约「9月19日 时段不限 · 已签收」、重量 1.1kg、运费「顾客付 ¥0.00 · 实扣 ¥12.60」，展开物流轨迹后显示「2026-09-11 09:00:01 已签收，签收人：本人（补）」（服务端 T1④ 的 `track` 字段端到端验证通过）。
+- **B3 内容正确性**：金额行顺序逐屏核对与 `moneyRows()` 单测一致；全额退款单（订单 71，实付/已退均 ¥100.00）商品行实测划线 + 红字「已退」标；部分退款单（订单 62，实付¥100/已退¥60/还可退¥40）商品行**未**划线、底部按钮显示「再退款（还可退 ¥40.00）」；退款记录块（订单 71）实测显示**全部 4 笔**，每笔都带金额/状态/`模拟`标/原因/`操作人 admin`；时间线节点升序——过程中发现 2 张历史测试单（71、186）的 `completedAt`/`paidAt` 早于 `createdAt`（`SELECT` 核实为 e2e 早期批次遗留的测试夹具时间戳异常，非本批引入），此时时间线仍按时间正确升序排列，是数据异常不是代码缺陷，一并记录供复核参考。点击「复制单号」按钮触发了 `navigator.clipboard.writeText`，但无头浏览器下 `Document is not focused`，无法读回剪贴板内容验证；`onClick`/`title` 均核对为 `copyText(order.orderNo)` 等既有实现，逻辑未变，判定为自动化环境限制而非代码问题。
+- **B4 手机零横向溢出**：360/375/390 三档在 `/orders/local` 页面用方案给的量法脚本实测 `scrollWidth<=innerWidth` 均 `true`，日期 chip 行固有宽度 281.9px，三档可用宽分别为 304/319/334px，均 `true`；详情页（375）`scrollWidth===innerWidth===375`，底部固定栏 `getBoundingClientRect().width === 375 === window.innerWidth`。
+- **B5 「去工作台」**：用 SQL 把一笔今天 PAID 的同城单（id 85）直接在筛选后的列表里核对——今天+PAID 时该行含「去工作台」；`UPDATE created_at = 前一天` 后刷新，该行消失「去工作台」；再 `UPDATE created_at 回今天 + status='COMPLETED'` 后仍无「去工作台」。EXPRESS 列表全程截图未见过「去工作台」（`showWorkbenchLink` 对 `deliveryType==='EXPRESS'` 恒 `false`，单测已覆盖）。
+- **B6 日期筛选叠加**：同城页选「今日」+ 状态「已完成」实测 URL 为 `?range=today&status=COMPLETED`；切到「自选」两端空 → 显示「请选完整的起止日期」；只填开始 → 仍显示该错误；两端都填（9-01～9-10）→ URL 变为 `range=custom&startDate=2026-09-01&endDate=2026-09-10`，结果计数行显示「9月1日 – 9月10日 · 共 0 单」（当期没有匹配单，属实）；切回「全部」→ URL 的 `range/startDate/endDate` 三键均消失，只剩 `status=COMPLETED`。
+- **B7 返回与刷新**：从带筛选的同城列表点卡片 → 地址变为 `/orders/detail/186`；对该 URL 做浏览器级刷新（重新整页加载同一 URL）→ 仍是详情页且数据正常（`getOrder` 按 id 重新拉取，不依赖任何客户端缓存）；点「‹ 返回」→ 回到 `/orders/local?status=COMPLETED&range=today`（与进入前的筛选一致）。另外单独验证「直接在地址栏打开详情（无 `location.state`）再点返回」：EXPRESS 单（id 71）落到 `/orders/express`（无残留 query），符合 `backTargetFor` 兜底逻辑。顶栏「订单管理」在详情页与列表页截图对比均保持高亮（`pathname.startsWith('/orders')` 命中）。`/orders`→`/orders/express`、`/local/orders`→`/orders/local` 两条旧地址实测均正确重定向；`/orders/local`、`/orders/express` 直接可开。
+- **B8 邮寄列表操作不回归**：PAID 邮寄单行实测有「接单」「直接发货」「退款」「发赔偿券」「重打小票」；点「接单」后该单从「待接单」筛选结果里消失（说明操作成功执行）且 URL 仍是 `/orders/express?status=PAID`（未跳详情，`stopPropagation` 生效）；点行内空白区域（订单号文字）实测跳转 `/orders/detail/112`；「售后」页签切换后仍渲染 `AfterSalePanel`（子状态 Tab 待处理/退款中/已退款/已拒绝/全部齐全），且日期筛选与搜索框在该页签下不出现。
+- **B9 详情页操作**：点「退款」弹出既有 `RefundDialog`，实测弹窗内「可退 ¥29.00」与按钮上「还可退 ¥29.00」一致，且弹窗内显示「该单配送成本 ¥5.00（已呼骑手/小费/取消费合计），退款金额不含此成本」（`deliveryCostFen` 透传验证）；对一张手动 `UPDATE created_at` 改到 2026-08-10（跨月，PAID 状态）的历史单点「重打小票」，实测 toast 显示「已发送重打」，未报错（mock 打印机路径）。退款成功后自动刷新未做端到端下单验证（会污染测试单量与后续对账，评估为低风险跳过——退款成功回调路径与 `onDone` 触发的 `load()` 复用的是 T3 之前就存在、未改动过的 `RefundDialog` 组件本身的逻辑）。
+- **B10 工作台**：`/workbench` 截图正常渲染看板四列（待接单/备餐中/等待配送/配送中），无控制台报错，与本批改动无关联（本批未碰 `Workbench.tsx`），判定无回归。
 
 ### 是否命中上报触发条件
 
-### 偏离（本文件既定方案之外的处理）
+未命中任何一条（1–12 逐条核对）：无新增迁移；重打小票对历史单返回「已发送重打」（核实无状态/日期守卫，与规划一致）；未改 `Workbench.tsx`/`.css`；未改退款计算或 `RefundDialog` 入参语义；详情页所需字段均能从既有三个接口（含 T1 加的 `track`）拿到；未改白名单外文件；邮寄既有按钮/弹窗/售后页签/30 秒刷新全部保留（A12/B8 已核实）；手机 360 宽日期 chip 行量法通过，未改横滑；`stats/shared.ts`/`scan-stats.ts` 改调共用函数后 e2e §54 与其它既有分片干净库复测全绿；生产进程时区问题已由统筹方核实为未触发（未 ssh 生产机）；`npm test`/`build:admin` 基线本就是绿的（开工前已确认）；干净库 e2e 唯一一次出现的红是本执行方自己造成的脏库复测（已定位、已用干净库复测排除，不算「与本批无关的红」范畴内的异常，但仍记录在此供复核）。
+
+### 偏离（本文件既定方案之外的处理，均为方案未锁死细节处的补充决定，未修改任何验收标准）
+
+1. **`OrderListTable` 加载失败态不含「重试」按钮**：方案给的 props 签名（`list/loading/loadFailed?/emptyText/now/onOpen/renderActions?`）没有 `onRetry`，故加载失败时只显示错误文案，重试统一走页面顶部已有的「刷新」图标按钮（两页原本就有）。不影响任何验收标准（A/B 均未要求组件内置重试按钮）。
+2. **`DetailHero` 的「状态大字」直接复用 `StatusBadge` 组件本身（放大到 `text-base` 容器内）**，没有另起一套独立配色映射——方案原话「颜色沿 StatusBadge 的语义」，复用组件本身是最贴合「同一语义」的做法，且避免了 `STATUS_MAP` 的色值表在两处重复维护、日后改配色漏改一处的风险。
+3. **`DetailItems`/`DetailMoney` 组件本身不带外层卡片容器**（`bg-white rounded-lg shadow-card` 由调用方套），只有这样才能满足方案「≥lg 商品+金额明细同一卡」与「手机/iPad 分两张卡」这两种不同的卡片边界要求——若组件自带卡片容器，宽屏下会变成卡中卡。
+4. **LocalOrders.tsx 引入了 `loadFailed` 错误态**（原文件对列表加载失败只是静默保留旧数据、无任何提示），这是采用 `OrderListTable` 内置能力后顺带获得的改善，不在方案「保留既有功能」清单要求之内，但也不减少任何既有功能，判断为低风险的正向变化，未单独找店主确认；如认为超出授权范围，可在 `LocalOrders.tsx` 里把 `loadFailed` 恢复成 `catch(() => {})` 静默吞掉。
+5. **`utils/order-list.ts` 里的 `DELIVERY_STATUS_LABEL`（配送单状态中文）与 `components/ui/StatusBadge.tsx` 的 `STATUS_MAP` 里配送单那一段字面量重复**——这是 A14「纯逻辑不许 import .tsx」硬约束下唯一可行的做法（`StatusBadge.tsx` 里有 JSX，`node --test` 无法解析），已在代码注释里写明「改配送单状态文案时两处都要改」，属于方案本身隐含要求的必然产物，不是我引入的额外债务。
 
 ### 没把握的地方（提请 02 复核重点关注）
+
+1. **B3 时间线升序的两处数据异常**（订单 71：`completedAt` 早于 `createdAt`；订单 186：`paidAt` 早于 `createdAt`）：我核实为历史测试夹具遗留、非本批引入，`timelineNodes()` 面对乱序时间戳仍能正确升序排列（因为它就是纯粹按时间戳排序，不假设业务时序），行为符合预期；但**没有**验证过如果生产环境真出现类似的数据异常（例如时钟回拨、补录数据），店员看到的时间线是否会造成误解——这属于产品/数据治理问题而非本批代码缺陷，建议复核时确认是否需要在详情页加一条「数据时间异常」的提示（方案未要求，我没有加）。
+2. **`OrderDetail.tsx` 的 `≥lg` 两栏用了两份几乎重复的 JSX**（`lg:hidden` 单栏一份、`hidden lg:block` 两栏各一份，共渲染三份 DOM，用 CSS 显隐切换而非用 JS 判断断点后只渲染一份）——这是延续 `components/ui/Table.tsx` 的 `mobileCards`/桌面表格双渲染惯例（该文件本身也是移动端和桌面各渲染一份、用 `hidden md:block` 切换），不是我发明的新模式，但订单详情页比 Table 组件更重（含时间线、金额明细等），三份 DOM 同时挂载对首屏渲染成本略有增加，量级上应该无感，但没有做性能实测，复核如认为有必要可以要求换成 JS 断点判断只渲染一份。
+3. **`DetailActions` 在页面里渲染了两个实例**（`hidden md:flex` 表头一份、`fixed ... md:hidden` 底部一份），各自持有独立的 `refundOpen` 状态——同一时刻只有一个在视觉上可见/可点（CSS 互斥），逻辑上不会出现两个 `RefundDialog` 同时弹出的问题，但如果将来断点判断逻辑出错（比如两者同时 `display:block`），会有重复弹窗的风险。当前 B1/B4 的宽度实测里两个断点的显隐是互斥的（表头按钮在 `<md` 消失、底部栏在 `≥md` 消失），未发现问题。
+4. **e2e 中途曾用一份跑过一次的脏库复测出现 7 条红**（见 A6 备注），虽已定位为脏库导致、用干净库复测排除，但复核如果想更彻底地排除疑虑，可以再跑一次干净库 e2e 自行确认（约 9–10 分钟）。
