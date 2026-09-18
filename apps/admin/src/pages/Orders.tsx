@@ -85,7 +85,7 @@ export default function Orders() {
       status: filterStatus || undefined,
       keyword: keyword.trim() || undefined,
       deliveryType: 'EXPRESS',
-      ...orderDateQuery(dateState, now),
+      ...orderDateQuery(dateState, new Date()),
     })
       .then((res) => {
         setList(res.data.data.list)

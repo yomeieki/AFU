@@ -73,7 +73,7 @@ export default function LocalOrders() {
       status: status || undefined,
       keyword: keyword.trim() || undefined,
       ...(type ? { deliveryType: type } : { channel: 'LOCAL' }),
-      ...orderDateQuery(dateState, now),
+      ...orderDateQuery(dateState, new Date()),
     })
       .then((res) => {
         setList(res.data.data.list)
