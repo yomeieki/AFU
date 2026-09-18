@@ -41,6 +41,8 @@ import type {
   ExpressBookingView,
   ExpressBookingEventInfo,
   ExpressBookingQuotes,
+  OrderDetail,
+  ExpressTrack,
 } from '../types'
 import type { PauseScope } from '../utils/pause-scope'
 import { endOfTodayIso } from '../utils/pause-scope'
@@ -107,10 +109,13 @@ export const getOrders = (params?: {
   deliveryType?: 'EXPRESS' | 'LOCAL' | 'PICKUP' | 'ALL'
   /** channel=LOCAL 一次看外送 + 自取；与 deliveryType 二选一；同时传时服务端以 channel 为准（routes/admin/orders.ts），所以调用方只传其一 */
   channel?: 'LOCAL' | 'EXPRESS'
+  /** 下单日期筛选（上海自然日，按 createdAt），各自可选；不传 = 不限日期 */
+  startDate?: string
+  endDate?: string
 }) => client.get<ApiResponse<PaginatedData<Order>>>('/admin/orders', { params })
 
 export const getOrder = (id: number) =>
-  client.get<ApiResponse<Order>>(`/admin/orders/${id}`)
+  client.get<ApiResponse<OrderDetail>>(`/admin/orders/${id}`)
 
 export const acceptOrder = (id: number) =>
   client.post<ApiResponse<Order>>(`/admin/orders/${id}/accept`)
@@ -281,7 +286,7 @@ export const getWorkbenchSnapshot = (fresh = false) =>
 
 // 邮寄订单——取件预约操作（apps/server/src/routes/admin/express.ts）
 export const getExpressBooking = (id: number) =>
-  client.get<ApiResponse<{ booking: ExpressBookingView | null; active: boolean; events: ExpressBookingEventInfo[] }>>(`/admin/express/orders/${id}/booking`)
+  client.get<ApiResponse<{ booking: ExpressBookingView | null; active: boolean; events: ExpressBookingEventInfo[]; track: ExpressTrack | null }>>(`/admin/express/orders/${id}/booking`)
 export const getExpressBookingQuotes = (id: number, weightKg?: number) =>
   client.get<ApiResponse<ExpressBookingQuotes>>(`/admin/express/orders/${id}/quotes`, { params: weightKg ? { weightKg } : undefined })
 export const bookExpress = (id: number, data: { kuaidicom: string; serviceType?: string | null; weightKg?: number; dayType: '今天' | '明天' | '后天'; pickupStart?: string | null; pickupEnd?: string | null; remark?: string | null }) =>

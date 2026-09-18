@@ -37,6 +37,12 @@ export const topNavigation: NavItem[] = [workbenchNav, ...mainNavigation]
 export const activeNavLabel = (pathname: string) =>
   topNavigation.find((item) => pathname.startsWith(item.prefix))?.label ?? '经营概览'
 
+/**
+ * 订单详情页地址。与 `/orders` 父路由是兄弟静态路由（见实施计划「路由与命名」），
+ * `pathname.startsWith('/orders')` 依旧命中「订单管理」，不用改 navIcons/navBadge。
+ */
+export const orderDetailPath = (id: number) => `/orders/detail/${id}`
+
 export const centerTabs: Record<
   'catalog' | 'orders' | 'settings' | 'promotion' | 'system',
   CenterTab[]

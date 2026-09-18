@@ -211,6 +211,70 @@ export interface Order {
   afterSale?: AfterSaleSummary | null
   /** M2/M3：本单用的那张券的快照，仅详情接口返回；没用券为 null */
   coupon?: OrderCoupon | null
+  /** 订单详情页用（GET /admin/orders/:id 才有；include 全列，同一次改造顺手补声明） */
+  cancelledAt?: string | null
+  refundedAt?: string | null
+  /** 列表接口用（T1 新增）：最近一张配送单的骑手/状态，供宽屏第 7 列显示；非同城单为 null */
+  latestDelivery?: { status: string; courierName: string | null; courierCompany: string | null; provider: string } | null
+}
+
+/** 订单详情页的一笔退款记录（GET /admin/orders/:id 的 refunds[]，全部倒序返回） */
+export interface RefundRecord extends RefundSummary {
+  reason: string | null
+  operator: string | null
+  successTime: string | null
+  errorCode: string | null
+  afterSaleId: number | null
+}
+
+/** 订单详情页的一条售后申请（GET /admin/orders/:id 的 afterSales[]，全部倒序返回） */
+export interface AfterSaleRecord {
+  id: number
+  reason: AfterSaleReason
+  description: string | null
+  images: string[]
+  status: AfterSaleStatus
+  reply: string | null
+  refundId: number | null
+  handledBy: string | null
+  handledAt: string | null
+  createdAt: string
+}
+
+/** 邮寄物流轨迹（管理端只读，T1④；与顾客端同口径，≤30 条） */
+export interface ExpressTrack {
+  updatedAt: string | null
+  signed: boolean
+  items: { context: string; ftime: string }[]
+}
+
+/** GET /admin/orders/:id 的完整返回；比列表用的 Order 多了退款/售后全量、支付方式、下单人、邮寄预约快照与券 */
+export interface OrderDetail extends Order {
+  refunds: RefundRecord[]
+  afterSales: AfterSaleRecord[]
+  payment: { paymentType: 'WECHAT' | 'MOCK'; paidAt: string | null } | null
+  user: { id: number; nickname: string; phone: string | null } | null
+  expressBookings: {
+    id: number
+    bookingNo: string
+    status: string
+    kuaidicom: string
+    kuaidinum: string | null
+    dayType: string | null
+    pickupDate: string | null
+    pickupStart: string | null
+    pickupEnd: string | null
+    courierName: string | null
+    courierMobile: string | null
+    customerFeeFen: number | null
+    quotedFeeFen: number | null
+    prepaidFeeFen: number | null
+    settledFeeFen: number | null
+    billedWeightG: number | null
+    weightG: number | null
+    failReason: string | null
+    activeOrderId: number | null
+  }[]
 }
 
 /** 订单详情里的券快照。比顾客端多 source/issuedBy/remark——售后要看「是不是我们自己补的」 */

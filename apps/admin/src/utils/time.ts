@@ -110,3 +110,18 @@ export function shiftDayKey(n: number, now: Date = new Date()): string {
   const p = (v: number) => String(v).padStart(2, '0')
   return `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())}`
 }
+
+/**
+ * 订单列表用的紧凑时间：上海今天 → `今天 HH:mm`；上海昨天 → `昨天 HH:mm`；
+ * 同年 → `M月D日 HH:mm`；否则 `YYYY-MM-DD HH:mm`。`now` 显式传入以便测试钉时刻。
+ */
+export function fmtListTime(v: Input, now: Date = new Date()): string {
+  const d = toDate(v); if (!d) return EMPTY
+  const p = parts(d)
+  const dayKey = `${p.year}-${p.month}-${p.day}`
+  if (dayKey === todayKey(now)) return `今天 ${p.hour}:${p.minute}`
+  if (dayKey === shiftDayKey(-1, now)) return `昨天 ${p.hour}:${p.minute}`
+  const nowYear = parts(now).year
+  if (p.year === nowYear) return `${Number(p.month)}月${Number(p.day)}日 ${p.hour}:${p.minute}`
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`
+}

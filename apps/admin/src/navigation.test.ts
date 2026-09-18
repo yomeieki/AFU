@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { activeNavLabel, centerTabs, isChannel, legacyTarget, mainNavigation, readChannel, topNavigation, workbenchNav } from './navigation.ts'
+import { activeNavLabel, centerTabs, isChannel, legacyTarget, mainNavigation, orderDetailPath, readChannel, topNavigation, workbenchNav } from './navigation.ts'
 
 test('maps the legacy express orders URL without losing its status', () => {
   assert.deepEqual(legacyTarget('/orders', '?status=PAID'), {
@@ -14,6 +14,11 @@ test('maps every removed sidebar page to its business-center child route', () =>
   assert.equal(legacyTarget('/local/orders', '').pathname, '/orders/local')
   assert.equal(legacyTarget('/member-settings', '').pathname, '/promotion/member')
   assert.equal(legacyTarget('/local/settings', '').pathname, '/settings/local')
+})
+
+test('orderDetailPath 拼出详情页地址，且不是 legacyRoutes 的已知旧地址', () => {
+  assert.equal(orderDetailPath(12), '/orders/detail/12')
+  assert.equal(legacyTarget('/orders/detail/12', '').pathname, '/orders/detail/12')
 })
 
 test('accepts only the two known sales channels', () => {
