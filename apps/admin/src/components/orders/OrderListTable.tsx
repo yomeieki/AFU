@@ -56,7 +56,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
 
   const afterSaleTag = (o: Order) => {
     if (!o.afterSale || !['PENDING', 'APPROVED'].includes(o.afterSale.status)) return null
-    const cls = `px-2 py-0.5 rounded-full text-xs ${o.afterSale.status === 'PENDING' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`
+    const cls = `px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${o.afterSale.status === 'PENDING' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`
     const text = `售后${AFTER_SALE_STATUS_LABEL[o.afterSale.status]}`
     if (!onAfterSaleTag) return <span className={cls}>{text}</span>
     return (
