@@ -2,9 +2,8 @@ import { useState } from 'react'
 import { Printer } from 'lucide-react'
 import Button from '../../ui/Button'
 import { toast } from '../../ui/Toast'
-import { confirmDialog } from '../../ui/ConfirmDialog'
 import RefundDialog from '../../RefundDialog'
-import { reprintOrder, completeRefund } from '../../../api/admin'
+import { reprintOrder } from '../../../api/admin'
 import type { OrderDetail } from '../../../types'
 
 interface Props {
@@ -40,23 +39,6 @@ export default function DetailActions({ order, deliveryCostFen, onReload, classN
     }
   }
 
-  const handleCompleteRefund = async () => {
-    const ok = await confirmDialog({
-      title: '手动标记退款完成',
-      content: `仅在已确认微信商户平台退款成功、但系统未收到回调时使用。确认将订单 ${order.orderNo} 标记为已退款？`,
-      danger: true,
-      confirmText: '确认标记',
-    })
-    if (!ok) return
-    try {
-      await completeRefund(order.id)
-      toast.success('已标记退款完成')
-      onReload()
-    } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? '操作失败')
-    }
-  }
-
   const r = order.latestRefund
   const refundActive = !!r && ['PENDING', 'PROCESSING', 'ABNORMAL'].includes(r.status)
 
@@ -82,7 +64,6 @@ export default function DetailActions({ order, deliveryCostFen, onReload, classN
         ) : r?.status === 'ABNORMAL' ? (
           <span className="text-sm text-red-500 self-center">退款异常</span>
         ) : null}
-        <Button variant="secondary" onClick={handleCompleteRefund}>手动标记完成</Button>
       </>
     )
   })()
