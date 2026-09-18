@@ -921,3 +921,133 @@ R15 的 `768 行高仍 >100 或商品摘要 <140px` 停报条件：**未触发**
 - 已 `DROP DATABASE food_shop_fix3`，`SHOW DATABASES LIKE 'food_shop_fix3'` 确认为空。
 - 未修改 `.claude/launch.json`（该文件为其它历史 worktree 会话遗留的未跟踪文件，本轮未新增条目、未提交）。
 - `git status --porcelain` 全局为空，working tree clean。
+
+## 03c 回判与第三修补轮（fable · Fable 5.1，2026-09-18）
+
+> 工序声明：**03c 回判 · fable**（第二修补轮回判，L 级）。只判断、不写业务代码。逐条亲自打开 `37f23ae` 的 `OrderListTable.tsx`、`ui/Table.tsx`、`Orders.tsx:377` / `LocalOrders.tsx:194`（卡片外壳）、两个页面的 `renderActions`、预览 `2026-09-18-order-detail-wide.html:173-174 / 338-343 / 416-421` 核对了 02c 复核（opus，新会话，Chrome 实测）的 1 条阻断、2 条需改与建议；复核方的像素数值我没有重新量，判定依据是代码结构与店主三档规格，数值只作旁证。
+> 第三修补轮链路：**01''' 执行 · sonnet（R20–R23）→ 02c' 复核 · opus（新会话：只给「需求要点 + 本节 + 修补 diff」）→ 03c' 回判 · fable → 04 机械核对 · haiku**。本节不新增、不放宽第 2 节任何验收标准；对 R15 / R17 两条判据只做**等价改写**（标「03c 回判修订」），不改阈值方向。
+
+### 一、对 [阻断 1] [需改 2] [需改 3] 的判定
+
+| # | 判定 | 核对依据 |
+|---|---|---|
+| 阻断 1：1024–约 1150 宽表格被卡片 `overflow-hidden` 裁掉右侧 | **成立** | ① 外壳：`Orders.tsx:377` 与 `LocalOrders.tsx:194` 都是 `bg-white rounded-lg shadow-card overflow-hidden`，`ui/Table.tsx` 的 `<table className="w-full">`——自动布局表格的宽度不能小于各列最小内容宽之和，超出卡片就被裁，而 `document.documentElement.scrollWidth` 完全感知不到（裁切发生在卡片内部），所以 R15 判据 ① 抓不住。② ≥lg 可见 8 列：订单 / 顾客 / 商品 / 实付 / 状态 / 配送·取餐 / 操作 / ›。逐列最小宽（含 `px-4` 32px）按代码算：订单 ≈ 154（`:141-142` 两个 `nowrap shrink-0`）、顾客 ≈ 141（电话行不可断）、**商品 = min(文字, 320) + 32，最长 352**（`:157` `lg:w-auto lg:max-w-none` 让 td 不再弹性，`:158` 内层 `truncate` 是 nowrap）、实付 ≈ 88、状态 ≈ 108、配送·取餐 ≈ 120、**操作 ≥ 150 + 32 = 182**（`:180` `lg:min-w-[150px]` + `whitespace-nowrap`）、› 32；合计 ≈ 1177 > 1024 宽时的卡片 961。短摘要（≈ 179px）也有 ≈ 1004 > 961——与复核方量到的 77 / 154 同数量级。③ 复核方说的「f194400 时 1024 已超 5px」说明 8 列在 1024 本来就是零余量，本轮把 `min-w`、`px-2→px-4`、nowrap、商品上限外移四项一起加上就翻了。**根因不是哪一项类名，而是 ≥1024 摆 8 列且商品列不肯缩。** 修法必须是结构性的：<1280 不能有独立操作列，且商品列在 <1280 必须是弹性列（`w-full max-w-0`，与 768–1023 已验证的做法一致）。 |
+| 需改 2：`:58` 「售后待处理」小标折成两行 | **成立** | `afterSaleTag` 的 `cls` 没有 `whitespace-nowrap`；它在状态列 `inline-flex flex-wrap` 容器里，`StatusBadge` 自己有 `whitespace-nowrap`（`StatusBadge.tsx:17`）但小标没有。CJK 任意两字间可断行，所以状态列的最小宽只由徽标决定，小标被压到「售后待 / 处理」。1023 从 20 变 36 是本轮引入：R15 把商品列改成 `w-full max-w-0` 后其它列全部退到最小宽（这正是弹性列的机理），没有 nowrap 的小标就现形；768 改前就是 36 是同一原因先前已存在。修法 `whitespace-nowrap` 正确；代价：状态列最小宽从 max(徽标, 一字) 变 max(徽标, 76px)，容器仍 `flex-wrap`，小标可整体换到徽标下一行，列宽最多多 ≈ 16px。 |
+| 需改 3：`:138` 「备注」小标拆成「备 / 注」 | **成立** | `<span className="ml-1.5 text-[10px] …">备注</span>` 是行内元素、无 nowrap，两字间可断。订单列在弹性列机理下退到最小宽（≈ 第二行「渠道标签 + 时间」的 154px），单号（`font-mono` 11–16 字 ≈ 92–134px）+ 备注（≈ 34px）超过它时就断字。加 `whitespace-nowrap` 后小标不再拆字，但**可能整体掉到单号下一行**（列最小宽不变，这是有意的：不让备注把订单列撑宽去挤商品列）。1280 邮寄改前改后都 33 说明 ≥lg 也在最小宽附近，同样受益。判据用「小标只占一行」而不是「行高不变」。 |
+
+### 二、排法选择：采纳统筹方排法，附三点修正
+
+两案对照店主三档规格（预览 `:416-421`「≥1024 表格 · 7 列（多一列配送/取餐）」）与已确认预览（1280 同城 7 列 `:173-174`；iPad 竖屏 6 列、「去工作台 ›」在商品摘要下 `:338-343`）：
+
+| | 复核方（7 列整体提到 xl） | 统筹方（配送·取餐留 lg，只把操作列推到 xl） |
+|---|---|---|
+| 1024–1279（iPad 横屏） | 6 列，**没有配送·取餐**——违反店主「≥1024 多一列配送/取餐」 | 7 列：订单 / 顾客 / 商品 / 实付 / 状态 / 配送·取餐 / ›，操作按钮在商品摘要下——与三档规格逐字一致，与 iPad 竖屏排法连续 |
+| ≥1280 | 8 列（含操作列） | 8 列（含操作列） |
+| 能否解决阻断 1 | 能 | **只靠推操作列不够**：1024 下 7 列（订单 154 + 顾客 141 + 商品 352 + 实付 88 + 状态 108 + 配送·取餐 120 + › 32 = 995）仍 > 961，因为商品列在 ≥lg 是 `lg:w-auto lg:max-w-none` 不肯缩。统筹方粗算「商品剩 318」隐含了商品列可缩的前提，代码里现在没有。 |
+
+**选统筹方，修正如下（写进 R20）：**
+1. **商品列的弹性范围从 `<lg` 扩到 `<xl`**：td `w-full max-w-0 xl:w-auto xl:max-w-none`，内层 `truncate lg:max-w-[…]`。1024–1279 商品列吃掉剩余宽度（上限 320 列宽），其余列退到最小宽——这与 768–1023 已在 Chrome 验证过的机理完全相同，只是把断点从 lg 挪到 xl；≥1280 类名解析结果与今天 ≥lg 一致，不动。
+2. **配送·取餐两行加 `whitespace-nowrap`**（td 上加一次）：弹性列机理会把没有 nowrap 的 CJK 列压到一字一行（复核方在 1024 同城看到的 46px 就是这个），配送·取餐现在是 <xl 唯一没有 nowrap 的列。最长内容「顺丰速运 SF1234567890123」≈ 160px，最坏 20 位单号 ≈ 220px，1024 下商品列仍 ≥ 218px。
+3. **撤 `lg:min-w-[150px]`**（与复核方一致）：1024–1279 已无操作列，它只剩在 ≥1280 生效；≥1280 8 列合计最小宽 ≈ 1100 < 1217，操作列按自动布局分到的富余（按 max-content 差额比例，操作列差额最大）足够保持「四个一行 + 重打小票换行」两行 89px；用「与 f194400 同夹具同宽 `row.offsetHeight` 差 ≤ 2px」判据兜底，达不到就上报，**不得**再加 min-w。
+
+各档最终显示（表格；<768 卡片不变）：
+- **768–1023**：6 列 订单 / 顾客 / 商品 / 实付 / 状态 / ›；操作按钮在商品摘要下（R15，不动）。
+- **1024–1279**：7 列 订单 / 顾客 / 商品 / 实付 / 状态 / 配送·取餐 / ›；操作按钮在商品摘要下（同一个 `data-testid="order-row-actions"` 容器，`xl:hidden`）。
+- **≥1280**：有 `renderActions` 时 8 列（配送·取餐之后多一列「操作」），无 `renderActions` 时 7 列；操作按钮在操作列。与 f194400 / 02 复核过的状态一致（见「待店主确认 1」）。
+
+### 三、对 [建议] 与判据写法的取舍
+
+| # | 取舍 | 理由 |
+|---|---|---|
+| 建议：≥lg 商品列长摘要 352 vs 改前 320，改 `lg:max-w-[288px]` | **纳入**（R23） | T4 原文是 td 上 `truncate max-w-[320px]`（列宽 320 含内边距）；03b 修正 3 把上限挪进内层 div 时写了「≥lg 仍是 320px，不回归」，实际变成 352——是 03b 的笔误不是执行方的错。288 + 32 = 320 复原列宽；对 ≥1280 8 列多还 32px 给操作列，只有好处。 |
+| 建议：R15 判据 ① 补「表格不超出卡片」 | **纳入**（03c 回判修订，见下） | 见阻断 1 ①。 |
+| 建议：R17 `offsetHeight < 20` 改「只占一行」 | **纳入**（03c 回判修订，见下） | 时间 span 是 flex 子项，被 `align-items: stretch` 拉到同行 20px，`offsetHeight` 量的是拉伸后高度不是行数；改成机械可核的「文本只有一个行盒」，不放宽（折成两行会是 2 个行盒）。 |
+| 复核方对执行方 `lg:min-w-[150px]` 偏离的结论：不合理，应撤 | **同意** | 见二、修正 3；另记一笔：执行方在 1024 量到 141 后补 min-w 而不是上报，是因为 R15 只给了「行高差 ≤ 2px」目标没给「怎么达到」的边界——这次 R20 把「不得加 min-w / 不得缩按钮 / 不得再动断点」写成硬约束。 |
+| 三处「判据未达标」：售后小标 → 需改 2；同城操作区 32 → 可接受；R17 时间 span 20 → 可接受 | **同意** | 同城操作区用 `Button size="sm"`（32 高）是既有组件，判据 ≤ 24 写错了，R20 判据改为「只占一行」+ `≤ 36`。 |
+
+**03c 回判修订（判据等价改写，供 02c'/04 使用；原文不删，以本段为准）：**
+- 定义两个量法，写进每个宽度的脚本：
+  ```js
+  const table = document.querySelector('table'), card = table.closest('.overflow-hidden')
+  const fits = Math.round(table.getBoundingClientRect().right - card.getBoundingClientRect().right) <= 0
+            && table.scrollWidth <= card.clientWidth
+            && document.documentElement.scrollWidth <= innerWidth     // 原 ① 保留
+  // 只用于「内容只有文本」的元素（售后小标、备注小标、时间线时间 span、配送·取餐两行）；
+  // 含 svg 图标的按钮不能用它（图标会多出一个 rect）
+  const oneLine = el => { const r = document.createRange(); r.selectNodeContents(el); return r.getClientRects().length === 1 }
+  ```
+- R15 判据 ①「`scrollWidth <= innerWidth`」→ 改为 `fits === true`（三项与）。
+- R17「`s.scrollWidth <= s.clientWidth && s.offsetHeight < 20`」→ 改为 `s.scrollWidth <= s.clientWidth && oneLine(s)`。
+- R15「售后小标 `offsetHeight < 24`」→ `oneLine(tag) && tag.offsetHeight < 24`（单行时 text-xs + py-0.5 = 20，两条都要）。
+- R15 同城「`ops.offsetHeight <= 24`」→ `ops.offsetHeight <= 36 && [...ops.children].every(c => c.getBoundingClientRect().top === ops.children[0].getBoundingClientRect().top)`（所有按钮同一行顶）。
+
+### 四、第三修补轮任务清单（R20–R23；01''' 执行 · sonnet）
+
+通用约束同 Global Constraints 与「三、修补轮任务清单」开头一段。**只允许改 `apps/admin/src/components/orders/OrderListTable.tsx` 一个文件**（四条都在它里面）+ 本方案文件；**不得**动 `components/ui/*`、两个页面文件、`utils/order-list.ts`。每条一个提交，修完自己跑对应验证，把真实输出贴进本节末尾「第三修补轮记录」。夹具（SQL 直插即可，每页都要有）：
+- 邮寄：① `PAID` 5 按钮单，**商品 ≥ 4 道菜**（摘要超过 320px）；② `SHIPPED` 单，`shipment.expressCompany='顺丰速运'`、`expressNo` 15 位（配送·取餐列最长内容）；③ 有「售后待处理」的单；④ 有「已退」且**有备注**（`remark` 非空）的单。
+- 同城：⑤ 今天 `PAID` 外送单（去工作台 + 退款），**商品 ≥ 4 道菜**，有备注；⑥ `COMPLETED` 自取单（取餐两行、无操作按钮）。
+- **改前基线**：在 `37f23ae` 上量一次 1280×800 邮寄 ①②③④ 与同城 ⑤⑥ 的 `row.offsetHeight`，以及在 `f194400` 上量同一批（复核方给的 f194400 数据是 1024 溢出量，没有行高；≥1280 行高基线以 f194400 为准，R15 记录过的 89 / 66 可复用），先写进记录再改。
+
+**R20（阻断 1）操作列推到 ≥xl；1024–1279 改 7 列 + 操作在商品摘要下；商品列 <xl 弹性；撤 `lg:min-w`；配送·取餐不折行** — 文件：`OrderListTable.tsx`
+- 期望（类名逐字）：
+  - `:87` 操作 `<th>`：`text-left px-4 py-3 hidden xl:table-cell`。
+  - `:157` 商品 `<td>`：`px-4 py-3 text-gray-600 w-full max-w-0 xl:w-auto xl:max-w-none`；`:158` 内层 div 本条不动（仍 `truncate lg:max-w-[320px]`，R23 再改）。
+  - `:160` 摘要下操作容器：`xl:hidden mt-1 flex flex-wrap gap-x-3 gap-y-1 whitespace-nowrap`（只把 `lg:hidden` 换成 `xl:hidden`；`data-testid`、`onClick` 不动）。
+  - `:175` 配送·取餐 `<td>`：`px-4 py-3 hidden lg:table-cell text-xs text-gray-500 whitespace-nowrap`（`<th>` 不动，仍 `hidden lg:table-cell`）。
+  - `:180` 操作 `<td>`：`hidden xl:table-cell px-4 py-3 whitespace-nowrap`（去掉 `lg:min-w-[150px]`；`onClick` 与内层 `flex flex-wrap gap-x-3 gap-y-1` 不动）。
+  - `:54` 注释与 `:86` 注释改成「配送·取餐 <lg 隐藏、操作 <xl 隐藏，两列都仍计数」；`columns` 数值不变。`:38-41` 组件说明补一句三档：「768–1023 六列、1024–1279 七列（操作在商品摘要下）、≥1280 有操作时八列」。
+  - 手机卡片、订单 / 顾客 / 实付 / 状态四列、`afterSaleTag`、`Table` 组件：一字不动。
+- **硬约束**：达不到下面任何判据时**停下上报**，贴数值；**不得**给任何列加 `min-w` / `w-[…]`、不得缩按钮字号或内边距、不得再挪断点、不得改 `ui/Table`。
+- 验证（Browser，Chrome；每个宽度 `resize_window` 取顶层视口；**同城与邮寄两页都做**；先把「三、03c 回判修订」的 `fits` / `oneLine` 定义贴进控制台）：
+  - **1024×768、1100×768、1180×768、1279×768、1280×800** 五个宽度各执行：
+    ```js
+    const rows = [...table.querySelectorAll('tbody tr')]; const vis = e => getComputedStyle(e).display !== 'none'
+    ({ fits,
+       ths: [...table.querySelectorAll('thead th')].filter(vis).map(t => t.textContent.trim()),
+       cols: rows.map(r => [...r.children].filter(vis).length),
+       items: Math.min(...rows.map(r => r.children[2].firstElementChild.clientWidth)),
+       opsUnder: rows.map(r => { const o = r.querySelector('[data-testid="order-row-actions"]'); return o ? vis(o) : null }),
+       opsTd: rows.map(r => r.children.length === 8 ? getComputedStyle(r.children[6]).display : null),
+       ship: rows.map(r => [...r.children[5].children].every(oneLine)),
+       heights: rows.map(r => r.offsetHeight) })
+    ```
+    期望：`fits === true`（五个宽度、两页全部）；**1024/1100/1180/1279**：`ths` = `['订单','顾客','商品','实付','状态','配送·取餐','']`、`cols` 全 7、`opsUnder` 有按钮的行为 `true`、`opsTd` 全 `'none'`；**1280**：`ths` 多一个 `'操作'` 在 `'配送·取餐'` 之后、`cols` 全 8、`opsUnder` 全 `false`、`opsTd` 全 `'table-cell'`；`items ≥ 140`（所有宽度；1024 含 ≥4 道菜 + 15 位单号两张夹具在页）；`ship` 全 `true`（配送·取餐两行都不折）。
+  - **1024 行高**：邮寄 ① `row.offsetHeight ≤ 100` 且其 `ops.offsetHeight ≤ 48`（≤ 2 行）、按钮 `every(b => b.offsetHeight < 30)`；同城 ⑤ `row.offsetHeight ≤ 82` 且 `ops` 满足「同一行顶 + ≤ 36」；同城 ⑥ 与邮寄 ②③④（无操作或按钮少）`row.offsetHeight ≤ f194400 同宽同夹具 + 2`。
+  - **≥1280 不回归**：1280×800 邮寄 ①–④ 与同城 ⑤⑥ `row.offsetHeight` 与 f194400 同夹具基线差 ≤ 2px（① 预期 89、⑤ 预期 66）；操作 td 按钮容器 `columnGap === '12px'`；`getComputedStyle(items).maxWidth === '320px'`（R23 后改 `'288px'`）。
+  - **768×1024 与 1023×768 不回归**：R15 那 8 项（① 改 `fits`）在邮寄 ① 与同城 ⑤ 重跑，期望不变（768 邮寄 ① `row ≤ 100`、`items ≥ 140`；1023 `items ≥ 300`、`ops ≤ 24`）；`ths` 长度 6。
+  - **375 不回归**：B4 ① 同城 / 邮寄列表 `true`；卡片首行仍有「备注」。
+  - **B8 在 768、1024、1280 各实点一次**：点「接单」→ URL 不变且该单从 PAID 页签消失；点订单号空白处 → 跳 `/orders/detail/<id>`。1024 命中的是 `xl:hidden` 容器的 `stopPropagation`，1280 命中的是操作 td 的，768 命中的与 1024 同一容器——三处都要真点。
+  - `grep -c "lg:min-w" OrderListTable.tsx` = 0；`grep -c "hidden xl:table-cell"` = 2；`grep -c "xl:hidden"` = 1；`grep -c "hidden lg:table-cell"` = 2；`grep -c "xl:w-auto xl:max-w-none"` = 1；A2、A4 绿。
+- 回退验证：把商品 td 的 `w-full max-w-0` 临时改回 `lg:w-auto lg:max-w-none` 语义（即 `w-full max-w-0 lg:w-auto lg:max-w-none`）→ 1024 邮寄页 `fits` 变 `false`（红）→ 还原 → `true`（绿），贴两次输出。
+
+**R21（需改 2）售后小标不折行** — 文件：`OrderListTable.tsx`
+- 期望：`:58` `cls` 模板串加 `whitespace-nowrap`（`px-2 py-0.5 rounded-full text-xs whitespace-nowrap …`）；`<span>` 与 `<button>` 两种渲染共用该 `cls`，不另写。手机卡片同一小标也受益，不需单独改。
+- 验证：768×1024、1023×768、1024×768、1280×800 邮寄 ③ 那一行：`const tag = [...row.children[4].querySelectorAll('button, span')].find(e => e.textContent.startsWith('售后'))`→ `oneLine(tag) && tag.offsetHeight < 24` 为 `true`（复核方 1023 预期：小标 20、行高 72）；同一行 `row.children[4].clientWidth ≤ 改前 + 20`（状态列没被撑宽超过一个小标的量）；375 卡片 ③ 首行 `oneLine(tag)` 为 `true`。`grep -c "rounded-full text-xs whitespace-nowrap" OrderListTable.tsx` = 1。
+
+**R22（需改 3）备注小标不拆字** — 文件：`OrderListTable.tsx`
+- 期望：`:138` 表格订单列「备注」`<span>` 加 `whitespace-nowrap`（`ml-1.5 text-[10px] text-orange-600 bg-orange-50 rounded px-1 whitespace-nowrap`）。手机卡片 `:103` 已有 `shrink-0`，不动。
+- 验证：768×1024、1023×768、1024×768、1280×800，邮寄 ④ 与同城 ⑤（都有备注）：`const rm = row.children[0].querySelector('span[title]')` → `oneLine(rm)` 为 `true`；`row.offsetHeight ≤ 改前同宽同夹具`（小标整体掉到第二行时订单格仍是 3 行以内，不得比拆字时更高）；`rm.getClientRects().length === 1`。`grep -c 'rounded px-1 whitespace-nowrap" title' OrderListTable.tsx` = 1。
+
+**R23（建议）≥lg 商品列宽复原 320 列宽** — 文件：`OrderListTable.tsx`
+- 期望：`:158` 内层 div `truncate lg:max-w-[320px]` → `truncate lg:max-w-[288px]`（288 + `px-4` 32 = 320 列宽，与 T4 原文 td `max-w-[320px]` 等价）。
+- 验证：1280×800 邮寄 ① 与同城 ⑤：`getComputedStyle(items).maxWidth === '288px'`、商品 td `clientWidth === 320`（长摘要行）；`row.offsetHeight` 与 R20 记录值相同（单行 truncate，行高不受影响）；1024 邮寄 ① `items.clientWidth ≥ 140` 仍成立、`fits` 仍 `true`。`grep -c "lg:max-w-\[288px\]" OrderListTable.tsx` = 1、`grep -c "max-w-\[320px\]"` = 0。
+
+### 五、第三修补轮完成判据（02c' 复核与 04 机械核对用）
+
+- A1–A5、A7–A18 按第 2 节（A3 按修订写法）重新执行贴输出；`git diff 37f23ae..HEAD --name-only` 只允许 `apps/admin/src/components/orders/OrderListTable.tsx` + 本方案文件；`-- apps/server scripts apps/miniapp` 为空；A6 沿用。
+- R20 五个宽度 × 两页的脚本输出**逐宽度贴全**（不许只贴「全 true」；`heights` 数组要贴）；R20 的改前基线（37f23ae 与 f194400 各一份）写明 sha / 单号 / 宽度。
+- R21、R22 四个宽度 + 375 的输出贴全；R23 的 1280 与 1024 输出贴全。
+- B4（375 两列表）、B8（768 / 1024 / 1280）复测；B1 三档肉眼一眼核对未动。
+- 02c' 复核重点：① 1024 与 1100 两个宽度亲自量 `fits`，页内含 ≥ 4 道菜与 15 位单号两张夹具；② 1024 同城「配送·取餐」列宽 ≥ 100（不再一字一行）且自取行高不超过 f194400 + 2；③ 1280 邮寄 5 按钮行是否仍两行 89；④ 是否有本节之外的改动（尤其不得出现新的 `min-w` / `w-[`）。
+- 仍只有 Chrome 实测；iPad Safari 未测（见待店主确认 2）。
+
+### 六、待店主确认（03c 汇总，不替店主决定）
+
+1. **≥1280 表格比已确认预览多一列「操作」**：预览 1280 是 7 列、操作放商品摘要下；现实现（自 f194400 起，02 复核已过）在 ≥1280 同城 / 邮寄都有独立操作列（8 列）。**默认：保留**——邮寄页最多 5 个按钮（接单 / 直接发货 / 退款 / 发赔偿券 / 重打小票），电脑上单独一列比塞在摘要下好点，且本轮「≥1280 不回归」要求不动它。若店主要与预览完全一致：把操作 `<th>`/`<td>` 删掉、摘要下容器去掉 `xl:hidden`，两处类名的事，另起一轮。
+2. **iPad Safari 未实测**：所有宽度实测都在 Chrome（`resize_window`）。弹性列用的 `w-full max-w-0` 是 WebKit/Blink 通行做法（03b 修正 4 已说明），但没在真机验过。**默认：按 Chrome 结果上线**；上线后请店主在 iPad 竖屏与横屏各开一次「订单管理」两个页签，看表格右侧有没有被裁、商品摘要有没有字——有问题回报即回滚（零迁移，`DEPLOY_REF` 指回上一版）。
+
+### 七、遗留清单（本节新增，非本轮修）
+
+- 顾客列姓名 `<div>` 无 nowrap，靠第二行电话（≈ 100px 不可断）撑住；姓名超过 7 个汉字时会折行（基线如此，两轮都未动）。
+- `renderActions` ≥md 每行渲染两份靠 CSS 显隐（R15 引入，本轮把显隐断点从 lg 挪到 xl，份数不变）。
+- 1024–1279 有操作的行比 ≥1280 高约 14px（按钮在摘要下多占一行），是三档规格的自然结果，不是缺陷。
