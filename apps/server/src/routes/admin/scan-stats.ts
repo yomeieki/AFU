@@ -4,7 +4,7 @@ import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success } from '../../utils/response'
 import { realOrdersSql } from '../../utils/stats-scope'
-import { localDayPartsSql, LOCAL_DAY_GROUP_BY, localDayKey, localDayKeyFromParts } from '../../utils/local-day'
+import { localDayPartsSql, LOCAL_DAY_GROUP_BY, localDayKey, localDayKeyFromParts, parseLocalDayStart } from '../../utils/local-day'
 
 const router = Router()
 
@@ -14,19 +14,25 @@ const rangeSchema = z.object({
 })
 
 // 解析日期区间：[start 00:00, end 次日 00:00)，默认近 7 天（含今日）
+// 日期→瞬时换算经 utils/local-day.ts 的 parseLocalDayStart（与 stats/shared.ts、
+// routes/admin/orders.ts 同一实现），不在此处另拼字面量。
 function parseRange(query: unknown) {
   const { startDate, endDate } = rangeSchema.parse(query)
-  const end = endDate ? new Date(`${endDate}T00:00:00`) : new Date(new Date().setHours(0, 0, 0, 0))
-  const endExclusive = new Date(end)
+  const end = endDate ? parseLocalDayStart(endDate) : new Date(new Date().setHours(0, 0, 0, 0))
+  const start = startDate ? parseLocalDayStart(startDate) : null
+  if ((endDate && !end) || (startDate && !start)) {
+    throw new z.ZodError([{ code: 'custom', path: ['startDate'], message: '日期无效', input: query }])
+  }
+  const endExclusive = new Date(end as Date)
   endExclusive.setDate(endExclusive.getDate() + 1)
-  const start = startDate
-    ? new Date(`${startDate}T00:00:00`)
-    : (() => {
-        const d = new Date(end)
-        d.setDate(d.getDate() - 6)
-        return d
-      })()
-  return { start, endExclusive }
+  const resolvedStart =
+    start ??
+    (() => {
+      const d = new Date(end as Date)
+      d.setDate(d.getDate() - 6)
+      return d
+    })()
+  return { start: resolvedStart, endExclusive }
 }
 
 // GET /api/admin/scan-stats/summary

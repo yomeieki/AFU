@@ -6,6 +6,7 @@ import { AppError } from '../../middlewares/error'
 import { COURIER_LABEL, EXPRESS_COURIERS } from '../../services/express-settings'
 import { getBookingQuotes, createBooking, cancelBooking, modifyBookingSlot, voidUnknownBooking, getActiveBooking, bookingView, suggestSlot, SlotInput } from '../../services/delivery/express-booking'
 import { rejectCancelRequest, approveExpressCancelRequest } from '../../services/cancel-request'
+import { parseStoredTrack } from '../../services/delivery/express-track-json'
 
 const router = Router()
 const slotSchema = z.object({ dayType: z.enum(['今天', '明天', '后天']), pickupStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(), pickupEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional() })
@@ -25,7 +26,11 @@ router.get('/:id/booking', async (req: Request, res: Response, next: NextFunctio
   try {
     const id = idOf(req)
     const b = await prisma.expressBooking.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' }, include: { events: { orderBy: { createdAt: 'asc' }, select: { id: true, source: true, providerStatus: true, statusDesc: true, courierName: true, operator: true, createdAt: true } } } })
-    success(res, { booking: b ? bookingView(b) : null, active: !!b && b.activeOrderId === id, events: b?.events ?? [] })
+    // 完整物流轨迹（≤30 条，与顾客端 routes/orders.ts 同口径），供后台订单详情页展开显示；
+    // bookingView/BookingView 不改——工作台快照复用它，别把轨迹塞进去。
+    const st = b ? parseStoredTrack(b.trackJson) : null
+    const track = st ? { updatedAt: b?.trackUpdatedAt ? b.trackUpdatedAt.toISOString() : null, signed: st.ischeck, items: st.items.slice(0, 30) } : null
+    success(res, { booking: b ? bookingView(b) : null, active: !!b && b.activeOrderId === id, events: b?.events ?? [], track })
   } catch (e) { next(e) }
 })
 // GET /api/admin/express/orders/:id/quotes?weightKg=1.5 — 预约弹窗用

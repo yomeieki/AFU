@@ -72,3 +72,48 @@ export function localDayKey(d: Date): string {
 export function localDayKeyFromParts(r: LocalDayParts): string {
   return localDayKey(new Date(Date.UTC(Number(r.y), Number(r.mo) - 1, Number(r.d), Number(r.h))))
 }
+
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * `YYYY-MM-DD` → 该本地自然日 00:00 的瞬时；格式不对或不是真实日历日（`2026-02-30`、
+ * `2026-13-01`）返回 `null`。
+ *
+ * `new Date(\`${key}T00:00:00\`)` 按**进程本地时区**解释——与 `stats/shared.ts`、
+ * `scan-stats.ts` 现状的日期换算同一做法，本函数是它们的唯一实现来源。
+ *
+ * V8 对越界日历日不报 `Invalid Date`，而是滚动进位（`2026-02-30` → `2026-03-02`），
+ * 所以光判断 `Number.isNaN(d.getTime())` 不够，还要把结果重新取键、跟输入的 `key` 比对：
+ * 滚动后的日期取键必然与原始 `key` 不同，借此识别出「格式对但日历上不存在」的输入。
+ */
+export function parseLocalDayStart(key: string): Date | null {
+  if (!DAY_KEY.test(key)) return null
+  const d = new Date(`${key}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return null
+  return localDayKey(d) === key ? d : null
+}
+
+/**
+ * 起止（各自可选，含端）→ Prisma 用的 `{ gte?, lt? }`；`lt` = 止日**次日** 00:00（跨月/跨年
+ * 交给 `Date` 处理，不手算）。任一端格式或日历非法、或起晚于止，抛 `RangeError`（调用方按
+ * 40001 转 400；两种情形的判别留给调用方——它通常想给出不同的提示文案）。
+ */
+export function localDayBounds(startDate?: string, endDate?: string): { gte?: Date; lt?: Date } {
+  let gte: Date | undefined
+  if (startDate !== undefined) {
+    const s = parseLocalDayStart(startDate)
+    if (!s) throw new RangeError(`非法起始日期：${startDate}`)
+    gte = s
+  }
+  let lt: Date | undefined
+  if (endDate !== undefined) {
+    const e = parseLocalDayStart(endDate)
+    if (!e) throw new RangeError(`非法结束日期：${endDate}`)
+    lt = new Date(e)
+    lt.setDate(lt.getDate() + 1)
+  }
+  if (gte && lt && gte.getTime() >= lt.getTime()) {
+    throw new RangeError('起始日期晚于结束日期')
+  }
+  return { ...(gte ? { gte } : {}), ...(lt ? { lt } : {}) }
+}

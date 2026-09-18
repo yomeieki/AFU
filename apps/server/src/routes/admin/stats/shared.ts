@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { Prisma } from '@prisma/client'
 import { REAL_ORDERS } from '../../../utils/stats-scope'
+import { parseLocalDayStart } from '../../../utils/local-day'
 import type { LocalDayParts } from '../../../utils/local-day'
 
 /**
@@ -29,19 +30,22 @@ function dayKey(d: Date): string {
 
 /**
  * [start 00:00, end 次日 00:00)，默认近 7 天（含今日）；同时给出紧挨在前、等长的「上期」。
- * `new Date('YYYY-MM-DDT00:00:00')` 按服务端本地时区解释——服务端固定 Asia/Shanghai，
- * 与 routes/admin/scan-stats.ts 的 parseRange 同一做法。
+ * 日期→瞬时的换算经 `utils/local-day.ts` 的 `parseLocalDayStart`（按服务端本地时区解释，
+ * 服务端固定 Asia/Shanghai），与 `routes/admin/scan-stats.ts`、`routes/admin/orders.ts`
+ * 的日期参数是同一实现，不在此处另拼字面量。
  */
 export function parseRange(query: unknown): { cur: Range; prev: Range } {
   const q = rangeSchema.parse(query)
-  const end = q.endDate ? new Date(`${q.endDate}T00:00:00`) : new Date(new Date().setHours(0, 0, 0, 0))
-  const endExclusive = new Date(end)
-  endExclusive.setDate(endExclusive.getDate() + 1)
-  const start = q.startDate ? new Date(`${q.startDate}T00:00:00`) : new Date(end)
-  if (!q.startDate) start.setDate(start.getDate() - 6)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+  const endParsed = q.endDate ? parseLocalDayStart(q.endDate) : new Date(new Date().setHours(0, 0, 0, 0))
+  const startParsed = q.startDate ? parseLocalDayStart(q.startDate) : null
+  if ((q.endDate && !endParsed) || (q.startDate && !startParsed)) {
     throw new z.ZodError([{ code: 'custom', path: ['startDate'], message: '日期无效', input: q }])
   }
+  const end = endParsed as Date
+  const endExclusive = new Date(end)
+  endExclusive.setDate(endExclusive.getDate() + 1)
+  const start = startParsed ?? new Date(end)
+  if (!q.startDate) start.setDate(start.getDate() - 6)
   const days = Math.round((endExclusive.getTime() - start.getTime()) / 86400000)
   if (days < 1 || days > MAX_DAYS) {
     throw new z.ZodError([{ code: 'custom', path: ['endDate'], message: `区间须为 1–${MAX_DAYS} 天`, input: q }])

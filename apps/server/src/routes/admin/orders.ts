@@ -16,6 +16,7 @@ import { displayAddress } from '../../utils/address'
 import { BOOKING_STATUS_LABEL } from '../../services/delivery/express-booking-state'
 import { rejectCancelRequest } from '../../services/cancel-request'
 import { settlePoints } from '../../services/member/points'
+import { parseLocalDayStart, localDayBounds } from '../../utils/local-day'
 
 const router = Router()
 
@@ -72,9 +73,19 @@ const orderListSelect = {
     take: 1,
     select: { id: true, status: true, reason: true, createdAt: true },
   },
+  deliveries: {
+    orderBy: { id: 'desc' as const },
+    take: 1,
+    select: { status: true, courierName: true, courierCompany: true, provider: true },
+  },
 }
 
-// GET /api/admin/orders?status=&keyword=（订单号/收货人/手机号模糊）
+const orderDateSchema = z.object({
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式须为 YYYY-MM-DD').optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式须为 YYYY-MM-DD').optional(),
+})
+
+// GET /api/admin/orders?status=&keyword=（订单号/收货人/手机号模糊）&startDate=&endDate=（上海自然日，按下单时间 createdAt，各自可选）
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1)
@@ -96,9 +107,27 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         ? { deliveryType: 'EXPRESS' }
         : dt === 'ALL' ? {} : { deliveryType: dt === 'LOCAL' ? 'LOCAL' : dt === 'PICKUP' ? 'PICKUP' : 'EXPRESS' }
 
+    // 日期筛选：按上海自然日（进程本地时区）解释，缺省 = 不限日期。格式先经 zod，
+    // 日历有效性再经 parseLocalDayStart——两者分开校验是为了给「日期无效」与
+    // 「开始日期晚于结束日期」两种情形不同的提示文案。
+    const { startDate, endDate } = orderDateSchema.parse(req.query)
+    if (startDate && !parseLocalDayStart(startDate)) throw new AppError(40001, '日期无效')
+    if (endDate && !parseLocalDayStart(endDate)) throw new AppError(40001, '日期无效')
+    let createdAtWhere: Prisma.OrderWhereInput = {}
+    if (startDate || endDate) {
+      let bounds: { gte?: Date; lt?: Date }
+      try {
+        bounds = localDayBounds(startDate, endDate)
+      } catch {
+        throw new AppError(40001, '开始日期晚于结束日期')
+      }
+      createdAtWhere = { createdAt: bounds }
+    }
+
     const where = {
       ...(status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}),
       ...dtWhere,
+      ...createdAtWhere,
       ...(keyword
         ? {
             OR: [
@@ -123,7 +152,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     paginate(
       res,
-      list.map(({ refunds, afterSales, ...o }) => ({
+      list.map(({ refunds, afterSales, deliveries, ...o }) => ({
         ...o,
         // 同城单展示用短地址（省市恒为门店所在地，是噪音）。规则只在服务端实现一处，
         // 前端直接显示，避免前后端各写一遍后慢慢漂移。receiverFullAddress 保留原样——
@@ -132,6 +161,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         latestRefund: refunds[0] ?? null,
         afterSale: afterSales[0] ?? null,
         remainingRefundable: remainingRefundable(o),
+        latestDelivery: deliveries[0] ?? null,
       })),
       total,
       page,
