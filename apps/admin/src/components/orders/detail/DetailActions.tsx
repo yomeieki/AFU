@@ -45,7 +45,7 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
     if (['PAID', 'PREPARING', 'SHIPPED', 'COMPLETED'].includes(order.status)) {
       if (order.remainingRefundable <= 0) return null
       return (
-        <Button variant="danger" disabled={refundActive} title={refundActive ? '有退款处理中' : ''} onClick={onRefund} className="flex-1 md:flex-none">
+        <Button variant="danger" disabled={refundActive} title={refundActive ? '有退款处理中' : ''} onClick={onRefund} className="flex-1 md:flex-none whitespace-nowrap">
           {order.refundedAmount > 0 ? `再退款（还可退 ¥${(order.remainingRefundable / 100).toFixed(2)}）` : `退款（还可退 ¥${(order.remainingRefundable / 100).toFixed(2)}）`}
         </Button>
       )
@@ -54,14 +54,14 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
     return (
       <>
         {!refundActive && (
-          <Button variant="danger" onClick={onRefund} className="flex-1 md:flex-none">
+          <Button variant="danger" onClick={onRefund} className="flex-1 md:flex-none whitespace-nowrap">
             {r ? '重试退款' : '发起退款'}
           </Button>
         )}
         {r?.status === 'PENDING' || r?.status === 'PROCESSING' ? (
-          <span className="text-sm text-gray-500 self-center">微信处理中</span>
+          <span className="text-sm text-gray-500 self-center whitespace-nowrap">微信处理中</span>
         ) : r?.status === 'ABNORMAL' ? (
-          <span className="text-sm text-red-500 self-center">退款异常</span>
+          <span className="text-sm text-red-500 self-center whitespace-nowrap">退款异常</span>
         ) : null}
       </>
     )
@@ -70,7 +70,7 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
   return (
     <div className={`flex items-center gap-2 ${className}`}>
       {order.status !== 'PENDING_PAYMENT' && (
-        <Button variant="secondary" loading={reprinting} onClick={handleReprint} className="flex-1 md:flex-none" title="重打该单小票">
+        <Button variant="secondary" loading={reprinting} onClick={handleReprint} className="shrink-0 whitespace-nowrap" title="重打该单小票">
           <Printer className="w-4 h-4" />
           重打小票
         </Button>
