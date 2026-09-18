@@ -589,6 +589,144 @@ A3 逐条用例名（`node --test src/*.test.ts src/utils/*.test.ts`，共 91 �
 - 历史测试单存在 `completedAt`/`paidAt` 早于 `createdAt` 的夹具异常（执行方 B3 记录），时间线按时间升序不做提示。
 - `utils/order-list.ts` 的 `DELIVERY_STATUS_LABEL` 与 `StatusBadge.tsx` 的配送单文案两处维护（执行方偏离 5，A14 约束的必然产物）。
 
-### 修补轮记录（01' 执行时追加）
+### 修补轮记录（01' 执行 · sonnet，2026-09-18）
 
-（待填：修补前 sha、每条 R 的验证输出、R14 回退验证红/绿、A1–A18 重跑输出）
+**修补前 sha**：`ceba203`（= 03 回判提交，本轮开工尖端）。本轮**未改任何服务端文件**（`git diff ceba203..HEAD --name-only -- apps/server scripts` 输出为空），故未重跑干净库 e2e；A6 沿用 03 之前的验收记录。
+
+**提交列表**（15 个，逐条对应 R 编号；R8 因实测不达标追加一条补丁提交）：
+```
+476060c fix(admin): 详情页补映射 latestRefund（R1）
+03c5118 fix(admin): 详情页删除"手动标记退款完成"（R2）
+0046ee5 fix(admin): 退款弹窗挪到页面级，避开底栏层叠上下文（R3）
+72e955a fix(admin): 自选日期缺一端时清掉骨架屏（R4）
+d072683 fix(admin): 时间线跨日判断改走 utils/time.ts（R5）
+defd2ec fix(admin): 时间线 CLOSED 退款单独标注「退款关闭」（R6）
+2299d0b fix(admin): 「售后」标签恢复可点、手机卡片补齐（R7）
+d2e83ab fix(admin): 768 宽表格操作列不再一按钮一行（R8）
+89b160a fix(admin): 详情页头部与状态大字对齐已确认预览（R9）
+be92095 fix(admin): 375 宽底栏按钮不再折行（R10）
+e955941 fix(admin): 列表/详情页加载失败态可重试（R11）
+060d553 fix(admin): 30 秒静默刷新用当下时间算查询区间（R12）
+b8ed72d fix(admin): 手机卡片补备注小标、自选按钮无障碍标签、复制失败有提示（R13）
+2b38f43 test(admin): moneyRows 金额测试改逐行断言，不再只自洽夹具（R14）
+c180874 fix(admin): R8 追加——768 宽操作列进一步让宽，实测达到验收阈值
+```
+
+**环境**：DB `food_shop_odetail`（重建）、服务端 3115、后台 5178。未跑整套 e2e 造数据，改用一批精简 curl/SQL 夹具覆盖三渠道 × 多退款状态（详见下方「浏览器实测」前的数据说明），完成后已 `DROP DATABASE food_shop_odetail`、停掉两个进程、还原 `.claude/launch.json`。
+
+---
+
+#### 各 R 条验证（真实输出）
+
+**R1** `withLatestRefund`：新增 3 条单测全绿（`order-detail.test.ts`，见下方 A3 输出）。浏览器：REFUNDING+PROCESSING 单（id 4）底栏/标题右侧显示「微信处理中」且无「发起退款」按钮；REFUNDING+FAILED 且 `errorMessage` 非空的单（id 5）点「重试退款」→ `RefundDialog` 内出现「上次失败原因：」一行（内容因夹具 SQL 走 docker heredoc 有编码乱码，属测试数据问题，不是代码问题——同一弹窗里「订单号/实付/可退」等直接从接口取值的字段显示正常）。
+
+**R2**：`grep -c "completeRefund\|手动标记\|confirmDialog" apps/admin/src/components/orders/detail/DetailActions.tsx` = `0`；A12 对 `pages/Orders.tsx`「手动标记完成」仍 ≥1（列表侧保留）——浏览器 `/orders/express` 列表 REFUNDING 行确认「手动标记完成」按钮仍在。
+
+**R3**：`grep -c "RefundDialog" apps/admin/src/components/orders/detail/DetailActions.tsx` = `0`；`grep -c "<RefundDialog" apps/admin/src/pages/OrderDetail.tsx` = `1`。浏览器 375×812，id 5 详情页点底栏「重试退款」后执行：
+```js
+const ov=[...document.querySelectorAll('div.fixed.inset-0')].find(e=>e.className.includes('bg-black/40'));
+[ov.closest('.md\\:hidden.fixed')===null, document.elementFromPoint(innerWidth/2, 28)===ov || ov.contains(document.elementFromPoint(innerWidth/2, 28))]
+```
+→ `[true, true]`，与方案期望逐字一致。
+
+**R4**：直接开 `http://localhost:5178/orders/local?range=custom&startDate=2026-09-01` 与 `…/orders/express?range=custom&endDate=2026-09-10`，1 秒后 `document.querySelector('.animate-pulse') === null` 均为 `true`，且页面上出现「请选完整的起止日期」。
+
+**R5**：`time.test.ts` 新增 3 例全绿（见 A3）；`grep -c "slice(0, *10)" apps/admin/src/components/orders/detail/DetailTimeline.tsx` = `0`；`build:admin` 时区闸门仍打印 `✔`（见下方 A4）。浏览器真实数据验证：id 1 详情页下单 `2026-08-10 17:15`，后续「支付成功/接单/已发货/…」节点均显示为 `9-18 16:03`（M-DD HH:mm，跨月），与 `sameDayKey` 按上海自然日判定一致。
+
+**R6**：新增单测「CLOSED → 退款关闭，tone muted，且不存在退款处理中节点」全绿（见 A3）。浏览器 id 6 详情页时间线实测出现「退款关闭 ¥30.00」节点（独立于「退款处理中」）。
+
+**R7**：`grep -c "onAfterSaleTag" apps/admin/src/pages/Orders.tsx` = `1`。浏览器 `/orders/express`：桌面表格与手机卡片均出现「售后待处理」小标（此前手机卡片完全没有、表格是不可点 `<span>`）；点击后 URL 变为 `/orders/express?status=AFTER_SALE` 且**未**跳转到详情页（`AfterSalePanel` 正常渲染，售后列表能看到该条待处理记录）；`LocalOrders.tsx` 侧核实为纯 `<span>`（未传 `onAfterSaleTag`），与基线一致。
+
+**R8**（含追加补丁）：768×1024，`status=PAID` 的邮寄订单（接单/直接发货/退款/发赔偿券/重打小票 5 按钮）实测：
+- 第一版（商品列 `max-w-[160px]`）行高 140px，不达标（74px 可用宽度连两个最短按钮都放不下）；
+- 追加：商品列进一步收到 `max-w-[90px]`，操作列 `<th>` 加 `w-[190px] lg:w-auto` 提示，`<td>` `px-4→px-2`、按钮容器 `gap-x-3→gap-x-2` 挤出内边距空间；
+- 复测：`row.offsetHeight` = `93`（≤100 ✓），5 个按钮排成 3 行（2/2/1），`[...row.querySelectorAll('td:nth-last-child(2) button')].every(b => b.offsetHeight < 30)` = `true`（实测各 20px），`document.documentElement.scrollWidth <= innerWidth` = `true`（720/768 实测无横向滚动）。
+- 1280×800 复测：桌面态未受影响（`lg:w-auto`/`lg:max-w-[320px]` 生效，按钮一行四个+重打小票换行，与改动前视觉一致）。
+
+**R9**：375×812，`getComputedStyle(document.querySelector('h1')).fontSize` = `16px`（≥16px ✓）且可见；hero 状态元素 `fontSize=16px, fontWeight=600`（≥600 ✓）；返回按钮 `aria-label="返回全国邮寄"`、点击面 `40×40`。1280×800：标题行同时含「订单详情」「ORD…」单号、`aria-label="复制单号"` 按钮、渠道标签「同城外送」、「重打小票」/「再退款」按钮（`headerRow.textContent` 实测含全部五项）；`document.body.textContent` 里单号出现 3 次，仅 1 次可见（`offsetHeight>0`）——`DetailHero` 内的重复副本在 `md:hidden` 下正确隐藏。B1 三档顺序、B4 零溢出复测均通过（见下方汇总）。
+
+**R10**：375×812，id 2（部分退款单，按钮文案「再退款（还可退 ¥39.50）」）底栏实测：`[...bar.querySelectorAll('button')].every(b => b.offsetHeight < 48)` = `true`（实测 38/36）；`bar.scrollWidth === bar.clientWidth`（375===375）；id 4（REFUNDING+PROCESSING）底栏实测「重打小票」+「微信处理中」同一行不折行。
+
+**R11**：kill 掉服务端进程模拟接口失败后，`/orders/express`、`/orders/local` 均出现「订单列表加载失败，当前显示的不是真实数据」+「重试」按钮；详情页出现「订单加载失败」+「重试」+「‹ 返回订单管理」（未再 `return null`，`grep -c "return null" apps/admin/src/pages/OrderDetail.tsx` = `0`）。重启服务端后点「重试」，列表页与详情页均恢复真实数据（详情页实测拉回完整订单详情，含金额/时间线/退款记录）。
+
+**R12**：`grep -n "orderDateQuery(dateState, new Date())" apps/admin/src/pages/Orders.tsx apps/admin/src/pages/LocalOrders.tsx` 各命中 1；`grep -c "orderDateQuery(dateState, now)" apps/admin/src/pages/Orders.tsx apps/admin/src/pages/LocalOrders.tsx` 均为 `0`。
+
+**R13**：① 375 宽 `/orders/express` 列表，id 2 一类带备注的卡片首行出现橙色「备注」小标（此前手机卡片没有，表格行有）；② `document.querySelector('[data-testid="order-date-chips"] button[aria-label="自选"]')` 非空；③ 控制台执行 `Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })` 后点「复制单号」→ toast 出现「当前环境不支持复制，请长按选择」，`read_console_messages` 过滤 `Uncaught` 为空（无未捕获异常）。
+
+**R14**：见下方「回退验证」；单测新增「部分退款」夹具与逐行断言，见 A3 输出（`order-detail.test.ts` 17 例全绿）。
+
+---
+
+#### 回退验证（R1、R5、R14，红后已还原）
+
+1. **R1**：`withLatestRefund` 的 `o.refunds?.[0]` 改成 `o.refunds?.[1]`（取第二条而非最新一条）→ `node --test src/utils/order-detail.test.ts` 出现 1 个失败：
+   ```
+   ✖ withLatestRefund：取 refunds[0]（服务端已按 createdAt desc 排好）
+     actual: 'FAILED', expected: 'PROCESSING'
+   ```
+   还原后 `node --test` 17/17 绿，`git status --porcelain -- apps/admin/src/utils/order-detail.ts` 无输出。
+
+2. **R5**：`sameDayKey` 改回用 `toDate(...).toISOString().slice(0,10)`（UTC 日比较，等价于修复前的 bug 实现）→ `node --test src/utils/time.test.ts` 出现 2 个失败：
+   ```
+   ✖ sameDayKey：UTC 同日但上海跨日（北京 23:30 vs 次日 00:30）→ false   actual:true expected:false
+   ✖ sameDayKey：UTC 跨日但上海同日（北京 07:30 vs 09:00）→ true        actual:false expected:true
+   ```
+   还原后 `node --test` 8/8 绿，`git status --porcelain -- apps/admin/src/utils/time.ts` 无输出。
+
+3. **R14**（方案要求的两处回退验证）：
+   - 把 `moneyRows` 里 `promo`/`coupon` 两行的 `fen` 互换 → 用例①报 `800 !== 500` 失败。
+   - 把 `remaining` 行改用 `o.actualAmount`（而非 `o.remainingRefundable`）→ **第一个全额退款夹具的用例①/③因 `remainingRefundable===actualAmount` 巧合仍绿**（未改坏也能过，这正是原测试的缺陷所在）；改坏被新增的「部分退款」夹具用例抓住：`9200 !== 3200` 失败——证明本轮新增的部分退款夹具是必要的，不是原有断言的简单重复。
+   - 两次改坏均已还原，`node --test src/utils/order-detail.test.ts` 17/17 绿，`git status --porcelain -- apps/admin/src/utils/order-detail.ts` 无输出。
+
+---
+
+#### 全量回归（真实输出）
+
+- `npx tsc --noEmit -p apps/server/tsconfig.json` → 无输出，退出码 0。
+- `npx tsc --noEmit -p apps/admin/tsconfig.json` → 无输出，退出码 0。
+- `npm test --workspace=apps/admin` → `ℹ tests 99 / ℹ pass 99 / ℹ fail 0`。
+- A3 五个文件逐个 `node --test`（apps/admin 下）：
+  - `src/utils/order-date-range.test.ts` → `tests 14 / pass 14 / fail 0`
+  - `src/utils/order-list.test.ts` → `tests 14 / pass 14 / fail 0`
+  - `src/utils/order-detail.test.ts` → `tests 17 / pass 17 / fail 0`
+  - `src/utils/time.test.ts` → `tests 8 / pass 8 / fail 0`
+  - `src/navigation.test.ts` → `tests 17 / pass 17 / fail 0`
+- `npm run build --workspace=apps/admin` → 先打印 `✔ 管理端时间渲染全部走 Asia/Shanghai（无本地时区解读）`，随后 `vite build` 成功（`✓ built in 1.21s`）。
+- `npm run build --workspace=apps/server`（=A1）→ 无输出，退出码 0。
+- 服务端日期自测：`cd apps/server && TZ=Asia/Shanghai npx ts-node --transpile-only scripts/selftest-local-day.ts` → 9 例全 `✔`，退出码 0；`TZ=Asia/Tokyo` 复跑 → `本自测必须以 TZ=Asia/Shanghai 运行`，退出码 1。
+- A6：本轮无服务端改动，未重跑干净库 e2e（见上「修补前 sha」说明），`git diff ceba203..HEAD --name-only -- apps/server scripts` 输出为空。
+- A7/A8/A9：`git diff --name-only 5255d34...HEAD` 分别 grep `Workbench\.(tsx|css)$`、`^apps/server/prisma/`、`^apps/miniapp/` 均为空。
+- A11：`navigation.ts`/`App.tsx` 旧地址与新路由均命中；`node --test src/navigation.test.ts` 17/17 绿。
+- A12：对 `pages/Orders.tsx` 逐项 `grep -c` 全部 ≥1（含 R2 后仍保留的「手动标记完成」——只删了详情页那份）；`展开|收起` = 0。
+- A13：`OrderListTable` 在两页各 1 处引用；两页均 `<table` = 0；`LocalOrders.tsx` 无「配送时间线」字样。
+- A14：对 `utils/order-*.ts` + `date-range.ts` 的 `from 'react'|lucide-react|\.tsx'` 检索为空。
+- A15：三处 `parseLocalDayStart` 各 ≥1（本轮未改服务端，延续基线）。
+- A16：`git diff 5255d34...HEAD -- apps/server/src/services/refund.ts apps/admin/src/components/RefundDialog.tsx` 为空。
+- A17：`startDate=2026-02-30` → `40001`；`startDate=2026-09-18&endDate=2026-09-17` → `40001`；不带日期 → `code 0` 且 `latestDelivery` 键存在；`GET .../booking` 的 `data` 有 `track` 键——均实测通过。
+- A18：`git log ceba203..HEAD --format=%B | grep -c "Co-Authored-By: Claude "` = `15`，提交数 = `15`，逐条覆盖。
+
+---
+
+#### 浏览器实测补充（B 类复测）
+
+- **B1**：375（单栏，标题行无按钮）/768（单栏，内容宽 672 居中，`getComputedStyle(bar).display==='none'`，按钮在标题行右侧）/1280（两栏，左：商品+金额同卡→退款记录→售后，右：订单头→进度→收货→配送）三档顺序与列布局均实测通过。
+- **B4**：360/375/390 三档在同城列表、邮寄列表、详情页复测 `scrollWidth<=innerWidth` 均 `true`；日期 chip 固有宽度 281.9px，三档可用宽均 ≥ 该值；详情页底栏 `getBoundingClientRect().width === innerWidth` 在 375/390 均验证通过。
+- **B6**：点「今日」→ URL 变为 `?range=today`；自选缺一端 → 「请选完整的起止日期」（对应 R4）。
+- **B7**：从带 `range=today` 筛选的同城列表点卡片进详情，点「‹ 返回同城订单」→ 落回 `/orders/local?range=today`；直接开 `/orders/detail/1`（无 `location.state`，EXPRESS 单）点返回 → 落到 `/orders/express`；`/orders`→`/orders/express`、`/local/orders`→`/orders/local` 两条旧地址实测正确重定向。
+- **B8**：PAID 邮寄单点「接单」→ 该单从 PAID 筛选结果消失（操作生效）且 URL 未变（未跳详情，`stopPropagation` 生效）；点订单号空白处 → 正确跳转 `/orders/detail/8`。
+- **B9**：REFUNDING+FAILED 单点「重试退款」→ `RefundDialog` 正常弹出且显示「上次失败原因」（对应 R1）；历史单（id 1，`created_at` 改到 2026-08-10）点「重打小票」→ 返回「打印机功能未启用」提示（本机未开打印机开关，走的是 T1 既有兜底分支之一，不报错、不崩溃，符合「不报错」判据）。
+- **B3** 补充：CLOSED 退款时间线「退款关闭」肉眼核对通过（对应 R6）；全额退款单（id 1）商品行实测划线+「已退」标，部分退款单（id 2）商品行未标。
+
+---
+
+#### 是否命中上报触发条件
+
+**命中触发条件 6（白名单外文件改动）需特别说明**：R9 的任务文本明确要求「`StatusBadge` 加可选 prop `size?: 'sm' | 'lg'`」，而 `apps/admin/src/components/ui/StatusBadge.tsx` 属于方案 §3「点名禁改」的 `components/ui/*`，也字面匹配 §4 触发条件 6「`components/ui/*` 想加 prop」。
+
+判断：R9 是 03 回判（fable）逐条核对后写入本节的具体任务，且给出了不这样做的理由（「颜色仍来自 `STATUS_MAP`（不另起配色表）」——如果不加 prop 而是在 `components/orders/` 里另起一个大字徽标组件，就要在两处维护同一份状态颜色映射，与 A14/既有 `DELIVERY_STATUS_LABEL` 重复维护的教训相悖）。我判断这是 03 回判在写 R9 时已经权衡过、明知故犯的白名单例外（不是我在执行中临时决定绕过约束），按 R9 字面执行；但因为它字面命中触发条件表述，仍在此处如实报告，不代做最终裁定。改动本身很小（加一个可选 prop，默认值=原行为，`STATUS_MAP` 一字未动），`grep -n "size" apps/admin/src/components/ui/StatusBadge.tsx` 可核对改动范围。
+
+其余 11 条触发条件逐一核对：均未命中（无新增迁移；重打小票历史单返回既有兜底文案；未改 `Workbench.tsx`/`.css`；未改退款计算/`RefundDialog` 入参语义；R1–R14 涉及数据均来自既有三接口；除上述 R9 一项外未改其余白名单外文件；本轮未碰 `stats/shared.ts`/`scan-stats.ts`；未验证手机 360 宽 chip 行本轮改动前后均通过、未改横滑；未 ssh 生产机核实 pm2 时区；`npm test`/`build:admin` 开工前已确认基线绿；未跑 e2e 故无「无关红」可核对，`git diff` 已证明服务端零改动）。
+
+#### 偏离说明
+
+除「是否命中上报触发条件」里记录的 R9/`StatusBadge.tsx` 一项外，本轮严格按 R1–R14 逐条执行，未做任何本节之外的改动；R8 的具体实现细节（商品列宽度取值、操作列 padding/gap）与任务描述给出的「或等效」示例数值不同，是根据 768 宽下 5 按钮 PAID 邮寄单的实测结果反推调出的，最终以 R8 自带的验收阈值（`row.offsetHeight<=100`）为准，过程记在上面「各 R 条验证」。
