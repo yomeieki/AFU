@@ -77,7 +77,7 @@ export default function Orders() {
 
   const load = (p = page, silent = false) => {
     if (isAfterSaleTab) return
-    if (dateErr) return
+    if (dateErr) { setLoading(false); return }
     if (!silent) { setLoading(true); setLoadFailed(false) }
     getOrders({
       page: p,

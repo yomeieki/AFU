@@ -64,7 +64,7 @@ export default function LocalOrders() {
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
 
   const load = (p = page) => {
-    if (dateErr) return
+    if (dateErr) { setLoading(false); return }
     setLoading(true)
     setLoadFailed(false)
     getOrders({
