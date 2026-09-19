@@ -22,7 +22,7 @@ test('targets and item revelation use clamped document coordinates', () => {
   assert.equal(revealScrollTop({ itemTop: NaN, itemHeight: 0, scrollTop: -10, viewportHeight: Infinity }), 0)
 })
 
-function fixture() {
+function fixture(options = {}) {
   let registered
   const pending = []
   const calls = []
@@ -63,7 +63,11 @@ function fixture() {
         selectAll: s => { current = s; return q },
         scrollOffset: () => { selections.push(['scroll', current]); return q },
         boundingClientRect: () => { selections.push(['rect', current]); return q },
-        exec: cb => pending.push(() => cb(selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: viewportTop } : rects[s]))),
+        exec: cb => {
+          const result = () => selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: viewportTop } : rects[s])
+          const snapshot = options.snapshotAtExec ? structuredClone(result()) : null
+          pending.push(() => cb(snapshot || result()))
+        },
       }
       return q
     },
@@ -156,6 +160,20 @@ test('out of order queries and hidden page cannot overwrite newer layout', () =>
   hidden()
   assert.equal(f.page.data.sidebarTop, 280)
   f.page.onUnload()
+})
+
+test('a delayed selector sample keeps document offsets but cannot rewind a newer page scroll', () => {
+  const f = fixture({ snapshotAtExec: true })
+  f.page.measureOffsets(); f.flush()
+  f.page.measureOffsets() // captures viewport Y=0 and group rectangles now
+  f.page.onPageScroll({ scrollTop: 100 })
+  assert.equal(f.page.data.sidebarTop, 140)
+  f.flush()
+  assert.equal(f.page._offsets[0].top, 300, 'anchor conversion must use the coherent selector sample')
+  assert.equal(f.page._pageScrollTop, 100)
+  assert.equal(f.page.data.sidebarTop, 140)
+  assert.equal(f.page.data.sidebarHeight, 580)
+  f.page._clearTimers()
 })
 
 test('channel reload invalidates a selector result from the old channel', async () => {
@@ -287,6 +305,100 @@ test('manual sidebar position is preserved until the selected item leaves view',
   assert.equal(f.page.data.sidebarScrollTop, 0)
   f.page.setActiveGroup(20)
   assert.equal(f.page.data.sidebarScrollTop, 520)
+  f.page._clearTimers()
+})
+
+function activeSidebar(id, scrollTop) {
+  const f = fixture()
+  f.page.data.groups = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, name: String(i + 1), items: [] }))
+  f.page.data.activeGroupId = id
+  f.page.data.sidebarScrollTop = scrollTop
+  f.page._sidebarScrollTop = scrollTop
+  f.setViewportTop(300)
+  f.rects['.catalog-body'].top = -60 // document B=240: the toolbar is pinned
+  f.rects['.cat-panel'].top = 40
+  f.rects['.cat-item'] = Array.from({ length: 20 }, (_, i) => ({ dataset: { gid: i + 1 }, top: 40 + i * 50 - scrollTop, height: 50 }))
+  f.page.measureOffsets(); f.flush()
+  return f
+}
+
+test('dock growth minimally reveals the active category after sidebar height shrinks', () => {
+  const f = activeSidebar(20, 320)
+  assert.equal(f.page.data.sidebarHeight, 680)
+  f.page.onCartHeight({ detail: { px: 72 } })
+  assert.equal(f.page.data.sidebarHeight, 608)
+  assert.equal(f.page.data.sidebarScrollTop, 392)
+  f.rects['.cat-item'].forEach((item, i) => { item.top = 40 + i * 50 - 392 })
+  f.flush()
+  assert.equal(f.page.data.sidebarScrollTop, 392)
+  f.page._clearTimers()
+})
+
+test('measurement reveals an active category if its previous sidebar item cache was unavailable', () => {
+  const f = activeSidebar(20, 320)
+  f.page._sidebarItems = []
+  f.page.onCartHeight({ detail: { px: 72 } })
+  assert.equal(f.page.data.sidebarScrollTop, 320)
+  f.flush()
+  assert.equal(f.page.data.sidebarScrollTop, 392)
+  f.page._clearTimers()
+})
+
+test('viewport shrink reveals the active category while a visible manual position stays put', () => {
+  const f = activeSidebar(20, 320)
+  f.setWindowHeight(600)
+  f.page.onResize(); f.flush()
+  assert.equal(f.page.data.sidebarHeight, 560)
+  assert.equal(f.page.data.sidebarScrollTop, 440)
+  f.page._clearTimers()
+
+  const g = activeSidebar(5, 100)
+  g.page.onCartHeight({ detail: { px: 72 } }); g.flush()
+  assert.equal(g.page.data.sidebarScrollTop, 100, 'visible selection must not interrupt manual sidebar browsing')
+  g.page._clearTimers()
+})
+
+test('current search success while hidden finishes and is available on return', async () => {
+  const f = fixture()
+  let finish
+  let requests = 0
+  const api = require('../../apps/miniapp/api/catalog')
+  api.getProducts = () => { requests++; return new Promise(resolve => { finish = resolve }) }
+  f.page.setData({ searchKeyword: 'A', page: 1, hasMore: true })
+  f.page.loadProducts(true)
+  f.page.onHide()
+  finish({ list: [{ id: 1, name: 'A', price: 100, stock: 1 }], total: 1 })
+  await new Promise(r => setTimeout(r, 0))
+  f.page.onShow(); f.flush()
+  assert.equal(f.page.data.loading, false)
+  assert.deepEqual(f.page.data.list.map(item => item.id), [1])
+  f.page.onReachBottom()
+  assert.equal(requests, 1)
+  f.page._clearTimers()
+})
+
+test('current search rejection while hidden clears loading and can retry on return', async () => {
+  const f = fixture()
+  let fail
+  let requests = 0
+  const api = require('../../apps/miniapp/api/catalog')
+  api.getProducts = () => {
+    requests++
+    return requests === 1 ? new Promise((resolve, reject) => { fail = reject }) : Promise.resolve({ list: [{ id: 2, name: 'B', price: 100, stock: 1 }], total: 1 })
+  }
+  f.page.setData({ searchKeyword: 'B', page: 1, hasMore: true })
+  f.page.loadProducts(true)
+  f.page.onHide()
+  fail(new Error('offline'))
+  await new Promise(r => setTimeout(r, 0))
+  f.page.onShow(); f.flush()
+  await new Promise(r => setTimeout(r, 0))
+  f.flush()
+  assert.equal(f.page.data.loading, false)
+  assert.equal(requests, 2)
+  assert.deepEqual(f.page.data.list.map(item => item.id), [2])
+  f.page.onReachBottom()
+  assert.equal(requests, 2)
   f.page._clearTimers()
 })
 

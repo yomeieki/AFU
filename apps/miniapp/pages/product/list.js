@@ -110,6 +110,7 @@ Page({
     this._layout = null
     this._pageScrollTop = 0
     this._sidebarScrollTop = 0
+    this._needsSidebarReveal = false
     this._lockUntil = 0
     this._searchSeq = (this._searchSeq || 0) + 1
     var channel = app.getShoppingChannel()
@@ -265,6 +266,7 @@ Page({
   // 头由高变矮时（店主恢复营业、通知条消失）nextTick 那次量可能量早了：与 onImageLoad
   // 同款的幂等保险，200ms 后再补量一次；量两次数值一样也无所谓，setData 会自己去重。
   afterGroupsRendered() {
+    if (this._hidden || this._unloaded) return
     var self = this
     var run = function() { self.measureOffsets() }
     if (wx.nextTick) wx.nextTick(run)
@@ -301,7 +303,11 @@ Page({
     if (geometry.sidebarTop !== this.data.sidebarTop) patch.sidebarTop = geometry.sidebarTop
     if (geometry.sidebarHeight !== this.data.sidebarHeight) patch.sidebarHeight = geometry.sidebarHeight
     if (geometry.tailHeight !== this.data.tailHeight) patch.tailHeight = geometry.tailHeight
+    var visibleRangeChanged = geometry.sidebarTop !== this.data.sidebarTop || geometry.sidebarHeight !== this.data.sidebarHeight
     if (Object.keys(patch).length) this.setData(patch)
+    if (visibleRangeChanged && this.data.activeGroupId != null) {
+      this._needsSidebarReveal = !this.revealCategory(this.data.activeGroupId)
+    }
   },
 
   // Query the viewport and all layout rects together, so document coordinates share one scroll sample.
@@ -309,6 +315,7 @@ Page({
     if (this._hidden || !wx.createSelectorQuery) return
     var self = this
     var generation = this._measureGeneration = (this._measureGeneration || 0) + 1
+    var scrollRevision = this._scrollRevision || 0
     var query = wx.createSelectorQuery()
     if (query.in) query.in(this)
     query.selectViewport().scrollOffset()
@@ -323,15 +330,16 @@ Page({
         var viewport = res[0], toolbar = res[1], body = res[2], rects = res[3] || []
         var items = res[4] || [], sidebar = res[5], searchResults = res[6]
         if (!viewport || !toolbar || !body) return
-        var y = Math.max(0, viewport.scrollTop || 0)
+        var sampledY = Math.max(0, viewport.scrollTop || 0)
+        var liveY = (self._scrollRevision || 0) !== scrollRevision ? self._pageScrollTop : sampledY
         var win = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
         var pinnedHeight = toolbar.height || 0
-        var bodyTop = body.top + y
+        var bodyTop = body.top + sampledY
         var offsets = []
         for (var i = 0; i < rects.length; i++) {
           var gid = rects[i].dataset && rects[i].dataset.gid
           if (typeof gid === 'string' && gid !== 'other' && gid !== '' && !isNaN(Number(gid))) gid = Number(gid)
-          offsets.push({ id: gid, top: rects[i].top + y })
+          offsets.push({ id: gid, top: rects[i].top + sampledY })
         }
         self._offsets = offsets
         self._sidebarItems = []
@@ -343,18 +351,18 @@ Page({
           }
         }
         var lastGroupHeight = rects.length ? rects[rects.length - 1].height : 0
-        self._layout = { viewportHeight: win.windowHeight, pinnedHeight: pinnedHeight, bodyTop: bodyTop, lastGroupHeight: lastGroupHeight, scrollTop: y }
+        self._layout = { viewportHeight: win.windowHeight, pinnedHeight: pinnedHeight, bodyTop: bodyTop, lastGroupHeight: lastGroupHeight, scrollTop: liveY }
         var anchor = self._anchorSnapshot
         if (anchor && (anchor.bodyTop !== bodyTop || anchor.pinnedHeight !== pinnedHeight)) {
           var desired = Math.max(0, anchor.scrollTop + bodyTop - anchor.bodyTop - (pinnedHeight - anchor.pinnedHeight))
           self._anchorSnapshot = null
-          if (Math.abs(desired - y) >= 1) {
+          if (Math.abs(desired - liveY) >= 1) {
             self.scrollPageTo(desired, 0)
-            y = desired
+            liveY = desired
           }
         }
         if (clearAnchorOnResult) self._anchorSnapshot = null
-        self._pageScrollTop = y
+        self._pageScrollTop = liveY
         var patch = {}
         if (self.data.pinnedHeight !== pinnedHeight) patch.pinnedHeight = pinnedHeight
         if (Object.keys(patch).length) self.setData(patch)
@@ -364,7 +372,10 @@ Page({
           self._pendingLocateId = null
           self.locateGroup(pendingId)
         }
-        if (self.data.searchKeyword) self._fillSearchViewport(searchResults, y, win.windowHeight)
+        if (self._needsSidebarReveal && !self.data.searchKeyword && self.data.activeGroupId != null) {
+          self._needsSidebarReveal = !self.revealCategory(self.data.activeGroupId)
+        }
+        if (self.data.searchKeyword) self._fillSearchViewport(searchResults, liveY, win.windowHeight)
       })
   },
 
@@ -372,6 +383,7 @@ Page({
   onPageScroll(e) {
     if (this._hidden) return
     var y = Math.max(0, e.scrollTop || 0)
+    this._scrollRevision = (this._scrollRevision || 0) + 1
     this._pageScrollTop = y
     if (this._layout && (y < this._layout.bodyTop - this._layout.pinnedHeight || this.data.sidebarTop !== this._layout.pinnedHeight)) this._updateSidebarLayout()
     if (this.data.searchKeyword) return
@@ -392,16 +404,17 @@ Page({
   },
 
   revealCategory: function(id) {
-    if (!this._sidebarItems || !this._layout) return
+    if (!this._sidebarItems || !this._layout || this.data.sidebarHeight <= 0) return false
     for (var i = 0; i < this._sidebarItems.length; i++) {
       if (this._sidebarItems[i].id !== id) continue
       var oldTop = this._sidebarScrollTop || 0
       var top = categoryScroll.revealScrollTop({ itemTop: this._sidebarItems[i].top, itemHeight: this._sidebarItems[i].height, scrollTop: oldTop, viewportHeight: this.data.sidebarHeight })
-      if (Math.abs(top - oldTop) < 1) return
+      if (Math.abs(top - oldTop) < 1) return true
       this._sidebarScrollTop = top
       this.setData({ sidebarScrollTop: top === this.data.sidebarScrollTop ? top + 0.5 : top })
-      return
+      return true
     }
+    return false
   },
 
   onReachBottom: function() {
@@ -427,6 +440,7 @@ Page({
   },
 
   onUnload() {
+    this._unloaded = true
     this._hidden = true
     this._invalidateMeasurements()
     this._anchorSnapshot = null
@@ -460,7 +474,7 @@ Page({
       keyword: this.data.searchKeyword,
     })
       .then(function(data) {
-        if (self._hidden || seq !== (self._searchSeq || 0)) return
+        if (self._unloaded || seq !== (self._searchSeq || 0)) return
         if (self.buildQueryKey() !== reqKey) {
           // 条件已变化：本次结果作废，让新条件的请求重新发起
           self.setData({ loading: false })
@@ -490,7 +504,7 @@ Page({
         self.afterGroupsRendered()
       })
       .catch(function() {
-        if (!self._hidden && seq === (self._searchSeq || 0)) self.setData({ loading: false })
+        if (!self._unloaded && seq === (self._searchSeq || 0)) self.setData({ loading: false })
       })
   },
 
