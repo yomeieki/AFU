@@ -63,7 +63,7 @@ assert.equal(revealScrollTop({itemTop:450,itemHeight:50,scrollTop:0,viewportHeig
 assert.equal(revealScrollTop({itemTop:100,itemHeight:50,scrollTop:80,viewportHeight:400}),80)
 ```
 
-补充负滚动按 0、缺失/非有限值按 0、dock 为 0 恢复空间、视口小于顶部+D 高度钳制 0。页面测试使用现有 `loadPage/makeCtx`，让 selector mock 按选择器返回相应矩形而非固定三项旧数组；记录 `wx.pageScrollTo` 调用。验证点击分组两次、首页 pendingCategoryId、搜索结果分页与清空、测量请求先后乱序、hide/unload、resize、cart height 改变、收起后异步头部变高/变矮时保持商品相对工具栏位置、搜索首批不足一屏自动补足。保留旧分类数据、购物车与优惠测试含义。
+补充负滚动按 0、缺失/非有限值按 0、dock 为 0 恢复空间、视口小于顶部+D 高度钳制 0。页面测试使用现有 `loadPage/makeCtx`，让 selector mock 按选择器返回相应矩形而非固定三项旧数组；记录 `wx.pageScrollTo` 调用。验证点击分组两次、首页 pendingCategoryId、搜索结果分页与清空、测量请求先后乱序、hide/unload、resize、cart height 改变、收起后异步头部变高/变矮时保持商品相对工具栏位置（同时改变 B 与 P：旧 Y=500/B=200/P=40，新 B=240/P=60，目标 Y=520；原生已到 520 时不再滚动）、搜索首批不足一屏自动补足。保留旧分类数据、购物车与优惠测试含义。
 
 - [ ] **Step 2: 运行定向测试确认新行为失败。**
 
@@ -97,7 +97,7 @@ WXML 删除右侧内部滚动状态绑定，移除旧分组/搜索各自的 cart
 // onReachBottom：this.onScrollToLower()；onResize/onShow/cart/meta：afterGroupsRendered。
 ```
 
-禁止每个滚动事件都 query 全部商品或 setData groups。侧栏 `bindscroll` 记位置；需要揭示目标时才设置 `scroll-top`，同值再次需要滚动时保证触发。数据重载与切渠道取消旧定位、计时器和选择器回调。普通 onShow 保持位置；收起后头部高度变化通过布局前后 body 文档坐标差补偿 page scroll；补偿与测量不得形成循环。搜索短批次 hasMore 且可视区不足时继续取下一页，保留 loading/request key 防重复与串数据。右侧标题可使用每组 sticky 标题；锚点定位不得被固定栏遮住标题。
+禁止每个滚动事件都 query 全部商品或 setData groups。侧栏 `bindscroll` 记位置；需要揭示目标时才设置 `scroll-top`，同值再次需要滚动时保证触发。数据重载与切渠道取消旧定位、计时器和选择器回调。普通 onShow 保持位置；收起后头部高度变化保持逻辑位置 Y+P-B，目标 Y新=Y旧+(B新-B旧)-(P新-P旧)；使用变化前捕获的位置与变化后实际滚动值，不重复原生已完成的补偿，补偿与测量不得形成循环。搜索短批次 hasMore 且可视区不足时继续取下一页，保留 loading/request key 防重复与串数据。右侧标题可使用每组 sticky 标题；锚点定位不得被固定栏遮住标题。
 
 - [ ] **Step 5: 验证并提交。**
 
