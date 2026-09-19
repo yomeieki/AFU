@@ -13,8 +13,13 @@ const { getLocalMeta } = require('../../api/local')
 const { formatPrice } = require('../../utils/format')
 const { headNoticeOf, checkoutStateOf } = require('../../utils/local-catalog')
 
+var promo = require('../../utils/promo')
+var getPromoPreview = require('../../api/local').getPromoPreview
+
 Page({
   data: {
+    promotion: null,
+    promoTip: { show: false, text: '', tone: 'hint' },
     channel: 'EXPRESS',
     channelLabel: '全国邮寄',
     items: [],
@@ -49,23 +54,34 @@ Page({
         otherChannelCount: 0,
         otherChannelLabel: '',
         meta: null,
+        promotion: null,
+        promoTip: { show: false },
         mode: mode,
         headNotice: '',
         headBlocking: false,
       })
     }
     if (mode !== this.data.mode) this.setData({ mode: mode })
-    if (channel === 'LOCAL') this.loadMeta()
+    this._promoSeq = (this._promoSeq || 0) + 1
+    this.loadMeta()
     this.loadCart()
   },
 
   loadMeta() {
     var self = this
+    var channel = this.data.channel
     getLocalMeta()
       .then(function(meta) {
+        if (channel !== self.data.channel) return
+        if (channel === 'EXPRESS') {
+          self.setData({ promotion: meta.promotion })
+          self.loadPromo()
+          return
+        }
         var notice = headNoticeOf(meta, self.data.mode)
-        self.setData({ meta: meta, headNotice: notice.text, headBlocking: notice.blocking })
+        self.setData({ meta: meta, promotion: meta.promotion, headNotice: notice.text, headBlocking: notice.blocking })
         self.refreshCheckout()
+        self.loadPromo()
       })
       .catch(function() {
         // 拉不到门店状态不挡浏览；结算那一步服务端还会再判一次
@@ -90,6 +106,7 @@ Page({
           loading: false,
         })
         self.refreshCheckout()
+        self.loadPromo()
         self.checkOtherChannel(items.length === 0)
         getApp().updateCartCount()
       })
@@ -97,6 +114,27 @@ Page({
         self.setData({ loading: false })
       })
   },
+
+  loadPromo: function() {
+    var self = this
+    var seq = (this._promoSeq = (this._promoSeq || 0) + 1)
+    var type = promo.promoTypeOf(this.data.channel, this.data.mode)
+    var promotion = this.data.promotion
+    if (!this.data.selectedCount || (promotion && (!promotion.active || (promotion.channels || {})[type] === false))) {
+      this.setData({ promoTip: { show: false } })
+      return Promise.resolve()
+    }
+    return getPromoPreview(type, this.data.totalAmount).then(function(res) {
+      if (seq !== self._promoSeq) return
+      var meta = self.data.meta || {}
+      self.setData({ promoTip: promo.progressTipOf(res, { deliveryType: type, subtotal: self.data.totalAmount,
+        freeShipTiers: (meta.fee || {}).freeShipTiers, radiusKm: meta.radiusKm }) })
+    }, function() {
+      if (seq === self._promoSeq) self.setData({ promoTip: { show: false } })
+    })
+  },
+
+  onUnload: function() { this._promoSeq = (this._promoSeq || 0) + 1 },
 
   // 两个车分开，顾客很容易在一边看到空车、忘了另一边还挂着东西。
   // 只在本渠道车空时才去数另一边——有货时这条提示是噪音，也白费一次请求。

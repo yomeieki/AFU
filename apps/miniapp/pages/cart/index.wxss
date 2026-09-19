@@ -130,11 +130,8 @@
 .bottom-spacer {
   height: 130rpx;
 }
+.cart-dock { position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; }
 .bottom-bar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
   background-color: var(--card);
   border-top: 1rpx solid var(--divider);
   display: flex;
@@ -180,3 +177,7 @@
   display: inline-block;
   text-align: center;
 }
+
+.bottom-spacer-promo { height: 186rpx; }
+.cart-tip { font-size: 24rpx; padding: 10rpx 20rpx; text-align: center; background: #fff7e6; color: #9a3412; border-top: 1rpx solid #fde7c7; }
+.cart-tip-done { background: var(--success-bg); color: #166534; border-top-color: #dcfce7; }

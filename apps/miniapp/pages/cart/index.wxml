@@ -75,6 +75,8 @@
     </view>
 
     <!-- Bottom bar -->
+    <view class="cart-dock">
+      <view wx:if="{{promoTip.show}}" class="cart-tip {{promoTip.tone === 'done' ? 'cart-tip-done' : ''}}">{{promoTip.text}}</view>
     <view class="bottom-bar">
       <view class="total-wrap">
         <!-- 同城的这个数**不含配送费**：运费要按收货地址的道路距离算，购物车页没有地址，
@@ -91,7 +93,8 @@
         <text>{{checkoutText}}</text>
       </view>
     </view>
-    <view class="bottom-spacer"></view>
+    </view>
+    <view class="bottom-spacer {{promoTip.show ? 'bottom-spacer-promo' : ''}}"></view>
   </view>
 
 </view>

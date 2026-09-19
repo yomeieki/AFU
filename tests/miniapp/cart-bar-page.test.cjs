@@ -61,3 +61,6 @@ test('订单详情在自取优惠与优惠券之间显示满减快照', () => {
   assert.ok(w.indexOf('order.promoDiscountAmount > 0') < w.indexOf('order.discountAmount > 0'))
   assert.match(read('pages/order/detail.js'), /promoDiscountAmountText/)
 })
+test('购物车页同一固定容器内展示活动进度提示', () => {
+  assert.match(read('pages/cart/index.wxml'), /class="cart-tip/)
+})
