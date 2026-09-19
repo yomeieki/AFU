@@ -10,11 +10,11 @@
 <div class="mp-page">
   <div class="page">
     <div class="section card address-section"><div class="address-pin icon icon-pin"></div><div class="address-info"><div class="receiver-row"><span class="receiver-name">张三</span><span class="receiver-phone">138 0013 8000</span></div><span class="address-poi">丹桂小区</span><span class="address-full">四川省自贡市高新区丹桂大街 1 号 3 栋 2 单元</span></div><div class="arrow icon icon-arrow"></div></div>
-    <div class="section card delivery-section"><div class="section-title">配送信息</div><div class="delivery-info"><span>距门店 2.4 km</span><span>配送费 ¥3.00</span><span>预计 38 分钟 · 18:30 送达</span></div><span class="arrival-time">配送时间以骑手接单后实际安排为准</span></div>
-    <div class="section card"><div class="section-title">商品明细</div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">冷吃兔</span><span class="item-spec">中辣/去骨</span><span class="item-price">¥45.80</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">凉拌折耳根</span><span class="item-price">¥12.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div></div>
+    <div class="section card delivery-section"><div class="section-title">配送信息</div><div class="delivery-info"><span>距门店 2.4 km</span><span>配送费 ¥6.00</span><span>预计 38 分钟 · 18:30 送达</span></div><span class="arrival-time">配送时间以骑手接单后实际安排为准</span></div>
+    <div class="section card"><div class="section-title">商品明细</div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">冷吃兔</span><span class="item-spec">中辣/去骨</span><span class="item-price">¥30.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">6</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">凉拌折耳根</span><span class="item-price">¥31.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div></div>
     <div class="section card remark-section"><div class="tableware-row"><span class="row-label">餐具</span><span class="tableware-value">需要餐具 · 2 份</span><span class="tableware-arrow">›</span></div><div class="remark-row"><span class="row-label">备注</span><span class="remark-placeholder">20 字以内，如放门口、不要辣</span></div></div>
     <!-- 会员优惠（components/checkout-benefits）：有券有赠品这一态。
-         同城页没有逐项金额卡，优惠明细全靠组件自己那行 row-sum -->
+         优惠券组件与下方金额明细保持同一口径 -->
     <div class="benefits">
       <div class="row">
         <span class="row-label">优惠券</span>
@@ -38,24 +38,25 @@
           <span class="sum-item">优惠券 −¥5.00</span>
           <span class="sum-item">赠品 200 积分</span>
         </div>
-        <span class="earn">预计获得 5200 积分</span>
+        <span class="earn">预计获得 192 积分</span>
       </div>
     </div>
 
     <!-- 金额明细：商品金额 → 打包费 → 优惠券 → 配送费 → 积分赠品 → 应付（2026-09-13 打包费设计 §4.1 加打包费行）。
          积分赠品行与上面 benefits 区的 row-sum（「赠品 200 积分」）是同一份数据，两处口径要自洽。 -->
     <div class="section card amount-section"><div class="section-title">金额明细</div>
-      <div class="sum-row"><span class="sum-k">商品金额</span><span class="sum-v">¥57.80</span></div>
-      <div class="sum-row"><span class="sum-k">打包费</span><span class="sum-v">¥2.00</span></div>
+      <div class="sum-row"><span class="sum-k">商品金额</span><span class="sum-v">¥211.00</span></div>
+      <div class="sum-row"><span class="sum-k">打包费</span><span class="sum-v">¥7.00</span></div>
+      <div class="sum-row"><span class="sum-k">满减</span><span class="sum-v sum-cut">−¥20.00</span></div>
       <div class="sum-row"><span class="sum-k">优惠券</span><span class="sum-v sum-cut">−¥5.00</span></div>
-      <div class="sum-row"><span class="sum-k">配送费</span><span class="sum-v">¥3.00</span></div>
+      <div class="sum-row"><span class="sum-k">配送费</span><span class="sum-v">¥6.00</span></div>
       <div class="sum-row"><span class="sum-k">积分赠品</span><span class="sum-v">200 积分</span></div>
-      <div class="sum-row sum-total"><span class="sum-k">应付金额</span><span class="sum-v sum-pay">¥57.80</span></div>
+      <div class="sum-row sum-total"><span class="sum-k">应付金额</span><span class="sum-v sum-pay">¥199.00</span></div>
     </div>
 
     <div class="spacer"></div>
   </div>
-  <div class="bottom-bar"><div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div><div class="bottom-main"><div class="bottom-total-wrap"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">57</span><span class="price-dec">.80</span></div><div class="submit-btn btn-primary">提交订单 ¥57.80</div></div></div>
+  <div class="bottom-bar"><div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div><div class="bottom-main"><div class="bottom-total-wrap"><div class="bottom-total-line"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">199</span><span class="price-dec">.00</span></div><span class="bottom-total-sub">已优惠 ¥25.00</span></div><div class="submit-btn btn-primary">提交订单</div></div></div>
 </div>
 </body>
 </html>

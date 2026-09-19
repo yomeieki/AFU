@@ -27,16 +27,16 @@ const PORT = argPort !== -1 ? Number(process.argv[argPort + 1]) : 5180
 // 每个预览页用到的组件 wxss（随 usingComponents 手工登记）
 const PAGE_COMPONENTS = {
   cover: ['privacy-popup'],
-  index: ['empty-state'],
+  index: ['empty-state', 'local-cart-bar', 'promo-bar'],
   'product-detail': ['sku-popup'],
-  'product-list': ['empty-state'],
+  'product-list': ['empty-state', 'local-cart-bar', 'promo-bar'],
   cart: ['empty-state'],
   'order-list': ['empty-state', 'order-status-tag'],
   'address-list': ['empty-state'],
   'local-index': ['sku-popup', 'empty-state'],
   // 同城主页（pages/index 在 LOCAL 渠道）：门店头 + 外送/自取切换栏
-  'index-local': ['empty-state', 'local-store-header', 'local-mode-bar'],
-  'index-local-pickup': ['empty-state', 'local-store-header', 'local-mode-bar'],
+  'index-local': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar'],
+  'index-local-pickup': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar'],
   'local-pickup': ['checkout-benefits', 'tableware-sheet'],
   'local-pickup-picker': ['checkout-benefits'],
   'order-confirm': ['checkout-benefits'],

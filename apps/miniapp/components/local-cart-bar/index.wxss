@@ -98,6 +98,7 @@
 .cart-summary-sub { display: block; margin-top: 3rpx; color: #a8a8a8; font-size: 21rpx; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .local-cart-bar .checkout-btn {
   height: 68rpx;
+  min-height: 32px;
   min-width: 200rpx;
   padding: 0 40rpx;
   font-size: 28rpx;
