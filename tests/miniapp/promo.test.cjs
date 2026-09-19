@@ -197,3 +197,30 @@ test('父页仅在其它优惠变化时传值，避免组件回传导致递归�
     assert.equal(patches.some(v => Object.hasOwn(v, 'otherDiscount')), false)
   }
 })
+test('结算条量高上报含提示的整体高度，空车归零且不重复通知', () => {
+  let config, height = 44
+  const events = []
+  const file = path.resolve(__dirname, '../../apps/miniapp/components/local-cart-bar/index.js')
+  const wx = { nextTick: fn => fn(), createSelectorQuery: () => {
+    const q = { in: () => q, select: () => q, boundingClientRect: () => q, exec: fn => fn([{ height }]) }; return q
+  } }
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
+    require: dep => dep.startsWith('../../api/') ? {} : require(path.resolve(path.dirname(file), dep)),
+    Component: c => { config = c }, wx,
+  })
+  const c = { data: { ...structuredClone(config.data), count: 1 }, ...config.methods,
+    setData(p) { Object.assign(this.data, p) }, triggerEvent(n, d) { if (n === 'height') events.push(d.px) } }
+  c.measureDock(); c.measureDock()
+  height = 72; c.measureDock()
+  c.data.count = 0; c.measureDock(); c.measureDock()
+  assert.deepEqual(events, [44, 72, 0])
+})
+test('结算条优惠请求失败隐藏提示、取消划线金额', async () => {
+  const { c } = cartComponent(async () => ({ items: [] }), async () => { throw new Error('offline') })
+  c.data.count = 2; c.data.amount = 6000; c.data.promoFen = 500; c.data.tip = { show: true }
+  await c.loadPromo()
+  assert.equal(c.data.tip.show, false)
+  assert.equal(c.data.origText, '')
+  assert.equal(c.data.amountText, '¥60.00')
+  assert.doesNotMatch(c.data.subText, /已减/)
+})
