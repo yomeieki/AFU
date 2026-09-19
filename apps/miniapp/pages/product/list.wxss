@@ -266,11 +266,7 @@
 }
 .add-btn-disabled { background: var(--text-disabled, #c8c9cc); }
 
-/* 同城下底部有购物车条（内容 112rpx + 安全区）。这一页右侧是 scroll-view，
-   给 .page 加 padding 没用——要让出空位的是那个滚动容器的内容底部。 */
-.page-local .prod-panel {
-  padding-bottom: calc(132rpx + env(safe-area-inset-bottom));
-}
+.cart-spacer { width: 100%; }
 
 /* 分段：段头与 Task 5 的浮动条尺寸必须完全一致，滚到 0 时两者重叠得看不出是两层 */
 .group-anchor { padding-bottom: 8rpx; }

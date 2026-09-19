@@ -17,6 +17,7 @@ const app = getApp()
 
 Page({
   data: {
+    cartSpacerPx: 0,
     channel: 'EXPRESS',
     // 同城专用
     meta: null,
@@ -42,6 +43,14 @@ Page({
     tailHeight: 0,         // 最后一段之后的补白（px），量出来的
     catalogLoading: false, // 分组视图拉全量中 → 骨架屏
     channelSheetOpen: false, // 渠道切换弹层（两侧标识共用）
+  },
+
+  onCartHeight: function(e) {
+    var px = e.detail.px || 0
+    if (px !== this.data.cartSpacerPx) {
+      this.setData({ cartSpacerPx: px })
+      this.afterGroupsRendered()
+    }
   },
 
   onLoad() {
@@ -240,10 +249,10 @@ Page({
         }
         self._offsets = offsets
         // 最后一段顶不上去就永远亮不了：补白 = 可视高 − 最后段高。可视高取 scroll-view 自身高与「窗口底到面板顶」的较小值
-        // （同城下 .prod-panel 有给购物车条让位的 padding-bottom，盒子比可视区高，多补一点空白无害，少补才是 bug）
+        // 占位块与补白分开算：cartSpacerPx 已在滚动内容末尾占位，补白只补剩余高度。
         var win = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
         var visible = Math.min(panel.height, win.windowHeight - panel.top)
-        var tail = Math.max(0, Math.round(visible - rects[rects.length - 1].height))
+        var tail = Math.max(0, Math.round(visible - rects[rects.length - 1].height - self.data.cartSpacerPx))
         if (tail !== self.data.tailHeight) self.setData({ tailHeight: tail })
       })
   },

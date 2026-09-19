@@ -300,11 +300,7 @@
 }
 .navbar-channel-hover { background: var(--brand-bg-deep, #fde5dc); }
 
-/* 同城下底部有购物车条（内容 112rpx + 安全区），页面要留出等高的空位，
-   否则最后一行商品会被压在条底下点不到。邮寄渠道没有这条，不占位。 */
-.page-local {
-  padding-bottom: calc(132rpx + env(safe-area-inset-bottom));
-}
+.cart-spacer { width: 100%; }
 
 /* 同城商品卡的快速加购按钮。卡片底行原本是「价格 + 已售」，同城下换成「价格 + ＋」——
    已售数字对现拌凉菜意义不大，而加购按钮必须够大够好点（44pt 下限）。 */

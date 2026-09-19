@@ -153,6 +153,7 @@
     </view>
   </view>
 
+  <view class="cart-spacer" style="height: {{cartSpacerPx}}px;"></view>
 </view>
 
 <!-- 同城购物车条。fixed 在 tabBar 之上（tabBar 是画在 WebView 之外的原生组件，

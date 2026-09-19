@@ -17,6 +17,7 @@ const app = getApp()
 
 Page({
   data: {
+    cartSpacerPx: 0,
     // 自绘导航栏尺寸，onLoad 时按胶囊按钮实测值算出（见 computeNavBar）
     statusBarHeight: 0,
     navContent: 44,
@@ -33,6 +34,13 @@ Page({
     categories: [],
     products: [],
     loading: true,
+  },
+
+  onCartHeight: function(e) {
+    var px = e.detail.px || 0
+    if (px !== this.data.cartSpacerPx) {
+      this.setData({ cartSpacerPx: px })
+    }
   },
 
   onLoad() {

@@ -136,6 +136,7 @@
               </view>
             </view>
             <view class="group-tail" style="height: {{tailHeight}}px;"></view>
+            <view class="cart-spacer" style="height: {{cartSpacerPx}}px;"></view>
           </block>
         </block>
         <!-- 搜索视图（仅邮寄）：平铺 + 翻页，原样保留 -->
@@ -146,6 +147,7 @@
           </view>
           <view wx:if="{{loading}}" class="footer-tip"><text>加载中...</text></view>
           <view wx:elif="{{!hasMore && list.length > 0}}" class="footer-tip"><text>- 没有更多了 -</text></view>
+          <view class="cart-spacer" style="height: {{cartSpacerPx}}px;"></view>
         </block>
       </scroll-view>
 
