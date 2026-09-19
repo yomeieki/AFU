@@ -13,12 +13,14 @@ const { formatPrice } = require('../../utils/format')
 const catalogApi = require('../../api/catalog')
 const { getLocalMeta } = require('../../api/local')
 const { headNoticeOf, resolveLocalMode } = require('../../utils/local-catalog')
+var promoTypeOf = require('../../utils/promo').promoTypeOf
 const app = getApp()
 
 Page({
   data: {
     cartSpacerPx: 0,
     promotion: null,
+    promoType: 'EXPRESS',
     // 自绘导航栏尺寸，onLoad 时按胶囊按钮实测值算出（见 computeNavBar）
     statusBarHeight: 0,
     navContent: 44,
@@ -131,6 +133,7 @@ Page({
       products: [],
       meta: channel === 'LOCAL' ? this.data.meta : null,
       mode: channel === 'LOCAL' ? app.getLocalMode() : 'DELIVERY',
+      promoType: promoTypeOf(channel, app.getLocalMode()),
       headBlocking: false,
       promotion: null,
     })
@@ -182,6 +185,7 @@ Page({
           meta: meta,
           promotion: meta && meta.promotion,
           mode: mode,
+          promoType: promoTypeOf('LOCAL', mode),
           headBlocking: headNoticeOf(meta, mode).blocking,
           loading: false,
         })
@@ -212,7 +216,7 @@ Page({
           return
         }
         var mode = app.getLocalMode()
-        self.setData({ meta: meta, promotion: meta.promotion, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
+        self.setData({ meta: meta, promotion: meta.promotion, mode: mode, promoType: promoTypeOf('LOCAL', mode), headBlocking: headNoticeOf(meta, mode).blocking })
       })
       .catch(function() {
         // 保留上一次的 meta：拉不到店铺状态时，把营业中的店显示成打烊比不刷新更糟
@@ -231,7 +235,7 @@ Page({
 
   // 子模式变了：阻塞态按新模式重算，购物车条的按钮跟着变（去向与起送线都不一样）
   applyMode(mode) {
-    this.setData({ mode: mode, headBlocking: headNoticeOf(this.data.meta, mode).blocking })
+    this.setData({ mode: mode, promoType: promoTypeOf(this.data.channel, mode), headBlocking: headNoticeOf(this.data.meta, mode).blocking })
     this.refreshCartBar()
   },
   onModeChange(e) {

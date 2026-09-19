@@ -72,6 +72,8 @@
     <channel-badge channel="{{channel}}" bind:switch="openChannelSheet" />
   </view>
 
+  <promo-bar promotion="{{promotion}}" delivery-type="{{promoType}}" />
+
   <!-- Active search chip（搜索模式：点 × 清除并回到分组视图） -->
   <view class="category-tag-bar" wx:if="{{searchKeyword}}">
     <view class="category-tag">

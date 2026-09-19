@@ -29,3 +29,11 @@ test('主页和分类页两个渠道都挂载结算条并监听高度', () => {
     assert.match(tag, /bind:height="onCartHeight"/)
   }
 })
+test('两页活动条位于条件链之外并注册组件', () => {
+  for (const p of ['pages/index/index', 'pages/product/list']) {
+    const tag = read(p + '.wxml').match(/<promo-bar\b[^>]*>/)
+    assert.ok(tag)
+    assert.doesNotMatch(tag[0], /wx:elif/)
+    assert.equal(JSON.parse(read(p + '.json')).usingComponents['promo-bar'], '/components/promo-bar/index')
+  }
+})

@@ -52,6 +52,8 @@
     </view>
   </view>
 
+  <promo-bar promotion="{{promotion}}" delivery-type="{{promoType}}" />
+
   <!-- 同城「外送 / 自取」切换栏：页头之下、分类区之上（spec P2）。
        必须放在上面那条 wx:if / wx:elif 链**之外**——插在链中间会让 banner 的 wx:elif 绑到它身上。 -->
   <local-mode-bar wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:change="onModeChange" />

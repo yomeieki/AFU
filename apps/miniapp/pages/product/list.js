@@ -13,12 +13,14 @@ const catalogApi = require('../../api/catalog')
 const { getLocalMeta } = require('../../api/local')
 const { headNoticeOf, resolveLocalMode } = require('../../utils/local-catalog')
 var catalogGroups = require('../../utils/catalog-groups')
+var promoTypeOf = require('../../utils/promo').promoTypeOf
 const app = getApp()
 
 Page({
   data: {
     cartSpacerPx: 0,
     promotion: null,
+    promoType: 'EXPRESS',
     channel: 'EXPRESS',
     // 同城专用
     meta: null,
@@ -113,6 +115,7 @@ Page({
       hasMore: true,
       meta: channel === 'LOCAL' ? this.data.meta : null,
       mode: channel === 'LOCAL' ? app.getLocalMode() : 'DELIVERY',
+      promoType: promoTypeOf(channel, app.getLocalMode()),
       headBlocking: false,
       promotion: null,
     })
@@ -138,7 +141,7 @@ Page({
           return
         }
         var mode = resolve ? app.setLocalMode(resolveLocalMode(meta, app.getLocalMode())) : app.getLocalMode()
-        self.setData({ meta: meta, promotion: meta.promotion, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
+        self.setData({ meta: meta, promotion: meta.promotion, mode: mode, promoType: promoTypeOf('LOCAL', mode), headBlocking: headNoticeOf(meta, mode).blocking })
         self.afterGroupsRendered() // 门店头第一次画出来会把右侧往下推，要重量
       })
       .catch(function() {
@@ -462,7 +465,7 @@ Page({
 
   // 子模式变了：阻塞态按新模式重算，购物车条的按钮跟着变（去向与起送线都不一样）
   applyMode(mode) {
-    this.setData({ mode: mode, headBlocking: headNoticeOf(this.data.meta, mode).blocking })
+    this.setData({ mode: mode, promoType: promoTypeOf(this.data.channel, mode), headBlocking: headNoticeOf(this.data.meta, mode).blocking })
     this.refreshCartBar()
     this.afterGroupsRendered() // 外送/自取切换会改页头高度，要重量
   },

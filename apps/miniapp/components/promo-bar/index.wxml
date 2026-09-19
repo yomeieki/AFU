@@ -1,0 +1,5 @@
+<view wx:if="{{bar.show}}" class="promo-bar" bindtap="onTapDetail">
+  <text class="promo-badge">减</text>
+  <text class="promo-summary">{{bar.name}}　{{bar.summary}}</text>
+  <text class="promo-detail">详情 ›</text>
+</view>

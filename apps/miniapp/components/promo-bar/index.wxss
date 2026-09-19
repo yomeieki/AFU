@@ -1,0 +1,4 @@
+.promo-bar { display: flex; align-items: center; gap: 12rpx; background: #fff7f2; border-top: 1rpx solid var(--brand-bg-deep); padding: 12rpx 28rpx; font-size: 24rpx; color: #c2410c; }
+.promo-badge { flex-shrink: 0; background: var(--brand); color: #fff; font-size: 21rpx; border-radius: 6rpx; padding: 1rpx 6rpx; }
+.promo-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.promo-detail { flex-shrink: 0; color: var(--text-3); font-size: 23rpx; }

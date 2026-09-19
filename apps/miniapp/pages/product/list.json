@@ -6,6 +6,7 @@
     "channel-badge": "/components/channel-badge/index",
     "local-mode-bar": "/components/local-mode-bar/index",
     "local-cart-bar": "/components/local-cart-bar/index",
-    "local-sku-picker": "/components/local-sku-picker/index"
+    "local-sku-picker": "/components/local-sku-picker/index",
+    "promo-bar": "/components/promo-bar/index"
   }
 }
