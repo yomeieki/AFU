@@ -49,3 +49,8 @@ test('三个结算页满减行位于指定明细位置，统一使用组合计�
   assert.doesNotMatch(read('pages/local/confirm.js'), /d\.subtotal - d\.discount \+ fee \+ d\.packingFee/)
   assert.doesNotMatch(read('pages/order/confirm.js'), /this\.data\.totalAmount - this\.data\.discount \+ \(this\.data\.shippingFee \|\| 0\)/)
 })
+test('三种结算页将其它优惠传给优惠券组件', () => {
+  for (const p of ['local/confirm', 'local/pickup', 'order/confirm']) {
+    assert.match(read('pages/' + p + '.wxml').match(/<checkout-benefits\b[\s\S]*?\/>/)[0], /other-discount="{{otherDiscount}}"/)
+  }
+})

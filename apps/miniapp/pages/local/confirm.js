@@ -64,6 +64,7 @@ function selectedItems(cart, cartItemIds) {
 
 Page({
   data: {
+    otherDiscount: 0,
     promoFen: 0,
     promoDiscount: 0,
     couponDiscount: 0,
@@ -438,8 +439,10 @@ Page({
     var fee = (d.quote && d.quote.fee) || 0
     var r = composePay({ subtotal: d.subtotal, pickupDiscount: 0, promoFen: d.promoFen,
       couponDiscount: d.discount, shippingFee: fee, packingFee: d.packingFee })
-    this.setData({ payAmount: r.payAmount, promoDiscount: r.promoDiscount,
-      couponDiscount: r.couponDiscount, totalCut: r.totalCut })
+    var patch = { payAmount: r.payAmount, promoDiscount: r.promoDiscount,
+      couponDiscount: r.couponDiscount, totalCut: r.totalCut }
+    if (d.otherDiscount !== r.promoDiscount) patch.otherDiscount = r.promoDiscount
+    this.setData(patch)
   },
 
   onDecrease: function(e) {

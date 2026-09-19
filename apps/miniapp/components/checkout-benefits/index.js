@@ -7,10 +7,8 @@ var member = require('../../api/member')
  *
  *   bind:change → { couponId, gifts, discount, pointsUsed }
  *
- * `discount` **一律是服务端算好的 `coupons[].discount`**，组件不自己算
- * `min(面额, 小计)`（spec §6）。这条不是洁癖：封顶规则、门槛判定、渠道判定
- * 都在服务端的 `checkCouponUsable` 里，前端复制一份就等于承诺两边永远同步——
- * 而门槛比的是券前小计、封顶到小计这些细节，抄错一处就是每单都算错钱。
+ * `discount` 取服务端 coupons[].discount，再按父页传入的自取优惠 + 满减二次封顶。
+ * 门槛与选券资格仍使用减前 subtotal，组件不读取活动档位。
  *
  * ── 失败时必须把选择清空 ───────────────────────────────────────────
  *
@@ -20,6 +18,7 @@ var member = require('../../api/member')
  */
 Component({
   properties: {
+    otherDiscount: { type: Number, value: 0 },
     channel: { type: String, value: 'EXPRESS' },
     // 券前商品小计（分）。父页金额变了要重新拉——门槛与封顶都依赖它
     subtotal: { type: Number, value: 0 },
@@ -57,6 +56,9 @@ Component({
   },
 
   observers: {
+    otherDiscount: function() {
+      if (this.data.state === 'ready' || this.data.state === 'empty') this._emit()
+    },
     'channel, subtotal': function () {
       this._scheduleLoad()
     },
@@ -240,8 +242,8 @@ Component({
           break
         }
       }
-      // discount 只从服务端给的值取；取不到就是 0，绝不本地推算
-      if (sel && sel.usable) discount = sel.discount || 0
+      // 保留服务端原抵扣额，活动变化后可以重新封顶或恢复。
+      if (sel && sel.usable) discount = Math.min(sel.discount || 0, Math.max(0, this.data.subtotal - (this.properties.otherDiscount || 0)))
 
       var gifts = []
       var pointsUsed = 0
@@ -255,12 +257,12 @@ Component({
       }
 
       // 「预计得 N 分」：口径必须与服务端 calcEarn 一致 ——
-      //   服务端：floor(actualAmount / 100) × rate，其中 actualAmount = 小计 − 券 + 运费
-      // 少加运费就会比实际到账少「运费元数 × rate」（同城单配送费恒 > 0，每单都错）。
+      //   服务端：floor(actualAmount / 100) × rate，其中 actualAmount = 小计 − 自取优惠 − 满减 − 券 + 运费 + 打包费
+      // 此处尚未传入打包费，积分仍为估算值；正式积分以服务端订单完成时为准。
       // 文案带「预计」是必须的：真实得分在订单**完成**时才结算，中间还可能退款按比例扣回。
       var earnText = ''
       if (this.data.pointsEnabled && this.data.earnRatePerYuan > 0) {
-        var payFen = this.data.subtotal - discount + (this.properties.shippingFee || 0)
+        var payFen = this.data.subtotal - (this.properties.otherDiscount || 0) - discount + (this.properties.shippingFee || 0)
         if (payFen < 0) payFen = 0
         var earn = Math.floor(payFen / 100) * this.data.earnRatePerYuan
         if (earn > 0) earnText = '预计获得 ' + earn + ' 积分'

@@ -10,6 +10,7 @@ const app = getApp()
 
 Page({
   data: {
+    otherDiscount: 0,
     promoFen: 0,
     promoDiscount: 0,
     couponDiscount: 0,
@@ -156,8 +157,10 @@ Page({
     var d = this.data
     var r = composePay({ subtotal: d.totalAmount, promoFen: d.promoFen,
       couponDiscount: d.discount, shippingFee: d.shippingFee })
-    this.setData({ payAmount: r.payAmount, promoDiscount: r.promoDiscount,
-      couponDiscount: r.couponDiscount, totalCut: r.totalCut })
+    var patch = { payAmount: r.payAmount, promoDiscount: r.promoDiscount,
+      couponDiscount: r.couponDiscount, totalCut: r.totalCut }
+    if (d.otherDiscount !== r.promoDiscount) patch.otherDiscount = r.promoDiscount
+    this.setData(patch)
   },
 
   // 组件只抛四个值，本页不看它内部状态。换券不打接口——包邮/运费按券前小计判，

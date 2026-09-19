@@ -32,6 +32,7 @@ function decorateSlot(slot, day) {
 
 Page({
   data: {
+    otherDiscount: 0,
     promoFen: 0,
     promoState: 'idle',
     promoDiscount: 0,
@@ -238,7 +239,7 @@ Page({
     var amounts = st.computePickupPay(d.subtotal, d.discountRule, d.discount, packingFee, d.promoFen)
     var gap = Math.max(0, localCatalog.minOrderOf(d.meta, 'PICKUP') - d.subtotal)
     var payAmount = (d.items.length && d.promoState === 'ready') ? amounts.payAmount : null
-    this.setData({
+    var patch = {
       pickupDiscount: amounts.pickupDiscount,
       promoDiscount: amounts.promoDiscount,
       totalCut: amounts.pickupDiscount + amounts.promoDiscount + amounts.couponDiscount,
@@ -261,7 +262,10 @@ Page({
         benefitsLoading: d.benefitsLoading,
         submitting: d.submitting,
       }),
-    })
+    }
+    var otherDiscount = amounts.pickupDiscount + amounts.promoDiscount
+    if (d.otherDiscount !== otherDiscount) patch.otherDiscount = otherDiscount
+    this.setData(patch)
   },
 
   // ── 时段选择器 ──────────────────────────────────────────────

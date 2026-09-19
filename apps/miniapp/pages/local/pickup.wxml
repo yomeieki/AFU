@@ -78,6 +78,7 @@
 
   <!-- 优惠券与积分赠品。subtotal 传原小计：券门槛按原小计判（spec P6）；运费恒 0 -->
   <checkout-benefits
+    other-discount="{{otherDiscount}}"
     id="benefits"
     channel="LOCAL"
     subtotal="{{subtotal}}"

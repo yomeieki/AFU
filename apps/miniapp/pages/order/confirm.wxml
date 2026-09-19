@@ -62,6 +62,7 @@
   <!-- 会员优惠（M4）。subtotal 传**券前**商品小计：服务端拿它判门槛，
        传券后的值会让「满 50 减 10」在小计正好 50 时判不通过 -->
   <checkout-benefits
+    other-discount="{{otherDiscount}}"
     id="benefits"
     channel="EXPRESS"
     subtotal="{{totalAmount}}"

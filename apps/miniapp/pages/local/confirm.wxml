@@ -70,6 +70,7 @@
        同城页没有逐项金额卡（配送费在配送信息块里显示），优惠的明细由组件自己那行
        「优惠券 −¥X · 赠品 N 积分」承担，不另造一个金额区。 -->
   <checkout-benefits
+    other-discount="{{otherDiscount}}"
     id="benefits"
     channel="LOCAL"
     subtotal="{{subtotal}}"

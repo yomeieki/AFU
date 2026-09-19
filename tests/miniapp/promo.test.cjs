@@ -170,3 +170,30 @@ test('自取活动关闭不请求、清旧满减并恢复旧金额', async () =>
   assert.equal(p.data.promoState, 'ready')
   assert.equal(p.data.payAmount, 5400)
 })
+test('优惠券显示随其它优惠封顶，并在取消满减后恢复原抵扣额', () => {
+  let config, last
+  const file = path.resolve(__dirname, '../../apps/miniapp/components/checkout-benefits/index.js')
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), { require: () => ({}), Component: c => { config = c } })
+  const c = { data: { ...structuredClone(config.data), state: 'ready', subtotal: 6000, coupons: [{ id: 1, usable: true, discount: 6000 }], selectedCouponId: 1 },
+    properties: { otherDiscount: 800, shippingFee: 600 }, setData(p) { Object.assign(this.data, p) }, triggerEvent(n, d) { last = d }, ...config.methods }
+  c._emit()
+  assert.equal(c.data.discount, 5200)
+  assert.equal(last.discount, 5200)
+  c.properties.otherDiscount = 0
+  config.observers.otherDiscount.call(c)
+  assert.equal(c.data.discount, 6000)
+})
+test('父页仅在其它优惠变化时传值，避免组件回传导致递归重算', () => {
+  for (const name of ['local/confirm', 'local/pickup', 'order/confirm']) {
+    const p = checkoutPage(name)
+    const patches = []
+    p.setData({ subtotal: 6000, totalAmount: 6000, promoFen: 500, promoState: 'ready', quoteToken: 'token', quote: { fee: 600 }, items: [{ quantity: 2 }], discountRule: { type: 'PERCENT', value: 95 } })
+    p.setData = function(v) { patches.push(v); Object.assign(this.data, v) }
+    const recompute = p.syncPayAmount || p.recalcPay || p.recompute
+    recompute.call(p)
+    assert.equal(p.data.otherDiscount, name === 'local/pickup' ? 800 : 500)
+    patches.length = 0
+    recompute.call(p)
+    assert.equal(patches.some(v => Object.hasOwn(v, 'otherDiscount')), false)
+  }
+})
