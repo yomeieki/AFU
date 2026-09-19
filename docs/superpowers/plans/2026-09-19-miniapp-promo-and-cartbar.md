@@ -13,6 +13,8 @@
 - 仓库与分支：worktree `/Users/yumingyi/food-shop/.claude/worktrees/miniapp-promo`，分支 `claude/miniapp-promo`，基线 main `7f3374d`（当前 HEAD `58201f1` 只多一份预览 HTML）。**只在这个目录工作，不 cd 到主检出，不裸 `git stash`。**
 - 本 worktree **没有 `node_modules`**（2026-09-19 实测）。`npm run -s test:miniapp` 只用 `node:test`，不装依赖也能跑；但 ES5 闸门 `scripts/check-miniapp-es5.mjs` 需要 `acorn`——先在 worktree 根 `npm install`（主仓已有 `node_modules/acorn`，说明它是可装的传递依赖），**不要**改 `package.json` 去加依赖。
 
+- **统筹更正（2026-09-19）：不要在 worktree 里 `npm install`。** 本 worktree 位于主仓目录之下，Node 解析依赖会向上找到主仓的 `node_modules`：统筹方已实测在本 worktree 根直接运行 `node scripts/check-miniapp-es5.mjs apps/miniapp/utils/channel.js` 输出「ES5 ✔ … 全部通过」、`npm run -s test:miniapp` 输出 `tests 193 / pass 193 / fail 0`。装依赖只会白生成一份 `node_modules` 并可能改动 `package-lock.json`（白名单外）。若某条命令真的报找不到模块，停下上报，不要自行安装。
+
 ---
 
 ## 1. 需求（店主原话要点 + 已拍板）
