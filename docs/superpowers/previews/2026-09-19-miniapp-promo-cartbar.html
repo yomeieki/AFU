@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>满减显示与结算条 · 小程序预览</title>
+<style>
+  :root{--brand:#e5441e;--brand2:#ff6a3d;--brand-bg:#fef4f0;--t1:#1f2329;--t2:#4e5969;--t3:#86909c;--div:#eef0f2;--bg:#f5f6f7;--ok:#16a34a}
+  *{box-sizing:border-box}
+  body{margin:0;background:#e6e8eb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',sans-serif;color:var(--t1)}
+  .hd{background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;padding:18px 26px}
+  .hd h1{margin:0;font-size:18px}.hd p{margin:5px 0 0;font-size:13px;opacity:.93;line-height:1.6}
+  .wrap{padding:18px 26px 70px}
+  .sec{margin-top:30px}.sec>h2{font-size:15px;margin:0 0 5px}
+  .sec>.note{font-size:13px;color:#5c6670;margin:0 0 14px;line-height:1.75;max-width:900px}
+  .phones{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+  .col{display:flex;flex-direction:column;gap:6px}
+  .cap{font-size:12px;color:#4e5969;padding-left:4px}.cap b{color:#1f2329}
+  .cap.bad b{color:#b42318}.cap.good b{color:#14663a}
+  .phone{width:375px;height:640px;flex-shrink:0;background:var(--bg);border:1px solid #cdd2d8;border-radius:22px;overflow:hidden;position:relative;box-shadow:0 2px 10px rgba(0,0,0,.07)}
+  .phone.short{height:auto}
+  /* 原生导航 */
+  .nav{height:44px;background:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:16px;position:relative}
+  .capsule{position:absolute;right:8px;top:7px;width:87px;height:30px;border:1px solid #e5e6eb;border-radius:16px;background:#fff}
+  /* 门店头 */
+  .store{background:#fff;padding:8px 14px 10px}
+  .store .r1{display:flex;align-items:center;gap:7px}
+  .store .nm{font-size:17px;font-weight:700}
+  .pill{font-size:11px;padding:1px 7px;border-radius:10px;background:#e8f7ee;color:var(--ok)}
+  .chan{margin-left:auto;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--brand-bg);color:var(--brand)}
+  .store .r2{font-size:11.5px;color:var(--t3);margin-top:5px}
+  /* 活动条 */
+  .promo{display:flex;align-items:center;gap:6px;background:#fff7f2;border-top:1px solid #fde5dc;padding:6px 14px;font-size:12px;color:#c2410c}
+  .promo .tag{background:var(--brand);color:#fff;border-radius:3px;font-size:10.5px;padding:0 4px;line-height:16px}
+  .promo .more{margin-left:auto;color:var(--t3);font-size:11.5px}
+  .newbox{outline:1.5px dashed #16a34a;outline-offset:-2px}
+  /* 外送/自取 */
+  .mode{display:flex;background:#fff;margin:6px 10px;border-radius:8px;overflow:hidden;font-size:14px}
+  .mode span{flex:1;text-align:center;padding:8px 0;color:var(--t2)}
+  .mode span.on{background:var(--brand-bg);color:var(--brand);font-weight:600}
+  /* 左右栏 */
+  .body{display:flex;height:calc(100% - 44px - 58px - 44px);}
+  .body.hasPromo{height:calc(100% - 44px - 58px - 30px - 44px)}
+  .cats{width:92px;background:#f2f3f5;flex-shrink:0;font-size:13px;color:var(--t2);overflow:hidden}
+  .cats div{padding:15px 6px;text-align:center}
+  .cats div.on{background:#fff;color:var(--brand);font-weight:600;border-left:3px solid var(--brand)}
+  .goods{flex:1;background:#fff;overflow:hidden;position:relative}
+  .gh{font-size:13px;font-weight:600;padding:8px 10px}
+  .g{display:flex;gap:9px;padding:8px 10px;border-bottom:1px solid var(--div)}
+  .g .img{width:70px;height:70px;border-radius:6px;background:linear-gradient(135deg,#f3d9c9,#e9b99c);flex-shrink:0}
+  .g .img.b{background:linear-gradient(135deg,#dbe8f3,#b8cfe3)}
+  .g .inf{flex:1;display:flex;flex-direction:column}
+  .g .n{font-size:14px;font-weight:600}
+  .g .s{font-size:11px;color:var(--ok);margin-top:3px}
+  .g .p{margin-top:auto;display:flex;align-items:center}
+  .g .p b{color:var(--brand);font-size:16px}.g .p small{color:var(--t3);font-size:11px;margin-left:2px}
+  .add{margin-left:auto;width:24px;height:24px;border-radius:12px;background:var(--brand);color:#fff;text-align:center;line-height:23px;font-size:18px}
+  .spacer{height:96px;background:repeating-linear-gradient(45deg,#f0fdf4,#f0fdf4 6px,#dcfce7 6px,#dcfce7 12px);display:flex;align-items:center;justify-content:center;font-size:11px;color:#14663a}
+  /* 底部：原生 tabBar */
+  .tabbar{position:absolute;left:0;right:0;bottom:0;height:50px;background:#fff;border-top:1px solid #e5e6eb;display:flex;font-size:10px;color:var(--t3)}
+  .tabbar div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+  .tabbar i{display:block;width:20px;height:20px;border:2px solid currentColor;border-radius:5px}
+  .tabbar .on{color:var(--brand)}
+  .tabbar .bdg{position:relative}
+  .tabbar .bdg:after{content:"3";position:absolute;top:-6px;right:-9px;background:var(--brand);color:#fff;font-size:9px;border-radius:7px;min-width:14px;height:14px;line-height:14px;text-align:center}
+  /* 旧黑条 */
+  .oldbar{position:absolute;left:0;right:0;bottom:50px;background:#2b2b2b;display:flex;align-items:center;justify-content:space-between;padding:7px 12px;box-shadow:0 -2px 8px rgba(0,0,0,.12)}
+  .oldbar .badge{min-width:21px;height:21px;border-radius:11px;background:var(--brand);color:#fff;font-size:11px;text-align:center;line-height:21px;margin-right:7px}
+  .oldbar .tt{color:#e5e5e5;font-size:11px;line-height:1.2}
+  .oldbar .am{color:#fff;font-size:16px;font-weight:600;margin-top:2px;line-height:1.2}
+  .oldbar .btn{height:40px;padding:0 24px;border-radius:20px;background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;font-size:15px;font-weight:600;display:flex;align-items:center}
+  /* 新：进度条 + 薄黑条 */
+  .dock{position:absolute;left:0;right:0;bottom:50px}
+  .tip{background:#fff7e6;color:#9a3412;font-size:12px;text-align:center;padding:5px 10px;border-top:1px solid #fde7c7}
+  .tip b{color:var(--brand)}
+  .tip.done{background:#f0fdf4;color:#166534;border-top-color:#dcfce7}
+  .newbar{background:#2b2b2b;display:flex;align-items:center;padding:5px 6px 5px 12px;height:44px}
+  .cart{position:relative;width:34px;height:34px;border-radius:17px;background:#3c3c3c;display:flex;align-items:center;justify-content:center;margin-right:9px;flex-shrink:0}
+  .cart:before{content:"";width:15px;height:12px;border:2px solid #fff;border-top-width:3px;border-radius:0 0 3px 3px}
+  .cart span{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:var(--brand);color:#fff;font-size:10px;text-align:center;line-height:16px;padding:0 3px}
+  .newbar .am{color:#fff;font-size:17px;font-weight:700;letter-spacing:.2px}
+  .newbar .am s{color:#8c8c8c;font-size:11.5px;font-weight:400;margin-left:5px}
+  .newbar .sub{color:#a8a8a8;font-size:10.5px;margin-top:1px}
+  .newbar .btn{margin-left:auto;height:34px;padding:0 20px;border-radius:17px;background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;white-space:nowrap}
+  .ruler{font-size:11.5px;color:#6b7280;padding:4px 4px 0;line-height:1.6;max-width:375px}
+  .ruler b{color:#1f2329}
+  /* 结算页 */
+  .sheet{background:#fff;margin:10px;border-radius:10px;padding:12px 14px}
+  .sheet h4{margin:0 0 8px;font-size:14px}
+  .mr{display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;color:var(--t2)}
+  .mr .cut{color:var(--brand)}
+  .mr .h{color:var(--t3);font-size:11.5px;margin-left:6px}
+  .mr.sum{border-top:1px solid var(--div);margin-top:6px;padding-top:9px;font-size:15px;color:var(--t1);font-weight:600}
+  .mr.sum b{color:var(--brand);font-size:18px}
+  .coupon{display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;color:var(--t2)}
+  .coupon span:last-child{color:var(--brand)}
+  .paybar{position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1px solid #e5e6eb;display:flex;align-items:center;padding:8px 12px 22px}
+  .paybar .t{font-size:13px;color:var(--t2)}.paybar .t b{color:var(--brand);font-size:20px}
+  .paybar .t small{display:block;color:var(--brand);font-size:11px}
+  .paybar .btn{margin-left:auto;height:40px;padding:0 26px;border-radius:20px;background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;font-size:15px;font-weight:600;display:flex;align-items:center}
+  .states{display:flex;flex-direction:column;gap:10px;width:375px}
+  .state{border:1px solid #cdd2d8;border-radius:10px;overflow:hidden;background:#fff}
+  .state .lb{font-size:11.5px;color:#4e5969;padding:5px 10px;background:#f6f7f9;border-bottom:1px solid #e5e7eb}
+  table.rule{border-collapse:collapse;font-size:13px;background:#fff;border-radius:8px;overflow:hidden}
+  table.rule td,table.rule th{border-bottom:1px solid #eef0f2;padding:7px 12px;text-align:left}
+  table.rule th{background:#f6f7f9}
+</style>
+</head>
+<body>
+<div class="hd">
+  <h1>满减显示 + 结算条压薄 + 底部遮挡 · 小程序预览</h1>
+  <p>每台都是 375 宽手机；示例按你线上的「满 200 减 20」画。绿色虚线框 = 这次新加的东西。<br>订单内容、价格是示例，只为看版式。</p>
+</div>
+<div class="wrap">
+
+<div class="sec">
+  <h2>① 分类页（同城）：改前 vs 改后</h2>
+  <p class="note">
+    <b>改后三处变化：</b>① 门店头下面多一条<b>活动条</b>「满减 满 200 减 20」，点「详情」看全部档位和「可与优惠券叠加」；
+    ② 结算条上方一条<b>进度提示</b>「再买 ¥131 减 ¥20」；③ <b>黑条压薄</b>：从约 54px 降到 44px（跟美团同一个高度），左边合成一行，按钮调矮但仍然好按。<br>
+    右边列表滚到底：最后一件<b>完整露在黑条上面</b>，下面那块斜纹就是这次补的真空白（只为示意，实际是透明的）。
+  </p>
+  <div class="phones">
+    <div class="col">
+      <div class="cap bad"><b>改前（你截图的样子）</b></div>
+      <div class="phone">
+        <div class="nav">分类<div class="capsule"></div></div>
+        <div class="store"><div class="r1"><span class="nm">阿福凉菜</span><span class="pill">营业中</span><span class="chan">同城配送 ▾</span></div><div class="r2">配送范围 8 km · 满 ¥25 起送 · 基础运费 ¥4.50 起</div></div>
+        <div class="mode"><span class="on">外送</span><span>自取</span></div>
+        <div class="body">
+          <div class="cats"><div>阿福凉菜</div><div>特色菜</div><div>风味菜</div><div>鱼系列</div><div>素菜</div><div class="on">酒水/饮料</div></div>
+          <div class="goods">
+            <div class="gh">酒水/饮料</div>
+            <div class="g"><div class="img b"></div><div class="inf"><span class="n">苏打水</span><span class="s">仅剩 10 件</span><div class="p"><b>¥5.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+            <div class="g"><div class="img"></div><div class="inf"><span class="n">大郎歪</span><span class="s">仅剩 10 件</span><div class="p"><b>¥88.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+            <div class="g"><div class="img b"></div><div class="inf"><span class="n">燕京U8</span><span class="s">仅剩 10 件</span><div class="p"><b>¥8.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+          </div>
+        </div>
+        <div class="oldbar"><div style="display:flex;align-items:center"><span class="badge">3</span><div><div class="tt">共 3 件 · 券前小计</div><div class="am">¥69.00</div></div></div><div class="btn">去结算 · 外送</div></div>
+        <div class="tabbar"><div><i></i>主页</div><div class="on"><i></i>分类</div><div><i class="bdg"></i>购物车</div><div><i></i>我的</div></div>
+      </div>
+      <div class="ruler">最后一件「燕京U8」被黑条压住一半，<b>再也滚不上来</b>——空白加在滚动框自身的内边距上，真机微信不算进可滚动范围。</div>
+    </div>
+
+    <div class="col">
+      <div class="cap good"><b>改后</b>（滚到最底）</div>
+      <div class="phone">
+        <div class="nav">分类<div class="capsule"></div></div>
+        <div class="store"><div class="r1"><span class="nm">阿福凉菜</span><span class="pill">营业中</span><span class="chan">同城配送 ▾</span></div><div class="r2">配送范围 8 km · 满 ¥25 起送 · 基础运费 ¥4.50 起</div></div>
+        <div class="promo newbox"><span class="tag">减</span><span>满减　满 200 减 20</span><span class="more">详情 ›</span></div>
+        <div class="mode"><span class="on">外送</span><span>自取</span></div>
+        <div class="body hasPromo">
+          <div class="cats"><div>阿福凉菜</div><div>特色菜</div><div>风味菜</div><div>鱼系列</div><div>素菜</div><div class="on">酒水/饮料</div></div>
+          <div class="goods">
+            <div class="g"><div class="img"></div><div class="inf"><span class="n">大郎歪</span><span class="s">仅剩 10 件</span><div class="p"><b>¥88.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+            <div class="g"><div class="img b"></div><div class="inf"><span class="n">燕京U8</span><span class="s">仅剩 10 件</span><div class="p"><b>¥8.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+            <div class="spacer newbox">补在列表末尾的真空白（= 结算条高度）</div>
+          </div>
+        </div>
+        <div class="dock newbox">
+          <div class="tip">再买 <b>¥131</b> 减 <b>¥20</b></div>
+          <div class="newbar"><div class="cart"><span>3</span></div><div><div class="am">¥69.00</div><div class="sub">共 3 件</div></div><div class="btn">去结算 · 外送</div></div>
+        </div>
+        <div class="tabbar"><div><i></i>主页</div><div class="on"><i></i>分类</div><div><i class="bdg"></i>购物车</div><div><i></i>我的</div></div>
+      </div>
+      <div class="ruler">黑条 <b>44px</b>（改前约 54px），按钮 34px 高、宽度照旧；进度提示那条 <b>只在有活动时出现</b>，满减关着就不占地方。</div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>② 进度提示的三种状态</h2>
+  <p class="note">跟着购物车金额实时变。同城有「免运费」门槛时会一起提示（按你之前说的，点菜时就能看到还差多少免运费）；邮寄没有免运费门槛就只提示满减。门槛一律按<b>减前的商品小计</b>算（跟你定的规则一致）。</p>
+  <div class="states">
+    <div class="state"><div class="lb">没到满减</div><div class="tip">再买 <b>¥131</b> 减 <b>¥20</b></div><div class="newbar"><div class="cart"><span>3</span></div><div><div class="am">¥69.00</div><div class="sub">共 3 件</div></div><div class="btn">去结算 · 外送</div></div></div>
+    <div class="state"><div class="lb">到了满减，还没到免运费（同城）</div><div class="tip">已减 <b>¥20</b> · 再买 <b>¥29</b> 免运费</div><div class="newbar"><div class="cart"><span>7</span></div><div><div class="am">¥191.00<s>¥211.00</s></div><div class="sub">共 7 件 · 已减 ¥20</div></div><div class="btn">去结算 · 外送</div></div></div>
+    <div class="state"><div class="lb">都达成</div><div class="tip done">已减 <b>¥20</b> · 已免运费</div><div class="newbar"><div class="cart"><span>9</span></div><div><div class="am">¥226.00<s>¥246.00</s></div><div class="sub">共 9 件 · 已减 ¥20</div></div><div class="btn">去结算 · 外送</div></div></div>
+  </div>
+  <p class="note" style="margin-top:10px">达标后黑条上的金额直接显示<b>减完的数</b>，原价划线放旁边——顾客一眼看到省了多少。</p>
+</div>
+
+<div class="sec">
+  <h2>③ 分类页（全国邮寄）：也加上同样的结算条</h2>
+  <p class="note">跟同城一模一样的样子：列表里点「+」加菜，底下结算条直接去结算。原来的「购物车」页照样保留，从那边结算也行。活动条和进度提示也一起出现（你邮寄也开了满减）。</p>
+  <div class="phones">
+    <div class="col">
+      <div class="cap good"><b>改后 · 邮寄</b></div>
+      <div class="phone">
+        <div class="nav">分类<div class="capsule"></div></div>
+        <div class="store" style="padding-bottom:8px"><div class="r1"><span class="nm" style="font-size:15px">搜索商品</span><span class="chan">全国邮寄 ▾</span></div></div>
+        <div class="promo newbox"><span class="tag">减</span><span>满减　满 200 减 20</span><span class="more">详情 ›</span></div>
+        <div class="body hasPromo" style="height:calc(100% - 44px - 38px - 30px - 94px)">
+          <div class="cats"><div class="on">阿福凉菜</div><div>冷吃系列</div><div>卤味</div><div>红油</div></div>
+          <div class="goods">
+            <div class="gh">阿福凉菜</div>
+            <div class="g"><div class="img"></div><div class="inf"><span class="n">冷吃兔</span><span class="s">真空包装 · 顺丰冷链</span><div class="p"><b>¥58.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+            <div class="g"><div class="img"></div><div class="inf"><span class="n">红油耳叶</span><span class="s">真空包装</span><div class="p"><b>¥42.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+            <div class="g"><div class="img"></div><div class="inf"><span class="n">卤牛肉</span><span class="s">真空包装</span><div class="p"><b>¥68.00</b><small>/ 份</small><span class="add">+</span></div></div></div>
+          </div>
+        </div>
+        <div class="dock newbox">
+          <div class="tip">再买 <b>¥32</b> 减 <b>¥20</b></div>
+          <div class="newbar"><div class="cart"><span>3</span></div><div><div class="am">¥168.00</div><div class="sub">共 3 件 · 运费结算时算</div></div><div class="btn">去结算 · 邮寄</div></div>
+        </div>
+        <div class="tabbar"><div><i></i>主页</div><div class="on"><i></i>分类</div><div><i class="bdg"></i>购物车</div><div><i></i>我的</div></div>
+      </div>
+      <div class="ruler">邮寄运费按重量和地址算，所以黑条上写「运费结算时算」，不假装知道。</div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>④ 结算页：金额明细多一行「满减」，应付跟微信实扣一致</h2>
+  <p class="note">这是现在「显示和实扣对不上」的根治：应付不再由小程序自己算，改用服务器算好的数（服务器早就会算满减了）。顺序跟小票一致：商品小计 → 打包费 → 满减 → 优惠券 → 配送费。</p>
+  <div class="phones">
+    <div class="col">
+      <div class="cap good"><b>同城外送结算页 · 金额部分</b></div>
+      <div class="phone" style="height:520px">
+        <div class="nav">确认订单<div class="capsule"></div></div>
+        <div class="sheet">
+          <h4>金额明细</h4>
+          <div class="mr"><span>商品小计</span><span>¥211.00</span></div>
+          <div class="mr"><span>打包费</span><span>¥7.00</span></div>
+          <div class="mr newbox"><span>满减<span class="h">满 200 减 20</span></span><span class="cut">−¥20.00</span></div>
+          <div class="coupon"><span>优惠券</span><span>−¥5.00　满50减5 ›</span></div>
+          <div class="mr"><span>配送费</span><span>¥6.00</span></div>
+          <div class="mr sum"><span>应付</span><b>¥199.00</b></div>
+        </div>
+        <div class="paybar"><div class="t">应付 <b>¥199.00</b><small>已优惠 ¥25.00</small></div><div class="btn">提交订单</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>⑤ 这次做 / 不做</h2>
+  <table class="rule">
+    <tr><th>做</th><th>不做（保持之前的决定）</th></tr>
+    <tr><td>主页、分类页门店头下的活动条（同城、邮寄都有）</td><td>商品卡上逐道菜打「满减」标签（之前定过不打）</td></tr>
+    <tr><td>结算条压薄 + 进度提示；邮寄也加结算条</td><td>后台、服务端（早就准备好了）</td></tr>
+    <tr><td>列表末尾补真空白，最后一件不再被挡（分类页 + 搜索结果）</td><td>购物车页改版（只加一行进度提示）</td></tr>
+    <tr><td>三个结算页加「满减」行，应付改用服务器算的数</td><td></td></tr>
+    <tr><td>订单详情页加「满减」行</td><td></td></tr>
+  </table>
+</div>
+
+</div>
+</body>
+</html>
