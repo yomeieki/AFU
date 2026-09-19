@@ -91,7 +91,7 @@
   </view>
 
   <!-- 金额明细（Spec §5.5 + 2026-09-13 打包费设计 §4.1 加打包费行）。
-       固定六行口径，顺序不变：商品金额 / 打包费 / 优惠券 / 配送费 / 积分赠品 / 应付金额。
+       固定六行口径，顺序不变：商品金额 / 打包费 / 满减 / 优惠券 / 配送费 / 积分赠品 / 应付金额。
        打包费行仅在 packingFee > 0 时显示。
        任何 pending / error / blocked 状态下都不显示旧的应付金额——
        底部那一条也一样，两处必须同时变，否则会出现「上面写着待计算、下面还有个数」。 -->
@@ -105,9 +105,13 @@
       <text class="sum-k">打包费</text>
       <text class="sum-v">¥{{pricefmt.fen(packingFee)}}</text>
     </view>
-    <view wx:if="{{discount > 0}}" class="sum-row">
+    <view wx:if="{{promoDiscount > 0}}" class="sum-row">
+      <text class="sum-k">满减</text>
+      <text class="sum-v sum-cut">−¥{{pricefmt.fen(promoDiscount)}}</text>
+    </view>
+    <view wx:if="{{couponDiscount > 0}}" class="sum-row">
       <text class="sum-k">优惠券</text>
-      <text class="sum-v sum-cut">−¥{{pricefmt.fen(discount)}}</text>
+      <text class="sum-v sum-cut">−¥{{pricefmt.fen(couponDiscount)}}</text>
     </view>
     <view class="sum-row">
       <text class="sum-k">配送费</text>
@@ -153,6 +157,7 @@
        不再各拼一串三元表达式——那样迟早会出现「按钮变灰了但上面还写着一个金额」。 -->
   <view class="bottom-main">
     <view class="bottom-total-wrap">
+      <view class="bottom-total-line">
       <text class="bottom-total-label">合计</text>
       <block wx:if="{{action.amountState === 'ready'}}">
         <text class="price-symbol">¥</text>
@@ -161,6 +166,8 @@
       </block>
       <text wx:elif="{{action.amountState === 'error'}}" class="bottom-calculating">待重新计算</text>
       <text wx:else class="bottom-calculating">待计算</text>
+      </view>
+      <text wx:if="{{action.amountState === 'ready' && totalCut > 0}}" class="bottom-total-sub">已优惠 ¥{{pricefmt.fen(totalCut)}}</text>
     </view>
     <!-- 文案只有八种、且都很短。长原因（「超出配送范围（约 12.4 km）」之类）
          走上面的提示条，塞进按钮在 320 宽的机器上必然溢出。 -->

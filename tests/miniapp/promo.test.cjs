@@ -116,3 +116,57 @@ test('清空购物车使在途满减响应失效，错误响应隐藏提示', as
   assert.equal(c.data.promoFen, 0)
   assert.equal(c.data.tip.show, false)
 })
+function checkoutPage(name, apis = {}) {
+  let config
+  const file = path.resolve(__dirname, '../../apps/miniapp/pages/' + name + '.js')
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
+    require: dep => dep.startsWith('../../api/') ? (apis[dep.slice(10)] || {}) : dep === '../../utils/request' ? {} : dep === '../../utils/subscribe' ? {} : require(path.resolve(path.dirname(file), dep)),
+    Page: c => { config = c }, getApp: () => ({ globalData: {} }), wx: {}, console,
+  })
+  config.data = structuredClone(config.data)
+  config.setData = function(p) { Object.assign(this.data, p) }
+  return config
+}
+test('真实外送与邮寄页面组合报价满减、券封顶及费用', () => {
+  const l = checkoutPage('local/confirm')
+  l.setData({ quoteToken: 'token', quote: { fee: 600 }, subtotal: 6000, promoFen: 500, discount: 6000, packingFee: 200 })
+  l.syncPayAmount()
+  assert.equal(l.data.payAmount, 800)
+  assert.equal(l.data.couponDiscount, 5500)
+  assert.equal(l.data.totalCut, 6000)
+  const e = checkoutPage('order/confirm')
+  e.setData({ totalAmount: 6000, promoFen: 500, discount: 500, shippingFee: 600 })
+  e.recalcPay()
+  assert.equal(e.data.payAmount, 5600)
+  assert.equal(e.data.promoDiscount, 500)
+})
+test('自取满减请求在途不可提交，失败可重试，旧响应不能覆盖新结果', async () => {
+  const pending = []
+  const p = checkoutPage('local/pickup', { local: { getPromoPreview: (type, amount) => new Promise((resolve, reject) => pending.push({ resolve, reject, type, amount })) } })
+  p.setData({ items: [{ quantity: 2, packingFeeEach: 100 }], subtotal: 6000, discountRule: { type: 'PERCENT', value: 95 }, discount: 500, selected: { startAt: 'slot' }, hasAnySlot: true, slotsLoading: false, contactPhone: '13800009901', tableware: { mode: 'NONE' } })
+  const first = p.loadPromo()
+  assert.equal(p.data.payAmount, null)
+  assert.equal(p.data.action.disabled, true)
+  const second = p.loadPromo()
+  pending[1].reject(new Error('network'))
+  await second
+  assert.equal(p.data.action.action, 'promo')
+  assert.equal(p.data.action.disabled, false)
+  pending[0].resolve({ active: true, discountFen: 999 })
+  await first
+  assert.equal(p.data.promoState, 'error')
+  const third = p.loadPromo()
+  pending[2].resolve({ active: true, discountFen: 500 })
+  await third
+  assert.equal(p.data.payAmount, 4900)
+  assert.equal(p.data.totalCut, 1300)
+  assert.equal(p.data.action.action, 'submit')
+})
+test('自取活动关闭不请求、清旧满减并恢复旧金额', async () => {
+  const p = checkoutPage('local/pickup', { local: { getPromoPreview: () => { throw new Error('must not request') } } })
+  p.setData({ items: [{ quantity: 2, packingFeeEach: 100 }], subtotal: 6000, promoFen: 500, meta: { promotion: { active: false } }, discountRule: { type: 'PERCENT', value: 95 }, discount: 500 })
+  await p.loadPromo()
+  assert.equal(p.data.promoFen, 0)
+  assert.equal(p.data.promoState, 'ready')
+  assert.equal(p.data.payAmount, 5400)
+})

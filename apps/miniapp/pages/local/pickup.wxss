@@ -136,3 +136,7 @@
 .slot-cell { padding: 18rpx 0; border-radius: 10rpx; background: var(--bg); color: var(--text-1); font-size: 26rpx; text-align: center; }
 .slot-cell.active { background: var(--brand); color: #fff; font-weight: 600; }
 .slot-grid-empty { padding: 60rpx 0; color: var(--text-3); font-size: 26rpx; text-align: center; }
+
+.bottom-total-wrap { flex-direction: column; align-items: flex-start; }
+.bottom-total-line { display: flex; align-items: baseline; }
+.bottom-total-sub { display: block; font-size: 22rpx; color: var(--brand); }

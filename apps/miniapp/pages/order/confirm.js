@@ -1,3 +1,4 @@
+var composePay = require('../../utils/checkout-pay').composePay
 const { getCart } = require('../../api/cart')
 const { getAddresses } = require('../../api/address')
 const { createOrder, getOrderMeta } = require('../../api/order')
@@ -9,6 +10,10 @@ const app = getApp()
 
 Page({
   data: {
+    promoFen: 0,
+    promoDiscount: 0,
+    couponDiscount: 0,
+    totalCut: 0,
     // 购物车结算：cartItemIds；立即购买：mode=direct + directItem（不经购物车）
     mode: 'cart',
     cartItemIds: [],
@@ -98,12 +103,12 @@ Page({
     var self = this
     var seq = (this._quoteSeq = (this._quoteSeq || 0) + 1)
     if (!this.data.address) {
-      this.setData({ quote: null, quoteToken: null, quoteExpiresAtMs: 0, quoting: false, quoteError: '', shippingFee: 0, blockReason: '请选择收货地址' })
+      this.setData({ promoFen: 0, quote: null, quoteToken: null, quoteExpiresAtMs: 0, quoting: false, quoteError: '', shippingFee: 0, blockReason: '请选择收货地址' })
       this.recalcPay()
       return
     }
     if (!this.data.items.length) {
-      this.setData({ quote: null, quoteToken: null, quoteExpiresAtMs: 0, quoting: false, quoteError: '', shippingFee: 0, blockReason: '' })
+      this.setData({ promoFen: 0, quote: null, quoteToken: null, quoteExpiresAtMs: 0, quoting: false, quoteError: '', shippingFee: 0, blockReason: '' })
       this.recalcPay()
       return
     }
@@ -118,6 +123,7 @@ Page({
         self.setData({
           quoting: false,
           quote: q,
+          promoFen: q.promoDiscountFen || 0,
           quoteToken: block ? null : q.quoteToken,
           quoteExpiresAtMs: Date.parse(q.quoteExpiresAt) || 0,
           shippingFee: q.feeFen,
@@ -131,12 +137,12 @@ Page({
         var code = err && err.code
         if (code === 42260) {
           // 不寄送：页面内提示 + 禁付款，不 toast
-          self.setData({ quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, quoteError: '', blockReason: err.message || '该地区暂不支持邮寄' })
+          self.setData({ promoFen: 0, quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, quoteError: '', blockReason: err.message || '该地区暂不支持邮寄' })
         } else if (code === 42262 || code === 42224 || code === 42202 || code === 42201) {
-          self.setData({ quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, quoteError: '', blockReason: err.message })
+          self.setData({ promoFen: 0, quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, quoteError: '', blockReason: err.message })
         } else {
           var rateLimited = code === 42901 || code === 429
-          self.setData({ quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, blockReason: '', quoteError: rateLimited ? '操作太频繁，请稍后再试' : '运费获取失败' })
+          self.setData({ promoFen: 0, quoting: false, quote: null, quoteToken: null, quoteExpiresAtMs: 0, shippingFee: 0, blockReason: '', quoteError: rateLimited ? '操作太频繁，请稍后再试' : '运费获取失败' })
           if (rateLimited && !self._retriedRateLimit) { self._retriedRateLimit = true; setTimeout(function() { self.refreshQuote('retry') }, 3000) }
         }
         self.recalcPay()
@@ -145,10 +151,13 @@ Page({
 
   onRetryQuote() { this.refreshQuote('retry') },
 
-  // 合计 = 小计 − 券 + 运费（券只抵商品，不抵运费）
+  // 合计 = 小计 − 满减 − 封顶券 + 运费（优惠只抵商品）
   recalcPay() {
-    var pay = this.data.totalAmount - this.data.discount + (this.data.shippingFee || 0)
-    this.setData({ payAmount: pay < 0 ? 0 : pay })
+    var d = this.data
+    var r = composePay({ subtotal: d.totalAmount, promoFen: d.promoFen,
+      couponDiscount: d.discount, shippingFee: d.shippingFee })
+    this.setData({ payAmount: r.payAmount, promoDiscount: r.promoDiscount,
+      couponDiscount: r.couponDiscount, totalCut: r.totalCut })
   },
 
   // 组件只抛四个值，本页不看它内部状态。换券不打接口——包邮/运费按券前小计判，
@@ -182,7 +191,7 @@ Page({
       .catch(function() {
         // request 已 toast；标记失败禁止提交，避免空单/¥0 也能点提交。quoting 也一并落地，
         // 否则按钮虽被 loadFailed 挡住，运费行会一直卡在「计算中…」。
-        self.setData({ items: [], totalAmount: 0, shippingFee: 0, payAmount: 0, loadFailed: true, quoting: false })
+        self.setData({ promoFen: 0, promoDiscount: 0, couponDiscount: 0, totalCut: 0, items: [], totalAmount: 0, shippingFee: 0, payAmount: 0, loadFailed: true, quoting: false })
       })
   },
 

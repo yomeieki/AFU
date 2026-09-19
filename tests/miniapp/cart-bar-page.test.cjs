@@ -37,3 +37,15 @@ test('两页活动条位于条件链之外并注册组件', () => {
     assert.equal(JSON.parse(read(p + '.json')).usingComponents['promo-bar'], '/components/promo-bar/index')
   }
 })
+test('三个结算页满减行位于指定明细位置，统一使用组合计价', () => {
+  for (const [p, before] of [['local/confirm', '打包费'], ['local/pickup', '自取优惠'], ['order/confirm', '商品金额']]) {
+    const w = read('pages/' + p + '.wxml').replace(/<!--[\s\S]*?-->/g, '')
+    assert.match(w, /<view\s+wx:if="{{promoDiscount > 0}}"[^>]*>\s*<text[^>]*>满减<\/text>/)
+    assert.ok(w.indexOf('>' + before + '</text>') < w.indexOf('>满减</text>'))
+    assert.ok(w.indexOf('>满减</text>') < w.indexOf('>优惠券</text>'))
+    assert.match(w, /已优惠/)
+  }
+  for (const p of ['pages/local/confirm.js', 'pages/order/confirm.js', 'utils/pickup-checkout-state.js']) assert.match(read(p), /composePay\(/)
+  assert.doesNotMatch(read('pages/local/confirm.js'), /d\.subtotal - d\.discount \+ fee \+ d\.packingFee/)
+  assert.doesNotMatch(read('pages/order/confirm.js'), /this\.data\.totalAmount - this\.data\.discount \+ \(this\.data\.shippingFee \|\| 0\)/)
+})

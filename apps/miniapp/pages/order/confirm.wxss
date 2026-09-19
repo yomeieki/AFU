@@ -237,3 +237,7 @@
 .row-value.discount {
   color: var(--brand);
 }
+
+.bottom-total-wrap { flex-direction: column; align-items: flex-start; }
+.bottom-total-line { display: flex; align-items: baseline; }
+.bottom-total-sub { display: block; font-size: 22rpx; color: var(--brand); }

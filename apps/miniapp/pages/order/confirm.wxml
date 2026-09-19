@@ -76,9 +76,13 @@
       <text class="row-label">商品金额</text>
       <text class="row-value">¥{{pricefmt.fen(totalAmount)}}</text>
     </view>
-    <view wx:if="{{discount > 0}}" class="row">
+    <view wx:if="{{promoDiscount > 0}}" class="row">
+      <text class="row-label">满减</text>
+      <text class="row-value discount">−¥{{pricefmt.fen(promoDiscount)}}</text>
+    </view>
+    <view wx:if="{{couponDiscount > 0}}" class="row">
       <text class="row-label">优惠券</text>
-      <text class="row-value discount">−¥{{pricefmt.fen(discount)}}</text>
+      <text class="row-value discount">−¥{{pricefmt.fen(couponDiscount)}}</text>
     </view>
     <view wx:if="{{pointsUsed > 0}}" class="row">
       <text class="row-label">积分赠品</text>
@@ -123,10 +127,13 @@
   <view wx:elif="{{blockReason}}" class="min-order-tip">{{blockReason}}</view>
   <view class="bottom-main">
     <view class="bottom-total-wrap">
+      <view class="bottom-total-line">
       <text class="bottom-total-label">合计</text>
       <text class="price-symbol">¥</text>
       <text class="price-int bottom-total-int">{{pricefmt.int(pricefmt.fen(payAmount))}}</text>
       <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
+      </view>
+      <text wx:if="{{!quoting && !blockReason && !quoteError && totalCut > 0}}" class="bottom-total-sub">已优惠 ¥{{pricefmt.fen(totalCut)}}</text>
     </view>
     <view
       class="submit-btn btn-primary {{submitting || quoting || blockReason || quoteError ? 'btn-disabled' : ''}}"

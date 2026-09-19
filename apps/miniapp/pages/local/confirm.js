@@ -1,3 +1,4 @@
+var composePay = require('../../utils/checkout-pay').composePay
 var cartApi = require('../../api/cart')
 var getCart = cartApi.getCart
 var updateCartItem = cartApi.updateCartItem
@@ -63,6 +64,10 @@ function selectedItems(cart, cartItemIds) {
 
 Page({
   data: {
+    promoFen: 0,
+    promoDiscount: 0,
+    couponDiscount: 0,
+    totalCut: 0,
     cartItemIds: [],
     items: [],
     subtotal: 0,
@@ -206,7 +211,7 @@ Page({
       .catch(function() {
         self.setData({
           blockReason: '商品信息加载失败，请返回同城菜单重试',
-          quoteToken: null, quoteExpiresAtMs: 0, payAmount: null, quoting: false,
+          promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null, quoting: false,
         })
         self.syncAction()
       })
@@ -235,7 +240,7 @@ Page({
       this.haltQuote('请先选择同城商品')
       return
     }
-    this.setData({ quoting: true, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '' })
+    this.setData({ quoting: true, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '' })
     this.syncAction()
     quoteLocal(address.id, this.data.subtotal)
       .then(function(rawQuote) {
@@ -252,6 +257,8 @@ Page({
         var patch = {
           quoting: false,
           quote: quote,
+          promoFen: 0,
+          promoDiscount: 0,
           // 过期时刻由服务端随报价下发；解析不出来就按 0（不判过期），
           // 免得接口回滚到没有这个字段的版本时整页都提交不了。
           quoteExpiresAtMs: Date.parse(rawQuote.quoteExpiresAt) || 0,
@@ -282,6 +289,7 @@ Page({
           patch.quoteToken = null
           patch.payAmount = null
         } else {
+          patch.promoFen = quote.promoDiscountFen || 0
           patch.blockReason = ''
           patch.quoteToken = quote.quoteToken
           // 券只抵扣商品金额，不抵扣配送费。打包费与运费同层相加，不参与券封顶。
@@ -300,12 +308,12 @@ Page({
       .catch(function(err) {
         if (seq !== self._quoteSeq) return
         if (err.code === 42223) {
-          self.setData({ quoting: false, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', blockReason: err.message || '该地址缺少定位，请补充后再下单' })
+          self.setData({ quoting: false, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', blockReason: err.message || '该地址缺少定位，请补充后再下单' })
           self.syncAction()
           return
         }
         if (err.code === 42226) {
-          self.setData({ quoting: false, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', headNotice: err.message, headBlocking: true, blockReason: err.message })
+          self.setData({ quoting: false, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, quoteError: '', headNotice: err.message, headBlocking: true, blockReason: err.message })
           self.syncAction()
           return
         }
@@ -313,7 +321,7 @@ Page({
         if (rateLimited) wx.showToast({ title: '操作太频繁，请稍后再试', icon: 'none' })
         self.setData({
           quoting: false,
-          quoteToken: null,
+          promoFen: 0, promoDiscount: 0, quoteToken: null,
           quoteExpiresAtMs: 0,
           payAmount: null,
           quoteError: rateLimited ? '操作太频繁，请稍后再试' : '运费获取失败',
@@ -339,7 +347,7 @@ Page({
       clearTimeout(this._quoteTimer)
       this._quoteTimer = null
     }
-    this.setData({ quoting: true, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null })
+    this.setData({ quoting: true, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null })
     this.syncAction()
   },
 
@@ -348,7 +356,7 @@ Page({
   // 且只在它判定为阻塞（暂停/未开通/打烊）时才显示，不阻塞就留空。
   haltQuote: function(reason) {
     this.setData({
-      quoting: false, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null,
+      quoting: false, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null,
       quoteError: '', blockReason: reason,
       headNotice: (this._metaNotice && this._metaNotice.blocking) ? this._metaNotice.text : '',
       headBlocking: !!(this._metaNotice && this._metaNotice.blocking),
@@ -420,7 +428,7 @@ Page({
    * payAmount 的唯一重算点，供 refreshQuote 成功分支 / onBenefitsChange /
    * recomputePackingFee 三处共用——公式必须逐字相同，散着各写一份迟早会分叉。
    *
-   * 公式：小计 − 优惠 + 配送费 + 打包费。只有 quoteToken 存在且当前既不阻塞、
+   * 公式：小计 − 满减 − 封顶券 + 配送费 + 打包费。只有 quoteToken 存在且当前既不阻塞、
    * 也没有报价失败时才写出一个非 null 的数字，否则按兵不动（降级分支该显示
    * 「待计算」的地方不能被这里悄悄填上一个数）。
    */
@@ -428,8 +436,10 @@ Page({
     var d = this.data
     if (!d.quoteToken || d.blockReason || d.quoteError) return
     var fee = (d.quote && d.quote.fee) || 0
-    var pay = d.subtotal - d.discount + fee + d.packingFee
-    this.setData({ payAmount: pay < 0 ? 0 : pay })
+    var r = composePay({ subtotal: d.subtotal, pickupDiscount: 0, promoFen: d.promoFen,
+      couponDiscount: d.discount, shippingFee: fee, packingFee: d.packingFee })
+    this.setData({ payAmount: r.payAmount, promoDiscount: r.promoDiscount,
+      couponDiscount: r.couponDiscount, totalCut: r.totalCut })
   },
 
   onDecrease: function(e) {
@@ -675,7 +685,7 @@ Page({
       return
     }
     if (code === 42220 || code === 42222 || code === 42226) {
-      this.setData({ blockReason: err.message, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null, headNotice: err.message, headBlocking: true })
+      this.setData({ blockReason: err.message, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null, headNotice: err.message, headBlocking: true })
       this.syncAction()
       wx.showToast({ title: err.message, icon: 'none', duration: 3000 })
       return

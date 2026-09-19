@@ -32,6 +32,10 @@ function decorateSlot(slot, day) {
 
 Page({
   data: {
+    promoFen: 0,
+    promoState: 'idle',
+    promoDiscount: 0,
+    totalCut: 0,
     cartItemIds: [],
     items: [],
     subtotal: 0,
@@ -139,8 +143,32 @@ Page({
       blockReason: notice.blocking ? notice.text : '',
       discountRule: meta && meta.pickup ? meta.pickup.discount : null,
     })
-    this.recompute()
+    this.loadPromo()
   },
+
+  loadPromo: function() {
+    var self = this
+    var seq = (this._promoSeq = (this._promoSeq || 0) + 1)
+    var promotion = this.data.meta && this.data.meta.promotion
+    if (!this.data.items.length || (promotion && (!promotion.active || (promotion.channels || {}).PICKUP === false))) {
+      this.setData({ promoFen: 0, promoState: 'ready' })
+      this.recompute()
+      return Promise.resolve()
+    }
+    this.setData({ promoState: 'loading' })
+    this.recompute()
+    return localApi.getPromoPreview('PICKUP', this.data.subtotal).then(function(res) {
+      if (seq !== self._promoSeq) return
+      self.setData({ promoFen: res.discountFen || 0, promoState: 'ready' })
+      self.recompute()
+    }, function() {
+      if (seq !== self._promoSeq) return
+      self.setData({ promoFen: 0, promoState: 'error' })
+      self.recompute()
+    })
+  },
+
+  onUnload: function() { this._promoSeq = (this._promoSeq || 0) + 1 },
 
   // 已有选择就只判它还在不在（不覆盖），没有选择才自动选第一格
   loadSlots: function() {
@@ -207,11 +235,13 @@ Page({
     // 会把这一项硬压成 0，而 items 里的 packingFeeEach 其实是非 0 的，导致顾客看到的
     // 应付比微信实扣少一笔打包费。
     var packingFee = st.packingFeeOf(d.items)
-    var amounts = st.computePickupPay(d.subtotal, d.discountRule, d.discount, packingFee)
+    var amounts = st.computePickupPay(d.subtotal, d.discountRule, d.discount, packingFee, d.promoFen)
     var gap = Math.max(0, localCatalog.minOrderOf(d.meta, 'PICKUP') - d.subtotal)
-    var payAmount = d.items.length ? amounts.payAmount : null
+    var payAmount = (d.items.length && d.promoState === 'ready') ? amounts.payAmount : null
     this.setData({
       pickupDiscount: amounts.pickupDiscount,
+      promoDiscount: amounts.promoDiscount,
+      totalCut: amounts.pickupDiscount + amounts.promoDiscount + amounts.couponDiscount,
       couponDiscount: amounts.couponDiscount,
       packingFee: amounts.packingFee,
       payAmount: payAmount,
@@ -226,6 +256,7 @@ Page({
         phoneValid: st.isValidPhone(d.contactPhone),
         belowMinGap: gap,
         payAmount: payAmount,
+        promoError: d.promoState === 'error',
         hasTableware: !!d.tableware,
         benefitsLoading: d.benefitsLoading,
         submitting: d.submitting,
@@ -298,7 +329,7 @@ Page({
       var items = selectedItems(cart || {}, self.data.cartItemIds)
       var subtotal = items.reduce(function(sum, item) { return sum + item.subtotal }, 0)
       self.setData({ items: items, subtotal: subtotal })
-      self.recompute()
+      self.loadPromo()
     })
   },
   onDecrease: function(e) {
@@ -382,6 +413,7 @@ Page({
   onSubmit: function() {
     var act = this.data.action || {}
     var self = this
+    if (act.action === 'promo') { this.loadPromo(); return }
     if (act.action === 'slot') {
       this.openPicker()
       return
@@ -419,6 +451,9 @@ Page({
       clientRequestId: this._clientRequestId,
     }, true)
       .then(function(res) {
+        if (typeof res.actualAmount === 'number' && res.actualAmount !== self.data.payAmount) {
+          console.warn('local/pickup payAmount 与服务端 actualAmount 不一致', self.data.payAmount, res.actualAmount)
+        }
         self._clientRequestId = newClientRequestId()
         wx.showToast({ title: '下单成功，请在 ' + self.data.payTimeoutMin + ' 分钟内完成支付', icon: 'none', duration: 1500 })
         setTimeout(function() {

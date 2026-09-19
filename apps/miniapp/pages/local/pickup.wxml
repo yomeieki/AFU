@@ -99,7 +99,7 @@
   </view>
 
   <!-- 金额明细（spec §5.4 + 2026-09-13 打包费设计 §4.1 加打包费行）：
-       商品金额 / 打包费 / 自取优惠 / 优惠券 / 积分赠品 / 应付金额。
+       商品金额 / 打包费 / 自取优惠 / 满减 / 优惠券 / 积分赠品 / 应付金额。
        打包费行仅在 packingFee > 0 时显示。 -->
   <view class="section card amount-section">
     <view class="section-title">金额明细</view>
@@ -114,6 +114,10 @@
     <view wx:if="{{pickupDiscount > 0}}" class="sum-row">
       <text class="sum-k">自取优惠</text>
       <text class="sum-v sum-cut">−¥{{pricefmt.fen(pickupDiscount)}}</text>
+    </view>
+    <view wx:if="{{promoDiscount > 0}}" class="sum-row">
+      <text class="sum-k">满减</text>
+      <text class="sum-v sum-cut">−¥{{pricefmt.fen(promoDiscount)}}</text>
     </view>
     <view wx:if="{{couponDiscount > 0}}" class="sum-row">
       <text class="sum-k">优惠券</text>
@@ -174,6 +178,7 @@
   </view>
   <view class="bottom-main">
     <view class="bottom-total-wrap">
+      <view class="bottom-total-line">
       <text class="bottom-total-label">合计</text>
       <block wx:if="{{action.amountState === 'ready'}}">
         <text class="price-symbol">¥</text>
@@ -181,6 +186,8 @@
         <text class="price-dec">{{pricefmt.dec(pricefmt.fen(payAmount))}}</text>
       </block>
       <text wx:else class="bottom-calculating">待计算</text>
+      </view>
+      <text wx:if="{{action.amountState === 'ready' && totalCut > 0}}" class="bottom-total-sub">已优惠 ¥{{pricefmt.fen(totalCut)}}</text>
     </view>
     <view class="submit-btn btn-primary {{action.disabled ? 'btn-disabled' : ''}}" bindtap="onSubmit">
       <text>{{action.text}}</text>
