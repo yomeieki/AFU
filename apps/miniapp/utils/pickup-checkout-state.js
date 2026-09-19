@@ -5,7 +5,7 @@
 // 必然出现「文案改了但按钮还能点」。
 //
 // 优先级：阻塞 → 时段加载中 → 时段获取失败 → 无可取时段 → 未选时段 → 时段失效 →
-// 手机号 → 起送线 → 金额未知 → 餐具 → 优惠重算中 → 提交中。
+// 手机号 → 起送线 → 满减获取失败 → 金额未知 → 餐具 → 优惠重算中 → 提交中。
 // 「未选时段」与「时段失效」这两格按钮**都可点**：前者动作是 slot（打开时段选择器），
 // 后者是 reslot（重新拉时段并打开选择器）——都不是提交，与「未选餐具」同一套处理，
 // 页面必须按 action 分派，绝不能以「按钮没禁用」推断该提交。
@@ -23,7 +23,10 @@
 
 var formatPrice = require('./format').formatPrice
 
+var composePay = require('./checkout-pay').composePay
+
 var TEXT = {
+  PROMO_RETRY: '重新计算优惠',
   BLOCKED: '暂不可自取',
   NO_SLOT: '请选择取餐时间',
   SLOT_LOADING: '正在获取时段…',
@@ -68,6 +71,7 @@ function pickupCheckoutAction(s) {
   if (st.slotStale) return result(false, TEXT.SLOT_STALE, 'pending', 'reslot')
   if (!st.phoneValid) return result(true, TEXT.NO_PHONE, 'ready', 'none')
   if (st.belowMinGap > 0) return result(true, '还差 ¥' + formatPrice(st.belowMinGap) + ' 起', 'ready', 'none')
+  if (st.promoError) return result(false, TEXT.PROMO_RETRY, 'pending', 'promo')
   if (st.payAmount === null || st.payAmount === undefined) return result(true, TEXT.SUBMIT, 'pending', 'none')
   // 餐具必选（餐具设计 T2）。放在金额未知之后——amountState='ready' 时金额一定算得出来
   // （spec §5.3 的顺序据此勘误）。按钮可点，动作是打开餐具弹层
@@ -94,15 +98,15 @@ function pickupDiscountOf(rule, subtotal) {
   return 0
 }
 
-/** 小计 → 自取优惠 → 券（封顶到 小计−自取优惠）→ 打包费 → 实付。运费恒 0，所以这里没有它。
- * 打包费不参与券封顶的判定（封顶只看 小计−自取优惠），只在最后原样加回来——
- * 与服务端 computeCheckout 的口径一致：packingFee 与 shippingFee 同层相加。 */
-function computePickupPay(subtotal, rule, couponDiscount, packingFee) {
-  var pd = pickupDiscountOf(rule, subtotal)
-  var cap = Math.max(0, subtotal - pd)
-  var cd = Math.min(couponDiscount || 0, cap)
-  var pf = packingFee || 0
-  return { pickupDiscount: pd, couponDiscount: cd, packingFee: pf, payAmount: subtotal - pd - cd + pf }
+/** 小计 → 自取优惠 → 满减 → 券 → 打包费；组合与封顶统一交给 composePay。 */
+function computePickupPay(subtotal, rule, couponDiscount, packingFee, promoFen) {
+  var r = composePay({ subtotal: subtotal, pickupDiscount: pickupDiscountOf(rule, subtotal),
+    promoFen: promoFen, couponDiscount: couponDiscount, packingFee: packingFee })
+  var result = { pickupDiscount: r.pickupDiscount, couponDiscount: r.couponDiscount,
+    packingFee: packingFee || 0, payAmount: r.payAmount }
+  // 保持旧四参数调用的返回形状；新结算页显式传入第五参数。
+  if (arguments.length >= 5) result.promoDiscount = r.promoDiscount
+  return result
 }
 
 /** 单份打包费（分）：优先取行上已解析好的 packingFeeEach（购物车行是扁平字段），

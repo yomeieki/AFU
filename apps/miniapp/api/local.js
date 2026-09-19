@@ -29,7 +29,12 @@ function getPickupSlots() {
   return request({ url: '/local/pickup-slots', silent: true })
 }
 
+function getPromoPreview(deliveryType, subtotal) {
+  return request({ url: '/local/promo-preview?deliveryType=' + deliveryType + '&subtotal=' + (subtotal || 0), silent: true })
+}
+
 module.exports = {
+  getPromoPreview: getPromoPreview,
   getLocalMeta: getLocalMeta,
   quoteLocal: quoteLocal,
   quoteLocalByLocation: quoteLocalByLocation,
