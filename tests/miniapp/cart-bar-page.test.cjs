@@ -54,3 +54,10 @@ test('三种结算页将其它优惠传给优惠券组件', () => {
     assert.match(read('pages/' + p + '.wxml').match(/<checkout-benefits\b[\s\S]*?\/>/)[0], /other-discount="{{otherDiscount}}"/)
   }
 })
+test('订单详情在自取优惠与优惠券之间显示满减快照', () => {
+  const w = read('pages/order/detail.wxml')
+  assert.match(w, /order\.promoDiscountAmount > 0/)
+  assert.ok(w.indexOf('order.pickupDiscountAmount > 0') < w.indexOf('order.promoDiscountAmount > 0'))
+  assert.ok(w.indexOf('order.promoDiscountAmount > 0') < w.indexOf('order.discountAmount > 0'))
+  assert.match(read('pages/order/detail.js'), /promoDiscountAmountText/)
+})

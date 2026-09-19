@@ -332,6 +332,7 @@ function decorateOrder(order) {
     phoneTail: (order.receiverPhone || '').slice(-4),
     pickupSlotLabel: order.pickup ? (order.pickup.slotLabel || '') : '',
     pickupStore: order.pickup ? order.pickup.store : null,
+    promoDiscountAmountText: formatPrice(order.promoDiscountAmount || 0),
     pickupDiscountAmountText: formatPrice(order.pickupDiscountAmount || 0),
     expressStageText: expressStageText,
     showExpressStage: !!expressStageText,

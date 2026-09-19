@@ -151,6 +151,10 @@
       <text class="amount-label">自取优惠</text>
       <text class="amount-value discount">−¥{{order.pickupDiscountAmountText}}</text>
     </view>
+    <view class="amount-row" wx:if="{{order.promoDiscountAmount > 0}}">
+      <text class="amount-label">满减</text>
+      <text class="amount-value discount">−¥{{order.promoDiscountAmountText}}</text>
+    </view>
     <view class="amount-row" wx:if="{{order.discountAmount > 0}}">
       <text class="amount-label">优惠券</text>
       <text class="amount-value discount">−¥{{order.discountAmountText}}</text>
