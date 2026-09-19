@@ -1,14 +1,8 @@
-/* 同城购物车条。样式沿用改版前 pages/local/index.wxss 的那一套（深色条 + 白字 + 品牌色角标），
-   顾客已经认得这个形状，改版不动它。 */
-
-/* 展开的明细面板。bottom 要让开合计条自身的高度（内容 112rpx + 安全区），
-   否则面板底部会被合计条压住最后一行。 */
 .cart-detail {
   position: fixed;
   z-index: 80;
   left: 0;
   right: 0;
-  bottom: calc(112rpx + env(safe-area-inset-bottom));
   max-height: 56vh;
   padding: 22rpx 24rpx 12rpx;
   background: var(--card);
@@ -80,50 +74,43 @@
 .stepper-btn.disabled { color: var(--text-disabled); }
 .stepper-num { min-width: 52rpx; text-align: center; font-size: 26rpx; }
 
-/* 合计条。**bottom: 0，不给 tabBar 留偏移**——tabBar 是画在 WebView 之外的原生组件，
-   tabBar 页的可视区本来就不含它，这里已经落在 tabBar 之上；再加偏移只会留出一条缝。
-   同 pages/cart/index.wxss 的 .bottom-bar。 */
+.cart-dock { position: fixed; z-index: 90; left: 0; right: 0; bottom: 0; }
 .local-cart-bar {
-  position: fixed;
-  z-index: 90;
-  left: 0;
-  right: 0;
-  bottom: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 14rpx 24rpx;
-  padding-bottom: calc(14rpx + env(safe-area-inset-bottom));
+  min-height: 88rpx;
+  box-sizing: border-box;
+  padding: 10rpx 12rpx 10rpx 24rpx;
+  padding-bottom: calc(10rpx + env(safe-area-inset-bottom));
   background: #2b2b2b;
   box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.12);
 }
-.cart-summary { display: flex; align-items: center; min-width: 0; color: #fff; }
-.cart-badge {
-  min-width: 42rpx;
-  height: 42rpx;
-  padding: 0 5rpx;
-  margin-right: 14rpx;
-  border-radius: 999rpx;
-  background: var(--brand);
-  color: #fff;
-  font-size: 22rpx;
-  line-height: 42rpx;
-  text-align: center;
+.cart-summary { display: flex; align-items: center; min-width: 0; flex: 1; color: #fff; }
+.cart-icon { position: relative; width: 68rpx; height: 68rpx; border-radius: 50%; background: #3c3c3c; flex-shrink: 0; margin-right: 14rpx; }
+.cart-drawing { position: absolute; left: 19rpx; top: 19rpx; width: 28rpx; height: 22rpx; border: 3rpx solid #fff; border-top: none; transform: skew(-8deg); }
+.cart-drawing::before { content: ''; position: absolute; left: -8rpx; top: -7rpx; width: 8rpx; border-top: 3rpx solid #fff; }
+.cart-drawing::after { content: ''; position: absolute; bottom: -11rpx; left: 2rpx; width: 5rpx; height: 5rpx; border-radius: 50%; background: #fff; box-shadow: 20rpx 0 #fff; }
+.cart-badge { position: absolute; top: -5rpx; right: -6rpx; min-width: 28rpx; height: 28rpx; padding: 0 5rpx; box-sizing: border-box; border-radius: 999rpx; background: var(--brand); color: #fff; font-size: 19rpx; line-height: 28rpx; text-align: center; }
+.cart-summary-text { min-width: 0; }
+.cart-summary-main { white-space: nowrap; line-height: 1.1; }
+.cart-summary-amount { color: #fff; font-size: 34rpx; font-weight: 700; }
+.cart-summary-orig { margin-left: 8rpx; color: #8c8c8c; font-size: 23rpx; text-decoration: line-through; }
+.cart-summary-sub { display: block; margin-top: 3rpx; color: #a8a8a8; font-size: 21rpx; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-cart-bar .checkout-btn {
+  height: 68rpx;
+  min-width: 200rpx;
+  padding: 0 40rpx;
+  font-size: 28rpx;
+  margin-left: auto;
   box-sizing: border-box;
   flex-shrink: 0;
-}
-.cart-summary-text { min-width: 0; }
-.cart-summary-title,
-.cart-summary-amount { display: block; line-height: 1.2; }
-.cart-summary-title { color: #e5e5e5; font-size: 22rpx; }
-.cart-summary-amount { margin-top: 4rpx; color: #fff; font-size: 32rpx; font-weight: 600; }
-.checkout-btn {
-  flex-shrink: 0;
-  min-width: 200rpx;
-  padding: 16rpx 32rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 999rpx;
-  font-size: 28rpx;
   font-weight: 600;
-  text-align: center;
   white-space: nowrap;
 }
+.cart-tip { font-size: 24rpx; padding: 10rpx 20rpx; text-align: center; background: #fff7e6; color: #9a3412; border-top: 1rpx solid #fde7c7; }
+.cart-tip-done { background: var(--success-bg); color: #166534; border-top-color: #dcfce7; }
+.cart-tip-em { color: var(--brand); font-weight: 600; }

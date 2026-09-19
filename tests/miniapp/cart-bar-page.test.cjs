@@ -13,3 +13,11 @@ test('主页底部按实测高度占位', () => {
   assert.doesNotMatch(read('pages/index/index.wxss'), /\.page-local\s*\{/)
   assert.match(read('pages/index/index.wxml'), /class="cart-spacer"/)
 })
+test('结算条固定尺寸并包含进度提示与整体高度容器', () => {
+  const css = read('components/local-cart-bar/index.wxss')
+  assert.match(css, /\.local-cart-bar\s*\{[^}]*min-height:\s*88rpx/)
+  assert.match(css, /\.local-cart-bar\s+\.checkout-btn\s*\{[^}]*height:\s*68rpx/)
+  assert.doesNotMatch(css, /112rpx/)
+  assert.match(read('components/local-cart-bar/index.wxml'), /class="cart-dock"/)
+  assert.match(read('components/local-cart-bar/index.wxml'), /cart-tip/)
+})

@@ -76,3 +76,43 @@ test('渠道按邮寄/自取/外送映射', () => {
   assert.equal(p.promoTypeOf('LOCAL', 'PICKUP'), 'PICKUP')
   assert.equal(p.promoTypeOf('LOCAL', 'DELIVERY'), 'LOCAL')
 })
+// 运行真实组件方法，只替换微信宿主和网络边界，验证渠道/异步响应隔离。
+const vm = require('node:vm')
+const fs = require('node:fs')
+const path = require('node:path')
+function cartComponent(getCart, getPromoPreview) {
+  let config
+  const events = []
+  const file = path.resolve(__dirname, '../../apps/miniapp/components/local-cart-bar/index.js')
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
+    require: name => name === '../../api/cart' ? { getCart } : name === '../../api/local' ? { getPromoPreview } : require(path.resolve(path.dirname(file), name)),
+    Component: c => { config = c }, wx: { nextTick: fn => fn(), navigateTo: e => events.push(e) },
+  })
+  const c = { data: structuredClone(config.data), properties: { channel: 'EXPRESS', mode: 'DELIVERY', meta: null, promotion: null },
+    setData(p, cb) { Object.assign(this.data, p); if (cb) cb() }, triggerEvent(name, value) { events.push({ name, value }) }, ...config.methods }
+  return { c, events, config }
+}
+test('邮寄条只统计勾选件数小计并只传勾选行去结算', async () => {
+  const { c, events } = cartComponent(async () => ({ items: [
+    { id: 1, quantity: 2, subtotal: 6000, price: 3000, isSelected: 1 },
+    { id: 2, quantity: 9, subtotal: 9000, price: 1000, isSelected: 0 },
+  ] }), async () => ({ active: false, discountFen: 0 }))
+  await c.refresh()
+  assert.equal(c.data.count, 2)
+  assert.equal(c.data.amount, 6000)
+  assert.equal(c.data.actionText, '去结算 · 邮寄')
+  c.goCheckout()
+  assert.equal(events.at(-1).url, '/pages/order/confirm?cartItemIds=1')
+})
+test('清空购物车使在途满减响应失效，错误响应隐藏提示', async () => {
+  let resolve
+  const { c } = cartComponent(async () => ({ items: [] }), () => new Promise(r => { resolve = r }))
+  c.data.count = 2; c.data.amount = 6000
+  const pending = c.loadPromo()
+  c.data.count = 0
+  await c.loadPromo()
+  resolve({ active: true, discountFen: 500 })
+  await pending
+  assert.equal(c.data.promoFen, 0)
+  assert.equal(c.data.tip.show, false)
+})
