@@ -53,7 +53,22 @@ function makeCtx(channel) {
     stopPullDownRefresh() {}, showToast() {}, switchTab() {}, navigateTo() {}, reLaunch() {},
     showNavigationBarLoading() {}, hideNavigationBarLoading() {},
     nextTick: (fn) => setTimeout(fn, 0),
-    createSelectorQuery: () => { const q = { in: () => q, select: () => q, selectAll: () => q, boundingClientRect: () => q, scrollOffset: () => q, exec: (cb) => cb([{ top: 0, height: 600 }, { scrollTop: 0 }, []]) }; return q },
+    pageScrollTo() {},
+    createSelectorQuery: () => {
+      const selections = []
+      let current
+      const q = {
+        in: () => q,
+        selectViewport: () => { current = 'viewport'; return q },
+        select: s => { current = s; return q }, selectAll: s => { current = s; return q },
+        boundingClientRect: () => { selections.push(['rect', current]); return q },
+        scrollOffset: () => { selections.push(['scroll', current]); return q },
+        exec: cb => cb(selections[0] && selections[0][1] === 'viewport'
+          ? selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: 0 } : s === '.catalog-toolbar' ? { top: 0, height: 40 } : s === '.catalog-body' ? { top: 100, height: 600 } : s === '.cat-panel' ? { top: 100, height: 600 } : s === '.group-anchor' || s === '.cat-item' ? [] : null)
+          : [{ top: 0, height: 600 }, { scrollTop: 0 }, []]),
+      }
+      return q
+    },
   }
   return { app, wx, urls }
 }

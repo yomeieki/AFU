@@ -13,12 +13,17 @@ const catalogApi = require('../../api/catalog')
 const { getLocalMeta } = require('../../api/local')
 const { headNoticeOf, resolveLocalMode } = require('../../utils/local-catalog')
 var catalogGroups = require('../../utils/catalog-groups')
+var categoryScroll = require('../../utils/category-scroll')
 var promoTypeOf = require('../../utils/promo').promoTypeOf
 const app = getApp()
 
 Page({
   data: {
     cartSpacerPx: 0,
+    pinnedHeight: 0,
+    sidebarTop: 0,
+    sidebarHeight: 0,
+    sidebarScrollTop: 0,
     promotion: null,
     promoType: 'EXPRESS',
     channel: 'EXPRESS',
@@ -36,22 +41,20 @@ Page({
     total: 0,
     hasMore: true,
     loading: false,
-    // 右侧 scroll-view 回顶用（值变化才生效，故在 0 / 0.5 间交替）
-    rightScrollTop: 0,
     // 分组视图
     groups: [],            // [{ id, name, items }]，左侧与右侧分段都渲染它
     activeGroupId: null,   // 当前高亮段；搜索模式下 wxml 不画高亮
     activeGroupName: '',   // 右侧顶部浮动条文字
-    scrollIntoView: '',    // 'g-<id>'，点左侧时设置
     tailHeight: 0,         // 最后一段之后的补白（px），量出来的
     catalogLoading: false, // 分组视图拉全量中 → 骨架屏
     channelSheetOpen: false, // 渠道切换弹层（两侧标识共用）
   },
 
   onCartHeight: function(e) {
-    var px = e.detail.px || 0
+    var px = typeof e.detail.px === 'number' && isFinite(e.detail.px) ? Math.max(0, e.detail.px) : 0
     if (px !== this.data.cartSpacerPx) {
       this.setData({ cartSpacerPx: px })
+      this._updateSidebarLayout()
       this.afterGroupsRendered()
     }
   },
@@ -62,6 +65,7 @@ Page({
 
   // 每次切到本 tab 都会触发。渠道变了就整页重来；否则只消费主页传来的分类意图。
   onShow() {
+    this._hidden = false
     if (app.getShoppingChannel() !== this.data.channel) {
       this.reloadForChannel()
       return
@@ -70,6 +74,7 @@ Page({
       if (app.getLocalMode() !== this.data.mode) this.applyMode(app.getLocalMode())
     }
     this.loadMeta()
+    this.afterGroupsRendered()
     this.refreshCartBar()
     var g = app.globalData
     if (g.pendingCategoryAll === true) {
@@ -79,8 +84,7 @@ Page({
       if (this.data.searchKeyword) {
         this.clearSearch()
       } else {
-        this.setData({ scrollIntoView: '' })
-        this.resetRightScroll()
+        this.scrollPageTo(0, 0)
       }
       if (this.data.groups.length) this.setActiveGroup(this.data.groups[0].id)
       else this._pendingLocateId = null
@@ -98,14 +102,27 @@ Page({
   // 不归零的话，新渠道的第一屏会先闪出上一个渠道的商品；activeGroupId 也可能
   // 指向一个当前渠道根本没有的分类，右侧会一直空着且看不出原因。
   reloadForChannel() {
+    this._invalidateMeasurements()
+    this._clearTimers()
+    this._pendingLocateId = null
+    this._anchorSnapshot = null
+    this._offsets = []
+    this._layout = null
+    this._pageScrollTop = 0
+    this._sidebarScrollTop = 0
+    this._lockUntil = 0
+    this._searchSeq = (this._searchSeq || 0) + 1
     var channel = app.getShoppingChannel()
     this.setData({
       channel: channel,
       groups: [],
       activeGroupId: null,
       activeGroupName: '',
-      scrollIntoView: '',
       tailHeight: 0,
+      sidebarTop: 0,
+      sidebarHeight: 0,
+      sidebarScrollTop: 0,
+      pinnedHeight: 0,
       catalogLoading: true,
       keyword: '',
       searchKeyword: '',
@@ -121,7 +138,7 @@ Page({
     })
     this._products = []
     this._offsets = []
-    this.resetRightScroll()
+    this.scrollPageTo(0, 0)
     this.loadCatalog()
     // 进分类页这一次要做模式回落；onShow 里的刷新（loadMeta() 不传参）不改顾客已选的模式
     this.loadMeta(channel === 'LOCAL')
@@ -134,7 +151,8 @@ Page({
     var channel = this.data.channel
     getLocalMeta()
       .then(function(meta) {
-        if (channel !== self.data.channel) return
+        if (channel !== self.data.channel || self._hidden) return
+        self._captureAnchor()
         if (channel === 'EXPRESS') {
           self.setData({ promotion: meta.promotion })
           self.afterGroupsRendered()
@@ -166,7 +184,7 @@ Page({
       var groups = catalogGroups.groupByCategory(cats, products)
       var first = groups.length ? groups[0] : null
       self.setData({ groups: groups, catalogLoading: false, activeGroupId: first ? first.id : null, activeGroupName: first ? first.name : '' })
-      self.afterGroupsRendered() // 量各段锚点位置，Task 5 填充实现
+      self.afterGroupsRendered()
       if (self._pendingLocateId != null) {
         var id = self._pendingLocateId
         self._pendingLocateId = null
@@ -191,7 +209,10 @@ Page({
     var groups = this.data.groups
     for (var i = 0; i < groups.length; i++) {
       if (groups[i].id === id) {
-        this.setData({ activeGroupId: id, activeGroupName: groups[i].name })
+        if (id !== this.data.activeGroupId || groups[i].name !== this.data.activeGroupName) {
+          this.setData({ activeGroupId: id, activeGroupName: groups[i].name })
+        }
+        this.revealCategory(id)
         return
       }
     }
@@ -209,16 +230,25 @@ Page({
       if (this.data.groups[i].id === normId) { found = true; break }
     }
     if (!found) return
-    if (this.data.searchKeyword) this.clearSearch()
+    if (this.data.searchKeyword) {
+      this.clearSearch()
+      this._offsets = []
+      this._pendingLocateId = normId
+      this.setActiveGroup(normId)
+      return
+    }
+    if (!this._layout || !this._offsets.length) {
+      this._pendingLocateId = normId
+      this.afterGroupsRendered()
+      return
+    }
     this.setActiveGroup(normId)
     this._lockUntil = Date.now() + 500
-    var target = 'g-' + normId
-    if (this.data.scrollIntoView === target) {
-      // scroll-into-view 设成同一个值不会再次触发：顾客滑走后再点同一个分类要先置空再设
-      this.setData({ scrollIntoView: '' })
-      this.setData({ scrollIntoView: target })
-    } else {
-      this.setData({ scrollIntoView: target })
+    for (var j = 0; j < this._offsets.length; j++) {
+      if (this._offsets[j].id === normId) {
+        this.scrollPageTo(categoryScroll.pageTarget(this._offsets[j].top, this.data.pinnedHeight), 300)
+        return
+      }
     }
   },
 
@@ -226,8 +256,8 @@ Page({
     this.locateGroup(e.currentTarget.dataset.id)
   },
 
-  resetRightScroll() {
-    this.setData({ rightScrollTop: this.data.rightScrollTop === 0 ? 0.5 : 0 })
+  scrollPageTo: function(top, duration) {
+    if (wx.pageScrollTo) wx.pageScrollTo({ scrollTop: top, duration: duration || 0 })
   },
 
   // 分段渲染完成后（或右侧高度可能变化后）量一次锚点位置。
@@ -240,48 +270,146 @@ Page({
     if (wx.nextTick) wx.nextTick(run)
     else setTimeout(run, 0)
     if (this._remeasureTimer) clearTimeout(this._remeasureTimer)
-    this._remeasureTimer = setTimeout(run, 200)
+    this._remeasureTimer = setTimeout(function() {
+      self._remeasureTimer = null
+      self.measureOffsets(true)
+    }, 200)
   },
 
-  // 量各段顶部位置（相对 scroll-view 内容顶）与最后一段的补白。只在分段渲染完成后调，滚动时只做数值比较。
-  measureOffsets() {
-    if (this.data.searchKeyword || !this.data.groups.length || !wx.createSelectorQuery) return
+  _captureAnchor: function() {
+    if (!this._layout || this._anchorSnapshot) return
+    var y = typeof this._pageScrollTop === 'number' ? this._pageScrollTop : this._layout.scrollTop
+    if (y + this._layout.pinnedHeight < this._layout.bodyTop) return
+    this._anchorSnapshot = { scrollTop: y, bodyTop: this._layout.bodyTop, pinnedHeight: this._layout.pinnedHeight }
+  },
+
+  _invalidateMeasurements: function() {
+    this._measureGeneration = (this._measureGeneration || 0) + 1
+  },
+
+  _updateSidebarLayout: function() {
+    if (!this._layout) return
+    var geometry = categoryScroll.layoutOf({
+      viewportHeight: this._layout.viewportHeight,
+      pinnedHeight: this._layout.pinnedHeight,
+      bodyTop: this._layout.bodyTop,
+      scrollTop: this._pageScrollTop || 0,
+      dockHeight: this.data.cartSpacerPx,
+      lastGroupHeight: this._layout.lastGroupHeight,
+    })
+    var patch = {}
+    if (geometry.sidebarTop !== this.data.sidebarTop) patch.sidebarTop = geometry.sidebarTop
+    if (geometry.sidebarHeight !== this.data.sidebarHeight) patch.sidebarHeight = geometry.sidebarHeight
+    if (geometry.tailHeight !== this.data.tailHeight) patch.tailHeight = geometry.tailHeight
+    if (Object.keys(patch).length) this.setData(patch)
+  },
+
+  // Query the viewport and all layout rects together, so document coordinates share one scroll sample.
+  measureOffsets(clearAnchorOnResult) {
+    if (this._hidden || !wx.createSelectorQuery) return
     var self = this
-    wx.createSelectorQuery()
-      .select('.prod-panel').boundingClientRect()
-      .select('.prod-panel').scrollOffset()
-      .selectAll('.group-anchor').boundingClientRect()
-      .exec(function(res) {
-        var panel = res[0], scroll = res[1], rects = res[2] || []
-        if (!panel || !scroll || !rects.length) return
+    var generation = this._measureGeneration = (this._measureGeneration || 0) + 1
+    var query = wx.createSelectorQuery()
+    if (query.in) query.in(this)
+    query.selectViewport().scrollOffset()
+    query.select('.catalog-toolbar').boundingClientRect()
+    query.select('.catalog-body').boundingClientRect()
+    query.selectAll('.group-anchor').boundingClientRect()
+    query.selectAll('.cat-item').boundingClientRect()
+    query.select('.cat-panel').boundingClientRect()
+    query.select('.search-results').boundingClientRect()
+    query.exec(function(res) {
+        if (generation !== self._measureGeneration || self._hidden) return
+        var viewport = res[0], toolbar = res[1], body = res[2], rects = res[3] || []
+        var items = res[4] || [], sidebar = res[5], searchResults = res[6]
+        if (!viewport || !toolbar || !body) return
+        var y = Math.max(0, viewport.scrollTop || 0)
+        var win = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
+        var pinnedHeight = toolbar.height || 0
+        var bodyTop = body.top + y
         var offsets = []
         for (var i = 0; i < rects.length; i++) {
           var gid = rects[i].dataset && rects[i].dataset.gid
           if (typeof gid === 'string' && gid !== 'other' && gid !== '' && !isNaN(Number(gid))) gid = Number(gid)
-          offsets.push({ id: gid, top: rects[i].top - panel.top + scroll.scrollTop })
+          offsets.push({ id: gid, top: rects[i].top + y })
         }
         self._offsets = offsets
-        // 最后一段顶不上去就永远亮不了：补白 = 可视高 − 最后段高。可视高取 scroll-view 自身高与「窗口底到面板顶」的较小值
-        // 占位块与补白分开算：cartSpacerPx 已在滚动内容末尾占位，补白只补剩余高度。
-        var win = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()
-        var visible = Math.min(panel.height, win.windowHeight - panel.top)
-        var tail = Math.max(0, Math.round(visible - rects[rects.length - 1].height - self.data.cartSpacerPx))
-        if (tail !== self.data.tailHeight) self.setData({ tailHeight: tail })
+        self._sidebarItems = []
+        if (sidebar) {
+          for (var j = 0; j < items.length; j++) {
+            var itemId = items[j].dataset && items[j].dataset.gid
+            if (typeof itemId === 'string' && itemId !== 'other' && itemId !== '' && !isNaN(Number(itemId))) itemId = Number(itemId)
+            self._sidebarItems.push({ id: itemId, top: items[j].top - sidebar.top + (self._sidebarScrollTop || 0), height: items[j].height })
+          }
+        }
+        var lastGroupHeight = rects.length ? rects[rects.length - 1].height : 0
+        self._layout = { viewportHeight: win.windowHeight, pinnedHeight: pinnedHeight, bodyTop: bodyTop, lastGroupHeight: lastGroupHeight, scrollTop: y }
+        var anchor = self._anchorSnapshot
+        if (anchor && (anchor.bodyTop !== bodyTop || anchor.pinnedHeight !== pinnedHeight)) {
+          var desired = Math.max(0, anchor.scrollTop + bodyTop - anchor.bodyTop - (pinnedHeight - anchor.pinnedHeight))
+          self._anchorSnapshot = null
+          if (Math.abs(desired - y) >= 1) {
+            self.scrollPageTo(desired, 0)
+            y = desired
+          }
+        }
+        if (clearAnchorOnResult) self._anchorSnapshot = null
+        self._pageScrollTop = y
+        var patch = {}
+        if (self.data.pinnedHeight !== pinnedHeight) patch.pinnedHeight = pinnedHeight
+        if (Object.keys(patch).length) self.setData(patch)
+        self._updateSidebarLayout()
+        if (self._pendingLocateId != null && offsets.length) {
+          var pendingId = self._pendingLocateId
+          self._pendingLocateId = null
+          self.locateGroup(pendingId)
+        }
+        if (self.data.searchKeyword) self._fillSearchViewport(searchResults, y, win.windowHeight)
       })
   },
 
   // 尾随节流 100ms：保证最后一次滚动位置一定被处理
-  onRightScroll(e) {
+  onPageScroll(e) {
+    if (this._hidden) return
+    var y = Math.max(0, e.scrollTop || 0)
+    this._pageScrollTop = y
+    if (this._layout && (y < this._layout.bodyTop - this._layout.pinnedHeight || this.data.sidebarTop !== this._layout.pinnedHeight)) this._updateSidebarLayout()
     if (this.data.searchKeyword) return
-    this._pendingScrollTop = e.detail.scrollTop
+    this._pendingScrollTop = y
     if (this._scrollTimer) return
     var self = this
     this._scrollTimer = setTimeout(function() {
       self._scrollTimer = null
+      if (self._hidden) return
       if (Date.now() < (self._lockUntil || 0)) return // 点左侧后的滚动动画期间不让中间经过的段抢高亮
-      var id = catalogGroups.activeGroupOf(self._offsets, self._pendingScrollTop, 2)
+      var id = catalogGroups.activeGroupOf(self._offsets, self._pendingScrollTop + self.data.pinnedHeight, 2)
       if (id != null && id !== self.data.activeGroupId) self.setActiveGroup(id)
     }, 100)
+  },
+
+  onSidebarScroll: function(e) {
+    this._sidebarScrollTop = Math.max(0, e.detail.scrollTop || 0)
+  },
+
+  revealCategory: function(id) {
+    if (!this._sidebarItems || !this._layout) return
+    for (var i = 0; i < this._sidebarItems.length; i++) {
+      if (this._sidebarItems[i].id !== id) continue
+      var oldTop = this._sidebarScrollTop || 0
+      var top = categoryScroll.revealScrollTop({ itemTop: this._sidebarItems[i].top, itemHeight: this._sidebarItems[i].height, scrollTop: oldTop, viewportHeight: this.data.sidebarHeight })
+      if (Math.abs(top - oldTop) < 1) return
+      this._sidebarScrollTop = top
+      this.setData({ sidebarScrollTop: top === this.data.sidebarScrollTop ? top + 0.5 : top })
+      return
+    }
+  },
+
+  onReachBottom: function() {
+    this.onScrollToLower()
+  },
+
+  onResize: function() {
+    this.afterGroupsRendered()
   },
 
   // 商品图盒子是固定 160rpx 方盒，图片加载一般不改变布局；这里去抖重量只是按 spec §5.2 留的保险。
@@ -292,10 +420,16 @@ Page({
   },
 
   onHide() {
+    this._hidden = true
+    this._invalidateMeasurements()
+    this._anchorSnapshot = null
     this._clearTimers()
   },
 
   onUnload() {
+    this._hidden = true
+    this._invalidateMeasurements()
+    this._anchorSnapshot = null
     this._clearTimers()
   },
 
@@ -316,6 +450,7 @@ Page({
     var self = this
     // 记录本次请求对应的筛选条件，响应回来时若条件已变则丢弃（防止快速切换搜索词时串数据）。
     var reqKey = this.buildQueryKey()
+    var seq = this._searchSeq || 0
     this.setData({ loading: true })
 
     catalogApi.getProducts({
@@ -325,26 +460,44 @@ Page({
       keyword: this.data.searchKeyword,
     })
       .then(function(data) {
+        if (self._hidden || seq !== (self._searchSeq || 0)) return
         if (self.buildQueryKey() !== reqKey) {
           // 条件已变化：本次结果作废，让新条件的请求重新发起
           self.setData({ loading: false })
           self.loadProducts(true)
           return
         }
-        var newItems = (data.list || []).map(function(p) { return self.decorateProduct(p) })
-        var list = reset ? newItems : self.data.list.concat(newItems)
+        var existing = reset ? [] : self.data.list
+        var seen = {}
+        for (var i = 0; i < existing.length; i++) seen[String(existing[i].id)] = true
+        var newItems = []
+        var incoming = data.list || []
+        for (var j = 0; j < incoming.length; j++) {
+          var key = String(incoming[j].id)
+          if (seen[key]) continue
+          seen[key] = true
+          newItems.push(self.decorateProduct(incoming[j]))
+        }
+        var list = existing.concat(newItems)
         var total = data.total || 0
         self.setData({
           list: list,
           page: page + 1,
           total: total,
-          hasMore: list.length < total,
+          hasMore: !!newItems.length && list.length < total,
           loading: false,
         })
+        self.afterGroupsRendered()
       })
       .catch(function() {
-        self.setData({ loading: false })
+        if (!self._hidden && seq === (self._searchSeq || 0)) self.setData({ loading: false })
       })
+  },
+
+  _fillSearchViewport: function(results, scrollTop, viewportHeight) {
+    if (!this.data.searchKeyword || this.data.loading || !this.data.hasMore || !results) return
+    var bottom = typeof results.bottom === 'number' ? results.bottom : results.top + results.height
+    if (bottom <= viewportHeight - this.data.cartSpacerPx + 120) this.loadProducts(false)
   },
 
   buildQueryKey() {
@@ -367,6 +520,7 @@ Page({
       return
     }
     if (kw === this.data.searchKeyword) return
+    this._searchSeq = (this._searchSeq || 0) + 1
     this.setData({
       searchKeyword: kw,
       keyword: kw,
@@ -374,13 +528,15 @@ Page({
       page: 1,
       total: 0,
       hasMore: true,
+      loading: false,
     })
-    this.resetRightScroll()
+    this.scrollPageTo(0, 0)
     this.loadProducts(true)
   },
 
   // 清除搜索，回到分组视图（不重新拉全量）：回到顶部、高亮第一段
   clearSearch() {
+    this._searchSeq = (this._searchSeq || 0) + 1
     this.setData({
       searchKeyword: '',
       keyword: '',
@@ -388,9 +544,9 @@ Page({
       page: 1,
       total: 0,
       hasMore: true,
-      scrollIntoView: '',
+      loading: false,
     })
-    this.resetRightScroll()
+    this.scrollPageTo(0, 0)
     if (this.data.groups.length) this.setActiveGroup(this.data.groups[0].id)
     this.afterGroupsRendered() // 分段重新渲染后要重量
   },
@@ -465,6 +621,7 @@ Page({
 
   // 子模式变了：阻塞态按新模式重算，购物车条的按钮跟着变（去向与起送线都不一样）
   applyMode(mode) {
+    this._captureAnchor()
     this.setData({ mode: mode, promoType: promoTypeOf(this.data.channel, mode), headBlocking: headNoticeOf(this.data.meta, mode).blocking })
     this.refreshCartBar()
     this.afterGroupsRendered() // 外送/自取切换会改页头高度，要重量

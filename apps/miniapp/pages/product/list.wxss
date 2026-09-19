@@ -1,10 +1,14 @@
-/* 分类页：顶部搜索 + 左分类栏 / 右商品列表（tabBar 页，100vh 即 tabBar 以上区域） */
+/* The native page scroll carries the header and product list. */
 .page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
   background-color: var(--bg);
-  overflow: hidden;
+  min-height: 100vh;
+}
+
+.catalog-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background-color: var(--card);
 }
 
 /* Search bar：搜索框 + 右端渠道标识（2026-09-17），标识不可收缩，搜索框占满剩余宽度 */
@@ -75,12 +79,11 @@
   padding: 0 4rpx;
 }
 
-/* Two-column body：占满剩余高度，两侧各自独立滚动 */
+/* The left rail scrolls independently while the right column gives the page its height. */
 .body {
-  flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: row;
+  align-items: flex-start;
   border-top: 1rpx solid var(--divider);
 }
 
@@ -88,7 +91,7 @@
 .cat-panel {
   width: 180rpx;
   flex-shrink: 0;
-  height: 100%;
+  position: sticky;
   background-color: var(--bg);
 }
 .cat-item {
@@ -134,16 +137,13 @@
   font-weight: 600;
 }
 
-/* Right: product panel wrapper（给 Task 5 的吸顶浮动条一个定位父级） */
+/* Right: page-height product column */
 .prod-wrap {
   flex: 1;
   min-width: 0;
-  position: relative;
-  height: 100%;
 }
 .prod-panel {
   width: 100%;
-  height: 100%;
   background-color: var(--card);
 }
 .product-list {
@@ -270,7 +270,7 @@
 
 /* 分段：段头与 Task 5 的浮动条尺寸必须完全一致，滚到 0 时两者重叠得看不出是两层 */
 .group-anchor { padding-bottom: 8rpx; }
-.group-head { height: 64rpx; line-height: 64rpx; padding: 0 20rpx; font-size: 26rpx; font-weight: 600; color: var(--text-1); background-color: var(--card); }
+.group-head { position: sticky; z-index: 5; height: 64rpx; line-height: 64rpx; padding: 0 20rpx; font-size: 26rpx; font-weight: 600; color: var(--text-1); background-color: var(--card); }
 /* 空段要有高度：太矮的话滚过去后「段顶 <= scrollTop」立刻被下一段接管，高亮停不住 */
 .group-empty { min-height: 200rpx; display: flex; align-items: center; justify-content: center; font-size: 24rpx; color: var(--text-disabled); }
 .group-tail { width: 100%; }
@@ -283,8 +283,6 @@
 .skeleton-line-short { width: 55%; margin-top: 16rpx; }
 .skeleton-shine { animation: skeleton-breath 1.2s ease-in-out infinite; }
 @keyframes skeleton-breath { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-/* 吸顶浮动条：尺寸继承 .group-head，两者必须一样高，否则滚到 0 时露出双层段头 */
-.group-float { position: absolute; top: 0; left: 0; right: 0; z-index: 5; border-bottom: 1rpx solid var(--divider); box-sizing: border-box; }
 
 /* 渠道切换弹层：z-index 100 > 购物车条 90；底部留安全区 */
 .channel-mask { position: fixed; z-index: 100; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.45); }

@@ -53,7 +53,7 @@
   <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" channel="{{channel}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" bind:switchchannel="openChannelSheet" />
 
   <!-- 邮寄：搜索框 + 右端渠道标识。同城菜单只有几十件、左侧分类一眼看完，不需要搜索。 -->
-  <view wx:else class="search-bar">
+  <view wx:else class="catalog-toolbar search-bar">
     <view class="search-input-wrap">
       <text class="search-icon">🔍</text>
       <input
@@ -82,13 +82,15 @@
     </view>
   </view>
 
-  <local-mode-bar wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:change="onModeChange" />
+  <view wx:if="{{channel === 'LOCAL'}}" class="catalog-toolbar">
+    <local-mode-bar meta="{{meta}}" mode="{{mode}}" bind:change="onModeChange" />
+  </view>
 
   <!-- Two-column body -->
-  <view class="body">
+  <view class="body catalog-body">
 
     <!-- Left: category sidebar（无「全部」项，进页默认停在第一项） -->
-    <scroll-view class="cat-panel" scroll-y enhanced="{{true}}" show-scrollbar="{{false}}">
+    <scroll-view class="cat-panel" scroll-y enhanced="{{true}}" show-scrollbar="{{false}}" scroll-top="{{sidebarScrollTop}}" bindscroll="onSidebarScroll" style="top: {{pinnedHeight}}px; height: {{sidebarHeight}}px;">
       <view
         wx:for="{{groups}}"
         wx:key="id"
@@ -96,6 +98,8 @@
         hover-class="cat-item-hover"
         bindtap="onSelectCategory"
         data-id="{{item.id}}"
+        data-gid="{{item.id}}"
+        id="cat-{{item.id}}"
       >
         <view class="cat-item-bar"></view>
         <text class="cat-item-name">{{item.name}}</text>
@@ -105,21 +109,7 @@
     <!-- Right: product panel -->
     <view class="prod-wrap">
 
-      <!-- 吸顶浮动条：不用 CSS sticky（scroll-view 内表现不一致），画一条覆盖在顶部 -->
-      <view wx:if="{{!searchKeyword && !catalogLoading && activeGroupName}}" class="group-head group-float">{{activeGroupName}}</view>
-
-      <scroll-view
-        class="prod-panel"
-        scroll-y
-        enhanced="{{true}}"
-        show-scrollbar="{{false}}"
-        scroll-top="{{rightScrollTop}}"
-        scroll-into-view="{{scrollIntoView}}"
-        scroll-with-animation="{{true}}"
-        lower-threshold="120"
-        bindscrolltolower="onScrollToLower"
-        bindscroll="onRightScroll"
-      >
+      <view class="prod-panel">
         <!-- 分组视图：拉全量中骨架屏 → 空 → 分段 -->
         <block wx:if="{{!searchKeyword}}">
           <view wx:if="{{catalogLoading}}" class="skeleton-list">
@@ -131,31 +121,33 @@
           <empty-state wx:elif="{{groups.length === 0}}" type="product" text="{{channel === 'LOCAL' ? '同城菜单还在准备中' : '暂无商品'}}" />
           <block wx:else>
             <view wx:for="{{groups}}" wx:key="id" wx:for-item="g" id="g-{{g.id}}" data-gid="{{g.id}}" class="group-anchor">
-              <view class="group-head">{{g.name}}</view>
+              <view class="group-head" style="top: {{pinnedHeight}}px;">{{g.name}}</view>
               <view wx:if="{{g.items.length === 0}}" class="group-empty">该分类暂无商品</view>
               <view wx:else class="product-list">
                 <template wx:for="{{g.items}}" wx:key="id" is="product-row" data="{{item: item, channel: channel}}" />
               </view>
             </view>
             <view class="group-tail" style="height: {{tailHeight}}px;"></view>
-            <view class="cart-spacer" style="height: {{cartSpacerPx}}px;"></view>
           </block>
         </block>
         <!-- 搜索视图（仅邮寄）：平铺 + 翻页，原样保留 -->
         <block wx:else>
           <empty-state wx:if="{{list.length === 0 && !loading}}" type="product" text="没有找到相关商品" />
-          <view class="product-list">
-            <template wx:for="{{list}}" wx:key="id" is="product-row" data="{{item: item, channel: channel}}" />
+          <view class="search-results">
+            <view class="product-list">
+              <template wx:for="{{list}}" wx:key="id" is="product-row" data="{{item: item, channel: channel}}" />
+            </view>
+            <view wx:if="{{loading}}" class="footer-tip"><text>加载中...</text></view>
+            <view wx:elif="{{!hasMore && list.length > 0}}" class="footer-tip"><text>- 没有更多了 -</text></view>
           </view>
-          <view wx:if="{{loading}}" class="footer-tip"><text>加载中...</text></view>
-          <view wx:elif="{{!hasMore && list.length > 0}}" class="footer-tip"><text>- 没有更多了 -</text></view>
-          <view class="cart-spacer" style="height: {{cartSpacerPx}}px;"></view>
         </block>
-      </scroll-view>
+      </view>
 
     </view>
 
   </view>
+
+  <view class="cart-spacer" style="height: {{cartSpacerPx}}px;"></view>
 
   <local-sku-picker wx:if="{{channel === 'LOCAL'}}" id="local-sku-picker" bind:added="onAdded" />
 </view>

@@ -6,6 +6,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const loadedPages = []
+test.afterEach(() => { for (const page of loadedPages.splice(0)) page._clearTimers() })
 
 function loadPage(relPath, ctx) {
   Object.keys(require.cache)
@@ -24,12 +26,14 @@ function loadPage(relPath, ctx) {
     Object.assign(registered.data, patch)
   }
   registered.selectComponent = () => null
+  loadedPages.push(registered)
   return registered
 }
 
 function makeCtx(channel, opts) {
   opts = opts || {}
   const urls = []
+  const pageScrolls = []
   const app = {
     globalData: { shoppingChannel: channel, localMode: opts.localMode || 'DELIVERY', pendingCategoryId: null, pendingCategoryName: null, pendingCategoryAll: false },
     getShoppingChannel: () => app.globalData.shoppingChannel,
@@ -73,21 +77,36 @@ function makeCtx(channel, opts) {
     stopPullDownRefresh() {}, showToast() {}, switchTab() {}, navigateTo() {}, reLaunch() {},
     showNavigationBarLoading() {}, hideNavigationBarLoading() {},
     nextTick: (fn) => setTimeout(fn, 0),
+    pageScrollTo: (o) => pageScrolls.push(o),
     createSelectorQuery: () => {
       selectorQueryCalls++
+      const selections = []
+      let current
       const q = {
         in: () => q,
-        select: () => q,
-        selectAll: () => q,
-        boundingClientRect: () => q,
-        scrollOffset: () => q,
-        exec: (cb) => cb(opts.selectorQueryResult || [{ top: 0, height: 600 }, { scrollTop: 0 }, []]),
+        selectViewport: () => { current = 'viewport'; return q },
+        select: (s) => { current = s; return q },
+        selectAll: (s) => { current = s; return q },
+        boundingClientRect: () => { selections.push(['rect', current]); return q },
+        scrollOffset: () => { selections.push(['scroll', current]); return q },
+        exec: (cb) => {
+          const old = opts.selectorQueryResult || [{ top: 100, height: 600 }, { scrollTop: 0 }, []]
+          const rects = {
+            '.catalog-toolbar': { top: 0, height: 40 },
+            '.catalog-body': { top: old[0].top, height: old[0].height },
+            '.group-anchor': old[2].length ? old[2] : (opts.categories || []).map((c, i) => ({ dataset: { gid: c.id }, top: old[0].top + i * 300, height: 300 })),
+            '.cat-item': (opts.categories || []).map((c, i) => ({ dataset: { gid: c.id }, top: old[0].top + i * 50, height: 50 })),
+            '.cat-panel': { top: old[0].top, height: 600 },
+            '.search-results': { top: old[0].top, bottom: 900, height: 800 },
+          }
+          cb(selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: old[1].scrollTop } : rects[s]))
+        },
       }
       return q
     },
   }
   let selectorQueryCalls = 0
-  return { app, wx, urls, getSelectorQueryCalls: () => selectorQueryCalls }
+  return { app, wx, urls, pageScrolls, getSelectorQueryCalls: () => selectorQueryCalls }
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
@@ -156,25 +175,23 @@ test('点左侧 = 定位：滚到该段、立刻高亮，不发新请求', async
   await settleAll()
   const before = ctx.urls.length
   page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 2 } } })
-  assert.equal(page.data.scrollIntoView, 'g-2')
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 360)
   assert.equal(page.data.activeGroupId, 2)
   assert.equal(page.data.activeGroupName, '凉菜')
   assert.equal(ctx.urls.length, before, '点左侧不该发新请求')
 })
 
-test('同一分类再点一次仍能触发滚动（scroll-into-view 同值不触发，需先置空）', async function () {
+test('同一分类再点一次仍发出原生页面定位', async function () {
   const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
   page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 2 } } })
-  assert.equal(page.data.scrollIntoView, 'g-2')
-  page.setData({ scrollIntoView: 'g-2' })
-  page._patches.length = 0
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 360)
+  const before = ctx.pageScrolls.length
   page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 2 } } })
-  const sawEmpty = page._patches.some((p) => Object.prototype.hasOwnProperty.call(p, 'scrollIntoView') && p.scrollIntoView === '')
-  assert.equal(sawEmpty, true, '需要先置空再设值才能重新触发 scroll-into-view：' + JSON.stringify(page._patches))
-  assert.equal(page.data.scrollIntoView, 'g-2')
+  assert.equal(ctx.pageScrolls.length, before + 1)
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 360)
 })
 
 test('首页意图 → 定位（pendingCategoryId / pendingCategoryAll）', async function () {
@@ -186,7 +203,7 @@ test('首页意图 → 定位（pendingCategoryId / pendingCategoryAll）', asyn
   ctx.app.globalData.pendingCategoryId = 2
   ctx.app.globalData.pendingCategoryName = '凉菜'
   page.onShow.call(page)
-  assert.equal(page.data.scrollIntoView, 'g-2')
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 360)
   assert.equal(page.data.activeGroupId, 2)
   assert.equal(ctx.app.globalData.pendingCategoryId, null)
   assert.equal(ctx.app.globalData.pendingCategoryName, null)
@@ -196,7 +213,7 @@ test('首页意图 → 定位（pendingCategoryId / pendingCategoryAll）', asyn
   page.onShow.call(page)
   assert.equal(page.data.activeGroupId, 1)
   assert.equal(page.data.searchKeyword, '')
-  assert.equal(page.data.scrollIntoView, '', '回「全部」要清掉残留的段 id，否则 scroll-into-view 优先级压过 scroll-top，页面停在旧段')
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 0, '回首页要滚到页面顶部')
   assert.equal(ctx.app.globalData.pendingCategoryAll, false)
   assert.equal(ctx.app.globalData.pendingCategoryId, null)
   assert.equal(ctx.app.globalData.pendingCategoryName, null)
@@ -227,67 +244,62 @@ test('搜索模式保留分页且与分组视图互不干扰（仅邮寄）', as
   assert.ok(ctx.urls.some((u) => u.indexOf('keyword=%E5%85%94') !== -1 && u.indexOf('page=1&pageSize=20') !== -1), ctx.urls.join(' '))
   assert.deepEqual(page.data.groups, groupsBefore, '搜索不该清掉分组数据')
 
-  page.onScrollToLower.call(page)
+  page.onReachBottom.call(page)
   await settleAll()
   assert.ok(ctx.urls.some((u) => u.indexOf('keyword=%E5%85%94') !== -1 && u.indexOf('page=2') !== -1), ctx.urls.join(' '))
 
-  page.setData({ scrollIntoView: 'g-3' }) // 模拟搜索前残留的旧段 id
   page.clearSearch.call(page)
   await settleAll()
   assert.equal(page.data.searchKeyword, '')
   assert.deepEqual(page.data.list, [])
   assert.equal(page.data.activeGroupId, 1)
-  assert.equal(page.data.scrollIntoView, '', '清搜索要顺带清掉残留的段 id，否则 scroll-into-view 优先级压过 scroll-top，页面停在旧段而不回顶')
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 0, '清搜索应回到页面顶部')
   const catalogUrlCountAfter = ctx.urls.filter((u) => u.indexOf('pageSize=50') !== -1).length
   assert.equal(catalogUrlCountAfter, catalogUrlCountBefore, 'clearSearch 不该重新拉全量')
 })
 
-// 返工（02 复核 + 03 回判判成立）：clearSearch / pendingCategoryAll 两处漏清 scrollIntoView，
-// scroll-into-view 优先级高于 scroll-top，残留旧段会让「清掉搜索」/「回全部」停在旧段而不回顶。
-test('返工：clearSearch 清掉残留的段 id，否则 scroll-into-view 压过 scroll-top 回不了顶', async function () {
+test('clearSearch 在选择旧分类后回到页面顶部', async function () {
   const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
   page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 3 } } })
-  assert.equal(page.data.scrollIntoView, 'g-3')
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 660)
   page.setData({ keyword: '兔' })
   page.onSearchConfirm.call(page)
   await settleAll()
   page.clearSearch.call(page)
   await settleAll()
-  assert.equal(page.data.scrollIntoView, '', 'clearSearch 后残留的 g-3 没清掉，回搜索前会停在旧段而不是回顶')
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 0)
 })
 
-test('返工：pendingCategoryAll（非搜索路径）清掉残留段 id，且只回顶一次', async function () {
+test('pendingCategoryAll（非搜索路径）只回页面顶部一次', async function () {
   const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
   page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 3 } } })
-  assert.equal(page.data.scrollIntoView, 'g-3')
-  const rightScrollTopBefore = page.data.rightScrollTop
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 660)
+  const scrollCallsBefore = ctx.pageScrolls.length
   page._patches.length = 0
   ctx.app.globalData.pendingCategoryAll = true
   page.onShow.call(page)
-  assert.equal(page.data.scrollIntoView, '', 'pendingCategoryAll 回「全部」要清掉残留段 id，否则回不了顶')
-  const rightScrollTopPatches = page._patches.filter((p) => Object.prototype.hasOwnProperty.call(p, 'rightScrollTop'))
-  assert.equal(rightScrollTopPatches.length, 1, 'resetRightScroll 只该调一次；调两次净值不变，回顶会失效：' + JSON.stringify(page._patches))
-  assert.notEqual(page.data.rightScrollTop, rightScrollTopBefore, '应该真的回顶了')
+  assert.equal(ctx.pageScrolls.length, scrollCallsBefore + 1)
+  assert.equal(ctx.pageScrolls.at(-1).scrollTop, 0)
 })
 
-test('分组视图下 onScrollToLower 不发请求', async function () {
+test('分组视图下 onReachBottom 不发请求', async function () {
   const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
   const before = ctx.urls.length
-  page.onScrollToLower.call(page)
+  page.onReachBottom.call(page)
   await settleAll()
   assert.equal(ctx.urls.length, before)
 })
 
-test('切渠道清空：groups/activeGroupId/searchKeyword/scrollIntoView 归零，catalogLoading 置真', async function () {
+test('切渠道清空：groups/activeGroupId/searchKeyword/offsets 归零，catalogLoading 置真', async function () {
   const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
@@ -297,7 +309,7 @@ test('切渠道清空：groups/activeGroupId/searchKeyword/scrollIntoView 归零
   assert.deepEqual(page.data.groups, [])
   assert.equal(page.data.activeGroupId, null)
   assert.equal(page.data.searchKeyword, '')
-  assert.equal(page.data.scrollIntoView, '')
+  assert.deepEqual(page._offsets, [])
   assert.equal(page.data.catalogLoading, true)
 })
 
@@ -343,8 +355,8 @@ test('量锚点：offsets 与 tailHeight 按量出来的位置计算', async fun
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
-  assert.deepEqual(page._offsets, [{ id: 1, top: 40 }, { id: 2, top: 340 }, { id: 3, top: 590 }])
-  assert.equal(page.data.tailHeight, 480)
+  assert.deepEqual(page._offsets, [{ id: 1, top: 140 }, { id: 2, top: 440 }, { id: 3, top: 690 }])
+  assert.equal(page.data.tailHeight, 652)
 })
 
 test('量锚点：最后一段比可视区高时 tailHeight 为 0', async function () {
@@ -365,10 +377,11 @@ test('滚动 → 高亮跟随（节流 100ms 后才生效，连续滚动只 setD
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
+  page._clearTimers()
   page._offsets = [{ id: 1, top: 0 }, { id: 2, top: 340 }, { id: 3, top: 590 }]
   page._patches.length = 0
   for (let i = 0; i < 10; i++) {
-    page.onRightScroll.call(page, { detail: { scrollTop: 340 + i } })
+    page.onPageScroll.call(page, { scrollTop: 340 + i })
   }
   assert.equal(page.data.activeGroupId, 1, '节流期间不该立刻变')
   await wait(150)
@@ -382,26 +395,27 @@ test('点击锁：点左侧后 500ms 内滚动不改高亮，锁过期后恢复�
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
+  page._clearTimers()
   page._offsets = [{ id: 1, top: 0 }, { id: 2, top: 340 }, { id: 3, top: 590 }]
   page.onSelectCategory.call(page, { currentTarget: { dataset: { id: 3 } } })
   assert.equal(page.data.activeGroupId, 3)
-  page.onRightScroll.call(page, { detail: { scrollTop: 345 } })
+  page.onPageScroll.call(page, { scrollTop: 345 })
   await wait(150)
   assert.equal(page.data.activeGroupId, 3, '点击锁定期内滚动不该抢高亮')
   page._lockUntil = 0
-  page.onRightScroll.call(page, { detail: { scrollTop: 345 } })
+  page.onPageScroll.call(page, { scrollTop: 345 })
   await wait(150)
   assert.equal(page.data.activeGroupId, 2)
 })
 
-test('搜索模式下 onRightScroll 不联动', async function () {
+test('搜索模式下 onPageScroll 不联动', async function () {
   const ctx = makeCtx('EXPRESS', { categories: CATEGORIES_3, respond: pagedRespond(pagesFor60(), 60) })
   const page = loadPage('../../apps/miniapp/pages/product/list.js', ctx)
   page.onLoad.call(page)
   await settleAll()
   page._offsets = [{ id: 1, top: 0 }, { id: 2, top: 340 }, { id: 3, top: 590 }]
   page.setData({ searchKeyword: '兔' })
-  page.onRightScroll.call(page, { detail: { scrollTop: 345 } })
+  page.onPageScroll.call(page, { scrollTop: 345 })
   await wait(150)
   assert.equal(page.data.activeGroupId, 1, '搜索模式下不该联动')
 })
