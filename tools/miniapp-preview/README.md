@@ -1,6 +1,6 @@
 # 小程序 HTML 预览台
 
-在浏览器里近似预览 `apps/miniapp` 的 23 个页面，供 UI 改造时快速看效果、截图自检。
+在浏览器里近似预览 `apps/miniapp` 的 30 个页面/展示状态，供 UI 改造时快速看效果、截图自检。
 
 ## 用途
 
@@ -14,7 +14,7 @@ npm run preview:miniapp        # 默认 http://localhost:5180
 node tools/miniapp-preview/serve.mjs --port 5180
 ```
 
-打开首页即为「画廊」：23 个页面各嵌在手机边框里，顶部一条 tabBar 展示 8 张真实图标。
+打开首页即为「画廊」：30 个页面/展示状态各嵌在手机边框里，顶部一条 tabBar 展示 8 张真实图标。
 
 ## 工作机制
 
@@ -43,3 +43,14 @@ node tools/miniapp-preview/serve.mjs --port 5180
 - rpx 用 `calc` 近似，字体渲染与真机略有出入
 
 **最终交互与真机效果，仍以微信开发者工具打开 `apps/miniapp` 为准。**
+
+## 满减与结算条镜像（2026-09-19）
+
+`index`、`index-local`、`index-local-pickup`、`product-list` 均登记 `local-cart-bar` 与 `promo-bar`。
+镜像中的活动与免运数据仅为示例；真实小程序读取 `/local/meta`，同城免运金额与范围按后台 `fee.freeShipTiers` / `radiusKm` 动态展示。
+
+375px 宽下黑条 44px、按钮 34px；按钮另设 32px 最小高度，以免 320px 屏上 rpx 缩放后低于点击区下限。
+预览占位为带提示条实测的 72px；小程序使用组件 `height` 事件的实际像素值。
+
+结算示例：外送 `211 − 20 − 5 + 6 + 7 = 199` 元；自取另享 9.5 折，`211 − 10.55 − 20 − 5 + 7 = 182.45` 元；邮寄 `211 − 20 − 5 + 6 = 192` 元。
+优惠券组件的预计积分目前未计入打包费，因此外送/自取镜像仍按不含打包费金额示例（1 元积 1 分）；实际积分以服务端结算为准。

@@ -2047,3 +2047,13 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 ### 影响的既有接口
 
 `POST /api/orders`（计价接线：自取优惠之后、券之前插入满减，券封顶随之改为「小计 − 自取优惠 − 满减」）、`GET /api/orders`、`GET /api/orders/:id`、`GET /api/admin/orders`、`GET /api/admin/orders/:id`、`GET /api/local/meta`、`POST /api/local/quote`、`POST /api/express/quote`、`GET /api/local/promo-preview`（新增）、`GET/PUT /api/admin/settings/local-delivery`、小票渲染（`services/ticket/content.ts`）。`services/member/pricing.ts` 的 `computeCheckout` 新增可选入参 `promoDiscount`（默认 0，不传与传 0 逐字节一致）。
+
+
+### 小程序接入（2026-09-19）
+
+- 外送页从 `/local/quote.promoDiscountFen`、邮寄页从 `/express/quote.promoDiscountFen`、自取页从 `/local/promo-preview?deliveryType=PICKUP&subtotal=N` 的 `discountFen` 获取满减。页面与组件不从 `promotion.tiers` 自行取档。
+- `apps/miniapp/utils/checkout-pay.js` 的 `composePay` 是小程序金额组合的唯一入口：自取优惠 → 满减 → 券，依次封顶到商品余额，然后加运费与打包费。`computePickupPay` 委托该函数；旧四参数调用保持原返回形状，显式传第五参数 `promoFen` 时新增 `promoDiscount`。
+- `checkout-benefits.otherDiscount`（分）为自取优惠与满减之和，组件将服务端券抵扣额二次封顶到 `subtotal − otherDiscount`，显示与父页明细保持一致；券资格与门槛始终按减前小计。父页只在数值变化时更新该属性，避免回传事件反复重算。
+- 主页、分类页在两个渠道均读取公开 `/local/meta` 的活动配置，邮寄不采用同城营业状态。购物车进度使用公开 promo-preview；同城免运提示动态读取 `fee.freeShipTiers` / `radiusKm`，有距离限制时说明公里范围，自取与邮寄不显示这段同城免运提示。
+- promo-preview 请求失败：结算条隐藏进度和满减划线；自取页应付显示待计算，按钮在其它必要条件满足后显示「重新计算优惠」并重试。在途旧响应用序号作废，关闭活动或不参加自取时立即清零且不请求。
+- 订单详情读取订单快照 `promoDiscountAmount`，不根据当前活动设置反算。以上金额变化不影响起送、免运和券门槛的减前小计口径。

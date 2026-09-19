@@ -460,3 +460,113 @@ TZ=Asia/Shanghai PORT=3121 DATABASE_URL="$DATABASE_URL" JWT_SECRET=miniapp-promo
 ## 11. 执行记录（01 执行方追加）
 
 （留空：每个 T 的提交 sha、B4 量到的旧条高度、A11/A12 的三组输入输出、与方案的偏离逐条说明。）
+
+### 2026-09-19 · 当前工序 01 · GPT-6（Codex）：T4 触发 R9，暂停待统筹确认
+
+- 店主补充已接收：Q1 的同城免运金额与公里范围必须按现有后台 `fee.freeShipTiers` / `radiusKm` 动态生成，未写死 99 元或 5 km；Q2–Q7 按默认值。
+- 使用指定 worktree / 分支；未安装依赖。基线 `npm run -s test:miniapp` 为 193/193，acorn 可由父目录解析。
+- T1 提交 `2bcf1da`：金额组合、活动展示纯函数、自取状态适配、公开预览 API。新增用例先红后绿；全量 207/207。测试包含后台免运档位变化、距离限定及已达档最大范围。
+- T2 提交 `4ebfe25`：主页动态占位、分类分组与搜索内容内占位及尾部补白计算。A4 源码用例先红后绿（2/2）。实测高度接线属于 T3/T4，真机验收尚未执行。
+- T3 提交 `9e4f509`：结算条尺寸、进度提示、量高事件、邮寄勾选口径和跳转；添加购物车与满减请求序号守卫。新增源码/运行时用例先红后绿，两个新增测试文件合计 19/19。B2/C2/C3/C7 未执行，不能认定视觉和真机验收已通过。
+- T4 已编写但**未提交、未完成**：两页挂载邮寄结算条、接收高度、邮寄请求 `/local/meta` 仅更新 promotion。A4/A5 源码测试 4/4。全量测试为 **213 项，210 通过、3 失败**。
+- **R9 的可复现冲突**：T4 要求 EXPRESS 请求 `/local/meta`，但现有 `tests/miniapp/channel-pages.test.cjs:74`（主页邮寄用例）、`:112`（分类双渠道用例）以及 `tests/miniapp/channel-badge-page.test.cjs:69`（同城切邮寄用例）明确禁止 EXPRESS 请求该接口。§7 禁止改既有测试，§6 A1 又要求全绿，无法同时满足。相关旧测试保持原样，没有通过改 URL、延时请求或测试环境分支绕过断言。
+- **拟请求的最小白名单调整**：允许改 `tests/miniapp/channel-pages.test.cjs` 与 `tests/miniapp/channel-badge-page.test.cjs` 中上述三个用例；将旧断言更新为“邮寄可读取活动配置，但页面 meta 仍为 null、商品请求仍走 EXPRESS、渠道切换行为不变”，配合响应夹具验证 promotion 正确落地。§6 A1 的全绿要求及 A2 三份既有逻辑测试不变。确认前不实施。
+- T5–T11 尚未执行；A11/A12 本地服务端订单、B 系列预览/开发者工具、C 真机、D 回退验证均未执行。B4 旧条高度未测量，不能把 CSS 推算当作实测。
+
+偏离说明：
+
+1. T1 的 `computePickupPay` 旧测试使用深度对象相等断言，新增无条件返回字段会破坏 A2。实现为显式传第五参数时才增加 `promoDiscount`，旧四参数返回形状不变。风险：新调用方必须显式传第五参数（T6 将传入）。未改既有测试。
+2. 当前模型为 GPT-6（Codex），不是方案标注的 Sonnet；提交署名使用真实身份。仅执行工序 01，没有替代执行工序 02–04。
+3. 技能临时进度和日志放在 `/tmp/miniapp-promo-*`，不向白名单外新增项目文件；可持久交接信息以本节为准。
+4. 按 §0 更正未运行 `npm install`。Git 元数据受沙箱保护，提交通过批准后的 Git 操作完成，未推送、未合并、未部署或上传体验版。
+
+
+### 2026-09-19 · 工序 01 续执行记录（GPT-6 / Codex）
+
+店主回复「继续」，已批准上一节所列的两份既有测试、三个断言的最小调整；R9 已解除。更新后的测试验证邮寄请求活动信息，但页面 `meta` 保持 null、同城暂停不影响邮寄，商品仍按 EXPRESS 获取。其余既有测试未改。
+
+| 任务 | 实现提交 | 结果 |
+|---|---|---|
+| T1 | `2bcf1da` | 唯一金额组合函数、活动展示逻辑、自取状态与 API；包含后台免运档位动态变化用例 |
+| T2 | `4ebfe25` | 分组/搜索真实内容占位，主页占位与尾部补白 |
+| T3 | `9e4f509`；尺寸下限补充 `a57a652`；运行时验证补充 `e48ae47` | 统一购物车条、邮寄勾选口径、请求序号与量高上报 |
+| T4 | `b5aca92` | 两页双渠道接线及获准更新的三条旧断言；213/213 |
+| T5 | `d155fb9` | 活动条、渠道/模式映射及完整档位系统弹窗；214/214 |
+| T6 | `67f794d` | 三页满减、组合金额、已优惠与自取失败重试；218/218 |
+| T7 | `374aba6` | 券二次封顶、其它优惠变化才回传属性，防重算循环；221/221 |
+| T8 | `29d9387` | 订单详情满减快照 |
+| T9 | `7293113` | 购物车 tab 页提示；223/223 |
+| T10 | `a57a652` | 八份镜像同步、组件样式登记，浏览器截图和量高 |
+| T11 | 见本节后续交接提交记录 | API 附录 K、预览台 README、完整执行记录 |
+
+#### 可脚本化验收结果
+
+- A1：`npm run -s test:miniapp` 最终 **225 tests / 225 pass / 0 fail**，未减少基线 193 项。新增覆盖量高通知去重/清空、请求失败取消划线、自取异步旧响应隔离、二次券封顶与恢复、父子组件循环防护。
+- A2：`pickup-checkout-state.test.cjs`、`local-checkout-state.test.cjs`、`local-catalog.test.cjs` 相对 `7f3374d` 零差异且全部通过。
+- A3–A8：两个新增测试文件共 **32 项通过**（promo 23 项，cart-bar-page 9 项）。明细位置、活动注册、双渠道条、scroll-view 两处占位均有断言。
+- A9：指定 **9 个文件 ES5 全通过**；六个既有 ES6 文件的新增行没有 `const / let / 箭头 / 模板串 / 解构`。
+- A10：服务端、后台、app 配置/全局样式、禁止的工具模块、包清单/锁文件、scripts 相对基线零改动。实现共 50 个文件均属于原白名单或店主明确批准的两个测试例外。
+- A11/A12：新建隔离数据库 `food_shop_mp_promo`，本地端口 **3121**、时区 `Asia/Shanghai`，微信登录/支付、同城配送、打印均走 mock，scheduler 关闭。30 个迁移成功、seed 成功。三渠道各开/关一笔，共 **6 笔通过**。所有请求字段满足 §2.5 契约，未触发 R2。
+- B1：输出 `{ show: true, text: '再买 ¥131 减 ¥20', tone: 'hint' }`。
+- B2：Chrome + Playwright 实测四个带条镜像在 375px 宽时黑条 **44px**、按钮 **34px**、含提示 dock **72px**；八个镜像无横向溢出。320px 宽时按钮 **32px**，金额不与按钮重叠，最长示例提示为一行。该结果是浏览器近似验证，不替代 C 项真机结论。
+- 补充语法验证：调用本机微信开发者工具自带 `wcc` 成功编译全部 **38 个 WXML/WXS**；`wcsc` 成功编译本批 **8 个 WXSS**。未上传或生成体验版。
+
+#### A11/A12 金额证据（单位：分）
+
+每行 `subtotal=6000`、服务端 `checkout-options` 返回的券额均为 `6000`；各单独领券，保证没有复用已核销券。
+
+| 活动 | 渠道 | 自取优惠 | 服务端满减输入 | 运费 | 打包费 | 封顶后券额 | composePay / 下单响应 / 支付后详情 | 订单 |
+|---|---|---:|---:|---:|---:|---:|---|---:|
+| 开 | LOCAL | 0 | 500 | 300 | 200 | 5500 | 500 / 500 / 500 | 1 |
+| 开 | PICKUP | 300 | 500 | 0 | 200 | 5200 | 200 / 200 / 200 | 2 |
+| 开 | EXPRESS | 0 | 500 | 600 | 0 | 5500 | 600 / 600 / 600 | 3 |
+| 关 | LOCAL | 0 | 0 | 300 | 200 | 6000 | 500 / 500 / 500 | 4 |
+| 关 | PICKUP | 300 | 0 | 0 | 200 | 5700 | 200 / 200 / 200 | 5 |
+| 关 | EXPRESS | 0 | 0 | 600 | 0 | 6000 | 600 / 600 / 600 | 6 |
+
+六单支付后均为 `PAID`；同时逐项核对 `promoDiscountAmount / discountAmount / packingFee`。活动关闭时 `promo-preview.active=false`、满减为 0，并逐分等于旧公式。使用大面额券后开/关活动的实付均只剩费用，因此上述实付相同，优惠构成按满减开关正确变化。
+
+#### D 回退验证
+
+均在相关实现已提交、待验证文件相对 HEAD 干净后进行；每次使用 `git checkout -- <本次文件>` 恢复，不触碰其它未提交文档。
+
+- D1：将 `promo` 临时改为 0，promo 测试 **9 项失败**，包含同城/自取/邮寄、券封顶；恢复后全部通过。
+- D2：恢复旧 `.page-local .prod-panel` padding 并删除分组占位，A4 对应测试失败；恢复后通过。
+- D3：给分类页结算条恢复 LOCAL-only 条件，A5 对应测试失败；恢复后通过。
+- D4 未额外执行；§6 要求至少两处回退，已执行上述三处。券封顶本身另有运行时用例与六笔订单比较。
+
+#### 验收证据
+
+- [全量测试日志](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/final-tests.log)
+- [ES5 日志](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/es5.log)
+- [六笔订单完整输入输出](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/orders.json)
+- [浏览器测量](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/browser.json)
+- [回退验证结果](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/mutations.json)
+- [源码约束与编译核对](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/source-checks.txt)
+
+截图：
+
+- [同城主页](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/index-local.png)
+- [邮寄主页](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/index.png)
+- [自取主页](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/index-local-pickup.png)
+- [分类页](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/product-list.png)
+- [同城外送结算](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/local-confirm.png)
+- [自取结算](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/local-pickup.png)
+- [邮寄结算](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/order-confirm.png)
+- [订单详情](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/order-detail.png)
+- [320px 布局](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/miniapp-promo/320-local.png)
+
+#### 尚需人工完成的 §6 项目
+
+- **B3**：微信开发者工具三个结算页真实运行并下单尚未执行。当前 worktree `config/index.js` 指向线上 API；按 §8.3，执行方不修改该配置。店主可自行临时接到 3121 的本地 mock 服务后重启服务端复验（命令见 §8.1），或在后续获准版本中验证。
+- **B4**：没有在 `7f3374d` 的微信开发者工具中量取旧条，旧高记为**未测**；54/70 仅为方案推算，未冒充实测。本批新尺寸已由 B2 量取。
+- **C1–C7**：未做真机验收。操作顺序：iOS 同城分类点最后「酒水/饮料」并滚底、点末卡 +；邮寄分组和搜索各重复一次；清空/加购、切外送/自取观察占位；检查 iOS/安卓条与原生 tabBar 没有间隙；邮寄加购回主页/分类确认只带勾选行结算并验证展开增删；开/关满减、分别切三个模式验证活动与三态；三页实付对照微信支付；320 宽再次看文字和点击区。期望保持 §6 C1–C7 原样。
+
+#### 最终偏离与边界
+
+1. 延续 T1 兼容处理：第五参数显式传入才增加 `promoDiscount` 返回字段，避免破坏 A2 的旧返回对象断言；新自取页始终传第五参数。若外部调用遗漏第五参数，将拿不到新字段。
+2. 两份既有渠道测试的三个旧断言经店主「继续」明确批准后更新；其它白名单和验收标准未改。
+3. `68rpx` 在 320px 屏上只有约 29px，故按钮补 `min-height: 32px` 满足既定点击区下限。375px 仍严格 34px，320px 实测 32px；未改变结构或文案。
+4. 预览统一采用 211 元商品小计，但自取与邮寄依本渠道费用算正确金额（自取 182.45、邮寄 192.00），不机械套用外送的 199.00。风险：静态镜像示例不能代表用户的实时后台配置，真实页面均取接口值。
+5. `prisma db seed` 首次因直接调用 CLI 未携带主仓 `.bin` 路径而报 `ts-node ENOENT`；修正 PATH 使用已有依赖后成功。未安装新依赖、未改包文件。数据库首次确认不存在后创建，未执行 DROP。
+6. 当前模型与署名均为 GPT-6（Codex）。未执行工序 02 独立复核、03 回判或 04 独立机械核对；本节是工序 01 自验记录，后续仍按 §0 交接。未合并、未推送、未部署、未上传体验版。
