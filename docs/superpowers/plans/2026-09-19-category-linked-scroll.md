@@ -45,6 +45,7 @@
 - Create: `apps/miniapp/utils/category-scroll.js`
 - Modify: `apps/miniapp/pages/product/list.js`, `list.wxml`, `list.wxss`（必要时 `list.json`）
 - Create: `tests/miniapp/category-scroll.test.cjs`
+- Mock-only updates if needed: `tests/miniapp/channel-badge-page.test.cjs`, `tests/miniapp/channel-pages.test.cjs`, `tests/miniapp/local-mode.test.cjs`，补全 selectViewport 与 selector-aware 测量桩，保留全部业务断言。
 - Modify: `tests/miniapp/category-anchor-page.test.cjs`, `tests/miniapp/cart-bar-page.test.cjs`（只替换旧滚动/占位契约断言）
 
 **Interfaces:**
