@@ -8,6 +8,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const promotion = { active: true, name: '秋日满减', channels: { LOCAL: true, PICKUP: false, EXPRESS: true }, tiers: [{ minFen: 5000, cutFen: 500 }] }
+const meta = { enabled: false, paused: { reason: '暂停外送' }, pickup: { enabled: false }, promotion }
 
 function loadPage(relPath, ctx) {
   Object.keys(require.cache)
@@ -48,7 +50,7 @@ function makeCtx(channel, opts) {
     setStorageSync: () => {},
     request: (o) => {
       urls.push(o.url.replace(/^https?:\/\/[^/]+(\/api)?/, ''))
-      const body = /\/categories/.test(o.url) ? [] : /\/products/.test(o.url) ? { list: [], total: 0 } : {}
+      const body = /\/categories/.test(o.url) ? [] : /\/products/.test(o.url) ? { list: [], total: 0 } : /\/local\/meta/.test(o.url) ? meta : {}
       o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: body } })
     },
     getWindowInfo: () => ({ windowWidth: 375, windowHeight: 812, statusBarHeight: 44 }),
@@ -76,7 +78,10 @@ test('同城 → 邮寄：定渠道、重载本页拉邮寄货，弹层关闭', 
   await settle(); await settle()
   assert.equal(ctx.app.globalData.shoppingChannel, 'EXPRESS')
   assert.ok(has(ctx.urls, '/categories?channel=EXPRESS'), ctx.urls.join(' '))
-  assert.ok(!has(ctx.urls, '/local/meta'), '邮寄不该拉同城门店状态：' + ctx.urls.join(' '))
+  assert.ok(has(ctx.urls, '/local/meta'), '邮寄需要读取活动配置：' + ctx.urls.join(' '))
+  assert.deepEqual(page.data.promotion, promotion)
+  assert.equal(page.data.meta, null)
+  assert.equal(page.data.headBlocking, false)
   assert.equal(page.data.channelSheetOpen, false)
 })
 

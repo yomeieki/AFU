@@ -18,6 +18,7 @@ const app = getApp()
 Page({
   data: {
     cartSpacerPx: 0,
+    promotion: null,
     channel: 'EXPRESS',
     // 同城专用
     meta: null,
@@ -65,9 +66,9 @@ Page({
     }
     if (this.data.channel === 'LOCAL') {
       if (app.getLocalMode() !== this.data.mode) this.applyMode(app.getLocalMode())
-      this.loadMeta()
-      this.refreshCartBar()
     }
+    this.loadMeta()
+    this.refreshCartBar()
     var g = app.globalData
     if (g.pendingCategoryAll === true) {
       g.pendingCategoryAll = false
@@ -113,22 +114,31 @@ Page({
       meta: channel === 'LOCAL' ? this.data.meta : null,
       mode: channel === 'LOCAL' ? app.getLocalMode() : 'DELIVERY',
       headBlocking: false,
+      promotion: null,
     })
     this._products = []
     this._offsets = []
     this.resetRightScroll()
     this.loadCatalog()
     // 进分类页这一次要做模式回落；onShow 里的刷新（loadMeta() 不传参）不改顾客已选的模式
-    if (channel === 'LOCAL') this.loadMeta(true)
+    this.loadMeta(channel === 'LOCAL')
+    this.refreshCartBar()
   },
 
   // resolve 为 true 时才做外送/自取回落（只在进本页那一次做，onShow 的刷新不改顾客的选择）
   loadMeta(resolve) {
     var self = this
+    var channel = this.data.channel
     getLocalMeta()
       .then(function(meta) {
+        if (channel !== self.data.channel) return
+        if (channel === 'EXPRESS') {
+          self.setData({ promotion: meta.promotion })
+          self.afterGroupsRendered()
+          return
+        }
         var mode = resolve ? app.setLocalMode(resolveLocalMode(meta, app.getLocalMode())) : app.getLocalMode()
-        self.setData({ meta: meta, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
+        self.setData({ meta: meta, promotion: meta.promotion, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
         self.afterGroupsRendered() // 门店头第一次画出来会把右侧往下推，要重量
       })
       .catch(function() {

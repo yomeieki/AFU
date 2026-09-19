@@ -9,6 +9,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const promotion = { active: true, name: '秋日满减', channels: { LOCAL: true, PICKUP: false, EXPRESS: true }, tiers: [{ minFen: 5000, cutFen: 500 }] }
+const meta = { enabled: false, paused: { reason: '暂停外送' }, pickup: { enabled: false }, promotion }
 
 function loadPage(relPath, ctx) {
   Object.keys(require.cache)
@@ -42,7 +44,7 @@ function makeCtx(channel) {
     request: (o) => {
       urls.push(o.url.replace(/^https?:\/\/[^/]+(\/api)?/, ''))
       // 每个接口都给一个形状合法的空响应，页面据此走完整条 then 链
-      const body = /\/categories/.test(o.url) ? [] : /\/products/.test(o.url) ? { list: [], total: 0 } : {}
+      const body = /\/categories/.test(o.url) ? [] : /\/products/.test(o.url) ? { list: [], total: 0 } : /\/local\/meta/.test(o.url) ? meta : {}
       o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: body } })
     },
     getWindowInfo: () => ({ windowWidth: 375, windowHeight: 812, statusBarHeight: 44 }),
@@ -71,7 +73,7 @@ test('主页 LOCAL：分类与商品都带 channel=LOCAL，并拉门店 meta', a
   assert.ok(!has(ctx.urls, '/banners'), '同城不该请求邮寄 Banner')
 })
 
-test('主页 EXPRESS：分类与商品都带 channel=EXPRESS，且不拉同城 meta', async function () {
+test('主页 EXPRESS：商品按渠道加载，仅读取 meta 中的活动配置', async function () {
   const ctx = makeCtx('EXPRESS')
   const page = loadPage('../../apps/miniapp/pages/index/index.js', ctx)
   page.onLoad.call(page)
@@ -79,7 +81,10 @@ test('主页 EXPRESS：分类与商品都带 channel=EXPRESS，且不拉同城 m
   assert.ok(has(ctx.urls, '/categories?channel=EXPRESS'))
   assert.ok(has(ctx.urls, '/products?channel=EXPRESS'))
   assert.ok(has(ctx.urls, '/banners'))
-  assert.ok(!has(ctx.urls, '/local/meta'), '邮寄不该请求同城门店状态')
+  assert.ok(has(ctx.urls, '/local/meta'), '邮寄需要读取活动配置')
+  assert.deepEqual(page.data.promotion, promotion)
+  assert.equal(page.data.meta, null)
+  assert.equal(page.data.headBlocking, false)
 })
 
 // 顾客在封面换了渠道再切回这个 tab：onShow 必须整页重来。
@@ -117,7 +122,12 @@ test('分类页 LOCAL / EXPRESS 各自带对渠道', async function () {
     await settle(); await settle()
     assert.ok(has(ctx.urls, '/categories?channel=' + ch), ch + ' 分类：' + ctx.urls.join(' '))
     assert.ok(has(ctx.urls, '/products?channel=' + ch), ch + ' 商品：' + ctx.urls.join(' '))
-    assert.equal(has(ctx.urls, '/local/meta'), ch === 'LOCAL')
+    assert.ok(has(ctx.urls, '/local/meta'))
+    assert.deepEqual(page.data.promotion, promotion)
+    if (ch === 'EXPRESS') {
+      assert.equal(page.data.meta, null)
+      assert.equal(page.data.headBlocking, false)
+    }
   }
 })
 

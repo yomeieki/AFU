@@ -21,3 +21,11 @@ test('结算条固定尺寸并包含进度提示与整体高度容器', () => {
   assert.match(read('components/local-cart-bar/index.wxml'), /class="cart-dock"/)
   assert.match(read('components/local-cart-bar/index.wxml'), /cart-tip/)
 })
+test('主页和分类页两个渠道都挂载结算条并监听高度', () => {
+  for (const p of ['pages/index/index', 'pages/product/list']) {
+    const tag = read(p + '.wxml').match(/<local-cart-bar\b[^>]*>/)[0]
+    assert.doesNotMatch(tag, /wx:if/)
+    assert.match(tag, /channel="{{channel}}"/)
+    assert.match(tag, /bind:height="onCartHeight"/)
+  }
+})

@@ -18,6 +18,7 @@ const app = getApp()
 Page({
   data: {
     cartSpacerPx: 0,
+    promotion: null,
     // 自绘导航栏尺寸，onLoad 时按胶囊按钮实测值算出（见 computeNavBar）
     statusBarHeight: 0,
     navContent: 44,
@@ -97,9 +98,9 @@ Page({
     }
     if (this.data.channel === 'LOCAL') {
       if (app.getLocalMode() !== this.data.mode) this.applyMode(app.getLocalMode())
-      this.loadMeta()
-      this.refreshCartBar()
     }
+    this.loadMeta()
+    this.refreshCartBar()
   },
 
   onPullDownRefresh() {
@@ -131,23 +132,29 @@ Page({
       meta: channel === 'LOCAL' ? this.data.meta : null,
       mode: channel === 'LOCAL' ? app.getLocalMode() : 'DELIVERY',
       headBlocking: false,
+      promotion: null,
     })
     return channel === 'LOCAL' ? this.loadLocal() : this.loadExpress()
   },
 
   loadExpress() {
+    var self = this
     return Promise.all([
       catalogApi.getCategories('EXPRESS'),
       catalogApi.getProducts({ channel: 'EXPRESS', page: 1, pageSize: 6 }),
       request({ url: '/banners' }).catch(function() { return [] }),
+      getLocalMeta().catch(function() { return null }),
     ])
-      .then(([categories, productData, banners]) => {
-        this.setData({
-          banners: banners || [],
-          categories: categories || [],
-          products: this.decorate(productData),
+      .then(function(r) {
+        if (self.data.channel !== 'EXPRESS') return
+        self.setData({
+          banners: r[2] || [],
+          categories: r[0] || [],
+          products: self.decorate(r[1]),
+          promotion: r[3] ? r[3].promotion : null,
           loading: false,
         })
+        self.refreshCartBar()
         wx.stopPullDownRefresh()
       })
       .catch(() => {
@@ -173,6 +180,7 @@ Page({
           categories: categories || [],
           products: this.decorate(productData),
           meta: meta,
+          promotion: meta && meta.promotion,
           mode: mode,
           headBlocking: headNoticeOf(meta, mode).blocking,
           loading: false,
@@ -195,10 +203,16 @@ Page({
   // 模式回落只在进同城（loadLocal）那一次做；onShow 触发的刷新不改顾客已经选定的模式
   loadMeta() {
     var self = this
+    var channel = this.data.channel
     getLocalMeta()
       .then(function(meta) {
+        if (channel !== self.data.channel) return
+        if (channel === 'EXPRESS') {
+          self.setData({ promotion: meta.promotion })
+          return
+        }
         var mode = app.getLocalMode()
-        self.setData({ meta: meta, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
+        self.setData({ meta: meta, promotion: meta.promotion, mode: mode, headBlocking: headNoticeOf(meta, mode).blocking })
       })
       .catch(function() {
         // 保留上一次的 meta：拉不到店铺状态时，把营业中的店显示成打烊比不刷新更糟
