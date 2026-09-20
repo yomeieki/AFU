@@ -1,6 +1,6 @@
 # 小程序 HTML 预览台
 
-在浏览器里近似预览 `apps/miniapp` 的 30 个页面/展示状态，供 UI 改造时快速看效果、截图自检。
+在浏览器里近似预览 `apps/miniapp` 的页面/展示状态，供 UI 改造时快速看效果、截图自检。
 
 ## 用途
 
@@ -33,11 +33,24 @@ node tools/miniapp-preview/serve.mjs --port 5180
 - 新增页面用到新组件：在 `serve.mjs` 的 `PAGE_COMPONENTS` 登记其组件 wxss。
 - `*.generated.css` 由源码派生、已 gitignore，不入库。
 
+## 分类页整页滚动预览
+
+分类页另有两个可直接打开的交互镜像：
+
+- [同城分类页](http://localhost:5180/pages/product-list-local.html)：门店长通知、满减、外送/自取切换和含提示的购物栏。
+- [邮寄分类页](http://localhost:5180/pages/product-list.html)：吸顶搜索/渠道入口、搜索清除和示例分页。
+
+先运行 `node tools/miniapp-preview/serve.mjs --port 5180`，再打开链接。若 5180 已在使用，可换端口并替换链接中的端口。镜像使用 `product-list.generated.css` / `product-list-local.generated.css`，两份都由真实 `app.wxss`、分类页 WXSS 和对应组件 WXSS 生成。视口宽度决定 rpx 比例，页面本身自然滚动，分类侧栏单独滚动。
+
+可向上滑商品让门店头收起，点左侧末尾“酒水/饮料”检查一件商品及加购按钮，反向滚动到顶部；点优惠提示右侧的“预览：切换空车”观察购物栏从有到无的布局变化。邮寄页输入“冷吃兔”并点搜索或回车，可滚到底部加载下一批示例商品，再点搜索标签的 × 返回分组。渠道标识可在两份镜像间切换。15 个分类和重复商品由共享脚本确定性生成，计价、支付和后台请求都只是标明为样例的浏览器模拟。
+
+本次几何与交互检查的截图和 JSON 位于 `/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/`。这些结果不能代替 iOS/Android 微信真机对惯性、原生 tabBar 和安全区的验收。
+
 ## 边界（重要）
 
-这是**视觉近似**，不是功能验证：
+这是**视觉近似与分类页模拟交互**，不是微信运行时功能验证：
 
-- 不跑交互、事件、`wx:for`/`wx:if` 运行时、`price.wxs`（mock 数据已 baked）
+- 除分类页共享浏览器桥接外，不跑交互、事件、`wx:for`/`wx:if` 运行时、`price.wxs`（mock 数据已 baked）
 - 不连后端、无真实数据（协议/隐私政策例外：正文是 `config/legal.js` 的真文案）
 - iframe 模拟样式隔离（非真机的 Shadow 机制），个别继承细节可能有差异
 - rpx 用 `calc` 近似，字体渲染与真机略有出入

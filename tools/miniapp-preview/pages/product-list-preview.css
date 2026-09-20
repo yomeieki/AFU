@@ -1,0 +1,18 @@
+/* Browser-only shell. Page and component classes use generated WXSS. */
+html { --rpx: .5px; scroll-behavior: smooth; }
+body { margin: 0; background: #f5f6f7; }
+.mp-page { width: 100%; }
+.cat-panel { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.cat-panel::-webkit-scrollbar { display: none; }
+.cat-item { display: flex; width: 100%; border: 0; font-family: inherit; cursor: pointer; }
+.mode-tab { border: 0; font-family: inherit; cursor: pointer; }
+.add-btn, .search-clear, .category-tag-close { border: 0; font-family: inherit; cursor: pointer; }
+.search-input { border: 0; outline: 0; background: transparent; min-width: 0; }
+.channel-badge { text-decoration: none; }
+.search-results .footer-tip { display: block; width: 100%; border: 0; background: transparent; cursor: pointer; }
+[hidden] { display: none !important; }
+.preview-control { position: absolute; z-index: 30; top: 68px; right: 8px; padding: 5px 7px; border: 1px solid #ddd; border-radius: 8px; background: #fff; color: #444; font: 11px sans-serif; opacity: .8; }
+.preview-control:focus-visible, .preview-control:hover { opacity: 1; }
+.preview-cart-full .preview-control { position: fixed; z-index: 110; top: auto; bottom: calc(88 * var(--rpx)); right: 6px; padding: 2px 5px; font-size: 10px; }
+.preview-cart-full .cart-tip { text-align: left; padding-right: 90px; }
+.preview-note { display: block; padding: 12px; color: #888; font-size: 12px; text-align: center; }

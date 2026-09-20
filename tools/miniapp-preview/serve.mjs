@@ -7,7 +7,7 @@
  * 协议/隐私政策两页例外：正文现读 config/legal.js 渲染（见下方 LEGAL_PAGES）。
  *
  * 用法：node tools/miniapp-preview/serve.mjs [--port 5180]
- * 边界：视觉近似，无交互/wxs/真实数据，真机验证仍走微信开发者工具。
+ * 边界：分类页有浏览器布局交互样例；无真实 API/支付，真机仍需验证。
  */
 import http from 'node:http'
 import fs from 'node:fs'
@@ -29,7 +29,8 @@ const PAGE_COMPONENTS = {
   cover: ['privacy-popup'],
   index: ['empty-state', 'local-cart-bar', 'promo-bar'],
   'product-detail': ['sku-popup'],
-  'product-list': ['empty-state', 'local-cart-bar', 'promo-bar'],
+  'product-list': ['empty-state', 'channel-badge', 'local-cart-bar', 'promo-bar'],
+  'product-list-local': ['empty-state', 'channel-badge', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar'],
   cart: ['empty-state'],
   'order-list': ['empty-state', 'order-status-tag'],
   'address-list': ['empty-state'],
@@ -87,6 +88,7 @@ const PAGE_WXSS = {
   index: 'pages/index/index.wxss',
   'product-detail': 'pages/product/detail.wxss',
   'product-list': 'pages/product/list.wxss',
+  'product-list-local': 'pages/product/list.wxss',
   cart: 'pages/cart/index.wxss',
   user: 'pages/user/index.wxss',
   'order-list': 'pages/order/list.wxss',
