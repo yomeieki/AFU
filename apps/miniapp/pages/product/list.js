@@ -112,6 +112,7 @@ Page({
     this._sidebarScrollTop = 0
     this._needsSidebarReveal = false
     this._lockUntil = 0
+    this._pendingScrollTop = null
     this._searchSeq = (this._searchSeq || 0) + 1
     var channel = app.getShoppingChannel()
     this.setData({
@@ -244,7 +245,17 @@ Page({
       return
     }
     this.setActiveGroup(normId)
+    if (this._lockTimer) clearTimeout(this._lockTimer)
+    var self = this
+    var lockRevision = this._lockRevision = (this._lockRevision || 0) + 1
     this._lockUntil = Date.now() + 500
+    this._pendingScrollTop = null
+    this._lockTimer = setTimeout(function() {
+      if (lockRevision !== self._lockRevision) return
+      self._lockTimer = null
+      self._lockUntil = 0
+      if (!self._hidden && !self._unloaded && self._pendingScrollTop != null) self._syncActiveFromScroll()
+    }, 500)
     for (var j = 0; j < this._offsets.length; j++) {
       if (this._offsets[j].id === normId) {
         this.scrollPageTo(categoryScroll.pageTarget(this._offsets[j].top, this.data.pinnedHeight), 300)
@@ -282,7 +293,7 @@ Page({
     if (!this._layout || this._anchorSnapshot) return
     var y = typeof this._pageScrollTop === 'number' ? this._pageScrollTop : this._layout.scrollTop
     if (y + this._layout.pinnedHeight < this._layout.bodyTop) return
-    this._anchorSnapshot = { scrollTop: y, bodyTop: this._layout.bodyTop, pinnedHeight: this._layout.pinnedHeight }
+    this._anchorSnapshot = { scrollTop: y, bodyTop: this._layout.bodyTop, pinnedHeight: this._layout.pinnedHeight, scrollRevision: this._scrollRevision || 0 }
   },
 
   _invalidateMeasurements: function() {
@@ -324,11 +335,12 @@ Page({
     query.selectAll('.group-anchor').boundingClientRect()
     query.selectAll('.cat-item').boundingClientRect()
     query.select('.cat-panel').boundingClientRect()
+    query.select('.cat-panel').scrollOffset()
     query.select('.search-results').boundingClientRect()
     query.exec(function(res) {
         if (generation !== self._measureGeneration || self._hidden) return
         var viewport = res[0], toolbar = res[1], body = res[2], rects = res[3] || []
-        var items = res[4] || [], sidebar = res[5], searchResults = res[6]
+        var items = res[4] || [], sidebar = res[5], sidebarOffset = res[6], searchResults = res[7]
         if (!viewport || !toolbar || !body) return
         var sampledY = Math.max(0, viewport.scrollTop || 0)
         var liveY = (self._scrollRevision || 0) !== scrollRevision ? self._pageScrollTop : sampledY
@@ -347,12 +359,16 @@ Page({
           for (var j = 0; j < items.length; j++) {
             var itemId = items[j].dataset && items[j].dataset.gid
             if (typeof itemId === 'string' && itemId !== 'other' && itemId !== '' && !isNaN(Number(itemId))) itemId = Number(itemId)
-            self._sidebarItems.push({ id: itemId, top: items[j].top - sidebar.top + (self._sidebarScrollTop || 0), height: items[j].height })
+            self._sidebarItems.push({ id: itemId, top: items[j].top - sidebar.top + (sidebarOffset && sidebarOffset.scrollTop || 0), height: items[j].height })
           }
         }
         var lastGroupHeight = rects.length ? rects[rects.length - 1].height : 0
         self._layout = { viewportHeight: win.windowHeight, pinnedHeight: pinnedHeight, bodyTop: bodyTop, lastGroupHeight: lastGroupHeight, scrollTop: liveY }
         var anchor = self._anchorSnapshot
+        if (anchor && anchor.scrollRevision !== (self._scrollRevision || 0)) {
+          self._anchorSnapshot = null
+          anchor = null
+        }
         if (anchor && (anchor.bodyTop !== bodyTop || anchor.pinnedHeight !== pinnedHeight)) {
           var desired = Math.max(0, anchor.scrollTop + bodyTop - anchor.bodyTop - (pinnedHeight - anchor.pinnedHeight))
           self._anchorSnapshot = null
@@ -394,9 +410,14 @@ Page({
       self._scrollTimer = null
       if (self._hidden) return
       if (Date.now() < (self._lockUntil || 0)) return // 点左侧后的滚动动画期间不让中间经过的段抢高亮
-      var id = catalogGroups.activeGroupOf(self._offsets, self._pendingScrollTop + self.data.pinnedHeight, 2)
-      if (id != null && id !== self.data.activeGroupId) self.setActiveGroup(id)
+      self._syncActiveFromScroll()
     }, 100)
+  },
+
+  _syncActiveFromScroll: function() {
+    if (this.data.searchKeyword || this._pendingScrollTop == null) return
+    var id = catalogGroups.activeGroupOf(this._offsets, this._pendingScrollTop + this.data.pinnedHeight, 2)
+    if (id != null && id !== this.data.activeGroupId) this.setActiveGroup(id)
   },
 
   onSidebarScroll: function(e) {
@@ -437,6 +458,7 @@ Page({
     this._invalidateMeasurements()
     this._anchorSnapshot = null
     this._clearTimers()
+    this._lockUntil = 0
   },
 
   onUnload() {
@@ -445,11 +467,14 @@ Page({
     this._invalidateMeasurements()
     this._anchorSnapshot = null
     this._clearTimers()
+    this._lockUntil = 0
   },
 
   // tabBar 页 onUnload 基本不触发，onHide 必须清，否则定时器在别的 tab 上 setData
   _clearTimers() {
     if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null }
+    if (this._lockTimer) { clearTimeout(this._lockTimer); this._lockTimer = null }
+    this._lockRevision = (this._lockRevision || 0) + 1
     if (this._imgTimer) { clearTimeout(this._imgTimer); this._imgTimer = null }
     if (this._remeasureTimer) { clearTimeout(this._remeasureTimer); this._remeasureTimer = null }
   },

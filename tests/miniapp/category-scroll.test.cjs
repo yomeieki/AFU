@@ -43,6 +43,7 @@ function fixture(options = {}) {
     '.search-results': { top: 240, height: 0, bottom: 240 },
   }
   let viewportTop = 0
+  let sidebarViewportTop = 0
   let windowHeight = 720
   const wx = {
     getWindowInfo: () => ({ windowHeight, windowWidth: 375 }),
@@ -64,7 +65,7 @@ function fixture(options = {}) {
         scrollOffset: () => { selections.push(['scroll', current]); return q },
         boundingClientRect: () => { selections.push(['rect', current]); return q },
         exec: cb => {
-          const result = () => selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: viewportTop } : rects[s])
+          const result = () => selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: s === '.cat-panel' ? sidebarViewportTop : viewportTop } : rects[s])
           const snapshot = options.snapshotAtExec ? structuredClone(result()) : null
           pending.push(() => cb(snapshot || result()))
         },
@@ -88,7 +89,7 @@ function fixture(options = {}) {
   page.setData = patch => { page.patches.push(patch); Object.assign(page.data, patch) }
   page.selectComponent = () => null
   const flush = () => { while (pending.length) pending.shift()() }
-  return { page, app, rects, calls, pending, flush, setViewportTop: y => { viewportTop = y }, setWindowHeight: h => { windowHeight = h } }
+  return { page, app, rects, calls, pending, flush, setViewportTop: y => { viewportTop = y }, setSidebarViewportTop: y => { sidebarViewportTop = y }, setWindowHeight: h => { windowHeight = h } }
 }
 
 test('page measurement uses one viewport sample for document anchors and measured dock layout', () => {
@@ -261,6 +262,22 @@ test('delayed selector callback still owns the header anchor snapshot', async ()
   f.page._clearTimers()
 })
 
+test('a newer page gesture cannot be rewound by an older header anchor', () => {
+  const f = fixture({ snapshotAtExec: true })
+  f.setViewportTop(500)
+  f.rects['.catalog-body'].top = -300 // B=200 at Y=500
+  f.page.measureOffsets(); f.flush()
+  f.page.onPageScroll({ scrollTop: 500 })
+  f.page._captureAnchor()
+  f.rects['.catalog-body'].top = -260 // B=240 in the delayed selector sample
+  f.page.measureOffsets()
+  f.page.onPageScroll({ scrollTop: 700 })
+  f.flush()
+  assert.equal(f.calls.length, 0, 'old header anchor must not issue a page jump')
+  assert.equal(f.page._pageScrollTop, 700)
+  f.page._clearTimers()
+})
+
 test('page scroll highlights after throttle and reveals only offscreen sidebar items', async () => {
   const f = fixture()
   f.page.measureOffsets(); f.flush()
@@ -308,12 +325,75 @@ test('manual sidebar position is preserved until the selected item leaves view',
   f.page._clearTimers()
 })
 
+test('delayed sidebar rectangles use their own sampled scroll while reveal uses the live position', () => {
+  function delayedSidebar() {
+    const f = fixture({ snapshotAtExec: true })
+    f.page.data.groups = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, name: String(i + 1), items: [] }))
+    f.rects['.cat-item'] = Array.from({ length: 20 }, (_, i) => ({ dataset: { gid: i + 1 }, top: 240 + i * 50, height: 50 }))
+    f.page.measureOffsets(); f.flush()
+    f.page.measureOffsets() // rail rects and scroll offset sampled at zero
+    f.setSidebarViewportTop(200)
+    f.page.onSidebarScroll({ detail: { scrollTop: 200 } })
+    f.flush()
+    return f
+  }
+  const hidden = delayedSidebar()
+  hidden.page.setActiveGroup(3) // content [100,150], visible interval [200,680]
+  assert.equal(hidden.page.data.sidebarScrollTop, 100, 'reveal the hidden row by the minimum distance')
+  hidden.page._clearTimers()
+
+  const visible = delayedSidebar()
+  visible.page.setActiveGroup(12) // content [550,600] is already visible
+  assert.equal(visible.page.data.sidebarScrollTop, 0, 'do not disturb the live manual scroll')
+  assert.equal(visible.page._sidebarScrollTop, 200)
+  visible.page._clearTimers()
+})
+
+test('interrupted category jump reconciles its last scroll event at natural lock expiry', async () => {
+  const f = fixture()
+  f.page.measureOffsets(); f.flush()
+  f.page.locateGroup(3)
+  assert.equal(f.page.data.activeGroupId, 3)
+  f.page.onPageScroll({ scrollTop: 560 }) // animation ends early in group 2
+  await new Promise(r => setTimeout(r, 150))
+  assert.equal(f.page.data.activeGroupId, 3, 'intermediate event remains locked')
+  await new Promise(r => setTimeout(r, 450)) // no further page event
+  assert.equal(f.page.data.activeGroupId, 2)
+  f.page._clearTimers()
+})
+
+test('a second category tap owns the click lock and delays stale reconciliation', async () => {
+  const f = fixture()
+  f.page.measureOffsets(); f.flush()
+  f.page.locateGroup(2)
+  await new Promise(r => setTimeout(r, 200))
+  f.page.locateGroup(3)
+  f.page.onPageScroll({ scrollTop: 560 })
+  await new Promise(r => setTimeout(r, 350)) // past first tap expiry, within second tap lock
+  assert.equal(f.page.data.activeGroupId, 3)
+  await new Promise(r => setTimeout(r, 230))
+  assert.equal(f.page.data.activeGroupId, 2)
+  f.page._clearTimers()
+})
+
+test('hiding the page cancels pending click-lock reconciliation', async () => {
+  const f = fixture()
+  f.page.measureOffsets(); f.flush()
+  f.page.locateGroup(3)
+  f.page.onPageScroll({ scrollTop: 560 })
+  f.page.onHide()
+  await new Promise(r => setTimeout(r, 550))
+  assert.equal(f.page.data.activeGroupId, 3)
+  assert.equal(f.page._lockTimer, null)
+})
+
 function activeSidebar(id, scrollTop) {
   const f = fixture()
   f.page.data.groups = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, name: String(i + 1), items: [] }))
   f.page.data.activeGroupId = id
   f.page.data.sidebarScrollTop = scrollTop
   f.page._sidebarScrollTop = scrollTop
+  f.setSidebarViewportTop(scrollTop)
   f.setViewportTop(300)
   f.rects['.catalog-body'].top = -60 // document B=240: the toolbar is pinned
   f.rects['.cat-panel'].top = 40

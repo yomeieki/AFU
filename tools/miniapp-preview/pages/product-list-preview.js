@@ -9,6 +9,8 @@
   var root = document.getElementById('preview-root')
   var raf = 0
   var clickLockUntil = 0
+  var clickLockTimer = 0
+  var clickLockRevision = 0
 
   function esc(value) {
     return String(value).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] })
@@ -36,7 +38,7 @@
   function channelBadge() { return '<a class="channel-badge" href="/pages/product-list' + (local ? '' : '-local') + '.html">' + (local ? '同城配送' : '全国邮寄') + '<span class="channel-badge-caret">⌄</span></a>' }
 
   function header() {
-    if (!local) return '<div class="catalog-toolbar search-bar"><div class="search-input-wrap"><span class="search-icon">🔍</span><input id="catalog-search" class="search-input" placeholder="搜索商品" aria-label="搜索商品"><button id="search-confirm" class="search-clear" type="button">搜索</button></div>' + channelBadge() + '</div>'
+    if (!local) return '<div class="catalog-toolbar search-bar"><div class="search-input-wrap"><span class="search-icon">🔍</span><input id="catalog-search" class="search-input" placeholder="搜索商品" aria-label="搜索商品"><button id="search-confirm" class="search-clear" type="button" hidden>搜索</button></div>' + channelBadge() + '</div>'
     return '<div class="store-head"><div class="store-title-row"><div class="store-name-wrap"><div class="icon icon-shop store-icon"></div><span class="store-name">自贡味道同城店</span><span class="status-pill status-pill-closed">已打烊</span></div>' + channelBadge() + '</div>' +
       '<div class="delivery-rules-row"><span class="delivery-rules">配送范围 5 公里 · ¥30 起送 · 运费结算时算</span><span class="delivery-rules-arrow">›</span></div>' +
       '<div class="head-notice head-notice-soft"><span class="head-notice-text" id="notice-text">当前已打烊，您可以提前下单，营业后将按顺序安排配送。若您想预约自取，可切换到自取查看可预约时段。</span></div></div>'
@@ -79,6 +81,7 @@
         return '<div class="group-anchor" data-index="' + index + '" id="g-' + group.id + '"><div class="group-head">' + esc(group.name) + '</div><div class="product-list">' + group.items.map(product).join('') + '</div></div>'
       }).join('') + '<div class="group-tail" id="group-tail"></div>'
     }
+    document.querySelectorAll('.cat-item').forEach(function (item, index) { item.classList.toggle('active', !state.search && index === state.active) })
     panel.querySelectorAll('.add-btn').forEach(function (button) { button.addEventListener('click', function (event) { event.stopPropagation(); state.cartCount += 1; renderCart(); updateLayout() }) })
     updateLayout()
   }
@@ -140,7 +143,15 @@
   function selectCategory(index) {
     if (state.search) clearSearch()
     setActive(index)
+    if (clickLockTimer) clearTimeout(clickLockTimer)
+    var revision = ++clickLockRevision
     clickLockUntil = Date.now() + 500
+    clickLockTimer = setTimeout(function () {
+      if (revision !== clickLockRevision) return
+      clickLockTimer = 0
+      clickLockUntil = 0
+      if (!state.search) updateActive(document.querySelector('.catalog-toolbar').getBoundingClientRect().height)
+    }, 500)
     var group = document.getElementById('g-' + groups[index].id)
     var pinned = document.querySelector('.catalog-toolbar').getBoundingClientRect().height
     var documentTop = group.getBoundingClientRect().top + window.scrollY
@@ -150,6 +161,10 @@
   function startSearch() {
     var query = document.getElementById('catalog-search').value.trim()
     if (!query) { clearSearch(); return }
+    if (clickLockTimer) clearTimeout(clickLockTimer)
+    clickLockTimer = 0
+    clickLockRevision += 1
+    clickLockUntil = 0
     state.search = query
     state.searchPage = 1
     renderGroups()
@@ -160,6 +175,7 @@
     state.search = ''
     state.searchPage = 0
     document.getElementById('catalog-search').value = ''
+    document.getElementById('search-confirm').hidden = true
     renderGroups()
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -180,6 +196,7 @@
     }) })
     else {
       document.getElementById('search-confirm').addEventListener('click', startSearch)
+      document.getElementById('catalog-search').addEventListener('input', function (event) { document.getElementById('search-confirm').hidden = !event.target.value })
       document.getElementById('catalog-search').addEventListener('keydown', function (event) { if (event.key === 'Enter') startSearch() })
     }
     window.addEventListener('resize', updateLayout)

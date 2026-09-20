@@ -99,7 +99,7 @@ function makeCtx(channel, opts) {
             '.cat-panel': { top: old[0].top, height: 600 },
             '.search-results': { top: old[0].top, bottom: 900, height: 800 },
           }
-          cb(selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: old[1].scrollTop } : rects[s]))
+          cb(selections.map(([kind, s]) => kind === 'scroll' ? { scrollTop: s === '.cat-panel' ? (opts.sidebarScrollTop || 0) : old[1].scrollTop } : rects[s]))
         },
       }
       return q
