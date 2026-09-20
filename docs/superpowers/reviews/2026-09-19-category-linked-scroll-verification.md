@@ -37,6 +37,6 @@ git diff --check                                              exit 0
 
 ## 审核与真机待验
 
-方案预审 Agent 模型：`gpt-6-astra`；Task 1 执行 Agent：`gpt-5.6-sol`；Task 1 独立审核 Agent：`gpt-6-astra`，三项重要问题修复后在 `893fe80` 批准。Task 2 执行 Agent：`gpt-5.6-sol`。Task 2 独立审核及全分支终审由统筹另行记录，本文不预先宣称通过。方案与 Task 1 审核记录分别见证据目录 `design-review.md` 和 `.superpowers/sdd/2026-09-19-category-linked-scroll/task-1-review.md`。
+方案预审 Agent 模型：`gpt-6-astra`；Task 1 执行 Agent：`gpt-5.6-sol`；Task 1 独立审核 Agent：`gpt-6-astra`，三项重要问题修复后在 `893fe80` 批准。Task 2 执行 Agent：`gpt-5.6-sol`。Task 2 独立审核及全分支终审由统筹另行记录，本文不预先宣称通过。持久证据目录保留 [方案预审](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/design-review.md)、[Task 1 审核](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-1-review.md)、[Task 1 实施报告](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-1-report.md)与 [Task 2 实施报告](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-2-report.md)，原生自动测试日志也已复制至同目录。
 
 iOS 和 Android 微信开发者工具/真机各需依次：进入同城分类 → 加购 → 上滑收起头部 → 点/滑到末尾“酒水/饮料”并点击加购 → 反向滑至顶部 → 手动滑动左栏 → 切自取/外送 → 清空购物车 → 切邮寄搜索、加载下一页并清除。核对滚动连续性、吸顶与原生 tabBar/安全区衔接、底部分类及按钮不被遮挡、返回分类页的位置、真实购物栏高度和金额。未获得真机运行结果，以上项目均为待验，未上传体验版。
