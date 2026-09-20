@@ -1,6 +1,6 @@
 # 分类页整页联动滚动验收记录
 
-日期：2026-09-20。分支：`codex/category-scroll`，Task 1 原生实现基线 `893fe80`。本记录检查浏览器镜像、自动测试和原生编译；微信真机验收仍待执行。
+日期：2026-09-20。分支：`codex/category-scroll`，最终代码提交 `2dac89b`。本记录检查浏览器镜像、自动测试和原生编译；微信真机验收仍待执行。
 
 ## 可审阅预览和证据
 
@@ -25,10 +25,10 @@
 
 Playwright 使用已安装 Chrome，在 320、375、430px 宽 × 640、812px 高共六个视口中，以真实点击和滚轮采集同城 `initial/collapsed/last/restored/empty/pickup` 及邮寄 `initial/search-first/search-more/search-clear`，共 60 张状态截图和 60 条 DOM 测量，断言失败 0。所有状态水平溢出为 0px；有车时 `sidebar.bottom ≤ dock.top + 1`；末分组标题位于吸顶栏下，末加购按钮在购物栏上方。脚本等到实际分组与吸顶栏对齐后才截末分类，避免平滑动画中途截图。末组单商品后的空白是 `V − P − D − lastGroupHeight` 尾部补白，用于短分组定位。
 
-仓库检查（本次 Task 2 完成后执行）:
+仓库检查（最终修复后由统筹在 `2dac89b` 独立重跑）:
 
 ```text
-npm run -s test:miniapp                                      246 pass / 0 fail，exit 0
+npm run -s test:miniapp                                      251 pass / 0 fail，exit 0
 node scripts/check-miniapp-es5.mjs apps/miniapp/utils/category-scroll.js  1 file pass，exit 0
 git diff --check                                              exit 0
 ```
@@ -37,6 +37,20 @@ git diff --check                                              exit 0
 
 ## 审核与真机待验
 
-方案预审 Agent 模型：`gpt-6-astra`；Task 1 执行 Agent：`gpt-5.6-sol`；Task 1 独立审核 Agent：`gpt-6-astra`，三项重要问题修复后在 `893fe80` 批准。Task 2 执行 Agent：`gpt-5.6-sol`。Task 2 独立审核及全分支终审由统筹另行记录，本文不预先宣称通过。持久证据目录保留 [方案预审](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/design-review.md)、[Task 1 审核](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-1-review.md)、[Task 1 实施报告](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-1-report.md)与 [Task 2 实施报告](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-2-report.md)，原生自动测试日志也已复制至同目录。
+方案预审 Agent 模型：`gpt-6-astra`；Task 1 执行 Agent：`gpt-5.6-sol`；Task 1 独立审核 Agent：`gpt-6-astra`，三项重要问题修复后在 `893fe80` 批准。Task 2 执行 Agent：`gpt-5.6-sol`。Task 2 独立审核 Agent：`gpt-5.6-sol`，审核通过；全分支终审 Agent：`gpt-6-astra`，其发现的三项 P2 问题由 `gpt-5.6-sol` 集中修复为 `2dac89b`，再交独立 `gpt-6-astra` 定向复审。持久证据目录保留 [方案预审](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/design-review.md)、[Task 1 审核](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-1-review.md)、[Task 1 实施报告](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-1-report.md)与 [Task 2 实施报告](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/task-2-report.md)，原生自动测试日志也已复制至同目录。
 
 iOS 和 Android 微信开发者工具/真机各需依次：进入同城分类 → 加购 → 上滑收起头部 → 点/滑到末尾“酒水/饮料”并点击加购 → 反向滑至顶部 → 手动滑动左栏 → 切自取/外送 → 清空购物车 → 切邮寄搜索、加载下一页并清除。核对滚动连续性、吸顶与原生 tabBar/安全区衔接、底部分类及按钮不被遮挡、返回分类页的位置、真实购物栏高度和金额。未获得真机运行结果，以上项目均为待验，未上传体验版。
+
+
+## 最终修复与证据索引
+
+| 问题 | 最终处理 |
+| --- | --- |
+| 左栏测量返回前用户又滑动 | 同次选择器查询采集左栏自身 scrollOffset；旧矩形换算使用该样本，可见性判断使用最新位置。 |
+| 分类定位动画被打断 | 点击锁自然到期处理最后一次滚动位置；新点击取代旧计时器，隐藏/卸载/切渠道清理。 |
+| 异步头部变化覆盖新手势 | 头部补偿带滚动版本；后续发生新滚动即放弃旧补偿，正常增长/缩短和原生已补偿场景保持正确。 |
+| 邮寄预览搜索状态不一致 | 搜索按钮随输入显隐；搜索结果状态清除分类高亮，清搜索恢复，与原生 WXML 一致。 |
+
+持久证据目录为 `/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/`，包含 `task-2-review.md`、`final-review.md`、`final-fix-report.md` 和统筹独立运行的 `final-verification-tests.log`。原始不通过报告与修复报告均保留，便于追溯；最终状态以最后的定向复审为准。
+
+最终状态：独立 `gpt-6-astra` 在 `2dac89b` 完成定向复审，三项 P2 与预览显示差异均为 **ADDRESSED**，修复差异中无新阻断问题，代码审核结论为 **可合并**。详见 [最终定向复审](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/final-scoped-review.md)。本次保留 `codex/category-scroll` 工作分支供审阅，尚未合并到 main；真机验收仍按上节执行。

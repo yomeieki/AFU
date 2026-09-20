@@ -53,7 +53,7 @@
 - Produces: `category-scroll.js` 导出 `layoutOf({viewportHeight,pinnedHeight,bodyTop,scrollTop,dockHeight,lastGroupHeight})` 返回 `{sidebarTop,sidebarHeight,tailHeight}`；`pageTarget(groupTop,pinnedHeight)`；`revealScrollTop({itemTop,itemHeight,scrollTop,viewportHeight})`。
 - 页面 `onPageScroll({scrollTop})` 更新当前页面滚动、高亮、侧栏可视范围；`onReachBottom()` 触发现有搜索分页；`onResize()` 重量。原右侧 `scroll-view` 改为普通容器，所有定位迁移 `wx.pageScrollTo`。
 
-- [ ] **Step 1: 先写纯几何与真实页面事件的失败测试。**
+- [x] **Step 1: 先写纯几何与真实页面事件的失败测试。**
 
 ```js
 const {layoutOf,pageTarget,revealScrollTop} = require('../../apps/miniapp/utils/category-scroll')
@@ -66,13 +66,13 @@ assert.equal(revealScrollTop({itemTop:100,itemHeight:50,scrollTop:80,viewportHei
 
 补充负滚动按 0、缺失/非有限值按 0、dock 为 0 恢复空间、视口小于顶部+D 高度钳制 0。页面测试使用现有 `loadPage/makeCtx`，让 selector mock 按选择器返回相应矩形而非固定三项旧数组；记录 `wx.pageScrollTo` 调用。验证点击分组两次、首页 pendingCategoryId、搜索结果分页与清空、测量请求先后乱序、hide/unload、resize、cart height 改变、收起后异步头部变高/变矮时保持商品相对工具栏位置（同时改变 B 与 P：旧 Y=500/B=200/P=40，新 B=240/P=60，目标 Y=520；原生已到 520 时不再滚动）、搜索首批不足一屏自动补足。保留旧分类数据、购物车与优惠测试含义。
 
-- [ ] **Step 2: 运行定向测试确认新行为失败。**
+- [x] **Step 2: 运行定向测试确认新行为失败。**
 
 ```sh
 node --test tests/miniapp/category-scroll.test.cjs tests/miniapp/category-anchor-page.test.cjs tests/miniapp/cart-bar-page.test.cjs
 ```
 
-- [ ] **Step 3: 实现纯函数和页面结构。**
+- [x] **Step 3: 实现纯函数和页面结构。**
 
 纯函数的计算骨架（输入归一化在模块内统一处理）：
 ```js
@@ -86,7 +86,7 @@ return {sidebarTop: top, sidebarHeight: Math.max(0, viewportHeight - dockHeight 
 
 WXML 删除右侧内部滚动状态绑定，移除旧分组/搜索各自的 cart-spacer，留一份页面级占位和一份尾组补白（当前 cart-dock 已全宽不透明，不额外添加遮罩）。创建可测量 `.catalog-toolbar`、`.catalog-body`、`.cat-panel`、`.group-anchor`，给分类项带前缀 id。保留商品行 template、`catchtap` 加购、组件绑定。CSS `.page` 改为自然高度，`.catalog-toolbar` `position:sticky;top:0`；右侧内容自然撑高页面；左侧以专用容器正确设置 sticky/fixed + 动态高度且不遮盖工具栏。沿用当前全宽不透明 cart-dock 作底部视觉边界，保持购物栏层级与点击行为。
 
-- [ ] **Step 4: 接入测量与滚动状态。**
+- [x] **Step 4: 接入测量与滚动状态。**
 
 ```js
 // 同一 selector query 中 selectViewport().scrollOffset() 配合布局节点测量。
@@ -100,7 +100,7 @@ WXML 删除右侧内部滚动状态绑定，移除旧分组/搜索各自的 cart
 
 禁止每个滚动事件都 query 全部商品或 setData groups。侧栏 `bindscroll` 记位置；需要揭示目标时才设置 `scroll-top`，同值再次需要滚动时保证触发。数据重载与切渠道取消旧定位、计时器和选择器回调。普通 onShow 保持位置；收起后头部高度变化保持逻辑位置 Y+P-B，目标 Y新=Y旧+(B新-B旧)-(P新-P旧)；使用变化前捕获的位置与变化后实际滚动值，不重复原生已完成的补偿，补偿与测量不得形成循环。搜索短批次 hasMore 且可视区不足时继续取下一页，保留 loading/request key 防重复与串数据。右侧标题可使用每组 sticky 标题；锚点定位不得被固定栏遮住标题。
 
-- [ ] **Step 5: 验证并提交。**
+- [x] **Step 5: 验证并提交。**
 
 ```sh
 npm run -s test:miniapp
@@ -123,7 +123,7 @@ git commit -m "优化分类页整页滚动与购物栏避让"
 - Consumes: Task 1 最终 WXML/CSS 布局、`category-scroll.js` 几何契约；预览使用真实生成 CSS。
 - Produces: 可打开的同城/邮寄交互镜像、截图与机器可读几何测量、实际原生编译输出、真机步骤。
 
-- [ ] **Step 1: 同步镜像与确定性样例。**
+- [x] **Step 1: 同步镜像与确定性样例。**
 
 原 `/pages/product-list.html` 保留邮寄场景，新增同城路径展示店铺、长营业提示、满减、外送/自取栏。至少 10 个分类、末尾“酒水/饮料”、末分类一个商品，使用脚本创建确定性重复商品。响应式宽度设 `width=device-width`，rpx 跟随视口；购物栏含优惠提示并可切换空车。绑定分类点击、页面滚动高亮、左侧自动揭示、模式切换、邮寄搜索/清空及底部加载示例。
 
@@ -134,11 +134,11 @@ git commit -m "优化分类页整页滚动与购物栏避让"
 // 独立侧栏使用 overflow-y:auto；其余页面自然滚动。
 ```
 
-- [ ] **Step 2: 浏览器验证并留证。**
+- [x] **Step 2: 浏览器验证并留证。**
 
 使用现有 Playwright/Chrome 运行临时脚本，预览服务选择空闲端口（5181 优先），不停止用户已有 5180 服务。每个宽度 320/375/430、高度至少 640/812，检查初始/收起/末分类/恢复头部、空车与有车。以 DOM 矩形证明：`sidebar.bottom <= dock.top + 1`、末分类滚入后完整可见、末商品加购按钮高于 dock.top、工具栏收起后 top≈0、无水平溢出。截图命名标识尺寸、渠道、状态。结果写可持久证据目录，文档标注浏览器模拟。
 
-- [ ] **Step 3: 编译与完整测试。**
+- [x] **Step 3: 编译与完整测试。**
 
 ```sh
 npm run -s test:miniapp
@@ -148,7 +148,7 @@ git diff --check
 
 使用已安装微信开发者工具原生 `wcc`/`wcsc` 编译本次页面及引用组件，记录命令与退出码。不更改线上 API 配置，不上传体验版。若无法取得运行时真机，如实记录为待验而非通过。
 
-- [ ] **Step 4: 记录审核证据并提交。**
+- [x] **Step 4: 记录审核证据并提交。**
 
 验收文档逐条关联 spec 六项用户行为、自动测试、浏览器证据与真机待验；写入方案 Agent、执行 Agent、审核 Agent 实际模型，不冒用其他模型身份。README 更新预览入口与操作方法。
 
@@ -160,3 +160,16 @@ git commit -m "补齐分类联动滚动预览与验收记录"
 ## 完成条件
 
 任务审核通过、全分支独立审核没有未处理的阻断问题、测试与编译通过、预览可审阅。统筹最终提供分支、方案、审核结论、预览与真机待验项；本次布局变更完成不代表真机发布验收完成。
+
+
+## 执行与审核结果（2026-09-20）
+
+- 方案预审：独立 `gpt-6-astra`，确认原生页面滚动架构，补齐工具栏高度变化的坐标补偿与测试桩适配。
+- Task 1：`gpt-5.6-sol` 实现 `c6e72a2`；独立 `gpt-6-astra` 提出的三项问题在 `893fe80` 修复并复审通过。
+- Task 2：新的 `gpt-5.6-sol` 实现预览与验收证据，提交 `66b71a0`、`ecc4fc7`；独立 `gpt-5.6-sol` 审核通过。
+- 全分支审核：新的 `gpt-6-astra` 找到三处交错时序问题，`gpt-5.6-sol` 集中修复为 `2dac89b`：侧栏测量取自身同步滚动样本、点击锁自然到期处理最终位置、旧头部补偿在新滚动后失效；同步修正邮寄预览搜索显示条件。
+- 自动验证：统筹在 `2dac89b` 重跑小程序测试，251/251 通过，ES5 工具模块检查通过，diff 检查通过；浏览器 60 状态、6 组尺寸断言失败 0；38 个 WXML/WXS、14 个 WXSS 原生编译输入通过且后续未变更。
+- 本次未改服务端、管理后台或购物车计价，同城免运费沿用后台动态设置。独立 worktree 保留，主仓 `main` 仍为 `c41ec3a`。
+- 完整证据与真机操作步骤见 `docs/superpowers/reviews/2026-09-19-category-linked-scroll-verification.md`。iOS/Android 微信真机验收仍待执行，浏览器镜像通过不等于已完成发布验收。
+
+最终定向复审由新的 `gpt-6-astra` 完成，全部问题已解决，代码审核可合并；详见 [最终定向复审](/Users/yumingyi/.codex/visualizations/2026/09/19/01a0b835-9aea-7e62-9e76-4801535b11af/category-scroll/final-scoped-review.md)。
