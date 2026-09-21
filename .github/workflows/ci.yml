@@ -1,0 +1,42 @@
+# 构建校验：PR 和 main 上都跑一遍「服务器部署时会跑的那串命令」。
+#
+# 仓库没有 eslint、没有测试，所以这里只回答一个问题：这份代码编不编得过。
+# 这恰好是 GitHub 长期连不上、改动全靠直推 main 的那段时间完全没人把关的部分。
+#
+# 步骤顺序与 scripts/deploy.sh [3/9]→[5/9]→[7/9] 保持一致，改这里时请同步看那边。
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 与服务器 node 版本对齐；deploy.sh [1/9] 的下限是 18，低于它部署会被拦。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # 用 ci 而非 install：顺带校验 package-lock.json 没有脱节。
+      - run: npm ci --no-audit --no-fund
+
+      # 必须排在两个 build 之前，否则 server 的 tsc 找不到 @prisma/client 的类型。
+      # generate 只读 schema.prisma，不连库，所以给个占位 URL 即可。
+      - name: Generate Prisma client
+        working-directory: apps/server
+        env:
+          DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/ci
+        run: npx prisma generate
+
+      - name: Build server (tsc)
+        run: npm run build:server
+
+      - name: Build admin (tsc + vite)
+        run: npm run build:admin
