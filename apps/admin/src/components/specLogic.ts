@@ -1,3 +1,7 @@
+import * as msg from './specMessages'
+import type { LoadFixes } from './specMessages'
+export type { LoadFixes }
+
 /**
  * 商品规格编辑的纯逻辑层：不依赖 React / DOM，只做「维度 + 组合行」的状态变换。
  * 所有行匹配一律按 specValues 数组内容做 key（JSON.stringify），不用 join('/')
@@ -76,6 +80,70 @@ export function createState(dimensions: SpecDimension[], rows: SkuRow[]): SpecEd
 }
 
 /**
+ * 打开编辑时自动整理（不需要店员做任何前移/后移之类的维护动作）：
+ * 1. 规格项名与选项统一去首尾空格；去空格后为空的选项丢弃；同规格项内去空格后
+ *    重复的选项只保留首次出现；每个被 trim 实际改变的名字/选项计 1 到 trimmedValues。
+ * 2. 组合行的每个值逐项去空格；按内容去重（保留首次出现，其余计 droppedRows）；
+ *    按整理后的 cartesian(dims) 顺序重排：命中的行原样保留（含 id/价格/库存），
+ *    缺的补一行空白默认值并计 addedRows；对不上任何组合的行丢弃并计 droppedRows。
+ * 规格项为空（无规格商品）时原样返回空状态，不做任何整理。
+ */
+export function prepareLoadedState(
+  dims: SpecDimension[],
+  rows: SkuRow[]
+): { state: SpecEditorState; fixes: LoadFixes } {
+  if (dims.length === 0) {
+    return { state: { dimensions: [], rows: [], template: null }, fixes: { addedRows: 0, trimmedValues: 0, droppedRows: 0 } }
+  }
+
+  let trimmedValues = 0
+  const newDims: SpecDimension[] = dims.map((d) => {
+    const name = normalizeValue(d.name)
+    if (name !== d.name) trimmedValues++
+    const seen = new Set<string>()
+    const values: string[] = []
+    for (const raw of d.values) {
+      const v = normalizeValue(raw)
+      if (v !== raw) trimmedValues++
+      if (!v || seen.has(v)) continue
+      seen.add(v)
+      values.push(v)
+    }
+    return { name, values }
+  })
+
+  const normalizedRows = rows.map((r) => ({ ...r, specValues: r.specValues.map(normalizeValue) }))
+  const byKey = new Map<string, SkuRow>()
+  let droppedRows = 0
+  for (const r of normalizedRows) {
+    const key = rowKey(r.specValues)
+    if (byKey.has(key)) {
+      droppedRows++
+      continue
+    }
+    byKey.set(key, r)
+  }
+
+  let addedRows = 0
+  const expected = cartesian(newDims)
+  const expectedKeys = new Set(expected.map(rowKey))
+  const combinedRows = expected.map((values) => {
+    const hit = byKey.get(rowKey(values))
+    if (hit) return hit
+    addedRows++
+    return { specValues: values, price: '', originalPrice: '', stock: 0 }
+  })
+  for (const key of byKey.keys()) {
+    if (!expectedKeys.has(key)) droppedRows++
+  }
+
+  return {
+    state: { dimensions: newDims, rows: combinedRows, template: null },
+    fixes: { addedRows, trimmedValues, droppedRows },
+  }
+}
+
+/**
  * 按当前 dimensions 重新计算组合行：
  * 1. 优先用 rows 里内容完全匹配的行（保留 id/价格/库存）；
  * 2. 找不到、且传入了 template 时，把组合在 template.dimIndex 位置换成占位符
@@ -108,12 +176,28 @@ export function renameDimension(state: SpecEditorState, dimIndex: number, name: 
   }
 }
 
-/** 新增维度（无值）：现有行原样保留（含 id），只在末尾追加一个占位符位置；template 失效 */
-export function addDimension(state: SpecEditorState, name = ''): { state: SpecEditorState } {
+/** 无规格商品第一次加规格项时，占位行带入的默认售价/原价/库存 */
+export interface RowDefaults {
+  price: string
+  originalPrice: string
+  stock: number
+}
+
+/**
+ * 新增维度（无值）：现有行原样保留（含 id），只在末尾追加一个占位符位置；template 失效。
+ * 仅当这是从 0 个维度开始新增（无规格商品第一次加规格项）且传入 defaults 时，
+ * 占位行的价格/原价/库存用 defaults 填好，不需要店员逐行手填（对已有维度的商品
+ * 传 defaults 不生效，因为此时占位行不止一条，直接套用商品级默认值没有意义）。
+ */
+export function addDimension(state: SpecEditorState, name = '', defaults?: RowDefaults): { state: SpecEditorState } {
   if (state.dimensions.length >= MAX_DIMENSIONS) return { state }
+  const wasEmpty = state.dimensions.length === 0
   const dimensions = [...state.dimensions, { name, values: [] }]
   const expanded = state.rows.map((r) => ({ ...r, specValues: [...r.specValues, PLACEHOLDER] }))
-  const rows = rebuildRows(dimensions, expanded, null)
+  let rows = rebuildRows(dimensions, expanded, null)
+  if (wasEmpty && defaults) {
+    rows = rows.map((r) => ({ ...r, price: defaults.price, originalPrice: defaults.originalPrice, stock: defaults.stock }))
+  }
   return { state: { dimensions, rows, template: null } }
 }
 
@@ -121,24 +205,37 @@ export function addDimension(state: SpecEditorState, name = ''): { state: SpecEd
  * 删除维度：
  * - 删到只剩 0 个维度 → 行清空（无规格商品）。
  * - 被删维度还没有值（占位状态）→ 行只是去掉该位置，id/价格/库存原样保留，不合并。
- * - 被删维度已有值 → 按去掉该维度后的组合合并：同一份组合取当前行顺序里的第一行，
- *   价格/库存取自该行，合并后的行一律不带 id（对应 SKU 保存时会重建，购物车按需清空）。
- * 返回 mergedFrom/mergedTo 供 UI 生成确认文案。
+ * - 被删维度是刚加的、还带着「加它之前」的 template（R13：反悔删掉刚加的维度）→
+ *   直接用 template.rows 去掉该位置恢复原状，不触发合并、不重建 SKU、不清购物车。
+ * - 其它情况（被删维度已有值、且不是可恢复的路径）→ 按去掉该维度后的组合合并：
+ *   同一份组合取当前行顺序里的第一行，价格/库存取自该行，合并后的行一律不带 id
+ *   （对应 SKU 保存时会重建，购物车按需清空）。
+ * 返回 mergedFrom/mergedTo（供 UI 生成确认文案）与 restored（是否走了 R13 恢复路径）。
  */
 export function removeDimension(
   state: SpecEditorState,
   dimIndex: number
-): { state: SpecEditorState; mergedFrom: number; mergedTo: number } {
+): { state: SpecEditorState; mergedFrom: number; mergedTo: number; restored: boolean } {
   const dim = state.dimensions[dimIndex]
   const dimensions = state.dimensions.filter((_, i) => i !== dimIndex)
 
   if (dimensions.length === 0) {
-    return { state: { dimensions: [], rows: [], template: null }, mergedFrom: state.rows.length, mergedTo: 0 }
+    return { state: { dimensions: [], rows: [], template: null }, mergedFrom: state.rows.length, mergedTo: 0, restored: false }
   }
 
   if (dim.values.length === 0) {
     const rows = state.rows.map((r) => ({ ...r, specValues: r.specValues.filter((_, i) => i !== dimIndex) }))
-    return { state: { dimensions, rows, template: null }, mergedFrom: rows.length, mergedTo: rows.length }
+    return { state: { dimensions, rows, template: null }, mergedFrom: rows.length, mergedTo: rows.length, restored: false }
+  }
+
+  if (state.template && state.template.dimIndex === dimIndex) {
+    const rows = state.template.rows.map((r) => ({ ...r, specValues: r.specValues.filter((_, i) => i !== dimIndex) }))
+    return {
+      state: { dimensions, rows, template: null },
+      mergedFrom: state.rows.length,
+      mergedTo: rows.length,
+      restored: true,
+    }
   }
 
   const order: string[] = []
@@ -166,6 +263,7 @@ export function removeDimension(
     state: { dimensions, rows, template: null },
     mergedFrom: state.rows.length,
     mergedTo: rows.length,
+    restored: false,
   }
 }
 
@@ -218,9 +316,10 @@ export function moveValue(state: SpecEditorState, dimIndex: number, valueIndex: 
  */
 export function addValue(state: SpecEditorState, dimIndex: number, rawValue: string): MutationResult {
   const value = normalizeValue(rawValue)
-  if (!value) return { error: '规格值不能为空' }
+  if (!value) return { error: msg.E0_EMPTY_VALUE }
   const dim = state.dimensions[dimIndex]
-  if (dim.values.includes(value)) return { error: `规格值「${value}」已存在` }
+  // 已有值也按去首尾空格比较（R8）：库里可能存在带空格的历史数据
+  if (dim.values.some((v) => normalizeValue(v) === value)) return { error: msg.msgDuplicateNewValue(value) }
 
   const wasEmpty = dim.values.length === 0
   const dimensions = state.dimensions.map((d, i) => (i === dimIndex ? { ...d, values: [...d.values, value] } : d))
@@ -237,10 +336,13 @@ export function addValue(state: SpecEditorState, dimIndex: number, rawValue: str
  */
 export function renameValue(state: SpecEditorState, dimIndex: number, oldValue: string, rawNewValue: string): MutationResult {
   const newValue = normalizeValue(rawNewValue)
-  if (!newValue) return { error: '规格值不能为空' }
+  if (!newValue) return { error: msg.E3_EMPTY_RENAME }
   const dim = state.dimensions[dimIndex]
   if (newValue === oldValue) return { state } // 无变化
-  if (dim.values.includes(newValue)) return { error: `规格值「${newValue}」已存在` }
+  // 已有值也按去首尾空格比较（R8）；排除自己，允许「把自己改成去空格版本」
+  if (dim.values.some((v) => v !== oldValue && normalizeValue(v) === newValue)) {
+    return { error: msg.msgDuplicateRename(newValue) }
+  }
 
   const dimensions = state.dimensions.map((d, i) =>
     i === dimIndex ? { ...d, values: d.values.map((v) => (v === oldValue ? newValue : v)) } : d
@@ -258,12 +360,19 @@ export function renameValue(state: SpecEditorState, dimIndex: number, oldValue: 
  * 删除规格值：返回受影响的「已保存」（带 id）行数，供 UI 生成确认文案。
  * 如果删的是该维度最后一个值，维度回到「没有值」的占位状态——对应行不删除，
  * 只是把该位置换回占位符（id/价格/库存原样保留），而不是把整张表清空。
+ * R13：如果这正好是刚加的维度（template.dimIndex === dimIndex），删到没有值时
+ * 直接用 template.rows 恢复成加它之前的样子，并保留 template——这样「新加维度→
+ * 加值→把值又都删掉→删掉这个维度」同样能一路恢复回原状，不需要店员重建。
  */
 export function removeValue(state: SpecEditorState, dimIndex: number, value: string): { state: SpecEditorState; affectedSavedRows: number } {
   const dim = state.dimensions[dimIndex]
   const remainingValues = dim.values.filter((v) => v !== value)
   const dimensions = state.dimensions.map((d, i) => (i === dimIndex ? { ...d, values: remainingValues } : d))
   const affectedSavedRows = state.rows.filter((r) => r.specValues[dimIndex] === value && r.id !== undefined).length
+
+  if (remainingValues.length === 0 && state.template && state.template.dimIndex === dimIndex) {
+    return { state: { ...state, dimensions, rows: state.template.rows, template: state.template }, affectedSavedRows }
+  }
 
   const baseRows =
     remainingValues.length === 0
@@ -291,20 +400,21 @@ export function removeValue(state: SpecEditorState, dimIndex: number, value: str
 export function validateSpecForm(dims: SpecDimension[], rows: SkuRow[]): string | null {
   if (dims.length === 0) return null
 
-  for (const d of dims) {
-    const label = d.name.trim() || '未命名维度'
-    if (d.values.length === 0) return `请为规格维度「${label}」至少添加一个规格值`
+  for (let i = 0; i < dims.length; i++) {
+    const d = dims[i]
+    const label = msg.dimLabel(d.name, i)
+    if (d.values.length === 0) return msg.msgNoValues(label)
     const seen = new Set<string>()
     for (const raw of d.values) {
       const v = normalizeValue(raw)
-      if (!v) return `规格维度「${label}」存在空白的规格值`
-      if (seen.has(v)) return `规格维度「${label}」存在重复的规格值「${v}」`
+      if (!v) return msg.msgBlankValue(label)
+      if (seen.has(v)) return msg.msgDuplicateValueInDim(label, v)
       seen.add(v)
     }
   }
 
   if (rows.some((r) => r.specValues.includes(PLACEHOLDER))) {
-    return '请为每个规格维度添加规格值后再保存'
+    return msg.V4_PLACEHOLDER_ROW
   }
 
   const expected = cartesian(dims)
@@ -313,12 +423,53 @@ export function validateSpecForm(dims: SpecDimension[], rows: SkuRow[]): string 
   const expectedKeySet = new Set(expected.map(rowKey))
   const coversAll = expected.every((combo) => rowKeySet.has(rowKey(combo)))
   if (rows.length !== expected.length || rowKeySet.size !== rowKeys.length || !coversAll || rowKeys.some((k) => !expectedKeySet.has(k))) {
-    return '规格组合与规格值不一致，请检查各维度的规格值后重试'
+    return msg.V5_MISMATCH
   }
 
-  if (rows.length === 0) return '请为规格维度添加规格值'
   for (const r of rows) {
-    if (!r.price || parseFloat(r.price) <= 0) return `规格「${r.specValues.join('/')}」价格必须大于 0`
+    if (!r.price || parseFloat(r.price) <= 0) return msg.msgRowPriceMissing(r.specValues)
   }
   return null
+}
+
+// ---------------------------------------------------------------------------
+// 确认框决策（纯函数，返回 confirmDialog() 的入参或 null=不弹）
+// ---------------------------------------------------------------------------
+
+/** 点「添加规格项」：当前行里有带 id 的行（已保存过）才需要提醒会拆分重建、清购物车 */
+export function confirmForAddDimension(state: SpecEditorState): msg.ConfirmSpec | null {
+  if (state.dimensions.length >= MAX_DIMENSIONS) return null
+  const hasSavedRows = state.rows.some((r) => r.id !== undefined)
+  return hasSavedRows ? msg.confirmAddDimension() : null
+}
+
+/**
+ * 删除规格项：判定顺序固定为
+ * (1) 只剩这一个规格项 → 有带 id 行则提醒会变成单规格，否则不弹；
+ * (2) 该规格项还没有选项 → 不弹（不影响任何已保存数据）；
+ * (3) 这正是刚加的、还能用 template 恢复的规格项 → 提醒会恢复原状（不危险，不弹红色按钮）；
+ * (4) 其它情况：有带 id 行则提醒会合并重建、清购物车，否则不弹（新商品还没保存过）。
+ */
+export function confirmForRemoveDimension(state: SpecEditorState, dimIndex: number): msg.ConfirmSpec | null {
+  const dim = state.dimensions[dimIndex]
+  if (!dim) return null
+  const label = msg.dimLabel(dim.name, dimIndex)
+  const hasSavedRows = state.rows.some((r) => r.id !== undefined)
+
+  if (state.dimensions.length === 1) {
+    return hasSavedRows ? msg.confirmRemoveLastDimension() : null
+  }
+  if (dim.values.length === 0) return null
+  if (state.template && state.template.dimIndex === dimIndex) {
+    return msg.confirmRemoveDimensionRestore(label)
+  }
+  if (!hasSavedRows) return null
+  const preview = removeDimension(state, dimIndex)
+  return msg.confirmRemoveDimensionMerge(label, preview.mergedFrom, preview.mergedTo)
+}
+
+/** 删除选项：只有会连带删掉已保存（带 id）的组合时才提醒会清购物车 */
+export function confirmForRemoveValue(state: SpecEditorState, dimIndex: number, value: string): msg.ConfirmSpec | null {
+  const preview = removeValue(state, dimIndex, value)
+  return preview.affectedSavedRows > 0 ? msg.confirmRemoveValue(value, preview.affectedSavedRows) : null
 }

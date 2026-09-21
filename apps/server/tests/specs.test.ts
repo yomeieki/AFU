@@ -94,12 +94,12 @@ function sku(
 }
 
 // ---- S1 / S2 / S3 ----
-test('S1 validateSpecs 拒绝同维度重复值（含去首尾空格后重复）', () => {
+test('S1 validateSpecs 拒绝同维度重复值（含去首尾空格后重复），文案精确等于 M4', () => {
   const dims = [{ name: '辣度', values: ['中辣', '中辣'] }]
   assert.throws(() => validateSpecs(dims, [sku(undefined, '中辣', ['中辣'])]), (e: unknown) => {
     assert.ok(e instanceof AppError)
     assert.equal(e.code, 40001)
-    assert.ok(e.message.includes('辣度'))
+    assert.equal(e.message, '规格项「辣度」里的选项「中辣」重复了')
     return true
   })
 
@@ -107,16 +107,17 @@ test('S1 validateSpecs 拒绝同维度重复值（含去首尾空格后重复）
   assert.throws(() => validateSpecs(dims2, [sku(undefined, '中辣', ['中辣'])]), (e: unknown) => {
     assert.ok(e instanceof AppError)
     assert.equal(e.code, 40001)
-    assert.ok(e.message.includes('辣度'))
+    assert.equal(e.message, '规格项「辣度」里的选项「中辣」重复了')
     return true
   })
 })
 
-test('S2 validateSpecs 拒绝纯空格值', () => {
+test('S2 validateSpecs 拒绝纯空格值，文案精确等于 M3', () => {
   const dims = [{ name: '辣度', values: ['中辣', '  '] }]
   assert.throws(() => validateSpecs(dims, [sku(undefined, '中辣', ['中辣'])]), (e: unknown) => {
     assert.ok(e instanceof AppError)
     assert.equal(e.code, 40001)
+    assert.equal(e.message, '规格项「辣度」里有空白的选项')
     return true
   })
 })
@@ -269,19 +270,19 @@ test('S8 specText 未变化的行只收到一次 update 调用', async () => {
 })
 
 // ---- S10（第一轮裁决 R10）----
-test('S10 validateSpecs 拒绝 skuList 中重复的 id', () => {
+test('S10 validateSpecs 拒绝 skuList 中重复的 id，文案精确等于 M6', () => {
   const dims = [{ name: '辣度', values: ['微辣', '中辣'] }]
   const skus = [sku(1, '微辣', ['微辣']), sku(1, '中辣', ['中辣'])]
   assert.throws(() => validateSpecs(dims, skus), (e: unknown) => {
     assert.ok(e instanceof AppError)
     assert.equal(e.code, 40001)
-    assert.ok(e.message.includes('规格 id 重复'))
+    assert.equal(e.message, '同一个规格被提交了两次')
     return true
   })
 })
 
 // ---- S11（用户决定，第一轮裁决后：服务端也要求组合覆盖 cartesian(dims)）----
-test('S11 validateSpecs 要求 skuList 恰等于 cartesian(dims)：2x2 只提交 3 个抛错，提交完整 4 个正常', () => {
+test('S11 validateSpecs 要求 skuList 恰等于 cartesian(dims)：2x2 只提交 3 个抛错，提交完整 4 个正常；文案精确等于 M11', () => {
   const dims = [
     { name: '辣度', values: ['微辣', '中辣'] },
     { name: '骨型', values: ['带骨', '去骨'] },
@@ -294,7 +295,7 @@ test('S11 validateSpecs 要求 skuList 恰等于 cartesian(dims)：2x2 只提交
   assert.throws(() => validateSpecs(dims, three), (e: unknown) => {
     assert.ok(e instanceof AppError)
     assert.equal(e.code, 40001)
-    assert.ok(e.message.includes('规格组合'))
+    assert.equal(e.message, '规格组合的个数和选项对不上，请关掉编辑窗口重新打开后再保存')
     return true
   })
 
@@ -305,4 +306,130 @@ test('S11 validateSpecs 要求 skuList 恰等于 cartesian(dims)：2x2 只提交
     sku(undefined, '中辣/去骨', ['中辣', '去骨']),
   ]
   assert.doesNotThrow(() => validateSpecs(dims, four))
+})
+
+// ---- S12-S16（第二轮复核 R11：只对真正冲突的行写临时名；控制字符校验）----
+test('S12 只对真正冲突的行改临时名：4 个 SKU 的 specText 全部改成互不相关的新值，不需要临时名', async () => {
+  const { tx, getRows, calls } = makeFakeTx([
+    { id: 1, productId: 1, specText: 'a/x', specValues: ['a', 'x'], price: 100, originalPrice: null, stock: 1, sortOrder: 0 },
+    { id: 2, productId: 1, specText: 'a/y', specValues: ['a', 'y'], price: 100, originalPrice: null, stock: 1, sortOrder: 1 },
+    { id: 3, productId: 1, specText: 'b/x', specValues: ['b', 'x'], price: 100, originalPrice: null, stock: 1, sortOrder: 2 },
+    { id: 4, productId: 1, specText: 'b/y', specValues: ['b', 'y'], price: 100, originalPrice: null, stock: 1, sortOrder: 3 },
+  ])
+  await assert.doesNotReject(() =>
+    syncProductSkus(tx, 1, [
+      sku(1, 'x/a', ['x', 'a'], 0),
+      sku(2, 'y/a', ['y', 'a'], 1),
+      sku(3, 'x/b', ['x', 'b'], 2),
+      sku(4, 'y/b', ['y', 'b'], 3),
+    ])
+  )
+  const tempUpdates = calls.filter(
+    (c) => c.method === 'update' && typeof (c.args as { data: { specText?: string } }).data.specText === 'string' && (c.args as { data: { specText: string } }).data.specText.startsWith('\u0001')
+  )
+  assert.equal(tempUpdates.length, 0)
+  const updates = calls.filter((c) => c.method === 'update')
+  assert.equal(updates.length, 4)
+  const rows = getRows()
+  assert.deepEqual(
+    rows.map((r) => [r.id, r.specText, r.specValues]).sort((a, b) => (a[0] as number) - (b[0] as number)),
+    [
+      [1, 'x/a', ['x', 'a']],
+      [2, 'y/a', ['y', 'a']],
+      [3, 'x/b', ['x', 'b']],
+      [4, 'y/b', ['y', 'b']],
+    ]
+  )
+})
+
+test('S13 互换必须仍走临时名：库中 A/X(1)、B/X(2) 提交互换，临时名 update 恰 2 次', async () => {
+  const { tx, getRows, calls } = makeFakeTx([
+    { id: 1, productId: 1, specText: 'A/X', specValues: ['A', 'X'], price: 100, originalPrice: null, stock: 1, sortOrder: 0 },
+    { id: 2, productId: 1, specText: 'B/X', specValues: ['B', 'X'], price: 100, originalPrice: null, stock: 1, sortOrder: 1 },
+  ])
+  await assert.doesNotReject(() =>
+    syncProductSkus(tx, 1, [
+      sku(1, 'B/X', ['B', 'X'], 0),
+      sku(2, 'A/X', ['A', 'X'], 1),
+    ])
+  )
+  const tempUpdates = calls.filter(
+    (c) => c.method === 'update' && typeof (c.args as { data: { specText?: string } }).data.specText === 'string' && (c.args as { data: { specText: string } }).data.specText.startsWith('\u0001')
+  )
+  assert.equal(tempUpdates.length, 2)
+  const rows = getRows()
+  assert.equal(rows.find((r) => r.id === 1)!.specText, 'B/X')
+  assert.equal(rows.find((r) => r.id === 2)!.specText, 'A/X')
+  assert.ok(rows.every((r) => !r.specText.startsWith('\u0001tmp:')))
+})
+
+test('S14 旧名被新行占用：新行在前提交，临时名 update 恰 1 次；顺序反过来提交结果相同', async () => {
+  const { tx: tx1, getRows: getRows1, calls: calls1 } = makeFakeTx([
+    { id: 1, productId: 1, specText: 'A', specValues: ['A'], price: 100, originalPrice: null, stock: 1, sortOrder: 0 },
+  ])
+  await assert.doesNotReject(() =>
+    syncProductSkus(tx1, 1, [
+      sku(undefined, 'A', ['A'], 0),
+      sku(1, 'B', ['B'], 1),
+    ])
+  )
+  const tempUpdates1 = calls1.filter(
+    (c) => c.method === 'update' && typeof (c.args as { data: { specText?: string } }).data.specText === 'string' && (c.args as { data: { specText: string } }).data.specText.startsWith('\u0001')
+  )
+  assert.equal(tempUpdates1.length, 1)
+  const rows1 = getRows1()
+  assert.equal(rows1.find((r) => r.id === 1)!.specText, 'B')
+  assert.equal(rows1.find((r) => r.specText === 'A')!.id !== 1, true)
+
+  const { tx: tx2, getRows: getRows2, calls: calls2 } = makeFakeTx([
+    { id: 1, productId: 1, specText: 'A', specValues: ['A'], price: 100, originalPrice: null, stock: 1, sortOrder: 0 },
+  ])
+  await assert.doesNotReject(() =>
+    syncProductSkus(tx2, 1, [
+      sku(1, 'B', ['B'], 0),
+      sku(undefined, 'A', ['A'], 1),
+    ])
+  )
+  const tempUpdates2 = calls2.filter(
+    (c) => c.method === 'update' && typeof (c.args as { data: { specText?: string } }).data.specText === 'string' && (c.args as { data: { specText: string } }).data.specText.startsWith('\u0001')
+  )
+  assert.equal(tempUpdates2.length, 1)
+  const rows2 = getRows2()
+  assert.equal(rows2.find((r) => r.id === 1)!.specText, 'B')
+  assert.equal(rows2.find((r) => r.specText === 'A')!.id !== 1, true)
+})
+
+test('S15 链式改名：1→B, 2→C, 3→D，临时名 update 恰 2 次（id2、id3；id1 的旧名 A 没人要）', async () => {
+  const { tx, getRows, calls } = makeFakeTx([
+    { id: 1, productId: 1, specText: 'A', specValues: ['A'], price: 100, originalPrice: null, stock: 1, sortOrder: 0 },
+    { id: 2, productId: 1, specText: 'B', specValues: ['B'], price: 100, originalPrice: null, stock: 1, sortOrder: 1 },
+    { id: 3, productId: 1, specText: 'C', specValues: ['C'], price: 100, originalPrice: null, stock: 1, sortOrder: 2 },
+  ])
+  await assert.doesNotReject(() =>
+    syncProductSkus(tx, 1, [
+      sku(1, 'B', ['B'], 0),
+      sku(2, 'C', ['C'], 1),
+      sku(3, 'D', ['D'], 2),
+    ])
+  )
+  const tempUpdateIds = calls
+    .filter((c) => c.method === 'update' && typeof (c.args as { data: { specText?: string } }).data.specText === 'string' && (c.args as { data: { specText: string } }).data.specText.startsWith('\u0001'))
+    .map((c) => (c.args as { where: { id: number } }).where.id)
+    .sort()
+  assert.deepEqual(tempUpdateIds, [2, 3])
+  const rows = getRows()
+  assert.equal(rows.find((r) => r.id === 1)!.specText, 'B')
+  assert.equal(rows.find((r) => r.id === 2)!.specText, 'C')
+  assert.equal(rows.find((r) => r.id === 3)!.specText, 'D')
+})
+
+test('S16 validateSpecs 拒绝选项里的控制字符，文案精确等于 M5，可以兜住与临时名相同的选项', () => {
+  const dims = [{ name: '辣度', values: ['\u0001tmp:1'] }]
+  const skus = [sku(undefined, '\u0001tmp:1', ['\u0001tmp:1'])]
+  assert.throws(() => validateSpecs(dims, skus), (e: unknown) => {
+    assert.ok(e instanceof AppError)
+    assert.equal(e.code, 40001)
+    assert.equal(e.message, '选项「\u0001tmp:1」里有不能用的字符')
+    return true
+  })
 })

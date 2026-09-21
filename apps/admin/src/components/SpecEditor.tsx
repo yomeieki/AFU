@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, X } from 'lucide-react'
 import type { SpecDimension } from '../types'
 import {
   addDimension as addDimensionLogic,
   addValue as addValueLogic,
+  confirmForAddDimension,
+  confirmForRemoveDimension,
+  confirmForRemoveValue,
   moveDimension as moveDimensionLogic,
   moveValue as moveValueLogic,
   removeDimension as removeDimensionLogic,
@@ -13,9 +16,11 @@ import {
   rowKey,
   PLACEHOLDER,
   type DimensionTemplate,
+  type RowDefaults,
   type SkuRow,
   type SpecEditorState,
 } from './specLogic'
+import * as msg from './specMessages'
 import { confirmDialog } from './ui/ConfirmDialog'
 import { toast } from './ui/Toast'
 
@@ -25,6 +30,10 @@ interface Props {
   dimensions: SpecDimension[]
   skuRows: SkuRow[]
   onChange: (dimensions: SpecDimension[], skuRows: SkuRow[]) => void
+  /** 打开编辑时自动整理产生的提示（见 Products.tsx openEdit），显示在标题下方 */
+  notice?: string | null
+  /** 无规格商品第一次加规格项时，占位行带入的默认售价/原价/库存 */
+  defaults?: RowDefaults
 }
 
 const inputCls =
@@ -54,8 +63,8 @@ export function handleEscapeKey(e: {
   e.nativeEvent?.stopImmediatePropagation?.()
 }
 
-export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
-  // 每个维度一个「新值」输入框的临时文本
+export default function SpecEditor({ dimensions, skuRows, onChange, notice, defaults }: Props) {
+  // 每个维度一个「新选项」输入框的临时文本
   const [valueDrafts, setValueDrafts] = useState<string[]>([])
   // 正在改名的规格值
   const [editingValue, setEditingValue] = useState<ValueEditing | null>(null)
@@ -64,6 +73,8 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
   const [template, setTemplate] = useState<DimensionTemplate | null>(null)
   const [batchPrice, setBatchPrice] = useState('')
   const [batchStock, setBatchStock] = useState('')
+  // 改名输入框「回车已成功提交」后，紧跟着的 onBlur 不再二次提交/二次提示（R7）
+  const renameSettledRef = useRef(false)
 
   const currentState = (): SpecEditorState => ({ dimensions, rows: skuRows, template })
 
@@ -72,44 +83,20 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
     onChange(state.dimensions, state.rows)
   }
 
-  // ---------- 维度 ----------
+  // ---------- 规格项 ----------
 
   const handleAddDimension = async () => {
-    const before = currentState()
-    if (before.dimensions.length >= 3) return
-    const hasSavedRows = before.rows.some((r) => r.id !== undefined)
-    if (hasSavedRows) {
-      const ok = await confirmDialog({
-        title: '新增规格维度',
-        content:
-          '新增维度后，原有规格组合会按当前价格/库存复制到新组合上，请保存前逐行核对。\n' +
-          '保存后原有规格会重新创建，顾客购物车里选了这些规格的商品会被清空。确定新增？',
-      })
-      if (!ok) return
-    }
+    const confirm = confirmForAddDimension(currentState())
+    if (confirm && !(await confirmDialog(confirm))) return
     // 确认期间数据可能已变化，执行前重新取最新状态
     const state = currentState()
     if (state.dimensions.length >= 3) return
-    commit(addDimensionLogic(state, '').state)
+    commit(addDimensionLogic(state, '', defaults).state)
   }
 
   const handleRemoveDimension = async (i: number) => {
-    const before = currentState()
-    const dim = before.dimensions[i]
-    if (!dim) return
-    const hasSavedRows = before.rows.some((r) => r.id !== undefined)
-    if (dim.values.length > 0 && hasSavedRows) {
-      const preview = removeDimensionLogic(before, i)
-      const isLast = before.dimensions.length === 1
-      const content = isLast
-        ? '删除最后一个维度后，商品会变成单规格。保存后所有规格都会被删除并重新创建，' +
-          '顾客购物车里选了这些规格的商品会一起清空。确定删除？'
-        : `删除维度「${dim.name || `维度${i + 1}`}」后，现有 ${preview.mergedFrom} 个组合会合并为 ${preview.mergedTo} 个，` +
-          '每组价格/库存取合并前第一行的，请保存前逐行核对。\n' +
-          '保存后对应规格会被删除并重新创建，顾客购物车里选了这些规格的商品会一起清空。确定删除？'
-      const ok = await confirmDialog({ title: '删除规格维度', content, danger: true })
-      if (!ok) return
-    }
+    const confirm = confirmForRemoveDimension(currentState(), i)
+    if (confirm && !(await confirmDialog(confirm))) return
     setEditingValue(null)
     // 确认期间数据可能已变化，执行前重新取最新状态
     const state = currentState()
@@ -125,37 +112,34 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
     commit(moveDimensionLogic(currentState(), i, direction).state)
   }
 
-  // ---------- 规格值 ----------
+  // ---------- 选项 ----------
 
-  const handleAddValue = (i: number, notify: boolean) => {
+  const handleAddValue = (i: number) => {
     const raw = valueDrafts[i] ?? ''
-    if (!raw.trim()) return
-    const result = addValueLogic(currentState(), i, raw)
-    if ('error' in result) {
-      if (notify) toast.error(result.error)
+    const clearDraft = () => {
+      setValueDrafts((prev) => {
+        const next = [...prev]
+        next[i] = ''
+        return next
+      })
+    }
+    if (!raw.trim()) {
+      clearDraft()
       return
     }
-    setValueDrafts((prev) => {
-      const next = [...prev]
-      next[i] = ''
-      return next
-    })
+    const result = addValueLogic(currentState(), i, raw)
+    if ('error' in result) {
+      toast.error(result.error)
+      clearDraft()
+      return
+    }
+    clearDraft()
     commit(result.state)
   }
 
   const handleRemoveValue = async (i: number, v: string) => {
-    const before = currentState()
-    const preview = removeValueLogic(before, i, v)
-    if (preview.affectedSavedRows > 0) {
-      const ok = await confirmDialog({
-        title: '删除规格值',
-        content:
-          `删除规格值「${v}」后，保存时会删除 ${preview.affectedSavedRows} 个已保存的规格，` +
-          '顾客购物车里选了这个规格的商品会一起清空。确定删除？',
-        danger: true,
-      })
-      if (!ok) return
-    }
+    const confirm = confirmForRemoveValue(currentState(), i, v)
+    if (confirm && !(await confirmDialog(confirm))) return
     if (editingValue?.dimIndex === i && editingValue.oldValue === v) setEditingValue(null)
     // 确认期间数据可能已变化，执行前重新取最新状态
     const state = currentState()
@@ -166,16 +150,31 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
     commit(moveValueLogic(currentState(), i, valueIndex, direction).state)
   }
 
-  const startRename = (i: number, v: string) => setEditingValue({ dimIndex: i, oldValue: v, draft: v })
+  const startRename = (i: number, v: string) => {
+    renameSettledRef.current = false
+    setEditingValue({ dimIndex: i, oldValue: v, draft: v })
+  }
 
-  const commitRenameValue = (notify: boolean) => {
+  /**
+   * source='enter'：回车确认；source='blur'：失焦确认。两者都必须给出可见提示、
+   * 都要让输入框回到确定的状态（不能停在「既非编辑态又没提示」的卡住状态，R7）：
+   * - 成功：退出编辑态，标记本次改名已结束（避免紧跟着的 blur 二次提交/二次提示）。
+   * - 为空：toast 提示 + 退出编辑态、恢复原名。
+   * - 重复：toast 提示；回车时保持编辑态、焦点留在框内方便直接改；失焦时退出编辑态、恢复原名。
+   */
+  const commitRenameValue = (source: 'enter' | 'blur') => {
     if (!editingValue) return
+    if (source === 'blur' && renameSettledRef.current) return
     const { dimIndex, oldValue } = editingValue
     const result = renameValueLogic(currentState(), dimIndex, oldValue, editingValue.draft)
     if ('error' in result) {
-      if (notify) toast.error(result.error)
+      toast.error(result.error)
+      // 改成空白：不管回车还是失焦都直接恢复原名；改成重复的名字：回车保持编辑态方便
+      // 直接改，失焦才恢复原名（避免用户还没看清提示，输入框就已经跳走）。
+      if (result.error === msg.E3_EMPTY_RENAME || source === 'blur') setEditingValue(null)
       return
     }
+    renameSettledRef.current = true
     setEditingValue(null)
     commit(result.state)
   }
@@ -204,17 +203,16 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
     )
   }
 
-  // 维度还没配好值时，对应的组合行只是内部占位，不在表格/卡片里展示；
+  // 规格项还没配好选项时，对应的组合行只是内部占位，不在表格/卡片里展示；
   // 用原始下标配对，updateRow 仍按 skuRows 的真实下标写入。
   const visibleEntries = skuRows
     .map((row, idx) => ({ row, idx }))
     .filter(({ row }) => !row.specValues.includes(PLACEHOLDER))
-  const hasPendingDimension = dimensions.some((d) => d.values.length === 0)
 
   return (
     <div className="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/50">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700">商品规格</span>
+        <span className="text-sm font-medium text-gray-700">{msg.T1_TITLE}</span>
         {dimensions.length < 3 && (
           <button
             type="button"
@@ -222,29 +220,27 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
             className="inline-flex items-center gap-1 text-sm text-brand-600 hover:text-brand-700"
           >
             <Plus className="w-4 h-4" />
-            添加规格维度
+            {msg.T2_ADD_DIMENSION}
           </button>
         )}
       </div>
 
+      {notice && <p className="text-xs text-amber-600 whitespace-pre-line">{notice}</p>}
+
       {dimensions.length === 0 ? (
-        <p className="text-xs text-gray-400">
-          未配置规格：商品按下方「售价/库存」单规格出售。如需多规格（如 辣度、重量、去骨/带骨），点击右上角添加。
-        </p>
+        <p className="text-xs text-gray-400">{msg.T3_EMPTY_HINT}</p>
       ) : (
-        <p className="text-xs text-gray-400">
-          点击规格值可改名，用箭头调整顺序；改名和换序都会保留已填的价格/库存，小程序按这里的顺序展示。
-        </p>
+        <p className="text-xs text-gray-400">{msg.T4_HAS_DIM_HINT}</p>
       )}
 
-      {/* 维度编辑 */}
+      {/* 规格项编辑 */}
       {dimensions.map((dim, i) => (
         <div key={i} className="bg-white border border-gray-200 rounded-md p-2.5 space-y-2">
           <div className="flex items-center gap-2">
             <input
               value={dim.name}
               onChange={(e) => handleRenameDimension(i, e.target.value)}
-              placeholder={`维度名，如 ${['辣度', '重量', '骨型'][i] ?? '口味'}`}
+              placeholder={msg.dimNamePlaceholder(i)}
               className={`${inputCls} flex-1 min-w-0 sm:flex-none sm:w-36`}
             />
             <div className="ml-auto flex items-center gap-1">
@@ -255,7 +251,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                     onClick={() => handleMoveDimension(i, 'prev')}
                     disabled={i === 0}
                     className={iconBtnCls}
-                    title="维度上移"
+                    title={msg.T6_MOVE_UP}
                   >
                     <ChevronUp className="w-4 h-4" />
                   </button>
@@ -264,7 +260,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                     onClick={() => handleMoveDimension(i, 'next')}
                     disabled={i === dimensions.length - 1}
                     className={iconBtnCls}
-                    title="维度下移"
+                    title={msg.T6_MOVE_DOWN}
                   >
                     <ChevronDown className="w-4 h-4" />
                   </button>
@@ -274,7 +270,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                 type="button"
                 onClick={() => handleRemoveDimension(i)}
                 className="p-0.5 text-gray-400 hover:text-red-500"
-                title="删除该维度"
+                title={msg.T6_REMOVE_DIM}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -293,7 +289,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                     onClick={() => handleMoveValue(i, vi, 'prev')}
                     disabled={vi === 0}
                     className={iconBtnCls}
-                    title="前移"
+                    title={msg.T7_MOVE_PREV}
                   >
                     <ChevronLeft className="w-3 h-3" />
                   </button>
@@ -305,13 +301,13 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault()
-                          commitRenameValue(true)
+                          commitRenameValue('enter')
                         } else if (e.key === 'Escape') {
                           handleEscapeKey(e)
                           setEditingValue(null)
                         }
                       }}
-                      onBlur={() => commitRenameValue(false)}
+                      onBlur={() => commitRenameValue('blur')}
                       className="bg-white border border-brand-300 rounded px-1 py-0.5 text-xs text-gray-800 w-20 focus:outline-none"
                     />
                   ) : (
@@ -319,7 +315,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                       type="button"
                       onClick={() => startRename(i, v)}
                       className="px-1 py-0.5 hover:underline"
-                      title="点击改名"
+                      title={msg.T7_RENAME}
                     >
                       {v}
                     </button>
@@ -329,7 +325,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                     onClick={() => handleMoveValue(i, vi, 'next')}
                     disabled={vi === dim.values.length - 1}
                     className={iconBtnCls}
-                    title="后移"
+                    title={msg.T7_MOVE_NEXT}
                   >
                     <ChevronRight className="w-3 h-3" />
                   </button>
@@ -337,7 +333,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                     type="button"
                     onClick={() => handleRemoveValue(i, v)}
                     className="p-0.5 text-brand-400 hover:text-red-500"
-                    title="删除该规格值"
+                    title={msg.T7_REMOVE_VALUE}
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -356,37 +352,30 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  handleAddValue(i, true)
+                  handleAddValue(i)
                 }
               }}
-              onBlur={() => handleAddValue(i, false)}
-              placeholder="输入规格值后回车"
+              onBlur={() => handleAddValue(i)}
+              placeholder={msg.T8_VALUE_PLACEHOLDER}
               className={`${inputCls} w-full sm:w-36`}
             />
           </div>
-          {dim.values.length === 0 && (
-            <p className="text-xs text-amber-600">添加规格值后显示组合</p>
-          )}
+          {dim.values.length === 0 && <p className="text-xs text-amber-600">{msg.T9_NO_VALUES_HINT}</p>}
         </div>
       ))}
 
       {/* 组合表格 */}
       {visibleEntries.length > 0 && (
         <div className="space-y-2">
-          {hasPendingDimension && (
-            <p className="text-xs text-amber-600">
-              有维度还没有规格值，下面暂时只显示已配好的组合，请为每个维度都添加规格值后再保存。
-            </p>
-          )}
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-gray-500">批量填充</span>
+            <span className="text-gray-500">{msg.T10_BATCH_LABEL}</span>
             <input
               type="number"
               step="0.01"
               min="0"
               value={batchPrice}
               onChange={(e) => setBatchPrice(e.target.value)}
-              placeholder="价格(元)"
+              placeholder={msg.T10_BATCH_PRICE_PLACEHOLDER}
               className={`${inputCls} w-24 flex-1 min-w-[5rem] sm:flex-none`}
             />
             <input
@@ -394,7 +383,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               min="0"
               value={batchStock}
               onChange={(e) => setBatchStock(e.target.value)}
-              placeholder="库存"
+              placeholder={msg.T10_BATCH_STOCK_PLACEHOLDER}
               className={`${inputCls} w-20 flex-1 min-w-[4.5rem] sm:flex-none`}
             />
             <button
@@ -402,7 +391,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               onClick={batchFill}
               className="text-brand-600 hover:text-brand-700 font-medium"
             >
-              应用到全部
+              {msg.T10_BATCH_BUTTON}
             </button>
           </div>
           <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-md bg-white">
@@ -411,12 +400,12 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                 <tr>
                   {dimensions.map((d, i) => (
                     <th key={i} className="text-left px-3 py-2 whitespace-nowrap">
-                      {d.name || `维度${i + 1}`}
+                      {d.name || msg.dimLabel(d.name, i)}
                     </th>
                   ))}
-                  <th className="text-left px-3 py-2">价格(元) *</th>
-                  <th className="text-left px-3 py-2">原价(元)</th>
-                  <th className="text-left px-3 py-2">库存</th>
+                  <th className="text-left px-3 py-2">{msg.T11_PRICE_HEADER}</th>
+                  <th className="text-left px-3 py-2">{msg.T11_ORIGINAL_PRICE_HEADER}</th>
+                  <th className="text-left px-3 py-2">{msg.T11_STOCK_HEADER}</th>
                 </tr>
               </thead>
               <tbody>
@@ -434,7 +423,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                         min="0"
                         value={row.price}
                         onChange={(e) => updateRow(idx, { price: e.target.value })}
-                        placeholder="必填"
+                        placeholder={msg.T11_PRICE_PLACEHOLDER}
                         className={`${inputCls} w-24`}
                       />
                     </td>
@@ -445,7 +434,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                         min="0"
                         value={row.originalPrice}
                         onChange={(e) => updateRow(idx, { originalPrice: e.target.value })}
-                        placeholder="可选"
+                        placeholder={msg.T11_OPTIONAL_PLACEHOLDER}
                         className={`${inputCls} w-24`}
                       />
                     </td>
@@ -471,31 +460,31 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                 <p className="text-sm font-medium text-gray-800 mb-2">{row.specValues.join(' / ')}</p>
                 <div className="grid grid-cols-3 gap-2">
                   <label className="block">
-                    <span className="block text-xs text-gray-500 mb-1">价格(元) *</span>
+                    <span className="block text-xs text-gray-500 mb-1">{msg.T11_PRICE_HEADER}</span>
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       value={row.price}
                       onChange={(e) => updateRow(idx, { price: e.target.value })}
-                      placeholder="必填"
+                      placeholder={msg.T11_PRICE_PLACEHOLDER}
                       className={`${inputCls} w-full py-2`}
                     />
                   </label>
                   <label className="block">
-                    <span className="block text-xs text-gray-500 mb-1">原价(元)</span>
+                    <span className="block text-xs text-gray-500 mb-1">{msg.T11_ORIGINAL_PRICE_HEADER}</span>
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       value={row.originalPrice}
                       onChange={(e) => updateRow(idx, { originalPrice: e.target.value })}
-                      placeholder="可选"
+                      placeholder={msg.T11_OPTIONAL_PLACEHOLDER}
                       className={`${inputCls} w-full py-2`}
                     />
                   </label>
                   <label className="block">
-                    <span className="block text-xs text-gray-500 mb-1">库存</span>
+                    <span className="block text-xs text-gray-500 mb-1">{msg.T11_STOCK_HEADER}</span>
                     <input
                       type="number"
                       min="0"
@@ -508,9 +497,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               </div>
             ))}
           </div>
-          <p className="text-xs text-gray-400">
-            共 {visibleEntries.length} 个规格组合。商品售价将自动取最低规格价，总库存为各规格之和。
-          </p>
+          <p className="text-xs text-gray-400">{msg.summaryText(visibleEntries.length)}</p>
         </div>
       )}
     </div>

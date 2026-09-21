@@ -211,7 +211,7 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
         data: { ...data, ...specData },
         include: skuInclude,
       })
-    })
+    }, { maxWait: 5000, timeout: 20000 })
     success(res, product)
   } catch (e) {
     next(e)

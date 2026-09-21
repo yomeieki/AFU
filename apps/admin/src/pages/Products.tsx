@@ -3,7 +3,8 @@ import { Plus, Search, Download, QrCode } from 'lucide-react'
 import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
 import SpecEditor, { type SkuRow } from '../components/SpecEditor'
-import { validateSpecForm } from '../components/specLogic'
+import { prepareLoadedState, validateSpecForm } from '../components/specLogic'
+import * as msg from '../components/specMessages'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
@@ -54,6 +55,7 @@ export default function Products() {
   const [form, setForm] = useState(emptyForm)
   const [specDims, setSpecDims] = useState<SpecDimension[]>([])
   const [skuRows, setSkuRows] = useState<SkuRow[]>([])
+  const [specNotice, setSpecNotice] = useState<string | null>(null)
   const hasSkus = specDims.length > 0 && skuRows.length > 0
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -92,6 +94,7 @@ export default function Products() {
     setForm(emptyForm)
     setSpecDims([])
     setSkuRows([])
+    setSpecNotice(null)
     setError('')
     setShowModal(true)
   }
@@ -117,16 +120,19 @@ export default function Products() {
       status: p.status,
       isRecommended: p.isRecommended,
     })
-    setSpecDims(p.specDimensions ?? [])
-    setSkuRows(
-      (p.skus ?? []).map((s) => ({
-        id: s.id,
-        specValues: s.specValues,
-        price: (s.price / 100).toString(),
-        originalPrice: s.originalPrice ? (s.originalPrice / 100).toString() : '',
-        stock: s.stock,
-      }))
-    )
+    // 打开编辑时自动整理：历史数据里组合不全/名字带空格/对不上的行，系统在这里
+    // 一次性补齐、去空格、清理，店员不需要做任何「前移再后移」之类的维护动作。
+    const rawRows = (p.skus ?? []).map((s) => ({
+      id: s.id,
+      specValues: s.specValues,
+      price: (s.price / 100).toString(),
+      originalPrice: s.originalPrice ? (s.originalPrice / 100).toString() : '',
+      stock: s.stock,
+    }))
+    const { state, fixes } = prepareLoadedState(p.specDimensions ?? [], rawRows)
+    setSpecDims(state.dimensions)
+    setSkuRows(state.rows)
+    setSpecNotice(msg.loadNoticeText(fixes))
     setError('')
     setShowModal(true)
   }
@@ -134,9 +140,9 @@ export default function Products() {
   const handleSave = async () => {
     if (!form.categoryId) { setError('请选择分类'); return }
     if (!form.name.trim()) { setError('请输入商品名称'); return }
-    if (!hasSkus && !form.price) { setError('请输入价格'); return }
+    if (!hasSkus && !form.price) { setError(msg.T15_PRICE_REQUIRED); return }
     if (specDims.length > 0) {
-      if (specDims.some((d) => !d.name.trim())) { setError('请填写规格维度名'); return }
+      if (specDims.some((d) => !d.name.trim())) { setError(msg.T14_DIM_NAME_REQUIRED); return }
       const specError = validateSpecForm(specDims, skuRows)
       if (specError) { setError(specError); return }
     }
@@ -187,6 +193,7 @@ export default function Products() {
         await createProduct(payload)
       }
       setShowModal(false)
+      setSpecNotice(null)
       load()
     } catch (err: unknown) {
       setError(
@@ -565,10 +572,10 @@ export default function Products() {
       {showModal && (
         <Modal
           title={editing ? '编辑商品' : '新增商品'}
-          onClose={() => setShowModal(false)}
+          onClose={() => { setShowModal(false); setSpecNotice(null) }}
           footer={
             <>
-              <Button variant="secondary" onClick={() => setShowModal(false)}>
+              <Button variant="secondary" onClick={() => { setShowModal(false); setSpecNotice(null) }}>
                 取消
               </Button>
               <Button loading={saving} onClick={handleSave}>
@@ -634,6 +641,8 @@ export default function Products() {
                 dimensions={specDims}
                 skuRows={skuRows}
                 onChange={(dims, rows) => { setSpecDims(dims); setSkuRows(rows) }}
+                notice={specNotice}
+                defaults={{ price: form.price, originalPrice: form.originalPrice, stock: 0 }}
               />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -648,7 +657,7 @@ export default function Products() {
                     disabled={hasSkus}
                     onChange={(e) => setForm({ ...form, price: e.target.value })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:bg-gray-100 disabled:text-gray-400"
-                    placeholder={hasSkus ? '由规格自动取最低价' : '如 29.90'}
+                    placeholder={hasSkus ? msg.T13_PRICE_PLACEHOLDER_HAS_SPECS : '如 29.90'}
                   />
                 </div>
                 <div>
