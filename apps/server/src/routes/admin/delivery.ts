@@ -145,7 +145,16 @@ router.post('/:id/ready', async (req: Request, res: Response, next: NextFunction
     if (await getActiveDelivery(id)) throw new AppError(42228, '该订单已有在途配送单')
     // 幂等：重复点只回原时刻，不覆盖
     const readyAt = o.readyAt ?? new Date()
-    if (!o.readyAt) await prisma.order.updateMany({ where: { id, status: 'PREPARING', readyAt: null }, data: { readyAt } })
+    if (!o.readyAt) {
+      // 复核 R2：条件写必须判 count——:78 读到的是几毫秒前的快照，这期间订单可能已被并发的秒退/
+      // 取消/接单翻走。命中 0 行就不能装作成功：重读当前状态再报错，同 doAccept（:57-58）的写法。
+      const moved = await prisma.order.updateMany({ where: { id, status: 'PREPARING', readyAt: null }, data: { readyAt } })
+      if (moved.count === 0) {
+        const now = await prisma.order.findUnique({ where: { id }, select: { status: true } })
+        const cur = now?.status ?? o.status
+        throw new AppError(42204, `订单状态为 ${cur}，仅备餐中订单可标记已备好`)
+      }
+    }
     const s = await getLocalSettings()
     const tl = o.distanceM === null ? null : scheduleTimeline(s, o.scheduledAt, o.distanceM)
     if (tl && Date.now() >= tl.callAt.getTime()) {

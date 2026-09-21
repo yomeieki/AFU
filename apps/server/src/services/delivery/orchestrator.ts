@@ -237,6 +237,14 @@ export async function callRider(input: CallRiderInput) {
   const snapshotForDelivery = fresh?.snapshot ?? order.quoteSnapshot
   const quotedAtForDelivery = fresh?.quotedAt ?? order.quotedAt
 
+  // 预约单：呼叫即视为已备好（spec §4.5 不变量：有在途配送单 ⇒ readyAt 非空）。呼叫失败也保留——店员表达过「好了」。
+  // 复核 R1：必须挪到占位 delivery.create 之前写——这样任何时刻只要有 delivery 行存在，readyAt 必已非空，
+  // 不再有「占位已建但 readyAt 仍为 null」的窗口（下面的原子复核在占位创建之后才跑，补不上这半程）。
+  // where 补 status: 'PREPARING'：此刻订单可能已被并发的秒退/取消翻走，不带状态条件会在 REFUNDING 上误写 readyAt。
+  if (order.scheduledAt && !order.readyAt) {
+    await prisma.order.updateMany({ where: { id: orderId, status: 'PREPARING', readyAt: null }, data: { readyAt: new Date() } })
+  }
+
   // 占位事务：activeOrderId 唯一索引 = 并发防线
   const seq = (await prisma.delivery.count({ where: { orderId } })) + 1
   const deliveryNo = `D${orderId}-${seq}`
@@ -274,11 +282,6 @@ export async function callRider(input: CallRiderInput) {
       status: 'FAILED', activeOrderId: null, errorCode: 'RACE', failReason: '占位后发现订单状态已变化（可能正在退款/取消），呼叫已取消',
     } })
     throw new AppError(42204, '订单状态已变化（可能正在退款/取消），呼叫骑手已取消')
-  }
-
-  // 预约单：呼叫即视为已备好（spec §4.5 不变量：有在途配送单 ⇒ readyAt 非空）。呼叫失败也保留——店员表达过「好了」
-  if (order.scheduledAt && !order.readyAt) {
-    await prisma.order.updateMany({ where: { id: orderId, readyAt: null }, data: { readyAt: new Date() } })
   }
 
   const totalItems = order.items.reduce((n, it) => n + it.quantity, 0)

@@ -1044,9 +1044,12 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
     if (timed && (order.status === 'PAID' || order.status === 'PREPARING')) {
       if (!(await canSelfCancelOf(order))) throw new AppError(42229, '已临近约定时间，请改为「申请取消」由商家确认')
       await prisma.$transaction(async (tx) => {
-        // 条件写：与「已备好」「呼叫骑手」并发时以先落库者为准（readyAt/pickupReadyAt 一旦非空本次取消失败）
+        // 条件写：与「已备好」「呼叫骑手」并发时以先落库者为准（readyAt/pickupReadyAt 一旦非空本次取消失败）。
+        // 复核 R1：deliveries:{none:{activeOrderId:{not:null}}} 补的是 callRider 占位创建 → readyAt 落库
+        // 之间的窗口——占位事务先落库时 activeOrderId 已经占住，这里的条件写天然匹配不上，不会出现
+        // 「已有在途配送单但秒退成功」的情形（抄自 services/refund.ts:146-149 的同款守卫）。
         const moved = await tx.order.updateMany({
-          where: { id, status: { in: ['PAID', 'PREPARING'] }, readyAt: null, pickupReadyAt: null },
+          where: { id, status: { in: ['PAID', 'PREPARING'] }, readyAt: null, pickupReadyAt: null, deliveries: { none: { activeOrderId: { not: null } } } },
           data: {
             status: 'REFUNDING', cancelledAt: new Date(), cancelReason: '用户申请退款',
             cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
