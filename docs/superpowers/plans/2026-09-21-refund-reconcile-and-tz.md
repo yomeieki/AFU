@@ -321,7 +321,7 @@
 
 ### 6.5 行为
 
-- [ ] `GET /api/admin/system/status` 响应含 `order.refundReconcile.{afterMin,alertAfter,batch}` 与 `timezone.{name,offsetMin,ok,overriddenFrom}`；生产路由树里**不存在** `/api/admin/system/pay-mock/*`（用 `WECHAT_PAY_MOCK` 未设的开发启动验证：`POST /api/admin/system/pay-mock/reset` 返回 404）。
+- [ ] `GET /api/admin/system/status` 响应含 `order.refundReconcile.{afterMin,alertAfter,batch}` 与 `timezone.{name,offsetMin,ok,overriddenFrom}`；生产路由树里**不存在** `/api/admin/system/pay-mock/*`（用 `WECHAT_PAY_MOCK` 未设的开发启动验证：**带 admin token** `POST /api/admin/system/pay-mock/reset` 返回 404；不带 token 拿到的是 401，与「路由不存在」无法区分，不算验过）。
 - [ ] `run-scheduler` 响应含 `refundReconcile` 键。
 
 ### 6.6 回退验证（先提交，再在工作区临时改、跑、`git checkout --` 复原；结果写进回报，四处都要做）
@@ -333,7 +333,7 @@
 
 ### 6.7 上线后必须人工核的项（统筹方 / 店主做，执行方不做）
 
-1. 部署后 `pm2 logs food-shop-server --lines 50` 看到 `[server] timezone: Asia/Shanghai (offset -480)`，**没有**「已被覆盖」警告（生产系统本就是上海时区）；`pm2 env $(pm2 id food-shop-server) | grep TZ` = Asia/Shanghai；后台登录后 `GET /api/admin/system/status` 的 `timezone.ok=true`。
+1. 部署后 `pm2 logs food-shop-server --lines 50` 看到 `[server] timezone: Asia/Shanghai (offset -480)`，**没有**「已被覆盖」警告（生产系统本就是上海时区）；后台登录后 `GET /api/admin/system/status` 的 `timezone.ok=true`（以日志与 `/status` 为准；`pm2 env $(pm2 id food-shop-server) | grep TZ` 只作参考——`pm2 reload --update-env` 对在线进程刷 env 依 PM2 版本而异，即使没刷上，进程内 pin 也保证行为正确）。
 2. 观察一轮心跳：部署后 2 分钟内 `pm2 logs` 无 `定时任务 refundReconcile 失败` 告警；`SELECT COUNT(*) FROM refunds WHERE status IN ('PENDING','PROCESSING','ABNORMAL')` 在生产为 0（当前事实），任务空转。
 3. **真实小额退款复现补查**（可选，店主同意才做）：用 `docs/ops-test-orders.md` 的测试单流程下一笔 ¥0.30 单并支付；在 nginx 上临时把 `location /api/wechat/pay/refund-notify` 改成 `return 503;`（先备份配置，`nginx -t && nginx -s reload`）；后台一键退款 → 退款单停在 PROCESSING（微信回调被 503 拒绝，微信会重试但都被拒）；等 5–6 分钟后看该行 `reconcile_count ≥ 1` 且状态翻成 SUCCESS、订单 REFUNDED、店员群收到「退款已到账」；随后恢复 nginx 配置 `nginx -s reload`；之后微信重推回调到达时应 ack 且 `refunded_amount` 不变（比对 `SELECT refunded_amount, actual_amount FROM orders WHERE id=…`）。整个过程微信重试窗口很长（首轮几分钟内多次），不会丢；若 30 分钟内没恢复 nginx，老板会先收到「退款长时间未到账」告警——那是预期。
 4. 告警链路：把测试单的告警 key 与 `docs/deployment.md` 十三 表格对一遍，确认企微/PushPlus 收到的文案是本批新加的三种之一。
@@ -485,9 +485,40 @@ tail -3 /tmp/e2e-rtz.log; grep '✘' /tmp/e2e-rtz.log
 2. T4 分片 68 与既有回归对比未做「逐字节对齐 §9 已知偶发清单」（因为本次跑出的是 0 失败，没有红需要比对；§9 清单本身在本次运行里一条都没触发，这一情况方案里未预设，按「零红即满足」处理）。
 
 **上线后必须人工核的项**（方案 §6.7，原样列出，执行方未做，供统筹方/店主留存）：
-1. 部署后 `pm2 logs food-shop-server --lines 50` 看到 `[server] timezone: Asia/Shanghai (offset -480)`，没有「已被覆盖」警告；`pm2 env $(pm2 id food-shop-server) | grep TZ` = Asia/Shanghai；后台登录后 `GET /api/admin/system/status` 的 `timezone.ok=true`。
+1. 部署后 `pm2 logs food-shop-server --lines 50` 看到 `[server] timezone: Asia/Shanghai (offset -480)`，没有「已被覆盖」警告；后台登录后 `GET /api/admin/system/status` 的 `timezone.ok=true`（以日志与 `/status` 为准；`pm2 env $(pm2 id food-shop-server) | grep TZ` 只作参考——`pm2 reload --update-env` 对在线进程刷 env 依 PM2 版本而异，即使没刷上，进程内 pin 也保证行为正确）。
 2. 观察一轮心跳：部署后 2 分钟内 `pm2 logs` 无「定时任务 refundReconcile 失败」告警；`SELECT COUNT(*) FROM refunds WHERE status IN ('PENDING','PROCESSING','ABNORMAL')` 在生产为 0（当前事实），任务空转。
 3. 真实小额退款复现补查（可选，店主同意才做）：下一笔 ¥0.30 测试单并支付；nginx 临时把 `/api/wechat/pay/refund-notify` 改 `return 503`；后台一键退款 → 停在 PROCESSING；等 5-6 分钟看 `reconcile_count ≥ 1` 且翻 SUCCESS、订单 REFUNDED、店员群收到「退款已到账」；恢复 nginx；微信重推回调应 ack 且 `refunded_amount` 不变。
 4. 告警链路：把测试单的告警 key 与 `docs/deployment.md` 十三节表格对一遍，确认企微/PushPlus 收到的文案是本批新加的三种之一。
 
 **收尾**：临时库 `food_shop_rtz`/`food_shop_rtz_shadow` 已删；`.selftest/` 下生成的临时密钥文件已 gitignore；起过的服务进程已停；`git status --porcelain` 干净；未合并、未部署。
+
+## 13. 03 回判（fable，2026-09-21，02 opus 复核后）
+
+02 结论「修完再合」：1 条需改 + 6 条建议。逐条回判：
+
+| # | 02 发现 | 回判 | 处置 |
+|---|---|---|---|
+| 1 | [需改] `refund-reconcile.ts:92`/`:105` 两条告警没配 `windowMs`，落默认 5 分钟；对应状态永不自愈、每 5–6 分钟重查 ⇒ 每笔约 10 条/小时告警轰炸 | **成立**（我核过 `notify.ts:13` 默认 5 分钟、`:216` 同文件已配 6h） | 修补轮 F1 |
+| 2 | [建议] `:207` detail 按 `fresh.status` 判，PENDING 行会被报成「查询失败: 」；且 `fresh` 已被并发推成 SUCCESS 时仍发「未到账」 | **成立**，且 PENDING 行正是补查最该救的一类 | 修补轮 F2 |
+| 3 | [建议] ABNORMAL 行重查仍 ABNORMAL 时 mark* 命中 0 行，但仍计 `advanced` | **成立** | 修补轮 F3 |
+| 4 | [建议] `local-settings.ts:342` 注释「仓库里没有任何地方固定 process.env.TZ」已过时 | **成立** | 修补轮 F4（白名单放开这一段注释，只改注释） |
+| 5 | [建议] batch 20 × 15s 超时最坏 300s 拖住整轮心跳 | 成立但生产在途退款为 0、与既有 `reconcileExpressStale` 同范式 | **不进本批**，记后续计划 |
+| 6 | [建议] e2e 68.11 注释承诺 timezone 断言没写；§6.5「不带 token 404」判据不严谨 | **成立** | 修补轮 F5；§6.5 已由统筹改文 |
+| 7 | [建议] §6.7-1 `pm2 env` 可能假红 | **成立** | §6.7 与 §12 复印件已由统筹改文；`docs/deployment.md` 十二节同步一句（F6） |
+
+### 修补轮清单（01 · sonnet，基线 `a6990af`，全部做完一次提交）
+
+- **F1** `apps/server/src/services/refund-reconcile.ts:92`、`:105` 两处 `notifySystemAlert` 的 opts 补 `windowMs: ALERT_WINDOW_MS`（文件内已有的 6h 常量）。`docs/deployment.md:621-622` 限频列改「每退款单 6 小时一次」；`docs/api.md:2090`「限频窗口同 notifySystemAlert 默认 5 分钟」改「6 小时窗口内只发一次（与「退款长时间未到账」同）」。
+- **F2** `refund-reconcile.ts:206-207`：跳过条件改为 `!fresh || fresh.reconcileCount < alertAfter || !['PENDING','PROCESSING'].includes(fresh.status)`（ABNORMAL 与所有终态都跳过）；`detail` 改按本轮 `outcome` 判：`outcome === 'PROCESSING' ? '微信侧仍处理中' : `查询失败: ${fresh.reconcileLastError ?? ''}``。
+- **F3** `reconcileRefund` 在 `switch` 之后（返回 SUCCESS/CLOSED/ABNORMAL/FAILED 之前）重读一次 `status`，与函数开头拿到的 `refund.status` 相同则返回 `'SKIPPED'`（说明 mark*/finalize 命中 0 行，没有推进）。**不改** `finalizeRefundSuccess`/mark* 的签名。同步改 `reconcileRefund` 头注释。
+- **F4** `apps/server/src/services/local-settings.ts:342` 一段注释改写为：进程时区已由 `utils/timezone.ts` 钉死 Asia/Shanghai，但这条校验仍保留——不让金额生效时刻依赖任何进程配置。只改注释，**不动**正则与逻辑。
+- **F5** `scripts/e2e.d/68-refund-reconcile.sh` 68.11 补两条：`assert_eq "68.11 status.timezone.ok" "$(jq -r '.data.timezone.ok' <<<"$RR68_STATUS")" "true"`、`assert_eq "68.11 status.timezone.name" "$(jq -r '.data.timezone.name' <<<"$RR68_STATUS")" "Asia/Shanghai"`；注释去掉「T5 完成后才有意义」。
+- **F6** `docs/deployment.md` 十二节 `pm2 env … | grep TZ` 那行后加一句：只作参考，以 `[server] timezone` 日志与 `/status` 的 `timezone.ok` 为准。
+
+### 修补轮验收（02 二审 opus 与 04 haiku 都按这里）
+
+- 自测新增/改动：`selftest-refund-reconcile.ts` 加三条用例：(a) ABNORMAL 行、微信仍返回 ABNORMAL → `reconcileRefund` 返回 `'SKIPPED'`、`reconcileStuckRefunds` 返回值不计入；(b) PENDING 行、微信返回 PROCESSING、`reconcileCount ≥ alertAfter` → 「退款长时间未到账」detail 含「微信侧仍处理中」、不含「查询失败」；(c) 行已 SUCCESS 但 `outcome === 'PROCESSING'`（并发场景，直接把行置 SUCCESS 再调 `reconcileStuckRefunds`）→ 不发「未到账」告警。**改坏验证**：F2 的跳过条件改回旧写法 → (c) 变红；F3 的重读去掉 → (a) 变红。
+- 告警窗口：自测里对 `notifySystemAlert` 的桩记录 opts，断言 `refund-reconcile-notfound:*` 与 `refund-reconcile-mismatch:*` 两个 key 的 `windowMs === 6*60*60*1000`（用例 8/9 就地补断言即可）。改坏验证：去掉 F1 的一处 `windowMs` → 对应断言变红。
+- 既有：`npx tsc --noEmit -p apps/server` 零错；五个自测脚本全绿；分片 68 单独跑全绿（不必全量 e2e，改动不触及其它分片；但 68.11 新断言必须在实跑输出里看到）。
+- `git diff --name-only a6990af..HEAD` 只允许：`refund-reconcile.ts`、`local-settings.ts`、`selftest-refund-reconcile.ts`、`68-refund-reconcile.sh`、`docs/deployment.md`、`docs/api.md`、本方案文件（执行记录追加）。
+- 不进本批（记后续计划）：补查 batch 默认值与最坏耗时。
