@@ -448,6 +448,10 @@ model Refund {
   wxResponseData String?   @map("wx_response_data") @db.Text
   wxNotifyData   String?   @map("wx_notify_data") @db.Text
   successTime    DateTime? @map("success_time")
+  // 退款补查（2026-09-21）：上次向微信查询的时间 / 累计查询次数 / 最近一次查询失败或金额不符的原因
+  reconcileCheckedAt DateTime? @map("reconcile_checked_at")
+  reconcileCount     Int       @default(0) @map("reconcile_count")
+  reconcileLastError String?   @map("reconcile_last_error") @db.VarChar(255)
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 

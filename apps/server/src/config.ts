@@ -95,6 +95,11 @@ const envSchema = z.object({
   FEIE_API_BASE: z.string().optional(),
   // 打印机 mock（生产开启拒绝启动）
   PRINTER_PROVIDER_MOCK: z.string().optional(),
+
+  // 退款状态自动补查（2026-09-21）：年龄阈值/复查间隔（分钟）、连续几次没结果告警、每轮限量
+  REFUND_RECONCILE_AFTER_MIN: z.coerce.number().int().min(1).default(5),
+  REFUND_RECONCILE_ALERT_AFTER: z.coerce.number().int().min(1).default(6),
+  REFUND_RECONCILE_BATCH: z.coerce.number().int().min(1).max(100).default(20),
 })
 
 const parsed = envSchema.safeParse(process.env)
@@ -219,6 +224,11 @@ export const config = {
     user: env.FEIE_USER ?? '',
     ukey: env.FEIE_UKEY ?? '',
     apiBase: (env.FEIE_API_BASE ?? '').replace(/\/+$/, ''),
+  },
+  refundReconcile: {
+    afterMin: env.REFUND_RECONCILE_AFTER_MIN,
+    alertAfter: env.REFUND_RECONCILE_ALERT_AFTER,
+    batch: env.REFUND_RECONCILE_BATCH,
   },
   kd100Express: {
     // env 空串（.env.example 里 KD100_EXPRESS_* 默认注释掉，但历史部署可能残留 ""）不是 nullish，

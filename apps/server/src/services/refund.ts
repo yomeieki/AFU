@@ -261,15 +261,20 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       reason: reason || undefined,
       notifyUrl: getRefundNotifyUrl(),
     })
-    // 同步返回 SUCCESS 时这里只预写 PROCESSING，不能直接写 SUCCESS：
-    // finalizeRefundSuccess 的幂等守卫正是「已 SUCCESS 就当做过了」，先写 SUCCESS 再调它，
-    // 首次落库就会被自己短路——钱退了，refundedAmount/订单/售后一样都不更新，且回调也不会再补。
-    // SUCCESS 只允许由 finalizeRefundSuccess 一处写入。
+    // 同步返回 SUCCESS/ABNORMAL/CLOSED 时这里一律只预写 PROCESSING，不直接写目标状态：
+    // 状态到终态的转移只允许在 finalizeRefundSuccess / markRefundAbnormal / markRefundClosed
+    // 三处各自发生恰好一次（且各自负责发通知）。这三个函数现在都是条件写（status 必须落在各自的
+    // 守卫集合内才会真正转移），如果这里先把行直接写成目标值，紧接着调用的 mark* 会因为「当前状态
+    // 已经是目标状态」而守卫不命中、直接 return——通知（notifyRefundResult/notifySystemAlert）
+    // 因此一次都不会发，是 100% 必现的回归，不是竞态（2026-09-21 统筹裁定：责任在 00 规划，见
+    // docs/superpowers/plans/2026-09-21-refund-reconcile-and-tz.md §10）。
+    // SUCCESS 一直是这样处理的（旧注释：「SUCCESS 只允许由 finalizeRefundSuccess 一处写入」）；
+    // 本次统一成三态都走同一套「先落 PROCESSING，再由下游做唯一一次终态转移」。
     await prisma.refund.update({
       where: { id: refund.id },
       data: {
         wxRefundId: result.refund_id,
-        status: result.status === 'SUCCESS' ? 'PROCESSING' : result.status,
+        status: 'PROCESSING',
         channel: result.channel ?? null,
         wxResponseData: JSON.stringify(result),
       },
@@ -429,12 +434,24 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<void>
   }
 }
 
-/** 微信返回 ABNORMAL：退款异常（如用户账户异常），需商户平台手动处理；保留在途占位防重复发起。 */
+/**
+ * 微信返回 ABNORMAL：退款异常（如用户账户异常），需商户平台手动处理；保留在途占位防重复发起。
+ * 守卫理由：补查/回调/initiateRefund 同步分支可能与另一路径同时到——若这一刻该行已被推进到
+ * SUCCESS（钱已经退成功、activeOrderId 已释放、refundedAmount 已累加），无条件写会把它错误地
+ * 改回 ABNORMAL，界面显示未成功但账其实已经对平。条件写只允许从「在途未 ABNORMAL」翻到
+ * ABNORMAL；count=0（已是 ABNORMAL，或已被别的路径推到终态）直接返回，不通知不告警——
+ * 回调重推 ABNORMAL（同一封回调网络重试/微信侧重投）时这里与改动前不同：改动前会在 5 分钟
+ * 告警窗口外重复告警，改动后 count=0 时完全不告警（守卫挡在告警之前），因为「已经是 ABNORMAL」
+ * 不是新信息。initiateRefund 的同步 ABNORMAL 分支调用本函数时该行必然是 PROCESSING
+ * （统筹裁定：那里已改成只预写 PROCESSING，不再直接写终态，见 :268-276 与其注释），守卫必中。
+ */
 export async function markRefundAbnormal(refundId: number, rawData?: string): Promise<void> {
-  const refund = await prisma.refund.update({
-    where: { id: refundId },
+  const moved = await prisma.refund.updateMany({
+    where: { id: refundId, status: { in: ['PENDING', 'PROCESSING'] } },
     data: { status: 'ABNORMAL', ...(rawData ? { wxNotifyData: rawData } : {}) },
   })
+  if (moved.count === 0) return
+  const refund = await prisma.refund.findUniqueOrThrow({ where: { id: refundId } })
   const order = await prisma.order.findUnique({ where: { id: refund.orderId } })
   if (order) notifyRefundResult(order, refund, 'ABNORMAL')
   notifySystemAlert('微信退款异常', [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, '需到微信商户平台手动处理'], {
@@ -442,12 +459,19 @@ export async function markRefundAbnormal(refundId: number, rawData?: string): Pr
   })
 }
 
-/** 微信返回 CLOSED：退款关闭（未退成功），释放在途占位供重试。 */
+/**
+ * 微信返回 CLOSED：退款关闭（未退成功），释放在途占位供重试。
+ * 守卫理由同 markRefundAbnormal：已到 SUCCESS 的行不得被改回 CLOSED。条件写覆盖全部在途态
+ * （PENDING/PROCESSING/ABNORMAL——ABNORMAL 行商户平台人工处理后微信可能推 CLOSED）。
+ * initiateRefund 的同步 CLOSED 分支调用本函数时该行必然是 PROCESSING，守卫必中（同上）。
+ */
 export async function markRefundClosed(refundId: number, rawData?: string): Promise<void> {
-  const refund = await prisma.refund.update({
-    where: { id: refundId },
+  const moved = await prisma.refund.updateMany({
+    where: { id: refundId, status: { in: ACTIVE_REFUND_STATUSES as unknown as string[] } },
     data: { status: 'CLOSED', activeOrderId: null, ...(rawData ? { wxNotifyData: rawData } : {}) },
   })
+  if (moved.count === 0) return
+  const refund = await prisma.refund.findUniqueOrThrow({ where: { id: refundId } })
   const order = await prisma.order.findUnique({ where: { id: refund.orderId } })
   if (order) notifyRefundResult(order, refund, 'CLOSED')
   notifySystemAlert('微信退款已关闭', [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, '可在后台重试退款'], {
@@ -455,10 +479,16 @@ export async function markRefundClosed(refundId: number, rawData?: string): Prom
   })
 }
 
-/** 发起阶段失败：释放在途占位，记录错误。 */
+/**
+ * 发起阶段失败：释放在途占位，记录错误。
+ * 守卫理由同上：只允许从 PENDING/PROCESSING（发起阶段/查询中）翻到 FAILED，
+ * 已终态（SUCCESS/CLOSED/ABNORMAL/FAILED）的行不再被改写。本函数唯一的调用点
+ * （initiateRefund 的 catch 分支）此时行仍是 PENDING（createRefund 已抛错，:268 的预写从未
+ * 执行到），守卫必中，行为与改动前一致。
+ */
 export async function markRefundFailed(refundId: number, errorCode: string, errorMessage: string): Promise<void> {
-  const refund = await prisma.refund.update({
-    where: { id: refundId },
+  const moved = await prisma.refund.updateMany({
+    where: { id: refundId, status: { in: ['PENDING', 'PROCESSING'] } },
     data: {
       status: 'FAILED',
       activeOrderId: null,
@@ -466,6 +496,8 @@ export async function markRefundFailed(refundId: number, errorCode: string, erro
       errorMessage: errorMessage.slice(0, 255),
     },
   })
+  if (moved.count === 0) return
+  const refund = await prisma.refund.findUniqueOrThrow({ where: { id: refundId } })
   notifySystemAlert('微信退款发起失败', [`订单 ${refund.orderNo}`, `金额 ¥${(refund.amount / 100).toFixed(2)}`, `${errorCode}: ${errorMessage}`], {
     key: `refund-failed:${refund.orderId}`,
   })
