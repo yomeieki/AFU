@@ -138,8 +138,10 @@ CURRENT_STEP="retention"
 find "${BACKUP_DIR}" -name '*.gz' -mtime "+${LOCAL_KEEP_DAYS}" -delete
 log "Local retention: kept last ${LOCAL_KEEP_DAYS} days ($(ls "${BACKUP_DIR}" | wc -l | tr -d ' ') files)"
 
-# COS 端保留策略：请在 COS 控制台给 bucket 配置「生命周期规则」（如 30 天后删除
-# backups/ 前缀对象），比脚本删除可靠且不依赖本机时钟/权限。
+# COS 端保留策略由桶的「生命周期规则」负责，脚本不删远端——备份用的 CAM 子用户
+# 刻意没有 DeleteObject 权限，密钥泄露也抹不掉备份。
+# 线上现行规则：food-shop-backup-90d，范围限定前缀 food-shop/（即 COS_BACKUP_PATH），
+# 当前版本 90 天后删除、碎片 30 天后删除。详见 docs/deployment.md「13.3 对象存储」。
 
 LOCAL_COUNT=$(ls "${BACKUP_DIR}" | wc -l | tr -d ' ')
 log "Backup complete"

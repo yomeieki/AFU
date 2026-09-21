@@ -58,11 +58,14 @@ if [[ "$(env_val NODE_ENV)" == "production" ]]; then
 fi
 
 # ── [2/9] 拉取最新代码 ────────────────────────────────────────────────────────
-# SKIP_FETCH=1：跳过 git fetch，直接用本地已有的 origin/main。
-# 用在 GitHub 从本机连不上的时候（国内机器常态：GnuTLS recv error / 443 超时），
-# 此时可从一台能连 GitHub 的机器把 ref 推过来：
+# 正常路径就是直接 git fetch，不需要任何额外开关。
+#
+# SKIP_FETCH=1 是应急通道，只在 GitHub 从本机连不上时才用（国内机器偶发：
+# GnuTLS recv error / 443 超时）。它跳过 fetch，直接用本地已有的 origin/main——
+# 所以必须先从一台能连 GitHub 的机器把 ref 推过来，否则部署的是旧代码：
 #   git push ubuntu@<服务器>:/www/food-shop <sha>:refs/remotes/origin/main
-# 然后 SKIP_FETCH=1 bash scripts/deploy.sh
+#   SKIP_FETCH=1 bash scripts/deploy.sh
+# 用完即弃：下一次正常部署不要再带这个变量，让 fetch 把 origin/main 拉回真值。
 echo "[2/9] 拉取最新代码..."
 cd "${REPO_DIR}"
 if [[ "${SKIP_FETCH:-0}" == "1" ]]; then
