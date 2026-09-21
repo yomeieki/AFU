@@ -846,7 +846,7 @@
 
 #### POST /api/admin/orders/:id/refund-complete
 
-人工兜底：确认商户平台已退款成功但系统未收到回调时，把 `REFUNDING` 订单标记为 `REFUNDED`（同时把进行中的退款记录标 SUCCESS）。仅 `REFUNDING` 可调用；重复调用 `42204`。
+人工兜底：确认商户平台已退款成功但系统未收到回调时，把 `REFUNDING` 订单标记为 `REFUNDED`（同时把进行中的退款记录标 SUCCESS）。仅 `REFUNDING` 可调用；重复调用 `42204`。**2026-09-21 起有自动补查（附录 L）**：微信退款回调丢失时定时任务会自动去微信核对并推进状态，本接口只作最后兜底（自动补查还没查到、或需要立即处理时用）。
 
 `GET /api/admin/orders` 列表每项附带 `latestRefund`（最近一条退款记录：`status` / `outRefundNo` / `amount` / `mode` / `errorMessage`）。
 
@@ -987,7 +987,8 @@
 | `GET /api/admin/orders/pending-count` | 增 `afterSaleCount` |
 | `POST /api/admin/webview-code` | admin token → 一次性 code（2 分钟） |
 | `POST /api/admin/login/webview` | `{ code }` → token（小程序 web-view `/m?code=` 用） |
-| `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖 |
+| `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖；2026-09-21 起新增 5 个退款补查覆盖键（附录 L） |
+| `POST /api/admin/system/pay-mock/{reset,refund-query,calls}` | 仅 `WECHAT_PAY_MOCK=true` 时挂载，退款查询 mock 控制面（附录 L） |
 
 ### 错误码新增
 | code | 含义 |
@@ -2057,3 +2058,53 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 - 主页、分类页在两个渠道均读取公开 `/local/meta` 的活动配置，邮寄不采用同城营业状态。购物车进度使用公开 promo-preview；同城免运提示动态读取 `fee.freeShipTiers` / `radiusKm`，有距离限制时说明公里范围，自取与邮寄不显示这段同城免运提示。
 - promo-preview 请求失败：结算条隐藏进度和满减划线；自取页应付显示待计算，按钮在其它必要条件满足后显示「重新计算优惠」并重试。在途旧响应用序号作废，关闭活动或不参加自取时立即清零且不请求。
 - 订单详情读取订单快照 `promoDiscountAmount`，不根据当前活动设置反算。以上金额变化不影响起送、免运和券门槛的减前小计口径。
+
+## 附录 L：退款状态自动补查与服务端时区（2026-09-21）
+
+### 退款状态自动补查
+
+微信退款回调丢失时，60 秒心跳定时任务（`refundReconcile`，实现在 `services/refund-reconcile.ts`）定时去问微信这笔退款到底成没成，按结果走既有的状态流转，不新增状态机、不改退款金额计算。
+
+**扫描范围**（`reconcileStuckRefunds`）：
+- `status IN ('PENDING','PROCESSING')` 且 `createdAt` 早于 `afterMin`（默认 5 分钟，同时也是复查间隔）且距上次补查已过 `intervalMin`；
+- `status = 'ABNORMAL'`（在途态，占 `activeOrderId`）且距上次补查已过 `abnormalIntervalMin`（默认 60 分钟，不进 env——店主在商户平台人工处理后微信可能推 SUCCESS/CLOSED 回调，回调丢了同样要有人兜）；
+- 每轮最多处理 `batch` 笔（默认 20），`orderBy createdAt asc`。
+
+**查询结果 × 当前状态 → 动作**（`reconcileRefund`，单笔，可独立调用做自测/联调）：
+
+| 微信查询结果 | 本地状态 | 动作 |
+|---|---|---|
+| `SUCCESS` | 任意在途态 | 走 `finalizeRefundSuccess`（与回调同一函数，天然幂等） |
+| `CLOSED` | 任意在途态 | 走 `markRefundClosed`，释放 `activeOrderId` |
+| `ABNORMAL` | 任意在途态 | 走 `markRefundAbnormal`，保留 `activeOrderId` |
+| `PROCESSING` | — | 不改状态，只记录本次已查过 |
+| 查无此单 | `PENDING` | 标 `FAILED`（`errorCode='RECONCILE_NOT_FOUND'`），释放 `activeOrderId`（后台可重试） |
+| 查无此单 | `PROCESSING`/`ABNORMAL` | 不改状态，只告警（当初拿到过 `refund_id`，查无此单不正常） |
+| 查询抛错（超时/5xx） | — | 不改状态，`reconcileLastError` 记录错误，下轮再试 |
+| 微信侧金额与本地 `amount` 不符 | — | 不改状态，告警（口径同 `wechat-notify.ts` 的回调金额校验） |
+
+**幂等与互斥依据**：`finalizeRefundSuccess` 用 `SELECT ... FOR UPDATE` 把回调与补查串行化，条件写 `status ≠ SUCCESS` 保证只有一方真正累加 `refundedAmount`，金额用 `LEAST(refunded_amount + amount, actual_amount)` 封顶。`markRefundAbnormal`/`markRefundClosed`/`markRefundFailed` 三个函数本批全部改成条件 `updateMany`（只有行仍在各自的「在途态」集合内才会真正转移状态并发通知），已被推进到别的终态的行调用这三个函数会 `count=0` 直接返回，不改状态、不重复通知。`reconcileRefund` 自己用 CAS 占坑（`reconcileCheckedAt` 从旧值改成 `now` 才算抢到）防并发 tick 重复查询。
+
+**Refund 新增三列**（`refunds` 表）：`reconcile_checked_at`（上次补查时间，`DATETIME(3)` 可空）、`reconcile_count`（累计补查次数，默认 0）、`reconcile_last_error`（最近一次查询失败或金额不符的原因，`VARCHAR(255)` 可空）。`GET /admin/orders/:id` 响应的 `refunds[]` 每项随之带上这三个字段（只读，供人工核对补查进度）。
+
+**告警**：`PENDING`/`PROCESSING` 行连续 `alertAfter`（默认 6 次，约 30 分钟）补查后仍未到终态 → 「退款长时间未到账」（`key: refund-reconcile-stuck:<id>`，6 小时窗口内只发一次）。`ABNORMAL` 行不发这条告警（`markRefundAbnormal` 已经告警过，且本就要人工处理）。另外两个新告警：「退款补查：微信查无此单」（`key: refund-reconcile-notfound:<id>`）、「退款补查金额不一致」（`key: refund-reconcile-mismatch:<id>`），限频窗口同 `notifySystemAlert` 默认 5 分钟。三条都走既有 `notifySystemAlert` 通道（企微系统告警 webhook → 回退订单群；PushPlus 只给老板），不新开通道。
+
+**env 三键**（默认值见 `.env.example`）：`REFUND_RECONCILE_AFTER_MIN`（≥1，默认 5，既是年龄阈值也是复查间隔）、`REFUND_RECONCILE_ALERT_AFTER`（≥1，默认 6）、`REFUND_RECONCILE_BATCH`（1–100，默认 20）。
+
+**`run-scheduler` 新增 5 个覆盖键**（供联调/e2e）：`refundReconcileAfterMin`、`refundReconcileIntervalMin`、`refundReconcileAbnormalIntervalMin`、`refundReconcileAlertAfter`、`refundReconcileBatch`（都可传 0，语义同其它阈值覆盖键——0 是「立刻命中」不是「关掉」）。
+
+**pay-mock 控制面** `/api/admin/system/pay-mock/*`（仅 `WECHAT_PAY_MOCK=true` 时挂载，生产不存在）：
+
+| 接口 | 说明 |
+|---|---|
+| `POST /reset` | 清空指令队列与调用记录 |
+| `POST /refund-query` | `{ outRefundNo?, directive }`，`outRefundNo` 缺省或传 `'*'` 表示对任意单号通配。`directive` 四种：`{kind:'ok', status:'SUCCESS'\|'CLOSED'\|'PROCESSING'\|'ABNORMAL', amount?, refundId?, successTime?}` / `{kind:'not_found'}` / `{kind:'error', code, message?, httpStatus?}` / `{kind:'timeout'}`。无指令时默认 `{kind:'ok', status:'PROCESSING'}`（安全默认，不改任何状态）。`ok` 不带 `amount` 时响应也不带 `amount`（补查只在 `amount` 存在时比对金额，与真实微信一致） |
+| `GET /calls?op=queryRefund` | 已记录的调用列表，供 e2e/联调断言查了几次 |
+
+**`GET /api/admin/system/status` 新增**：`order.refundReconcile.{afterMin,alertAfter,batch}`（当前生效的 env 配置）、`timezone`（见下）。
+
+### 服务端固定北京时间
+
+进程启动时（`config.ts`，`dotenv` 加载之后、任何业务 `Date` 使用之前）无条件把 `process.env.TZ` 覆盖为 `Asia/Shanghai`（不是缺省才填——PM2 显式配了 `TZ=UTC` 也会被纠正），随后自检：偏移必须是 `-480` 且 `Intl.DateTimeFormat().resolvedOptions().timeZone` 必须是 `Asia/Shanghai`（赋一个不存在的时区名会静默回落到 UTC，`offset` 会变 0，靠这个自检能抓到）。生产环境自检失败直接拒绝启动（`pm2 logs` 会看到 `[timezone] … 拒绝启动`）；非生产只警告不拦截。PM2 侧 `ecosystem.config.js` 的 `env_production` 也加了 `TZ: 'Asia/Shanghai'` 作第二道保险。
+
+`GET /api/admin/system/status` 新增 `timezone: { name, offsetMin, ok, overriddenFrom }`（`overriddenFrom` 是被覆盖前的原值，未发生覆盖则为 `null`）。启动日志新增一行 `[server] timezone: Asia/Shanghai (offset -480)`；若环境原本设了别的 TZ，会先打一行 `[timezone] 环境 TZ=<原值> 已被覆盖为 Asia/Shanghai`。
