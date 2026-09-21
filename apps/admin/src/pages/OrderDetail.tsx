@@ -190,7 +190,7 @@ export default function OrderDetail() {
               <DetailMoney order={order} />
             </div>
             {order.deliveryType === 'LOCAL' && (
-              <DetailDelivery data={localData} loading={localLoading} loadFailed={localFailed} onRetry={loadLocal} />
+              <DetailDelivery order={order} data={localData} loading={localLoading} loadFailed={localFailed} onRetry={loadLocal} />
             )}
             {order.deliveryType === 'EXPRESS' && (
               <DetailExpress order={order} data={expressData} loading={expressLoading} loadFailed={expressFailed} onRetry={loadExpress} />
@@ -218,7 +218,7 @@ export default function OrderDetail() {
             </div>
             <DetailCustomer order={order} />
             {order.deliveryType === 'LOCAL' && (
-              <DetailDelivery data={localData} loading={localLoading} loadFailed={localFailed} onRetry={loadLocal} />
+              <DetailDelivery order={order} data={localData} loading={localLoading} loadFailed={localFailed} onRetry={loadLocal} />
             )}
             {order.deliveryType === 'EXPRESS' && (
               <DetailExpress order={order} data={expressData} loading={expressLoading} loadFailed={expressFailed} onRetry={loadExpress} />

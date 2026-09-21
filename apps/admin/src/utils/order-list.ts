@@ -36,11 +36,11 @@ const DELIVERY_STATUS_LABEL: Record<string, string> = {
   DELIVERED: '已送达', CANCELLED: '已取消', FAILED: '呼叫失败', UNKNOWN: '状态未确认',
 }
 
-export type OrderListRow = Pick<Order, 'deliveryType' | 'status' | 'pickupAt' | 'pickupReadyAt' | 'completedAt' | 'shipment' | 'latestDelivery'>
+export type OrderListRow = Pick<Order, 'deliveryType' | 'status' | 'pickupAt' | 'pickupReadyAt' | 'completedAt' | 'shipment' | 'latestDelivery' | 'scheduledAt' | 'schedule'>
 
 /**
  * 宽屏第 7 列（配送·取餐）两行文字：
- *   LOCAL   → ['骑手 X' | '未呼叫', 配送单状态]
+ *   LOCAL   → ['骑手 X' | '未呼叫', 配送单状态]；预约单（scheduledAt 非空）首行换成「预约 <送达时段>」
  *   PICKUP  → ['取餐 HH:mm', '已备好' | '已取走' | '']
  *   EXPRESS → ['公司 单号' | '未发货', 'M-DD HH:mm 发货' | '']
  */
@@ -58,7 +58,12 @@ export function deliveryColumn(o: OrderListRow, _now: Date): [string, string] {
   }
   // LOCAL
   const d = o.latestDelivery
-  const line1 = d?.courierName ? `骑手 ${d.courierName}` : '未呼叫'
   const line2 = d ? (DELIVERY_STATUS_LABEL[d.status] ?? d.status) : ''
+  // 预约单：列表接口不保证带 schedule 节（只保证 scheduledAt），没有 schedule 就退回时刻格式化
+  if (o.scheduledAt) {
+    const line1 = `预约 ${o.schedule?.slotLabel ?? fmtMonthDayTime(o.scheduledAt)}`
+    return [line1, line2]
+  }
+  const line1 = d?.courierName ? `骑手 ${d.courierName}` : '未呼叫'
   return [line1, line2]
 }

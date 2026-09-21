@@ -61,10 +61,38 @@ test('deliveryColumn：LOCAL 有骑手', () => {
 
 test('deliveryColumn：LOCAL 未呼叫', () => {
   const r = deliveryColumn(
-    { deliveryType: 'LOCAL', status: 'PAID', pickupAt: null, pickupReadyAt: null, completedAt: null, shipment: null, latestDelivery: null },
+    { deliveryType: 'LOCAL', status: 'PAID', pickupAt: null, pickupReadyAt: null, completedAt: null, shipment: null, latestDelivery: null, scheduledAt: null, schedule: null },
     NOW
   )
   assert.deepEqual(r, ['未呼叫', ''])
+})
+
+test('deliveryColumn：LOCAL 预约单，有 schedule 节 → 首行用 slotLabel', () => {
+  const r = deliveryColumn(
+    {
+      deliveryType: 'LOCAL', status: 'PAID', pickupAt: null, pickupReadyAt: null, completedAt: null, shipment: null, latestDelivery: null,
+      scheduledAt: '2026-09-18T04:00:00Z',
+      schedule: {
+        scheduledAt: '2026-09-18T04:00:00Z', slotLabel: '今天 12:00-12:30', ticketAt: '2026-09-18T03:30:00Z',
+        prepStartAt: '2026-09-18T03:40:00Z', callAt: '2026-09-18T03:55:00Z', acceptDueAt: '2026-09-18T02:00:00Z',
+        selfCancelUntil: '2026-09-18T02:00:00Z', readyAt: null, phase: 'WAITING', etaIfCallNow: '2026-09-18T04:05:00Z', callToleranceMin: 5,
+      },
+    },
+    NOW
+  )
+  assert.deepEqual(r, ['预约 今天 12:00-12:30', ''])
+})
+
+test('deliveryColumn：LOCAL 预约单，列表接口无 schedule 节 → 退回 fmtMonthDayTime(scheduledAt)', () => {
+  const r = deliveryColumn(
+    {
+      deliveryType: 'LOCAL', status: 'PAID', pickupAt: null, pickupReadyAt: null, completedAt: null, shipment: null,
+      latestDelivery: { status: 'CALLING', courierName: null, courierCompany: null, provider: 'KD100' },
+      scheduledAt: '2026-09-18T04:00:00Z', schedule: undefined,
+    },
+    NOW
+  )
+  assert.deepEqual(r, ['预约 9-18 12:00', '待抢单'])
 })
 
 test('deliveryColumn：PICKUP 已备好', () => {

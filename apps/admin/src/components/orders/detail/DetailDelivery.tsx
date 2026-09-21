@@ -3,27 +3,42 @@ import { ChevronDown, ChevronUp, Phone } from 'lucide-react'
 import StatusBadge from '../../ui/StatusBadge'
 import Spinner from '../../ui/Spinner'
 import { providerLabel } from '../../../utils/providers'
-import { fmtDateTimeSec } from '../../../utils/time'
-import type { DeliveryEventInfo, DeliveryInfo } from '../../../types'
+import { fmtDateTimeSec, fmtHHmm, fmtMonthDayTime } from '../../../utils/time'
+import type { DeliveryEventInfo, DeliveryInfo, OrderDetail as OrderDetailData } from '../../../types'
 
 function yuan(fen: number) {
   return (fen / 100).toFixed(2)
 }
 
+const CALL_ORIGIN_LABEL: Record<string, string> = {
+  SCHEDULED_AUTO: '到点自动',
+  MANUAL_EARLY: '店员提前呼叫',
+}
+
 interface Props {
+  order: OrderDetailData
   data: { delivery: DeliveryInfo | null; events: DeliveryEventInfo[]; costFen: number } | null
   loading: boolean
   loadFailed: boolean
   onRetry: () => void
 }
 
-export default function DetailDelivery({ data, loading, loadFailed, onRetry }: Props) {
+export default function DetailDelivery({ order, data, loading, loadFailed, onRetry }: Props) {
   const [expanded, setExpanded] = useState(false)
   const d = data?.delivery ?? null
+  const sc = order.schedule
 
   return (
     <div className="bg-white rounded-lg shadow-card p-3 md:p-4 space-y-2">
       <h3 className="text-sm font-semibold text-gray-800">配送</h3>
+      {sc && (
+        <div className="text-sm text-gray-700 space-y-1">
+          <p>出备餐票 {fmtHHmm(sc.ticketAt)}</p>
+          <p>开始备餐 {fmtHHmm(sc.prepStartAt)}</p>
+          <p>该呼叫 {fmtHHmm(sc.callAt)}</p>
+          <p>已备好 {fmtMonthDayTime(sc.readyAt, '未点')}</p>
+        </div>
+      )}
       {loading ? (
         <p className="text-xs text-gray-400 flex items-center gap-1.5"><Spinner className="w-3.5 h-3.5" />加载中…</p>
       ) : loadFailed ? (
@@ -51,6 +66,7 @@ export default function DetailDelivery({ data, loading, loadFailed, onRetry }: P
             </p>
           )}
           <p className="text-sm text-gray-500">配送成本 {(data?.costFen ?? 0) > 0 ? `¥${yuan(data!.costFen)}` : '—'}</p>
+          {d.callOrigin && <p className="text-sm text-gray-500">呼叫来源 {CALL_ORIGIN_LABEL[d.callOrigin] ?? d.callOrigin}</p>}
           {d.failReason && <p className="text-xs text-red-500">失败原因：{d.failReason}</p>}
           {data && data.events.length > 0 && (
             <div>

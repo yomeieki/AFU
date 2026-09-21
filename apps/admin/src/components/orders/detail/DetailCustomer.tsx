@@ -30,6 +30,9 @@ export default function DetailCustomer({ order }: { order: OrderDetail }) {
           </button>
         </p>
       )}
+      {/* 预约送达只有 LOCAL 外送才有（服务端 routes/orders.ts 校验 scheduledAt 只允许 deliveryType=LOCAL），
+          与上面自取的 pickupAt 一行是同一位置、互斥的两种「约定时间」展示 */}
+      {order.schedule && <p className="text-sm text-gray-700">预约送达 {order.schedule.slotLabel}</p>}
       {isPickup && (
         <div className="text-sm text-gray-700 space-y-1">
           {order.pickupAt && <p>预约取餐 {fmtDateTime(order.pickupAt)}</p>}
