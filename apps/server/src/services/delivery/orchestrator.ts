@@ -56,6 +56,11 @@ export interface CallRiderInput {
    * 这三段逻辑，不用在升级任务里再抄一份。
    */
   forceMode?: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'
+  /**
+   * **内部字段，不从 HTTP 收**：预约单的呼叫来源（计划差异②）。SCHEDULED_AUTO = 已备好后到点自动发单
+   * （schedule-tasks / `/ready` 到点即呼）；MANUAL_EARLY = 店员「立即呼叫」跳过等待；不传 = 普通手动 / 升级。
+   */
+  origin?: DeliveryCallOrigin
 }
 
 /**
@@ -70,6 +75,8 @@ export interface CallRiderInput {
 export type DeliveryCallStrategy =
   | 'SOLO' | 'CHEAPEST' | 'ALL' | 'MANUAL'
   | 'SOLO_HELD' | 'CHEAPEST_HELD' | 'MANUAL_HELD'
+
+export type DeliveryCallOrigin = 'SCHEDULED_AUTO' | 'MANUAL_EARLY'
 
 /**
  * 超时未接时，各策略对应的「放弃升级」标记。没有对应值的策略不参与自动升级。
@@ -248,7 +255,7 @@ export async function callRider(input: CallRiderInput) {
       // 店员最急。空缺会在外呼成功后的落库事务里补（:129 附近），不会一直空着。
       quoteSnapshot: (snapshotForDelivery ?? Prisma.DbNull) as Prisma.InputJsonValue | typeof Prisma.DbNull,
       quotedAt: quotedAtForDelivery,
-      calledProviders, callStrategy,
+      calledProviders, callStrategy, callOrigin: input.origin ?? null,
     } })
     deliveryId = created.id
   } catch (e) {
@@ -267,6 +274,11 @@ export async function callRider(input: CallRiderInput) {
       status: 'FAILED', activeOrderId: null, errorCode: 'RACE', failReason: '占位后发现订单状态已变化（可能正在退款/取消），呼叫已取消',
     } })
     throw new AppError(42204, '订单状态已变化（可能正在退款/取消），呼叫骑手已取消')
+  }
+
+  // 预约单：呼叫即视为已备好（spec §4.5 不变量：有在途配送单 ⇒ readyAt 非空）。呼叫失败也保留——店员表达过「好了」
+  if (order.scheduledAt && !order.readyAt) {
+    await prisma.order.updateMany({ where: { id: orderId, readyAt: null }, data: { readyAt: new Date() } })
   }
 
   const totalItems = order.items.reduce((n, it) => n + it.quantity, 0)
@@ -554,7 +566,10 @@ export async function selfDeliver(input: { orderId: number; name: string; phone:
       } })
       // 注意：Order 没有 shippedAt 列（发货时间只存在于 Shipment，而 LOCAL 单永不写 Shipment）。
       // 同城单的「出发时间」以 Delivery.pickedUpAt 为准。
-      const moved = await tx.order.updateMany({ where: { id: input.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED' } })
+      const moved = await tx.order.updateMany({
+        where: { id: input.orderId, deliveryType: 'LOCAL', status: 'PREPARING' },
+        data: { status: 'SHIPPED', ...(order.scheduledAt && !order.readyAt ? { readyAt: now } : {}) },
+      })
       if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
       await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `店内自送：${input.name} ${input.phone}`, operator: input.operator })
       return { deliveryId: d.id, deliveryNo }
