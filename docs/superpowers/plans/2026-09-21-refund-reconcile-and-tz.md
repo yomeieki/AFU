@@ -522,3 +522,50 @@ tail -3 /tmp/e2e-rtz.log; grep '✘' /tmp/e2e-rtz.log
 - 既有：`npx tsc --noEmit -p apps/server` 零错；五个自测脚本全绿；分片 68 单独跑全绿（不必全量 e2e，改动不触及其它分片；但 68.11 新断言必须在实跑输出里看到）。
 - `git diff --name-only a6990af..HEAD` 只允许：`refund-reconcile.ts`、`local-settings.ts`、`selftest-refund-reconcile.ts`、`68-refund-reconcile.sh`、`docs/deployment.md`、`docs/api.md`、本方案文件（执行记录追加）。
 - 不进本批（记后续计划）：补查 batch 默认值与最坏耗时。
+
+---
+
+## 14. 修补轮执行记录（01 · sonnet）
+
+分支 `claude/refund-reconcile-tz`，基线 `a6990af`。提交 `b5a0b27`（`fix(server): 修补轮 F1–F6`）。
+
+**F1–F6 改动**：
+- F1：`apps/server/src/services/refund-reconcile.ts:113`（`refund-reconcile-notfound:*`）、`:124-125`（`refund-reconcile-mismatch:*`）两处 `notifySystemAlert` 补 `windowMs: ALERT_WINDOW_MS`（6 小时，文件内既有常量）；`docs/deployment.md:621-622` 限频列改「每退款单 6 小时一次」；`docs/api.md:2090` 措辞改「6 小时窗口内只发一次（与「退款长时间未到账」同）」。
+- F2：`refund-reconcile.ts:225` 跳过条件改为 `!fresh || fresh.reconcileCount < alertAfter || !['PENDING','PROCESSING'].includes(fresh.status)`；`:229` detail 改按本轮 `outcome`（而非 `fresh.status`）判 `outcome === 'PROCESSING' ? '微信侧仍处理中' : 查询失败: ...`。
+- F3：新增 `outcomeAfterMark(refundId, priorStatus, outcome)`（`refund-reconcile.ts:59-63`），在调用 `finalizeRefundSuccess`/`markRefundClosed`/`markRefundAbnormal`/`markRefundFailed` 之后重读一次 `status`：与调用前的 `refund.status` 相同则改报 `'SKIPPED'`（说明 mark*/finalize 命中 0 行，没有真正推进）。四处调用点：`:106`（FAILED，not_found+PENDING 分支）、`:142`（SUCCESS）、`:145`（CLOSED）、`:148`（ABNORMAL）；`reconcileRefund` 头注释（`:73-79`）同步改写。副作用：既有用例 6（`selftest-refund-reconcile.ts`）的断言依赖这个 bug（第二次查到仍 ABNORMAL 时旧代码错误返回 `'ABNORMAL'`），已同步改成断言 `'SKIPPED'`（`:364`）。
+- F4：`apps/server/src/services/local-settings.ts:341-344` 注释改写——进程时区已由 `utils/timezone.ts` 钉死 Asia/Shanghai，这条格式校验仍保留作为「金额生效时刻」不依赖进程配置的最后一道防线；只改注释，正则（`ISO_DATETIME`）与逻辑未动。
+- F5：`scripts/e2e.d/68-refund-reconcile.sh:189-193`（68.11）补两条断言 `status.timezone.ok`/`status.timezone.name`，去掉「T5 完成后才有意义」的过时说明。
+- F6：`docs/deployment.md` 十二节 `pm2 env … | grep TZ` 代码块后加一段说明：只作参考，以 `[server] timezone` 日志与 `/status` 的 `timezone.ok` 为准。
+
+**先红后绿**（三条新用例 + windowMs 断言，`apps/server/scripts/selftest-refund-reconcile.ts`）：
+- 新增用例 17（对应验收 (a)）：ABNORMAL 行重查仍 ABNORMAL → `reconcileRefund` 返回 `'SKIPPED'`，`reconcileStuckRefunds` 的 `advanced` 不计入。
+- 新增用例 18（对应验收 (b)）：PENDING 行本轮查得 PROCESSING、`reconcileCount` 达阈值 →「退款长时间未到账」detail 含「微信侧仍处理中」、不含「查询失败」；顺带断言 `r.status` 仍是 `'PENDING'`（证明旧 bug 的根因——PROCESSING 结果从不改 DB 的 status 字段）。
+- 新增用例 19（对应验收 (c)）：`reconcileStuckRefunds` 的 `query` 桩在返回 PROCESSING 前先把该行直接 UPDATE 成 SUCCESS（模拟并发回调），验证不发「未到账」告警。
+- windowMs 断言就地补进既有用例 8（PROCESSING→NOT_FOUND）与用例 9（AMOUNT_MISMATCH），并扩展 `notifySystemAlert` 桩记录结构为 `{title, key, windowMs, lines}`（原来只记 `{title, key}`，`lines` 是本轮新增，供用例 18 检查 detail 文案）。
+- 先红：改代码前，先在 F1-F6 落地后跑一遍确认全绿（因为是同一次改动一起做的，没有单独跑「改代码前」的红）；随后按下面「改坏验证」逐项人为改回旧写法，实测各自变红，间接证明了「先红后绿」——用第一次全跑（未改 `WECHAT_PAY_MOCK`，见下）踩到的用例 6 意外变红（细节见「偏离」）也印证了 F3 语义变化的真实性。
+
+**改坏验证**（四处，每处：临时改 → 跑 selftest → 见红 → `git checkout --` 复原 → 再跑绿；均在已提交 `b5a0b27` 之上操作，`checkout --` 复原到该提交而非基线）：
+1. F1-a：去掉 `refund-reconcile-notfound` 那处 `windowMs` → 用例 8（PROCESSING→NOT_FOUND）断言「F1：查无此单告警应带 6 小时限频窗口」变红（`actual undefined` vs `expected 21600000`）→ 复原 → 绿。
+2. F1-b：去掉 `refund-reconcile-mismatch` 那处 `windowMs` → 用例 9 断言「F1：金额不一致告警应带 6 小时限频窗口」变红（同上）→ 复原 → 绿。
+3. F2：跳过条件改回旧写法 `!fresh || fresh.status === 'ABNORMAL' || fresh.reconcileCount < alertAfter`，detail 改回按 `fresh.status` 判 → 用例 18（detail 应含「微信侧仍处理中」，实际含「查询失败: 」）与用例 19（「行已被并发推成 SUCCESS，不应再发」，实际收到了该告警）**均**变红 → 复原 → 绿。
+4. F3：`outcomeAfterMark` 改成直接 `return outcome`（去掉重读判断）→ 用例 6（`'ABNORMAL'` vs 期望 `'SKIPPED'`）与用例 17（同）均变红 → 复原 → 绿。
+
+（回报里统筹方原话「四处改坏验证」与清单里明列的 F1/F2/F3 三条对不上——F1 本身有两个 `windowMs` 落点、两条独立断言，按「一条断言对应一处改坏」拆成 F1-a/F1-b，凑成四处，与 F2/F3 各一处一起覆盖了全部新增断言与改动点。）
+
+**验收命令输出摘要**：
+- `npx tsc --noEmit -p apps/server`：零错误（改完 F1-F6 后一次性过；中途踩过一次注释内 `mark*/finalize` 里的 `*/` 提前闭合 JSDoc 注释导致的连锁语法错误，已改写成 `mark* / finalize` 修掉，非既有代码问题，是本轮新写注释引入又在同一轮修掉）。
+- `selftest-refund-reconcile.ts`（`TZ=Asia/Shanghai DATABASE_URL=food_shop_rtz2 JWT_SECRET=... ADMIN_JWT_SECRET=... npx ts-node --transpile-only scripts/selftest-refund-reconcile.ts`，**不带** `WECHAT_PAY_MOCK=true`——文件头注释明确要求不设，见「偏离」第 1 条）：`通过 20 / 失败 0`。
+- `selftest-timezone.ts`（`TZ=Asia/Tokyo`）：`9 例通过`。
+- `selftest-wechat-pay-query.ts`：`通过 17 / 失败 0`。
+- `selftest-local-day.ts`（`TZ=Asia/Shanghai`，既有，未变红）：`9 例通过`。
+- `selftest-wechat-notify.ts`（`--compiler-options '{"module":"CommonJS"}'`，既有，未变红）：`通过 12 / 失败 0`。
+- 分片 68：一次性库 `food_shop_rtz2`/`food_shop_rtz2_shadow`（`prisma migrate deploy` 打上 25 个迁移含本批 `20260921000000_refund_reconcile`；`prisma db seed`；未跑 `prisma generate`——共享 `.prisma/client` 已含 `reconcileCheckedAt` 等三列，`grep -c` 命中 34 处，判定无需重跑）；服务端 3125 端口（`SCHEDULER_DISABLED=true EXPRESS_PROVIDER_MOCK=true WECHAT_PAY_MOCK=true` 等 mock 齐全）；因 `scripts/e2e.sh` 没有单分片过滤参数，写了一个一次性 wrapper（复刻 `e2e.sh` 里分片 68 依赖的最小前置：健康检查、admin 登录、user 登录+地址、选商品、`make_paid_order`/`order_status`/`latest_refund`/`req`/`code`/`ok`/`fail`/`assert_eq`/`sched`/`sql`，逐字抄自 `e2e.sh` 对应行，未手改语义），只 `source scripts/e2e.d/68-refund-reconcile.sh`：`通过 77 / 失败 0`，含 68.11 两条新断言（`status.timezone.ok`=true、`status.timezone.name`=Asia/Shanghai）与 §6.4 要求的三处金额不变性断言（68.2 `refunded_amount = actual_amount` 且再补查不变、68.3 `refunded_amount=100` 且订单仍 PAID、68.8 `refunded_amount=0`）。
+
+**白名单比对**：`git diff --name-only a6990af..HEAD` = `apps/server/scripts/selftest-refund-reconcile.ts`、`apps/server/src/services/local-settings.ts`、`apps/server/src/services/refund-reconcile.ts`、`docs/api.md`、`docs/deployment.md`、`docs/superpowers/plans/2026-09-21-refund-reconcile-and-tz.md`、`scripts/e2e.d/68-refund-reconcile.sh`。逐一核对：前六个在 §13 回判清单内（`local-settings.ts` 由 F4 明确放开、限于注释）；`docs/superpowers/plans/...` 是本次追加执行记录。零白名单外改动。
+
+**偏离**：
+1. 首次跑 `selftest-refund-reconcile.ts` 时误照抄了 §6.2（T1 阶段旧验收命令）里的 `WECHAT_PAY_MOCK=true`，导致用例 11-14（`initiateRefund` 同步返回四态）全部变红（`config.mock.pay=true` 时 `initiateRefund` 直接走 MOCK 分支，永远到不了真正调用 `createRefund` 的 WECHAT 分支）——文件自己的头注释（写于 T2 之后）已经明确说明「不要设 `WECHAT_PAY_MOCK=true`」，§6.2 是更早写的、已被文件自身文档取代，去掉这个环境变量后问题消失，非代码 bug。回报里如实记录，供统筹方判断是否要点 §6.2 措辞。
+2. 用例 6（既有）的第二个断言随 F3 一起改了（`'ABNORMAL'`→`'SKIPPED'`），因为它验证的正是 F3 修的那个 bug、原断言依赖旧行为——这不在 F1-F6 清单逐条列出的改动范围内，但属于「F3 语义变化后既有测试必然同步」的直接后果，且 `selftest-refund-reconcile.ts` 本就在白名单内。如与统筹方预期不符，可回退这处断言改动单独讨论。
+3. §13 措辞「四处改坏验证」与清单里明列的 F1/F2/F3 三条存在数量对不上，按「F1 拆成两处（两个独立 windowMs 落点、两条独立断言）+ F2 一处 + F3 一处 = 四处」执行，覆盖了全部新增/改动断言，未跳过任何一条应验证的点。
+
+**清理**：一次性库 `food_shop_rtz2`/`food_shop_rtz2_shadow` 已 DROP；3125 端口服务已停；`git status --porcelain` 为空。
