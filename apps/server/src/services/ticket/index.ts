@@ -24,11 +24,12 @@ import { feieProvider } from './feie'
 import { mockPrinterProvider } from './mock'
 import {
   renderOrderTicket, renderReminderTicket, renderCancelTicket, renderCancelRequestTicket,
-  renderTestTicket, TicketOrderInput, TicketChannel,
+  renderTestTicket, renderReadyDueTicket, TicketOrderInput, TicketChannel,
 } from './content'
 import { getLocalSettings, isShopOpenNow, LocalDeliverySettings } from '../local-settings'
 import { pickupTicketLabel, prepStartAt } from '../pickup'
 import { scheduleTimeline } from '../delivery/schedule'
+import { ticketLabel, hhmmOf } from '../slots'
 
 const BATCH = 100
 /**
@@ -155,6 +156,7 @@ type OrderForTicket = {
   receiverDistrict: string; receiverDetail: string
   receiverPoiName: string | null; distanceM: number | null; estimatedDeliveryAt: Date | null
   announceCount: number
+  status: string; scheduledAt: Date | null
   // 会员优惠（M2）。⚠️ 这三处（类型 / ORDER_SELECT / toTicketInput）是 TicketOrderInput 的
   // **唯一生产者**——调用方只传 orderId，出票层自己按 ORDER_SELECT 重新查库。少列一个字段，
   // 票面就永远打不出它，而且不会有任何编译错误提示你。
@@ -180,13 +182,16 @@ const ORDER_SELECT = {
   receiverName: true, receiverPhone: true, receiverFullAddress: true,
   receiverDistrict: true, receiverDetail: true,
   receiverPoiName: true, distanceM: true, estimatedDeliveryAt: true, announceCount: true,
+  status: true, scheduledAt: true,
   discountAmount: true, pointsUsed: true, cancelRequestNote: true,
   tablewareMode: true, tablewareCount: true,
   pickupAt: true, pickupDiscountAmount: true, promoDiscountAmount: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
 
-function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderInput {
+type ScheduleForTicket = { slotLabel: string; stamp: string; prepStart: string; call: string; unaccepted: boolean } | null
+
+function toTicketInput(order: OrderForTicket, slotMinutes: number, schedule: ScheduleForTicket = null): TicketOrderInput {
   const channel: TicketChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : order.deliveryType === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
   return {
     channel,
@@ -217,6 +222,11 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderI
     pickupDayStamp: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).stamp : null,
     pickupDiscountAmount: order.pickupDiscountAmount,
     promoDiscountAmount: order.promoDiscountAmount,
+    scheduledAt: order.scheduledAt,
+    scheduleSlotLabel: schedule?.slotLabel ?? null,
+    scheduleDayStamp: schedule?.stamp ?? null,
+    schedulePrepStart: schedule?.prepStart ?? null,
+    scheduleCall: schedule?.call ?? null,
   }
 }
 
@@ -226,7 +236,7 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number): TicketOrderI
  */
 function renderForKind(
   kind: PrintJobKind, order: OrderForTicket, settings: PrinterSettings,
-  announceNo: number, slotMinutes: number, waitedMin?: number
+  announceNo: number, slotMinutes: number, waitedMin?: number, schedule: ScheduleForTicket = null
 ): string {
   // 票面文案按三值 TicketChannel 区分（选哪台打印机是 enqueueOrderTicket 的事，与这里无关）
   const ticketChannel: TicketChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : order.deliveryType === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
@@ -242,9 +252,13 @@ function renderForKind(
   if (kind === 'REPEAT' && !settings.repeat.reprint) {
     return renderReminderTicket({ channel: ticketChannel, waitedMin: waitedMin ?? 0, announceNo, receiverPhone: order.receiverPhone })
   }
-  // NEW_ORDER / REPRINT / repeat.reprint=true 时的 REPEAT，都是整张全票
-  const input = toTicketInput(order, slotMinutes)
+  if (kind === 'READY_DUE') {
+    return renderReadyDueTicket({ receiverPhone: order.receiverPhone, slotLabel: schedule?.slotLabel ?? '', call: schedule?.call ?? '', seq: announceNo })
+  }
+  // NEW_ORDER / REPRINT / PREP / repeat.reprint=true 时的 REPEAT，都是整张全票
+  const input = toTicketInput(order, slotMinutes, schedule)
   if (kind === 'REPEAT') input.announceNo = announceNo
+  if (kind === 'PREP') input.prep = { unaccepted: schedule?.unaccepted ?? order.status === 'PAID' }
   return renderOrderTicket(input)
 }
 
@@ -306,8 +320,17 @@ export async function enqueueOrderTicket(
   const channel: PrinterChannel = order.deliveryType === 'LOCAL' || order.deliveryType === 'PICKUP' ? 'LOCAL' : 'EXPRESS'
   const printers = printersForChannel(settings, channel)
   const providerName = activeProviderName(settings)
-  const baseSeq = opts.seq ?? (kind === 'NEW_ORDER' || kind === 'CANCEL' ? 0 : Date.now())
-  const slotMinutes = (await getLocalSettings()).pickup.slotMinutes
+  const baseSeq = opts.seq ?? (kind === 'NEW_ORDER' || kind === 'CANCEL' || kind === 'PREP' ? 0 : Date.now())
+  const localS = await getLocalSettings()
+  const slotMinutes = localS.pickup.slotMinutes
+  // 预约单：三种票都要印倒推时刻，在这里算一次传下去（content.ts 不算时区）
+  const schedule: ScheduleForTicket = order.deliveryType === 'LOCAL' && order.scheduledAt && order.distanceM !== null
+    ? (() => {
+        const tl = scheduleTimeline(localS, order.scheduledAt, order.distanceM)
+        const lb = ticketLabel(order.scheduledAt, localS.schedule.slotMinutes)
+        return { slotLabel: lb.text, stamp: lb.stamp, prepStart: hhmmOf(tl.prepStartAt), call: hhmmOf(tl.callAt), unaccepted: order.status === 'PAID' }
+      })()
+    : null
 
   const jobIds: number[] = []
 
@@ -319,7 +342,7 @@ export async function enqueueOrderTicket(
       const row = await prisma.printJob.create({
         data: {
           orderId: order.id, orderNo: order.orderNo, kind, provider: providerName, printerSn: '',
-          status: 'SKIPPED', content: renderForKind(kind, order, settings, baseSeq, slotMinutes, opts.waitedMin),
+          status: 'SKIPPED', content: renderForKind(kind, order, settings, baseSeq, slotMinutes, opts.waitedMin, schedule),
           lastError: '未配置该渠道的打印机', dedupeKey,
         },
       })
@@ -331,7 +354,7 @@ export async function enqueueOrderTicket(
   }
 
   for (const printer of printers) {
-    const content = renderForKind(kind, order, settings, baseSeq, slotMinutes, opts.waitedMin)
+    const content = renderForKind(kind, order, settings, baseSeq, slotMinutes, opts.waitedMin, schedule)
     const dedupeKey = buildDedupeKey(orderId, kind, baseSeq, printer.sn)
     let row
     try {
