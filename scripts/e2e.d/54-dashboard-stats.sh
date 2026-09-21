@@ -82,6 +82,7 @@ assert_eq "C⑥ 时效 5 个阶段齐全" "$(n54 "$C1" '.data.timing.stages | le
 assert_eq "C⑦ 承运商 闪送 +1" "$(n54 "$C1" '[.data.providers[]|select(.provider=="shansongtongcheng")][0].count // 0')" "$((C_SS+1))"
 assert_eq "C⑧ 呼叫阶梯三项之和 +1" "$(n54 "$C1" '.data.ladder | (.first + .cheapestN + .all)')" "$((C_LAD+1))"
 assert_eq "C⑨ 距离分布之和 = 同城单数" "$(n54 "$C1" '[.data.distance[].count] | add')" "$((C_CNT+1))"
+[[ "$(n54 "$C1" .data.kpi.scheduledCount)" -ge 0 ]] && ok "C⑩ kpi.scheduledCount 非负整数" || fail "C⑩ 预约单计数" "$C1"
 
 # ── D. express：B 段那张邮寄单还没发货 → 待发货积压里有它 ──
 D1=$(d54 express)
