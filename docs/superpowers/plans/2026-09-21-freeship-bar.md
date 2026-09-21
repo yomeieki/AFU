@@ -463,3 +463,18 @@ return {
 5. 预览台：`tools/miniapp-preview/pages/index-local-pickup.html:25` 与 `product-list-preview.js` 里自取态的规则行同步拆成两段（红字 + 灰字）。
 
 **验收补：** A 类加上述断言；B 类在 375 宽自取模式核对：红字段完整不省略、与后文用「 · 」隔开、整行仍可点；外送模式规则行与 `3cb5ae9` 逐字一致（源码级 diff 对照 `buildRules` 未动）。**白名单加**：`components/local-store-header/index.{js,wxml,wxss}`、`tools/miniapp-preview/pages/index-local-pickup.html`。上报条件加：若 `discountText` 在某些配置下不是 `pickupRulesText` 的首段（前缀裁剪失败），停下上报，不得改 `local-catalog.js`。
+
+## 13. 03 回判（fable，2026-09-21）——对 04 机械核对与 02 终审
+
+**04 haiku**：17 项中第 7 项红（`pages/cart/index.js` 不是纯 ES5）→ **误判，责任在统筹写的核对命令**：该文件在基线 `3cb5ae9` 第 11 行就是 `const`，属既有 ES6 文件，方案规则是「只核新增行」，第 8 项（新增行无 ES6）已通过。实际 17 项全 PASS。
+
+**02 opus**：无阻断、无需改；5 条建议逐条判定：
+| # | 判定 | 处置 |
+|---|---|---|
+| 1 摘要在「最低档不带距离」时缺空格粘字 | **成立**，但只在最低档 `maxKm ≥ radiusKm` 时出现，线上配置（58/2 km 起）不命中；现文案与店主确认预览逐字一致 | 记遗留：店主若把最低档改成全范围免运，再按 opus 给的条件空格修法处理 |
+| 2 `yuanShort` 去尾零外溢到结算条副标题「已减 ¥6.60→¥6.6」 | **成立**（超出 §11 枚举范围） | 接受：与同一条上的进度提示同源同格式，反而一致；**向店主报备** |
+| 3 `radiusKm===undefined` 时 S2 首段仍带距离 | **成立**但不可达（服务端 meta 恒带 `radiusKm`；meta 未到时 tiers 为空已 hidden） | 记遗留 |
+| 4 §6-B2 量法 `scrollWidth<=clientWidth` 对 `overflow:hidden` 的 flex 项恒真 | **成立，责任在 00 规划写法**；opus 已改用克隆节点量自然宽：免运费条 253.3 / 可用 287，不省略 | 以后方案的宽度判据一律用「脱离 flex 的自然宽」，写进后续规划注意事项 |
+| 5 门店头分隔点 `·` 两侧间距真机可能比改前宽约 8px | **需真机确认** | 列入真机清单；若太散改分隔文本为不带空格的 `·` |
+
+结论：**合并**。无需修补轮。
