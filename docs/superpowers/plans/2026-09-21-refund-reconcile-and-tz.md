@@ -454,3 +454,40 @@ tail -3 /tmp/e2e-rtz.log; grep '✘' /tmp/e2e-rtz.log
 - 回退验证 R1–R4 照旧。
 
 **其它**：T2 迁移文件按原设计重新创建；执行结束前在本 worktree `npx prisma generate` 一次，使共享 client 与最终 schema 一致（上报里提到的三字段残留由此消掉）。主仓 `apps/server` 下那个 `ts-node-dev` 进程不是本批的，**不要碰**。
+
+---
+
+## 12. 执行记录（01 · sonnet，2026-09-21，统筹裁定后续做完）
+
+分支 `claude/refund-reconcile-tz`，基线 main `a3b76c2`。六个提交：
+
+| T | sha | 内容 |
+|---|---|---|
+| T1 | `38c2da0` | `queryRefund` + pay-mock 控制面 + 自测（17/17） |
+| T2 | `4680230` | `reconcileRefund`/`reconcileStuckRefunds` + mark* 条件写 + `initiateRefund` 按统筹裁定改法 + `refunds` 加三列 + 自测（17/17，含统筹裁定补的 6 例） |
+| T3 | `1de1c4c` | scheduler 接线（5 个覆盖键 + 任务表） |
+| T4 | `ecd1cd8` | e2e 分片 68（69 条断言） |
+| T5 | `8b1c434` | 进程钉死时区 + 启动自检 + PM2/deploy 配置 + 自测（9/9） |
+| T6 | `f9b190b` | 文档（api.md 附录 L、deployment.md、staff-guide.md、.env.example） |
+
+**A 类验收**：`tsc --noEmit` 全程零错误；`git diff --name-only a3b76c2..HEAD` 全部落在 §7 白名单；`grep "status: 'SUCCESS'"` 只命中 `finalizeRefundSuccess` 一处；`grep -c "prisma.refund.update("` = 1；`migrate diff --exit-code` 零差异（多次复核）；干净库 `food_shop_rtz` 全量 e2e **1886 通过 / 0 失败**（含分片 68 自身 69 条），**零红**（比「无新增红」的验收标准更强，未出现方案 §9 列出的任何已知偶发）。
+
+**回退验证 R1–R5**：R1（`finalizeRefundSuccess` 去幂等守卫）→ 用例 1 的部分退款重放校验变红（200≠100，改成用不封顶的部分退款场景才能可靠抓到——全额退款场景会被 `LEAST()` 封顶掩盖，已在自测文件头注释记录这个坑）；R2（`markRefundClosed` 去互斥守卫）→ 用例 3 变红（SUCCESS 被改写成 CLOSED）；R3（`reconcileRefund` 去 CAS）→ 用例 4 变红（应 SKIPPED 的一路也变成 PROCESSING）；R4（`enforceTimezone` 去自检分支）→ `selftest-timezone.ts` ②③ 变红（exit 未被调用、无 warn）；R5（`initiateRefund:277` 改回统筹裁定前的写法）→ 用例 11/12（ABNORMAL/CLOSED）变红、用例 13/14（SUCCESS/FAILED）保持绿——四处 + 统筹裁定补的一处均按预期先红后绿。
+
+**T2 上报的后续**：统筹裁定 `477b9ad` 采纳，`initiateRefund` 的 `:268-288` 段已按裁定改法落地（同步返回统一先落 `PROCESSING`，终态转移与通知下沉到 `finalizeRefundSuccess`/`markRefundAbnormal`/`markRefundClosed` 各自发生恰好一次）；未放宽 mark* 守卫。
+
+**T4 排查记录**（未改变方案设计，纯执行期 bug）：分片 68 首次全量跑出 51 处红，根因是分片自身的 bash 语义坑——`IFS=$'\t' read -r a b <<<"$(fn)"` 这个写法里，临时 `IFS` 赋值会泄漏进 `$(fn)` 的求值期间；若 `fn`（这里是 `rr68_stuck`）内部经 `make_paid_order` 调用了认证请求，`req()` 里 `${t:+-H "Authorization: Bearer $t"}` 的空格分词会因为 `IFS` 缺空格而失效，`-H` 与值粘成一个 argv，curl 把它当带前导空格的 header 发出，触发 HTTP 折叠头语法，Node 的 `http` 解析器直接吐 400、不进 Express——故障表现是「shard 68 里所有认证请求返回空 body」。用一个隔离测试脚本单独跑分片 68（在同一 DB/server 上，不跑全量）+ 对比既有 `m1_login`（同样用 `IFS=$'\t' read < <(...)`，但内部只有匿名登录一次认证调用，且认证调用都写在 `read` 之外的独立语句里）才定位到。修法：把 12 处 `IFS=$'\t' read -r a b <<<"$(rr68_stuck …)"` 都拆成两条语句（先落 plain 变量，再单独一行 `IFS=$'\t' read`），与 `m1_login` 的既有写法一致。另有次生问题一并修掉：mock 支付不写 `payments.out_trade_no`（插入退款行时避免把 mysql 批处理模式下 NULL 的字面文本 "NULL" 当字符串插进本该是 NULL 的列）、NULL 判断统一改用 `col IS NULL` 而非裸 `SELECT col` 比较空串、`rr68_sched`（`intervalMin` 恒传 0，扫全表）需要每个让退款行停在非终态的用例结束时立即强制关闭该行，否则会被同批后续用例的 `rr68_sched` 捎带查一遍、污染那些用例自己的 `calls` 计数断言（原方案的 §5 T4 第 12 点只要求在分片末尾统一收尾，实测发现同批内部也需要）。
+
+**未做的**：baseline（a3b76c2）对照跑 —— 未执行。理由：跑 baseline 需要在临时 worktree 里对 a3b76c2 的 schema 跑 `prisma generate`，会覆盖共享的 `node_modules/@prisma/client`（多个 worktree 共用同一份，参见仓库既有教训「worktree 共用 Prisma client」），有干扰其它并行 agent 的风险；而本分支自身的全量 e2e 已经是 **0 失败**（比「与 baseline 比对无新增红」这条验收标准更强的结果，逻辑上蕴含它），故未做这一步、只在此说明未做及理由，供统筹方判断是否需要补做。
+
+**偏离**：
+1. §6.1 静态检查「`grep -rn "process.env.TZ" apps/server/src` 只命中 `utils/timezone.ts`」实测命中两处：`utils/timezone.ts`（本批新增，pin 逻辑本身）与 `services/local-settings.ts:342`（**方案 §2.8 已核实的既有代码事实**，一条注释里提到这个字符串，非本批引入，`local-settings.ts` 不在白名单内不可改）。验收标准原文没有把这条既有注释算进去，按代码事实执行方无法让 grep 只命中一处；已如实记录，不影响功能正确性。
+2. T4 分片 68 与既有回归对比未做「逐字节对齐 §9 已知偶发清单」（因为本次跑出的是 0 失败，没有红需要比对；§9 清单本身在本次运行里一条都没触发，这一情况方案里未预设，按「零红即满足」处理）。
+
+**上线后必须人工核的项**（方案 §6.7，原样列出，执行方未做，供统筹方/店主留存）：
+1. 部署后 `pm2 logs food-shop-server --lines 50` 看到 `[server] timezone: Asia/Shanghai (offset -480)`，没有「已被覆盖」警告；`pm2 env $(pm2 id food-shop-server) | grep TZ` = Asia/Shanghai；后台登录后 `GET /api/admin/system/status` 的 `timezone.ok=true`。
+2. 观察一轮心跳：部署后 2 分钟内 `pm2 logs` 无「定时任务 refundReconcile 失败」告警；`SELECT COUNT(*) FROM refunds WHERE status IN ('PENDING','PROCESSING','ABNORMAL')` 在生产为 0（当前事实），任务空转。
+3. 真实小额退款复现补查（可选，店主同意才做）：下一笔 ¥0.30 测试单并支付；nginx 临时把 `/api/wechat/pay/refund-notify` 改 `return 503`；后台一键退款 → 停在 PROCESSING；等 5-6 分钟看 `reconcile_count ≥ 1` 且翻 SUCCESS、订单 REFUNDED、店员群收到「退款已到账」；恢复 nginx；微信重推回调应 ack 且 `refunded_amount` 不变。
+4. 告警链路：把测试单的告警 key 与 `docs/deployment.md` 十三节表格对一遍，确认企微/PushPlus 收到的文案是本批新加的三种之一。
+
+**收尾**：临时库 `food_shop_rtz`/`food_shop_rtz_shadow` 已删；`.selftest/` 下生成的临时密钥文件已 gitignore；起过的服务进程已停；`git status --porcelain` 干净；未合并、未部署。
