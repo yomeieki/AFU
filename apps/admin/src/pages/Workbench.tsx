@@ -17,7 +17,7 @@ import type {
 import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor } from '../utils/pickup'
 import { tablewareLabel } from '../utils/tableware'
 import {
-  scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine,
+  scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn,
 } from '../utils/schedule'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
@@ -1633,21 +1633,24 @@ export default function Workbench() {
   // 显示「刷新中…」占位而不是让按钮区空白或显示错列的按钮。
   useEffect(() => {
     if (!snap || !drawer) return
-    for (const col of COLUMNS) {
-      const found = snap.columns[col.key].find((c) => c.orderId === drawer.card.orderId)
-      if (found) {
-        const colChanged = col.key !== drawer.colKey
-        const statusChanged = found.status !== drawer.card.status
-          || found.local?.delivery?.status !== drawer.card.local?.delivery?.status
-        if (found !== drawer.card || colChanged) setDrawer({ card: found, colKey: col.key })
-        if (colChanged || statusChanged) {
-          setDetailRefreshing(true)
-          void loadDetail(found.orderId, found.channel)
-        }
-        return
+    // 六桶找卡（五列 + WAITING 预约单专用的 scheduled 桶）：抽出到 utils/schedule.ts 的
+    // findCardColumn 复用，scheduled 命中时 colKey 记为 'pending'（它就渲染在待接单列的
+    // 折叠组里）——否则 WAITING 阶段的预约单打开抽屉后下一拍轮询必被误判成「已离开看板」
+    // （R1）：出票前是工作台上停留最长的阶段，一撞上就要店员手动关闭重开才能恢复操作。
+    const hit = findCardColumn(snap.columns, drawer.card.orderId)
+    if (hit) {
+      const { card: found, colKey } = hit
+      const colChanged = colKey !== drawer.colKey
+      const statusChanged = found.status !== drawer.card.status
+        || found.local?.delivery?.status !== drawer.card.local?.delivery?.status
+      if (found !== drawer.card || colChanged) setDrawer({ card: found, colKey })
+      if (colChanged || statusChanged) {
+        setDetailRefreshing(true)
+        void loadDetail(found.orderId, found.channel)
       }
+      return
     }
-    // 五列都没找到：订单已经离开看板（顾客取消退款、或被别的渠道/店员处理掉）。
+    // 六桶都没找到：订单已经离开看板（顾客取消退款、或被别的渠道/店员处理掉）。
     // 抽屉还开着，但 detail 是最后一次成功加载时的旧快照——不置 gone 的话 renderActions
     // 会照旧渲染上一列的按钮，店员点下去大概率是对着一个已经不存在的状态操作。
     setGone(true)
@@ -2457,7 +2460,18 @@ export default function Workbench() {
       <TopAlerts snap={snap} staleMinutes={staleMinutes} onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy} />
 
       {snap?.scheduleBar && (
-        <div className="wb__schedbar" onClick={() => { setScheduledOpen(true); boardRef.current?.scrollTo({ left: 0, behavior: 'smooth' }) }} role="button" tabIndex={0}>
+        <div
+          className="wb__schedbar"
+          onClick={() => {
+            // 预约单折叠组只在待接单列的渲染分支里存在（R3）：手机模式下如果店员当时切在
+            // 「备餐中」等别的标签页，只展开折叠组、只滚桌面看板容器，DOM 里根本没有这个
+            // 折叠组，点击「点击查看」就没有任何可见效果——手机上先切回待接单标签页。
+            if (isPhone) setPhoneCol('pending')
+            setScheduledOpen(true)
+            boardRef.current?.scrollTo({ left: 0, behavior: 'smooth' })
+          }}
+          role="button" tabIndex={0}
+        >
           <span>{scheduleBarText(snap.scheduleBar, now)}</span>
           <span className="wb__muted">点击查看</span>
         </div>

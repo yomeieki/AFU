@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine } from './schedule.ts'
-import type { ScheduleInfo, WorkbenchCard } from '../types'
+import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn } from './schedule.ts'
+import type { ScheduleInfo, WorkbenchCard, WorkbenchSnapshot } from '../types'
 
 // 2026-09-22 12:00 Asia/Shanghai = 04:00Z
 const NOON = Date.parse('2026-09-22T04:00:00Z')
@@ -41,6 +41,18 @@ test('倒计时条文案：还有/已到点、另有 N 张', () => {
   const bar = { prepStartAt: iso(NOON - min(44)), slotLabel: '今天 12:00–12:30', count: 3 }
   assert.equal(scheduleBarText(bar, NOON - min(64)), '下一张预约单 11:16 开始备餐，还有 20 分钟（今天 12:00–12:30 送达） · 另有 2 张')
   assert.equal(scheduleBarText({ ...bar, count: 1 }, NOON - min(40)), '下一张预约单 11:16 开始备餐，已到点 4 分钟（今天 12:00–12:30 送达）')
+})
+test('findCardColumn：五列 + scheduled 桶一起找；WAITING 预约单只在 scheduled 里，colKey 记为 pending（R1）', () => {
+  const card = (orderId: number) => ({ orderId } as unknown as WorkbenchCard)
+  const columns = {
+    pending: [card(1)], preparing: [card(2)], waitingCourier: [], delivering: [], done: [],
+    scheduled: [card(3)],
+  } as unknown as WorkbenchSnapshot['columns']
+  assert.deepEqual(findCardColumn(columns, 1), { card: columns.pending[0], colKey: 'pending' })
+  assert.deepEqual(findCardColumn(columns, 2), { card: columns.preparing[0], colKey: 'preparing' })
+  assert.deepEqual(findCardColumn(columns, 3), { card: columns.scheduled[0], colKey: 'pending' })
+  // 六处都没找到：订单已经离开看板（顾客取消退款、或被别的渠道/店员处理掉）
+  assert.equal(findCardColumn(columns, 999), null)
 })
 test('现在呼叫预计送达 / 呼叫窗口判定 / 字段行', () => {
   const sc = base('PREPPING')

@@ -3,10 +3,29 @@
  * 阶段（phase）由服务端算好，这里不倒推。时刻格式化走 utils/time（Asia/Shanghai）。
  */
 import { fmtHHmm } from './time.ts'
-import type { ScheduleInfo, SchedulePhase, WorkbenchCard } from '../types'
+import type { ScheduleInfo, SchedulePhase, WorkbenchCard, WorkbenchSnapshot } from '../types'
 
 export type ScheduleUrgency = '' | 'warn' | 'late'
 export type ScheduleColKey = 'pending' | 'preparing' | 'waitingCourier' | 'delivering' | 'done'
+
+const SCHEDULE_COL_KEYS: ScheduleColKey[] = ['pending', 'preparing', 'waitingCourier', 'delivering', 'done']
+
+/**
+ * 在快照的五列 + `scheduled` 桶里找一张卡片，供 Workbench 的「换列/离开看板」检测复用。
+ * `scheduled`（出票前的 WAITING 预约单）不是显示列，它渲染在待接单列顶部的折叠组里——
+ * 找到时 colKey 记为 `'pending'`，与 `renderCard` 里 `onOpen={() => openCard(c, col.key)}`
+ * 在 `col.key === 'pending'` 分支里把这些卡片的 colKey 设成 `'pending'` 保持一致。
+ * 六处都找不到才返回 null（订单已经离开看板：退款、被别的渠道/店员处理掉）。
+ */
+export function findCardColumn(columns: WorkbenchSnapshot['columns'], orderId: number): { card: WorkbenchCard; colKey: ScheduleColKey } | null {
+  for (const key of SCHEDULE_COL_KEYS) {
+    const found = columns[key].find((c) => c.orderId === orderId)
+    if (found) return { card: found, colKey: key }
+  }
+  const foundScheduled = columns.scheduled.find((c) => c.orderId === orderId)
+  if (foundScheduled) return { card: foundScheduled, colKey: 'pending' }
+  return null
+}
 
 const minLeft = (iso: string, now: number) => Math.ceil((Date.parse(iso) - now) / 60_000)
 const minOver = (iso: string, now: number) => Math.max(0, Math.floor((now - Date.parse(iso)) / 60_000))

@@ -21,6 +21,11 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
  * 3 km 的单、约 12:00 送达（用上海日历的今天 12:00）：呼叫 = 送达 − 路上 − 呼叫到取走；开始备餐 = 呼叫 − 备餐；
  * 出票 = 开始备餐 − 提前量；接单截止 = 开始备餐 − 缓冲；自助取消截止 = 送达 − selfCancelLeadMin。
  *
+ * 备餐时长与服务端 schedulePrepMinutes 同一套公式（R2）：送达时刻落在高峰窗口（s.peak.windows）
+ * 取 `Math.max(sc.prepMinutes, s.peak.prepMaxMinutes)` 的大者，否则原样用 sc.prepMinutes——
+ * 默认高峰第一段恰好是 12:00–13:00，不叠这一段的话示例钟点会比服务端真实算出来的系统性偏早。
+ * 窗口比较用 Asia/Shanghai 的 'HH:mm' 字符串，与 Workbench.tsx 的 prepMinutesNow 同法。
+ *
  * 只用「上海今天 12:00」这个演示锚点，不能用 `setHours`（本地时区 API，scripts/check-admin-timezone.mjs 会拦）——
  * 用 `todayKey()` 取上海日历的今天日期，拼上明确的 +08:00 偏移得到瞬时值。
  */
@@ -29,7 +34,10 @@ function example(s: LocalDeliverySettings, sc: Sched, selfCancelLeadMin: number)
   const ride = Math.round((3 / s.riderSpeedKmh) * 60)
   const t = noon.getTime()
   const callAt = t - (ride + s.callToPickupMin) * 60_000
-  const prepStartAt = callAt - sc.prepMinutes * 60_000
+  const noonHHmm = fmtHHmm(t, '')
+  const inPeak = !!noonHHmm && s.peak.windows.some((w) => noonHHmm >= w.start && noonHHmm < w.end)
+  const prepMinutes = inPeak ? Math.max(sc.prepMinutes, s.peak.prepMaxMinutes) : sc.prepMinutes
+  const prepStartAt = callAt - prepMinutes * 60_000
   return {
     ticket: fmtHHmm(prepStartAt - sc.prepTicketLeadMin * 60_000),
     acceptDue: fmtHHmm(prepStartAt - sc.acceptBufferMin * 60_000),
@@ -37,6 +45,8 @@ function example(s: LocalDeliverySettings, sc: Sched, selfCancelLeadMin: number)
     call: fmtHHmm(callAt),
     selfCancel: fmtHHmm(t - selfCancelLeadMin * 60_000),
     ride,
+    inPeak,
+    peakPrepMinutes: s.peak.prepMaxMinutes,
   }
 }
 
@@ -112,6 +122,7 @@ export default function ScheduleSettings() {
           <ul className="text-xs text-gray-600 space-y-1">
             <li>{ex.selfCancel} 顾客自助取消截止</li>
             <li>{ex.ticket} 出备餐票 · {ex.acceptDue} 接单截止 · <b>{ex.prepStart} 开始备餐</b> · <b>{ex.call} 呼叫骑手</b> · 12:00 送达</li>
+            {ex.inPeak && <li className="text-gray-500">（12:00 在高峰时段内，备餐按高峰上界 {ex.peakPrepMinutes} 分算）</li>}
           </ul>
         </div>
       </section>
