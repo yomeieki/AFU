@@ -238,6 +238,49 @@ export async function createRefund(params: RefundParams): Promise<RefundResult> 
   return data as RefundResult
 }
 
+/**
+ * 查询单笔退款的响应形状：与 RefundResult 同源，但 `amount` 改为可选——
+ * mock 场景下「无指令时默认返回 PROCESSING 且不带 amount」需要这个字段能合法缺失
+ * （真实微信查询接口按文档总是带 amount，这里放宽只是让类型能覆盖 mock 的合法取值）。
+ */
+export interface RefundQueryFound {
+  refund_id: string
+  out_refund_no?: string
+  transaction_id?: string
+  out_trade_no?: string
+  channel?: string
+  status: 'SUCCESS' | 'CLOSED' | 'PROCESSING' | 'ABNORMAL'
+  success_time?: string
+  amount?: { refund: number; total?: number; payer_refund?: number }
+}
+export type RefundQueryResult = { kind: 'found'; refund: RefundQueryFound } | { kind: 'not_found' }
+
+/**
+ * 查询单笔退款（用途：退款补查，见 services/refund-reconcile.ts）
+ * GET /v3/refund/domestic/refunds/{out_refund_no}，200 时响应形状与 createRefund 的 RefundResult 相同。
+ * 查无此单：HTTP 404 + code === 'RESOURCE_NOT_EXISTS' → { kind: 'not_found' }（不当错误抛出，
+ * 调用方按「发起阶段中断」处理）。其它非 2xx 仍抛 WechatRefundError；网络/超时由 fetchWechatPay 抛普通 Error。
+ */
+export async function queryRefund(outRefundNo: string): Promise<RefundQueryResult> {
+  const apiUrl = `https://api.mch.weixin.qq.com/v3/refund/domestic/refunds/${encodeURIComponent(outRefundNo)}`
+  const authorization = generateWxPayAuthorization('GET', apiUrl, '')
+  const resp = await fetchWechatPay(apiUrl, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: authorization,
+    },
+  })
+  const data = (await resp.json()) as Partial<RefundQueryFound> & { code?: string; message?: string }
+  if (resp.status === 404 && data.code === 'RESOURCE_NOT_EXISTS') {
+    return { kind: 'not_found' }
+  }
+  if (!resp.ok || !data.refund_id) {
+    throw new WechatRefundError(data.code ?? `HTTP_${resp.status}`, data.message ?? '微信退款查询请求失败', resp.status)
+  }
+  return { kind: 'found', refund: data as RefundQueryFound }
+}
+
 export function verifyNotifySignature(
   headers: { timestamp: string; nonce: string; signature: string },
   rawBody: string,

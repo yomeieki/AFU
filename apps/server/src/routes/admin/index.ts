@@ -17,6 +17,7 @@ import { verifyAdminToken } from '../../middlewares/auth'
 import { config } from '../../config'
 import kd100MockRouter from './kd100-mock'
 import expressMockRouter from './express-mock'
+import payMockRouter from './pay-mock'
 import deliveryRouter from './delivery'
 import expressAdminRouter from './express'
 import workbenchRouter from './workbench'
@@ -42,6 +43,7 @@ router.use('/system', systemRouter)
 if (config.mock.delivery) router.use('/system/kd100-mock', kd100MockRouter)
 if (config.mock.printer) router.use('/system/printer-mock', printerMockRouter)
 if (config.mock.express) router.use('/system/express-mock', expressMockRouter)
+if (config.mock.pay) router.use('/system/pay-mock', payMockRouter)
 router.use('/local/orders', deliveryRouter)
 router.use('/express/orders', expressAdminRouter)
 router.use('/workbench', workbenchRouter)
