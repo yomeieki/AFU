@@ -18,6 +18,8 @@ interface NotifyOrderInfo {
   discountAmount?: number
   deliveryType?: string
   pickupSlotLabel?: string | null
+  /** 预约送达时段文案（Task 8 的 buildContent 消费；本 Task 只加字段，接口先备齐） */
+  scheduleSlotLabel?: string | null
 }
 
 interface NotifyItemInfo {

@@ -25,6 +25,8 @@ import {
 import { calcPackingFee } from '../services/packing-fee'
 import { promoDiscountOf } from '../services/promotion'
 import { isValidPickupSlot, prepStartAt, pickupDiscountOf, pickupSlotLabel } from '../services/pickup'
+import { scheduleTimeline, isValidDeliverySlot, scheduleView } from '../services/delivery/schedule'
+import { slotLabel } from '../services/slots'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage, getSubscribeTemplateGroups } from '../services/subscribe-message'
 import { DELIVERY_STATUS_LABEL, providerLabel } from '../services/delivery/state'
 import { enqueueOrderTicket } from '../services/ticket'
@@ -91,14 +93,29 @@ async function pickupViewOf(order: { deliveryType: string; pickupAt: Date | null
     store: { name: s.store.name, phone: s.store.phone, address: `${s.store.district}${s.store.address}`, latE6: s.store.latE6, lngE6: s.store.lngE6 },
   }
 }
-/** 「取消订单」按钮该不该出现：待付款一律可；自取 PAID 且未到开始备餐；其余渠道 PAID 未接单 */
-async function canSelfCancelOf(order: { deliveryType: string; status: string; acceptedAt: Date | null; pickupAt: Date | null }) {
+/**
+ * 「取消订单」按钮该不该出现（spec 2026-09-21 §4.6）：待付款一律可；
+ * 自取 / 预约外送：约定时刻前 selfCancelLeadMin 分钟之外可自助秒退，不看是否接单，PAID/PREPARING 均可，
+ * 但已备好（readyAt / pickupReadyAt）后关闭；立即单与邮寄：PAID 未接单。
+ */
+async function canSelfCancelOf(order: {
+  deliveryType: string; status: string; acceptedAt: Date | null
+  pickupAt: Date | null; pickupReadyAt: Date | null
+  scheduledAt: Date | null; distanceM: number | null; readyAt: Date | null
+}) {
   if (order.status === 'PENDING_PAYMENT') return true
-  if (order.status !== 'PAID' || order.acceptedAt) return false
-  if (order.deliveryType !== 'PICKUP') return true
-  if (!order.pickupAt) return false
-  const s = await getLocalSettings()
-  return Date.now() < prepStartAt(s, order.pickupAt).getTime()
+  if (order.status !== 'PAID' && order.status !== 'PREPARING') return false
+  if (order.deliveryType === 'PICKUP') {
+    if (!order.pickupAt || order.pickupReadyAt) return false
+    const s = await getLocalSettings()
+    return Date.now() < order.pickupAt.getTime() - s.selfCancelLeadMin * 60_000
+  }
+  if (order.deliveryType === 'LOCAL' && order.scheduledAt) {
+    if (order.readyAt || order.distanceM === null) return false
+    const s = await getLocalSettings()
+    return Date.now() < scheduleTimeline(s, order.scheduledAt, order.distanceM).selfCancelUntil.getTime()
+  }
+  return order.status === 'PAID' && !order.acceptedAt
 }
 
 function isPayExpired(order: { createdAt: Date }): boolean {
@@ -106,20 +123,27 @@ function isPayExpired(order: { createdAt: Date }): boolean {
 }
 
 /**
- * D6 ②：同城/邮寄订单接单后 acceptGraceMin 分钟内可申请取消（各渠道各自的宽限分钟，0 = 关闭）。
- * 自取（spec 2026-09-11 P10）：接单前且未到开始备餐时刻 → 自助秒退（不走这里）；
- * PAID 且已过开始备餐时刻、或 PREPARING → 可申请；已备好（SHIPPED）后关闭。没有分钟数的概念。
+ * 「申请取消」窗口。立即单/邮寄（D6 ②）：接单后 acceptGraceMin 分钟内。
+ * 自取 / 预约外送（spec 2026-09-21 §4.6）：过了自助取消截止、且未备好、且无在途配送单、PAID/PREPARING → 可申请；没有分钟数概念。
  */
-async function cancelWindowOf(order: { deliveryType: string; status: string; acceptedAt: Date | null; cancelRequestedAt: Date | null; pickupAt: Date | null }) {
+async function cancelWindowOf(order: {
+  deliveryType: string; status: string; acceptedAt: Date | null; cancelRequestedAt: Date | null
+  pickupAt: Date | null; pickupReadyAt: Date | null
+  scheduledAt: Date | null; distanceM: number | null; readyAt: Date | null
+}) {
   const closed = { canRequestCancel: false, cancelRequestDeadline: null as Date | null, cancelGraceMin: 0 }
   if (order.deliveryType === 'PICKUP') {
-    if (!order.pickupAt || order.cancelRequestedAt) return closed
-    if (order.status === 'PREPARING') return { canRequestCancel: true, cancelRequestDeadline: null, cancelGraceMin: 0 }
-    if (order.status === 'PAID') {
-      const s = await getLocalSettings()
-      return { canRequestCancel: Date.now() >= prepStartAt(s, order.pickupAt).getTime(), cancelRequestDeadline: null, cancelGraceMin: 0 }
-    }
-    return closed
+    if (!order.pickupAt || order.cancelRequestedAt || order.pickupReadyAt) return closed
+    if (order.status !== 'PAID' && order.status !== 'PREPARING') return closed
+    const s = await getLocalSettings()
+    return { canRequestCancel: Date.now() >= order.pickupAt.getTime() - s.selfCancelLeadMin * 60_000, cancelRequestDeadline: null, cancelGraceMin: 0 }
+  }
+  if (order.deliveryType === 'LOCAL' && order.scheduledAt) {
+    if (order.cancelRequestedAt || order.readyAt || order.distanceM === null) return closed
+    if (order.status !== 'PAID' && order.status !== 'PREPARING') return closed
+    const s = await getLocalSettings()
+    const tl = scheduleTimeline(s, order.scheduledAt, order.distanceM)
+    return { canRequestCancel: Date.now() >= tl.selfCancelUntil.getTime(), cancelRequestDeadline: null, cancelGraceMin: 0 }
   }
   if (order.status !== 'PREPARING' || !order.acceptedAt) return closed
   const graceMin = order.deliveryType === 'LOCAL' ? (await getLocalSettings()).acceptGraceMin : order.deliveryType === 'EXPRESS' ? (await getExpressSettings()).acceptGraceMin : 0
@@ -148,6 +172,8 @@ const createOrderSchema = z
       .object({ name: z.string().trim().max(32).optional(), phone: z.string().trim().regex(/^1\d{10}$/, '取餐人手机号无效') })
       .optional(),
     quoteToken: z.string().max(1024).optional(),
+    // 预约送达（2026-09-21）：ISO 时刻，只对 LOCAL 有意义；传了就是预约单
+    scheduledAt: z.string().datetime({ offset: true }).optional(),
     // 备注上限 20 字（PO 2026-09-06 定）。不是字节预算问题——255 字也只让同城双联从 54 件降到
     // 34 件，远超实际量。真正的原因是**票面可读性**：备注用 <CB> 渲染（居中放大加粗，一个字占
     // 两列），255 字在 58mm 纸上要占约 17 行放大字，把订单信息全挤没，而且配送联厨房联各印一遍。
@@ -175,6 +201,7 @@ const createOrderSchema = z
   .refine((v) => v.deliveryType === 'PICKUP' || v.addressId !== undefined, { message: '请选择收货地址' })
   .refine((v) => v.deliveryType !== 'PICKUP' || v.addressId === undefined, { message: '自取订单不需要收货地址' })
   .refine((v) => v.deliveryType !== 'PICKUP' || (!!v.pickupAt && !!v.pickupContact), { message: '请选择取餐时间并填写取餐人手机号' })
+  .refine((v) => v.scheduledAt === undefined || v.deliveryType === 'LOCAL', { message: '仅同城外送支持预约送达' })
 
 /**
  * 「订单已创建」的返回体。首次创建与幂等重试**必须逐字段相同**——
@@ -206,6 +233,7 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
     payExpireAt: payExpireAtOf(order.createdAt, config.order.payTimeoutMin),
     subscribeTemplateIds: getSubscribeTemplateIds(),
     pickupAt: order.pickupAt ?? null,
+    scheduledAt: order.scheduledAt ?? null,
     pickupDiscountAmount: order.pickupDiscountAmount,
     promoDiscountAmount: order.promoDiscountAmount,
     subscribeTemplates: getSubscribeTemplateGroups(),
@@ -215,7 +243,7 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const { cartItemIds, directItem, addressId, deliveryType, pickupAt, pickupContact, quoteToken, remark, tableware, couponId, gifts, clientRequestId } =
+    const { cartItemIds, directItem, addressId, deliveryType, pickupAt, pickupContact, quoteToken, scheduledAt, remark, tableware, couponId, gifts, clientRequestId } =
       createOrderSchema.parse(applyLegacyTablewarePrefix(req.body))
 
     // 幂等前置查询：客户端超时重试时，绝大多数情况在这里就命中并原样返回，
@@ -338,18 +366,21 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     let shippingFee = 0
     let localSnapshot: {
       receiverLatE6?: number; receiverLngE6?: number; receiverPoiName?: string | null
-      distanceM?: number; distanceSource?: string; estimatedDeliveryAt?: Date
+      distanceM?: number; distanceSource?: string; estimatedDeliveryAt?: Date; scheduledAt?: Date
     } = {}
     let expressSnapshot: { expressQuoteSnapshot?: Prisma.InputJsonValue; expressRegionGroup?: string; expressWeightG?: number } = {}
     // PICKUP 什么都不做——运费恒为 0，门店校验/优惠已在上面（券之前）算完。
     if (deliveryType === 'LOCAL') {
       const s = await getLocalSettings()
+      const scheduled = scheduledAt ? new Date(scheduledAt) : null
       if (!s.enabled) throw new AppError(42226, '同城配送暂未开通')
-      if (isPaused(s)) throw new AppError(42226, `同城配送暂停接单${s.paused?.reason ? `：${s.paused.reason}` : ''}`)
+      if (scheduled && !s.schedule.enabled) throw new AppError(42290, '预约配送暂未开通')
+      // 预约单跳过「暂停」与「非营业时间」两道门：暂停期间的格子由时段生成排除，营业时间外本就可以约明天（spec §4.4）
+      if (!scheduled && isPaused(s)) throw new AppError(42226, `同城配送暂停接单${s.paused?.reason ? `：${s.paused.reason}` : ''}`)
       // F4：休业（holiday）与临时停业（paused）是两套独立开关，isOpenNow 不看 holiday——
       // 不先判这一条，休业期间的同城下单会被 isOpenNow 判成「非营业时间」，文案对不上真实原因。
       if (isHolidayNow(s)) throw new AppError(42226, nextOpenText(s))
-      if (!isOpenNow(s)) throw new AppError(42222, `当前非营业时间，${nextOpenText(s)}`)
+      if (!scheduled && !isOpenNow(s)) throw new AppError(42222, `当前非营业时间，${nextOpenText(s)}`)
       if (address!.latE6 === null || address!.lngE6 === null) throw new AppError(42223, '该地址缺少定位，请编辑地址并在地图上选点')
       if (s.store.latE6 === null || s.store.lngE6 === null) throw new AppError(42226, '门店尚未设置坐标，暂不能配送')
       /**
@@ -392,6 +423,8 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         throw new AppError(42227, '配送费已更新，请刷新后重新提交')
       }
       const distanceM = quoted.distanceM
+      // 预约时段必须精确命中此刻用凭证里的距离算出的某一格（顾客磨蹭到那格过期了就拒，让他重选）
+      if (scheduled && !isValidDeliverySlot(s, scheduled, distanceM, new Date())) throw new AppError(42291, '该时段已不可选，请重新选择送达时间')
       // 基础运费：**只有 QUOTE 口径才信 token**。
       //   QUOTE —— 来自实时报价，这里按设计不做第二次外呼、重算不出来，只能信签过名的那一份，
       //            效果是给顾客锁价 15 分钟（他在结算页看到多少就付多少）。
@@ -434,6 +467,8 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         // 现在改成**接单那一刻**才算（routes/admin/delivery.ts 的 doAccept），
         // 顾客在结算页看到的是「大概多少分钟」而不是钟点，见 routes/local.ts 的报价响应。
         // 这里**不给这个字段**（列本身可空），接单时才落值。
+        // 预约单：送达时段起点 + 预计送达直接等于它（接单时不再重算，见 admin/delivery.ts doAccept）
+        ...(scheduled ? { scheduledAt: scheduled, estimatedDeliveryAt: scheduled } : {}),
       }
     } else if (deliveryType === 'EXPRESS') {
       /**
@@ -819,9 +854,11 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const remaining = remainingRefundable(order)
     const activeAfterSale = afterSales[0] && ['PENDING', 'APPROVED'].includes(afterSales[0].status) ? afterSales[0] : null
     let delivery: ReturnType<typeof customerDeliveryView> | null = null
+    let pickedUp = false
     if (order.deliveryType === 'LOCAL') {
       const d = await prisma.delivery.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' } })
       delivery = d ? customerDeliveryView(d) : null
+      pickedUp = !!d?.pickedUpAt
     }
     // 顾客白名单：不给手机号、不给费用（同城 customerDeliveryView 同一原则）。
     // FAILED/VOID 对顾客等同「没预约」；CANCELLED 也下发，顾客端按「商家备货中」显示（Task 7 处理）。
@@ -856,6 +893,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       canApplyAfterSale: ['SHIPPED', 'COMPLETED'].includes(order.status) && remaining > 0 && !activeAfterSale,
       subscribeTemplateIds: getSubscribeTemplateIds(),
       pickup: await pickupViewOf(order),
+      schedule: order.deliveryType === 'LOCAL' && order.scheduledAt ? scheduleView(await getLocalSettings(), order, new Date(), pickedUp) : null,
       canSelfCancel: await canSelfCancelOf(order),
       subscribeTemplates: getSubscribeTemplateGroups(),
       delivery,
@@ -883,7 +921,10 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     }
     const win = await cancelWindowOf(order)
     if (!win.canRequestCancel) {
-      throw new AppError(42229, order.status === 'PAID' ? '商家尚未接单，请直接申请退款' : '已超过可取消时间，如有问题请联系商家')
+      const timed = order.deliveryType === 'PICKUP' || (order.deliveryType === 'LOCAL' && !!order.scheduledAt)
+      throw new AppError(42229, timed
+        ? (order.readyAt || order.pickupReadyAt ? '餐品已备好，如有问题请联系商家或申请售后' : '当前可直接取消订单，无需申请')
+        : order.status === 'PAID' ? '商家尚未接单，请直接申请退款' : '已超过可取消时间，如有问题请联系商家')
     }
     // 快照有效 Delivery/ExpressBooking 的当前状态（无在途单则 NONE）：店员处理取消申请时据此判断
     // 骑手是否已在路上/快递员是否已在路上，而不是等到点开详情才发现——申请那一刻的状态才是决策依据。
@@ -895,7 +936,7 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
           ? ((await prisma.expressBooking.findFirst({ where: { activeOrderId: id } }))?.status ?? 'NONE')
           : 'NONE'
     const moved = await prisma.order.updateMany({
-      where: { id, status: { in: order.deliveryType === 'PICKUP' ? ['PAID', 'PREPARING'] : ['PREPARING'] }, cancelRequestedAt: null },
+      where: { id, status: { in: order.deliveryType === 'PICKUP' || order.scheduledAt ? ['PAID', 'PREPARING'] : ['PREPARING'] }, cancelRequestedAt: null },
       data: {
         cancelRequestedAt, cancelRequestNote: note ?? null, cancelRequestDeliveryStatus: snapshotStatus,
         // 上一次申请若被驳回过，痕迹要清掉：顾客在窗口内还能再申请一次（比如第一次没说清理由），
@@ -996,18 +1037,27 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
       return success(res, withPayExpire(updated))
     }
 
-    // 自取：已到开始备餐时刻就不能自助退了（店里可能已经在做），转「申请取消」（spec P10）。
-    // pickupAt 缺失（不该发生，但别信数据完整性）与已到开始备餐时刻，两者都必须关闭自助秒退——
-    // 前者若放行会掉进下面的秒退分支，方向与 cancelWindowOf/canSelfCancelOf 的「缺 pickupAt 就不可退」相反。
-    if (order.deliveryType === 'PICKUP' && order.status === 'PAID') {
-      if (!order.pickupAt) throw new AppError(42229, '订单数据异常，请联系商家协商退款')
-      const s = await getLocalSettings()
-      if (Date.now() >= prepStartAt(s, order.pickupAt).getTime()) throw new AppError(42229, '已进入备餐时段，请改为「申请取消」由商家确认')
-    }
-
-    if (order.status === 'PAID' && !order.acceptedAt) {
+    // 自取 / 预约外送：约定时刻前 selfCancelLeadMin 之外可自助秒退，不看是否接单（spec 2026-09-21 §4.6）；
+    // 立即单 / 邮寄：PAID 未接单。两种都落到同一段「出 CANCEL 票 + 发起全额退款」。
+    const timed = order.deliveryType === 'PICKUP' || (order.deliveryType === 'LOCAL' && !!order.scheduledAt)
+    let selfCancelled = false
+    if (timed && (order.status === 'PAID' || order.status === 'PREPARING')) {
+      if (!(await canSelfCancelOf(order))) throw new AppError(42229, '已临近约定时间，请改为「申请取消」由商家确认')
       await prisma.$transaction(async (tx) => {
-        // 条件更新：与店员「接单」并发时以先落库者为准（已接单则本次取消失败）
+        // 条件写：与「已备好」「呼叫骑手」并发时以先落库者为准（readyAt/pickupReadyAt 一旦非空本次取消失败）
+        const moved = await tx.order.updateMany({
+          where: { id, status: { in: ['PAID', 'PREPARING'] }, readyAt: null, pickupReadyAt: null },
+          data: {
+            status: 'REFUNDING', cancelledAt: new Date(), cancelReason: '用户申请退款',
+            cancelRequestedAt: null, cancelRequestNote: null, cancelRequestDeliveryStatus: null, cancelRequestRemindedAt: null,
+          },
+        })
+        if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
+        await rollbackOrderStock(tx, order.items)
+      })
+      selfCancelled = true
+    } else if (order.status === 'PAID' && !order.acceptedAt) {
+      await prisma.$transaction(async (tx) => {
         const moved = await tx.order.updateMany({
           where: { id, status: 'PAID', acceptedAt: null },
           data: { status: 'REFUNDING', cancelledAt: new Date(), cancelReason: '用户申请退款' },
@@ -1015,6 +1065,9 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
         if (moved.count === 0) throw new AppError(42204, '商家已接单备餐，请电话联系商家协商退款')
         await rollbackOrderStock(tx, order.items)
       })
+      selfCancelled = true
+    }
+    if (selfCancelled) {
       // 出票（规格 §8b「订单被取消」）：付款成功那一刻已经出过 NEW_ORDER 票，厨房可能已经在备料——
       // 这里的判断是「决定取消」就立刻出 CANCEL 提醒票，不等下面的微信退款请求完成/回调确认。
       // 退款是否成功不影响「这单不用做了」这个事实，让厨房等退款确认才知道，只会白白多耽误几分钟。
@@ -1154,15 +1207,21 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
           // F3：来单推送要带取餐时间，否则店员只看到「自取新订单」不知道几点来取。
           // 失败不影响支付主流程——外层 .catch(() => undefined) 已经兜底，这里再套一层
           // try/catch 是为了让 getLocalSettings/pickupSlotLabel 出错时仍能发不带取餐时间的推送。
-          let slotLabel: string | undefined
+          // 变量名与本文件从 services/slots 导入的 slotLabel 函数撞名，改叫 pickupSlotLabelText 避免遮蔽。
+          let pickupSlotLabelText: string | undefined
           if (order.deliveryType === 'PICKUP' && order.pickupAt) {
             try {
-              slotLabel = pickupSlotLabel(order.pickupAt, (await getLocalSettings()).pickup.slotMinutes)
+              pickupSlotLabelText = pickupSlotLabel(order.pickupAt, (await getLocalSettings()).pickup.slotMinutes)
             } catch (e) {
               console.error('[orders] 计算取餐时段文案失败（mock 支付）:', (e as Error).message)
             }
           }
-          notifyOrderPaid({ ...order, paidAt, pickupSlotLabel: slotLabel }, items)
+          let scheduleSlotLabel: string | undefined
+          if (order.deliveryType === 'LOCAL' && order.scheduledAt) {
+            try { scheduleSlotLabel = slotLabel(order.scheduledAt, (await getLocalSettings()).schedule.slotMinutes) }
+            catch (e) { console.error('[orders] 计算预约时段文案失败（mock 支付）:', (e as Error).message) }
+          }
+          notifyOrderPaid({ ...order, paidAt, pickupSlotLabel: pickupSlotLabelText, scheduleSlotLabel }, items)
           if (req.openid) sendPaidSubscribeMessage(req.openid, { ...order, paidAt }, items[0]?.productName)
         })
         .catch(() => undefined)

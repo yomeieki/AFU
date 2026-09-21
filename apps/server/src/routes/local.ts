@@ -16,13 +16,17 @@ import {
 import { promoPreviewOf } from '../services/promotion'
 import { measureRoadQuote } from '../services/delivery/quote'
 import { buildPickupSlots } from '../services/pickup'
+import { buildDeliverySlots, earliestScheduleText } from '../services/delivery/schedule'
 import { deliveryTypeSchema } from '../utils/channel'
 
 const router = Router()
 
 router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    success(res, publicLocalMeta(await getLocalSettings()))
+    const s = await getLocalSettings()
+    const meta = publicLocalMeta(s)
+    // 页头还没有地址算不出路上时间，用配送半径算一个保守的最早送达（spec §4.3）
+    success(res, { ...meta, delivery: { ...meta.delivery, earliestScheduleText: earliestScheduleText(s) } })
   } catch (e) {
     next(e)
   }
@@ -32,6 +36,17 @@ router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => 
 router.get('/pickup-slots', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     success(res, buildPickupSlots(await getLocalSettings(), new Date()))
+  } catch (e) {
+    next(e)
+  }
+})
+
+// 预约外送时段（公开）。distanceM 必传：来自结算页已拿到的报价，时段的提前量取决于路上时间
+const deliverySlotsSchema = z.object({ distanceM: z.coerce.number().int().min(0).max(200_000) })
+router.get('/delivery-slots', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { distanceM } = deliverySlotsSchema.parse(req.query)
+    success(res, buildDeliverySlots(await getLocalSettings(), distanceM, new Date()))
   } catch (e) {
     next(e)
   }
