@@ -5,23 +5,9 @@ import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { generateProductQrCode } from '../../services/qrcode'
+import { specDimensionSchema, skuSchema, validateSpecs, aggregateFromSkus, syncProductSkus } from '../../services/specs'
 
 const router = Router()
-
-const specDimensionSchema = z.object({
-  name: z.string().min(1, '规格维度名不能为空').max(32),
-  values: z.array(z.string().min(1).max(32)).min(1, '规格维度至少一个值').max(20),
-})
-
-const skuSchema = z.object({
-  id: z.number().int().positive().optional(),
-  specText: z.string().min(1).max(128),
-  specValues: z.array(z.string().min(1).max(32)).min(1),
-  price: z.number().int().positive('规格价格必须大于 0'),
-  originalPrice: z.number().int().positive().nullable().optional(),
-  stock: z.number().int().min(0).default(0),
-  sortOrder: z.number().int().min(0).default(0),
-})
 
 const productSchema = z.object({
   categoryId: z.number().int().positive('分类不能为空'),
@@ -46,53 +32,6 @@ const productSchema = z.object({
   specDimensions: z.array(specDimensionSchema).max(3).nullable().optional(),
   skus: z.array(skuSchema).max(60).optional(),
 })
-
-/** 校验维度与 SKU 组合一致性；返回规范化后的 dimensions（null=无规格） */
-function validateSpecs(
-  specDimensions: z.infer<typeof specDimensionSchema>[] | null | undefined,
-  skus: z.infer<typeof skuSchema>[] | undefined
-) {
-  const dims = specDimensions?.length ? specDimensions : null
-  const skuList = skus ?? []
-  if (dims && skuList.length === 0) {
-    throw new AppError(40001, '配置了规格维度但未提供任何规格组合', 400)
-  }
-  if (!dims && skuList.length > 0) {
-    throw new AppError(40001, '提供了规格组合但缺少规格维度定义', 400)
-  }
-  if (!dims) return { dims: null, skuList: [] }
-
-  const seen = new Set<string>()
-  for (const sku of skuList) {
-    if (sku.specValues.length !== dims.length) {
-      throw new AppError(40001, `规格「${sku.specText}」的值数量与维度数不一致`, 400)
-    }
-    sku.specValues.forEach((v, i) => {
-      if (!dims[i].values.includes(v)) {
-        throw new AppError(40001, `规格值「${v}」不在维度「${dims[i].name}」中`, 400)
-      }
-    })
-    const joined = sku.specValues.join('/')
-    if (sku.specText !== joined) {
-      throw new AppError(40001, `规格「${sku.specText}」与其值组合「${joined}」不一致`, 400)
-    }
-    if (seen.has(sku.specText)) {
-      throw new AppError(40001, `规格「${sku.specText}」重复`, 400)
-    }
-    seen.add(sku.specText)
-  }
-  return { dims, skuList }
-}
-
-/** 有 SKU 时按 SKU 汇总回写商品冗余字段（price=min, stock=sum, originalPrice=min价 SKU 的原价） */
-function aggregateFromSkus(skuList: z.infer<typeof skuSchema>[]) {
-  const minPriceSku = skuList.reduce((m, s) => (s.price < m.price ? s : m), skuList[0])
-  return {
-    price: minPriceSku.price,
-    originalPrice: minPriceSku.originalPrice ?? null,
-    stock: skuList.reduce((sum, s) => sum + s.stock, 0),
-  }
-}
 
 const skuInclude = {
   images: { orderBy: { sortOrder: 'asc' as const } },
@@ -256,29 +195,10 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
       if (touchSpecs) {
         const { dims, skuList } = validateSpecs(specDimensions ?? null, skus)
 
-        // diff 同步 SKU：有 id 且仍存在→更新；无 id→创建；库里有但本次未带→删除（cascade 清购物车）
-        const existing = await tx.productSku.findMany({ where: { productId: id } })
-        const keepIds = new Set(skuList.filter((s) => s.id).map((s) => s.id!))
-        const toDelete = existing.filter((e) => !keepIds.has(e.id)).map((e) => e.id)
-        if (toDelete.length) {
-          await tx.productSku.deleteMany({ where: { id: { in: toDelete }, productId: id } })
-        }
-        for (let i = 0; i < skuList.length; i++) {
-          const s = skuList[i]
-          const payload = {
-            specText: s.specText,
-            specValues: s.specValues,
-            price: s.price,
-            originalPrice: s.originalPrice ?? null,
-            stock: s.stock,
-            sortOrder: s.sortOrder ?? i,
-          }
-          if (s.id && existing.some((e) => e.id === s.id)) {
-            await tx.productSku.update({ where: { id: s.id }, data: payload })
-          } else {
-            await tx.productSku.create({ data: { ...payload, productId: id } })
-          }
-        }
+        // 两阶段同步 SKU（见 services/specs.ts）：先删本次未携带的旧行（cascade 清购物车），
+        // 再把 specText 有变化的行先改临时名，避免维度重排后两个 SKU 的 specText 互换时
+        // 撞 (product_id, spec_text) 唯一索引，最后按最终值更新/创建。
+        await syncProductSkus(tx, id, skuList)
 
         specData = {
           specDimensions: dims ?? Prisma.DbNull,
@@ -291,7 +211,7 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
         data: { ...data, ...specData },
         include: skuInclude,
       })
-    })
+    }, { maxWait: 5000, timeout: 20000 })
     success(res, product)
   } catch (e) {
     next(e)

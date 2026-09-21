@@ -38,23 +38,29 @@ function settle(ok: boolean) {
 export function ConfirmDialogHost() {
   const { open, options } = useConfirmStore()
   if (!open) return null
+  // ConfirmDialogHost 和商品编辑弹窗都是 fixed inset-0 z-50、同一层叠上下文，
+  // 按 DOM 树序绘制时后挂载的编辑弹窗会盖住这里、按钮点不到（第一轮复核 R1）。
+  // 用一层 relative z-[60] 包装把整个确认弹窗提到所有 z-50 弹窗之上、
+  // z-[100] 的 Toast 之下；只是展示层包装，不改 confirmDialog() 的 API 与结算逻辑。
   return (
-    <Modal
-      title={options.title}
-      width="sm"
-      onClose={() => settle(false)}
-      footer={
-        <>
-          <Button variant="secondary" onClick={() => settle(false)}>
-            {options.cancelText ?? '取消'}
-          </Button>
-          <Button variant={options.danger ? 'danger' : 'primary'} onClick={() => settle(true)}>
-            {options.confirmText ?? '确定'}
-          </Button>
-        </>
-      }
-    >
-      {options.content ? <p className="text-sm text-gray-600">{options.content}</p> : null}
-    </Modal>
+    <div className="relative z-[60]">
+      <Modal
+        title={options.title}
+        width="sm"
+        onClose={() => settle(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => settle(false)}>
+              {options.cancelText ?? '取消'}
+            </Button>
+            <Button variant={options.danger ? 'danger' : 'primary'} onClick={() => settle(true)}>
+              {options.confirmText ?? '确定'}
+            </Button>
+          </>
+        }
+      >
+        {options.content ? <p className="text-sm text-gray-600 whitespace-pre-line">{options.content}</p> : null}
+      </Modal>
+    </div>
   )
 }
