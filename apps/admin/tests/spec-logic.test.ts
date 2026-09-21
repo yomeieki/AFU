@@ -502,12 +502,19 @@ test('A16（R2-A）：新增空维度期间对已有维度加值，再删掉那�
   assert.equal('id' in removed.state.rows[2], false)
   assert.equal(removed.state.rows[2].price, '')
 
-  // 注：「特辣」行是新出现的组合，价格从未被填过，天然是空白默认值。
-  // 第一轮裁决 plan.md 里 A16 写的是 validateSpecForm 应返回 null，
-  // 但按 A13(d)/A11 既有规则「行价格必须 > 0」，这里必然是非空提示——
-  // 与 A16 字面断言冲突，已在报告的「上报」栏说明，此处按更基础的
-  // 价格必填规则断言（不能反过来放宽 A13(d)）。
-  assert.ok(validateSpecForm(removed.state.dimensions, removed.state.rows) !== null)
+  // 「特辣」行是新出现的组合，价格从未被填过，天然是空白默认值。
+  // 第二轮裁决确认第一轮 A16 写的「validateSpecForm 返回 null」是笔误：
+  // 覆盖度校验（R6）不应误报（行集合与维度已一致），但新行价格未填仍应
+  // 被 A13(d) 拦下，所以这里必须严格等于价格提示这一条，而不是覆盖度
+  // 提示，也不是笼统的「非 null」。
+  assert.equal(
+    validateSpecForm(removed.state.dimensions, removed.state.rows),
+    '规格「特辣」价格必须大于 0'
+  )
+
+  // 补上价格后应恢复为 null（证明卡住的只是价格这一条，不是覆盖度问题）
+  const filledRows = removed.state.rows.map((r, i) => (i === 2 ? { ...r, price: '30' } : r))
+  assert.equal(validateSpecForm(removed.state.dimensions, filledRows), null)
 })
 
 test('A17（R2-B）：新增空维度期间改名已有维度的值，再删掉那个空维度，不残留旧值', () => {
