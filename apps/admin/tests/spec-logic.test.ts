@@ -13,6 +13,7 @@ import {
   validateSpecForm,
   cartesian,
   prepareLoadedState,
+  productLevelDefaults,
   confirmForAddDimension,
   confirmForRemoveDimension,
   confirmForRemoveValue,
@@ -711,17 +712,17 @@ test('A23 打开编辑去重清理：去空格后重复的选项与行都清理�
   )
 })
 
-test('A24 无规格商品新加规格项带默认值：defaults 只在从 0 个规格项开始时生效，库存默认按调用方传入值', () => {
+test('A24 无规格商品新加规格项带默认值：defaults 只在从 0 个规格项开始时生效，库存一律为 0（第一轮裁决 R16）', () => {
   const state0 = createState([], [])
-  const added = addDimension(state0, '辣度', { price: '29.9', originalPrice: '39.9', stock: 10 }).state
+  const added = addDimension(state0, '辣度', productLevelDefaults({ price: '29.9', originalPrice: '39.9', stock: 10 })).state
   assert.equal(added.rows.length, 1)
-  assert.deepEqual(added.rows[0], { specValues: [''], price: '29.9', originalPrice: '39.9', stock: 10 })
+  assert.deepEqual(added.rows[0], { specValues: [''], price: '29.9', originalPrice: '39.9', stock: 0 })
   assert.equal('id' in added.rows[0], false)
 
   const withFirstValue = addValue(added, 0, '微辣')
   assert.ok(withFirstValue.state)
   assert.equal(withFirstValue.state!.rows.length, 1)
-  assert.deepEqual(withFirstValue.state!.rows[0], { specValues: ['微辣'], price: '29.9', originalPrice: '39.9', stock: 10 })
+  assert.deepEqual(withFirstValue.state!.rows[0], { specValues: ['微辣'], price: '29.9', originalPrice: '39.9', stock: 0 })
 
   const withSecondValue = addValue(withFirstValue.state!, 0, '中辣')
   assert.ok(withSecondValue.state)
@@ -729,9 +730,10 @@ test('A24 无规格商品新加规格项带默认值：defaults 只在从 0 个�
   for (const r of withSecondValue.state!.rows) {
     assert.equal(r.price, '29.9')
     assert.equal(r.originalPrice, '39.9')
-    assert.equal(r.stock, 10)
+    assert.equal(r.stock, 0)
     assert.equal('id' in r, false)
   }
+  // 库存都是 0，价格已带入，价格校验通过
   assert.equal(validateSpecForm(withSecondValue.state!.dimensions, withSecondValue.state!.rows), null)
 
   // 不传 defaults → 占位行为空白默认值
@@ -742,9 +744,27 @@ test('A24 无规格商品新加规格项带默认值：defaults 只在从 0 个�
   const dims2: SpecDimension[] = [{ name: '辣度', values: ['微辣'] }]
   const rows2: SkuRow[] = [row(1, ['微辣'], '10', 1)]
   const state2 = createState(dims2, rows2)
-  const withDefaultsIgnored = addDimension(state2, '重量', { price: '29.9', originalPrice: '39.9', stock: 10 }).state
+  const withDefaultsIgnored = addDimension(state2, '重量', productLevelDefaults({ price: '29.9', originalPrice: '39.9', stock: 10 })).state
   const withoutDefaults = addDimension(state2, '重量').state
   assert.deepEqual(withDefaultsIgnored, withoutDefaults)
+})
+
+test('A37 productLevelDefaults：库存一律归 0，价格/原价原样透传（含空串）', () => {
+  assert.deepEqual(productLevelDefaults({ price: '29.9', originalPrice: '39.9', stock: 10 }), {
+    price: '29.9',
+    originalPrice: '39.9',
+    stock: 0,
+  })
+  assert.deepEqual(productLevelDefaults({ price: '29.9', originalPrice: '39.9', stock: 0 }), {
+    price: '29.9',
+    originalPrice: '39.9',
+    stock: 0,
+  })
+  assert.deepEqual(productLevelDefaults({ price: '', originalPrice: '', stock: 5 }), {
+    price: '',
+    originalPrice: '',
+    stock: 0,
+  })
 })
 
 test('A25 R13 反悔恢复：加规格项→加值→（手改价格）→删规格项，回到原样，手改的价格不保留', () => {
@@ -902,7 +922,7 @@ test('A29 confirmForRemoveDimension：按 (1)(2)(3)(4) 顺序覆盖各分支', (
   const afterAddValues = addValue(addValue(added, 2, '250g').state!, 2, '500g').state!
   assert.deepEqual(confirmForRemoveDimension(afterAddValues, 2), {
     title: '删掉规格项',
-    content: '删掉「第 3 个规格项」后，规格会恢复成加它之前的样子，原来的价格和库存都还在。确定删掉吗？',
+    content: '删掉「第 3 个规格项」后，规格会恢复成加它之前的样子，原来的价格和库存都还在；你刚才在新组合上填的价格和库存不会保留。确定删掉吗？',
     danger: false,
     confirmText: '删掉',
     cancelText: '不删了',
@@ -976,7 +996,7 @@ test('A32 E 组文案精确：空值提示与已有测试用例的精确文案',
   const state = createState(dims, [row(1, ['微辣'], '10', 1)])
 
   const emptyAdd = addValue(state, 0, '  ')
-  assert.equal(emptyAdd.error, '请先输入选项名')
+  assert.equal(emptyAdd.error, '请先输入选项名再添加')
 
   const emptyRename = renameValue(state, 0, '微辣', '  ')
   assert.equal(emptyRename.error, '选项名不能是空的，已恢复原来的名字')
@@ -1034,4 +1054,91 @@ test('A34 removeValue 删最后一个值：template 命中该规格项时恢复 
   assert.deepEqual(afterRemove.state.rows[0].specValues, [PLACEHOLDER, '带骨'])
   assert.equal(afterRemove.state.rows[0].id, 1)
   assert.equal(afterRemove.state.template, null)
+})
+
+// ---- A35-A36：第一轮裁决 R17（数量/字数上限的大白话拦截与保存前兜底） ----
+
+test('A35 E4/E5/E6 精确：单规格项选项数上限、名字长度上限、组合总数上限', () => {
+  // (a) 规格项已有 20 个选项，第 21 个被拒绝，状态不变
+  const values20 = Array.from({ length: 20 }, (_, i) => `v${i + 1}`)
+  const dimsFull: SpecDimension[] = [{ name: '辣度', values: values20 }]
+  const stateFull = createState(dimsFull, [])
+  const overflow = addValue(stateFull, 0, 'v21')
+  assert.equal(overflow.error, '一个规格项最多 20 个选项，「辣度」已经满了')
+  assert.deepEqual(stateFull.dimensions[0].values, values20)
+
+  // (b) 名字长度上限：33 字（addValue/renameValue）拒绝，32 字通过
+  const dimsShort: SpecDimension[] = [{ name: '辣度', values: ['微辣'] }]
+  const stateShort = createState(dimsShort, [row(1, ['微辣'], '10', 1)])
+  const tooLongAdd = addValue(stateShort, 0, 'x'.repeat(33))
+  assert.equal(tooLongAdd.error, '选项名最多 32 个字，请短一点')
+  const tooLongRename = renameValue(stateShort, 0, '微辣', 'x'.repeat(33))
+  assert.equal(tooLongRename.error, '选项名最多 32 个字，请短一点')
+  const okLength = addValue(stateShort, 0, 'x'.repeat(32))
+  assert.ok(okLength.state)
+
+  // (c) 组合总数上限：4×4×3=48，加第 4 个第三项选项到 64 个被拒绝；减到 2 个后能再加回
+  const dims3: SpecDimension[] = [
+    { name: 'A', values: ['a1', 'a2', 'a3', 'a4'] },
+    { name: 'B', values: ['b1', 'b2', 'b3', 'b4'] },
+    { name: 'C', values: ['c1', 'c2', 'c3'] },
+  ]
+  const state3 = createState(dims3, [])
+  const overflowCombo = addValue(state3, 2, 'd4')
+  assert.equal(overflowCombo.error, '加上「d4」后规格组合会有 64 个，最多只能 60 个，请少加几个选项')
+  assert.deepEqual(state3.dimensions, dims3)
+
+  const shrunk = removeValue(state3, 2, 'c3')
+  const afterShrink = addValue(shrunk.state, 2, 'd4')
+  assert.ok(afterShrink.state)
+  assert.deepEqual(afterShrink.state!.dimensions[2].values, ['c1', 'c2', 'd4'])
+})
+
+test('A36 V7–V11 精确：保存前兜底逐条验证', () => {
+  // V7：4 个规格项
+  const dims4: SpecDimension[] = [
+    { name: 'A', values: ['a'] },
+    { name: 'B', values: ['b'] },
+    { name: 'C', values: ['c'] },
+    { name: 'D', values: ['d'] },
+  ]
+  assert.equal(validateSpecForm(dims4, []), '规格项最多 3 个，请删掉多余的')
+
+  // V8：规格项名字 33 字
+  const longName = 'x'.repeat(33)
+  assert.equal(
+    validateSpecForm([{ name: longName, values: ['a'] }], []),
+    `规格项「${longName}」的名字最多 32 个字，请短一点`
+  )
+
+  // V9：21 个选项
+  const values21 = Array.from({ length: 21 }, (_, i) => `v${i + 1}`)
+  assert.equal(
+    validateSpecForm([{ name: '辣度', values: values21 }], []),
+    '规格项「辣度」的选项最多 20 个，请删掉一些'
+  )
+
+  // V10：选项 33 字
+  const longValue = 'x'.repeat(33)
+  assert.equal(
+    validateSpecForm([{ name: '辣度', values: [longValue] }], []),
+    `规格项「辣度」里的选项「${longValue}」最多 32 个字，请短一点`
+  )
+
+  // V11：4×4×4=64 个组合（行集合与 cartesian 一致，只是超过上限）
+  const dims64: SpecDimension[] = [
+    { name: 'A', values: ['a1', 'a2', 'a3', 'a4'] },
+    { name: 'B', values: ['b1', 'b2', 'b3', 'b4'] },
+    { name: 'C', values: ['c1', 'c2', 'c3', 'c4'] },
+  ]
+  assert.equal(validateSpecForm(dims64, []), '规格组合最多 60 个，现在有 64 个，请减少选项')
+
+  // 3×4×5=60 完整数据（价格已填）→ null（恰好等于上限允许通过）
+  const dims60: SpecDimension[] = [
+    { name: 'A', values: ['a1', 'a2', 'a3'] },
+    { name: 'B', values: ['b1', 'b2', 'b3', 'b4'] },
+    { name: 'C', values: ['c1', 'c2', 'c3', 'c4', 'c5'] },
+  ]
+  const full60 = cartesian(dims60).map((v) => row(undefined, v, '10', 1))
+  assert.equal(validateSpecForm(dims60, full60), null)
 })

@@ -3,7 +3,7 @@ import { Plus, Search, Download, QrCode } from 'lucide-react'
 import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
 import SpecEditor, { type SkuRow } from '../components/SpecEditor'
-import { prepareLoadedState, validateSpecForm } from '../components/specLogic'
+import { prepareLoadedState, productLevelDefaults, validateSpecForm } from '../components/specLogic'
 import * as msg from '../components/specMessages'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
@@ -642,7 +642,7 @@ export default function Products() {
                 skuRows={skuRows}
                 onChange={(dims, rows) => { setSpecDims(dims); setSkuRows(rows) }}
                 notice={specNotice}
-                defaults={{ price: form.price, originalPrice: form.originalPrice, stock: 0 }}
+                defaults={productLevelDefaults(form)}
               />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>

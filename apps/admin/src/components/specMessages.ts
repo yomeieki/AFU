@@ -86,7 +86,7 @@ export function loadNoticeText(fixes: LoadFixes): string | null {
 // E 组：即时提示（addValue / renameValue 的 error 返回值）
 // ---------------------------------------------------------------------------
 
-export const E0_EMPTY_VALUE = '请先输入选项名'
+export const E0_EMPTY_VALUE = '请先输入选项名再添加'
 export function msgDuplicateNewValue(v: string): string {
   return `「${v}」已经有了，不用再加`
 }
@@ -94,6 +94,13 @@ export function msgDuplicateRename(v: string): string {
   return `已经有一个叫「${v}」的选项了，请换个名字`
 }
 export const E3_EMPTY_RENAME = '选项名不能是空的，已恢复原来的名字'
+export const E5_TOO_LONG = '选项名最多 32 个字，请短一点'
+export function msgTooManyValues(label: string): string {
+  return `一个规格项最多 20 个选项，「${label}」已经满了`
+}
+export function msgTooManyCombos(v: string, n: number): string {
+  return `加上「${v}」后规格组合会有 ${n} 个，最多只能 60 个，请少加几个选项`
+}
 
 // ---------------------------------------------------------------------------
 // V 组：保存前校验（validateSpecForm 返回值）
@@ -117,6 +124,19 @@ export const V4_PLACEHOLDER_ROW = '有规格项还没有选项，请先添加选
 export const V5_MISMATCH = '规格组合和选项对不上，请关掉编辑窗口重新打开后再试'
 export function msgRowPriceMissing(values: string[]): string {
   return `组合「${values.join(' / ')}」还没有填价格，价格要大于 0`
+}
+export const V7_TOO_MANY_DIMENSIONS = '规格项最多 3 个，请删掉多余的'
+export function msgDimNameTooLong(label: string): string {
+  return `规格项「${label}」的名字最多 32 个字，请短一点`
+}
+export function msgTooManyValuesInDim(label: string): string {
+  return `规格项「${label}」的选项最多 20 个，请删掉一些`
+}
+export function msgValueTooLong(label: string, v: string): string {
+  return `规格项「${label}」里的选项「${v}」最多 32 个字，请短一点`
+}
+export function msgTooManyCombosTotal(n: number): string {
+  return `规格组合最多 60 个，现在有 ${n} 个，请减少选项`
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +190,7 @@ export function confirmRemoveDimensionMerge(label: string, from: number, to: num
 export function confirmRemoveDimensionRestore(label: string): ConfirmSpec {
   return {
     title: '删掉规格项',
-    content: `删掉「${label}」后，规格会恢复成加它之前的样子，原来的价格和库存都还在。确定删掉吗？`,
+    content: `删掉「${label}」后，规格会恢复成加它之前的样子，原来的价格和库存都还在；你刚才在新组合上填的价格和库存不会保留。确定删掉吗？`,
     danger: false,
     confirmText: '删掉',
     cancelText: '不删了',

@@ -114,7 +114,14 @@ export default function SpecEditor({ dimensions, skuRows, onChange, notice, defa
 
   // ---------- 选项 ----------
 
-  const handleAddValue = (i: number) => {
+  /**
+   * source='enter'：回车确认；source='blur'：失焦确认。空/纯空格的处理按 R20 区分：
+   * - 回车时草稿为空或纯空格 → 提示 + 清空（店员确实按了回车，说明有「添加」的意图）。
+   * - 失焦时草稿是纯空格（输入过内容）→ 提示 + 清空。
+   * - 失焦时草稿本来就是空字符串（没输入任何东西，只是点去了别处，如去填价格）→
+   *   不提示、不清空，避免把「没做任何操作」误报成「输入了空的选项」。
+   */
+  const handleAddValue = (i: number, source: 'enter' | 'blur') => {
     const raw = valueDrafts[i] ?? ''
     const clearDraft = () => {
       setValueDrafts((prev) => {
@@ -124,7 +131,10 @@ export default function SpecEditor({ dimensions, skuRows, onChange, notice, defa
       })
     }
     if (!raw.trim()) {
-      clearDraft()
+      if (source === 'enter' || raw !== '') {
+        toast.error(msg.E0_EMPTY_VALUE)
+        clearDraft()
+      }
       return
     }
     const result = addValueLogic(currentState(), i, raw)
@@ -241,6 +251,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange, notice, defa
               value={dim.name}
               onChange={(e) => handleRenameDimension(i, e.target.value)}
               placeholder={msg.dimNamePlaceholder(i)}
+              maxLength={32}
               className={`${inputCls} flex-1 min-w-0 sm:flex-none sm:w-36`}
             />
             <div className="ml-auto flex items-center gap-1">
@@ -352,10 +363,10 @@ export default function SpecEditor({ dimensions, skuRows, onChange, notice, defa
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  handleAddValue(i)
+                  handleAddValue(i, 'enter')
                 }
               }}
-              onBlur={() => handleAddValue(i)}
+              onBlur={() => handleAddValue(i, 'blur')}
               placeholder={msg.T8_VALUE_PLACEHOLDER}
               className={`${inputCls} w-full sm:w-36`}
             />

@@ -52,6 +52,12 @@ export interface SpecEditorState {
 export type MutationResult = { state: SpecEditorState } | { error: string }
 
 const MAX_DIMENSIONS = 3
+/** 与服务端 zod（services/specs.ts）保持一致的上限：单规格项最多选项数 */
+const MAX_VALUES_PER_DIMENSION = 20
+/** 与服务端 zod 保持一致的上限：规格项名 / 选项名最多字数（按 JS string.length 计） */
+const MAX_NAME_LENGTH = 32
+/** 与服务端 zod 保持一致的上限：规格组合总数（skus 数组上限） */
+const MAX_COMBINATIONS = 60
 
 /** 去首尾空格，规格值/维度名统一按此规范化后比较 */
 export function normalizeValue(v: string): string {
@@ -184,6 +190,15 @@ export interface RowDefaults {
 }
 
 /**
+ * 商品级默认值 → 占位行默认值：售价/原价原样带入，库存一律 0（不带商品原库存），
+ * 需要店员自己按各组合实际数量填，避免加了规格项之后商品总库存被“无中生有”地
+ * 乘倍，造成超卖（第一轮裁决 R16）。
+ */
+export function productLevelDefaults(form: { price: string; originalPrice: string; stock: number }): RowDefaults {
+  return { price: form.price, originalPrice: form.originalPrice, stock: 0 }
+}
+
+/**
  * 新增维度（无值）：现有行原样保留（含 id），只在末尾追加一个占位符位置；template 失效。
  * 仅当这是从 0 个维度开始新增（无规格商品第一次加规格项）且传入 defaults 时，
  * 占位行的价格/原价/库存用 defaults 填好，不需要店员逐行手填（对已有维度的商品
@@ -308,7 +323,9 @@ export function moveValue(state: SpecEditorState, dimIndex: number, valueIndex: 
 }
 
 /**
- * 新增规格值：去首尾空格后查重，重复或为空都拒绝。
+ * 新增规格值：去首尾空格后依次校验空值(E0)→长度(E5)→重复(E1)→该维度选项数上限(E4)→
+ * 加上后的组合总数上限(E6)，任一不通过都拒绝、状态不变（第一轮裁决 R17，数量/字数
+ * 上限与服务端 zod 一致，提前在前端拦成大白话提示，不让店员看到英文报错）。
  * 如果这是该维度「从无值到有第一个值」，把加值前的行存为新的 template（用于
  * 之后再给这个维度加值时也能找回同一批默认值）；如果该维度已有值，沿用现有
  * template（前提是它就是这个维度的），否则新出现的组合是空白默认值（A11）。
@@ -317,12 +334,18 @@ export function moveValue(state: SpecEditorState, dimIndex: number, valueIndex: 
 export function addValue(state: SpecEditorState, dimIndex: number, rawValue: string): MutationResult {
   const value = normalizeValue(rawValue)
   if (!value) return { error: msg.E0_EMPTY_VALUE }
+  if (value.length > MAX_NAME_LENGTH) return { error: msg.E5_TOO_LONG }
   const dim = state.dimensions[dimIndex]
   // 已有值也按去首尾空格比较（R8）：库里可能存在带空格的历史数据
   if (dim.values.some((v) => normalizeValue(v) === value)) return { error: msg.msgDuplicateNewValue(value) }
+  if (dim.values.length >= MAX_VALUES_PER_DIMENSION) {
+    return { error: msg.msgTooManyValues(msg.dimLabel(dim.name, dimIndex)) }
+  }
 
   const wasEmpty = dim.values.length === 0
   const dimensions = state.dimensions.map((d, i) => (i === dimIndex ? { ...d, values: [...d.values, value] } : d))
+  const comboCount = cartesian(dimensions).length
+  if (comboCount > MAX_COMBINATIONS) return { error: msg.msgTooManyCombos(value, comboCount) }
   const template: DimensionTemplate | null = wasEmpty
     ? { dimIndex, rows: state.rows }
     : keepTemplate(state.template, dimIndex)
@@ -332,13 +355,15 @@ export function addValue(state: SpecEditorState, dimIndex: number, rawValue: str
 
 /**
  * 规格值改名：同时更新维度定义与所有含该值的行，行对象其它字段（含 id）原样保留，
- * 不经过笛卡尔积重建，因此其余行完全不受影响、顺序不变。
+ * 不经过笛卡尔积重建，因此其余行完全不受影响、顺序不变。改名不会增加选项数或组合数，
+ * 所以只校验空值(E3)→长度(E5)→重复(E2)，不查 E4/E6（第一轮裁决 R17）。
  */
 export function renameValue(state: SpecEditorState, dimIndex: number, oldValue: string, rawNewValue: string): MutationResult {
   const newValue = normalizeValue(rawNewValue)
   if (!newValue) return { error: msg.E3_EMPTY_RENAME }
   const dim = state.dimensions[dimIndex]
   if (newValue === oldValue) return { state } // 无变化
+  if (newValue.length > MAX_NAME_LENGTH) return { error: msg.E5_TOO_LONG }
   // 已有值也按去首尾空格比较（R8）；排除自己，允许「把自己改成去空格版本」
   if (dim.values.some((v) => v !== oldValue && normalizeValue(v) === newValue)) {
     return { error: msg.msgDuplicateRename(newValue) }
@@ -397,12 +422,21 @@ export function removeValue(state: SpecEditorState, dimIndex: number, value: str
  * 3. 组合行价格缺失或非正数。
  * 无规格（dims 为空）时不做检查，交给上层的单规格校验。
  */
+/**
+ * 保存前校验，顺序固定为：V7（规格项总数）→ 逐规格项 [V8（名字长度）→ V1（无选项）→
+ * V2/V3（空白/重复选项）→ V9（该规格项选项数）→ V10（单个选项长度）] → V4（占位行兜底）
+ * → V11（组合总数）→ V5（行集合与笛卡尔积不一致兜底）→ V6（价格缺失）。
+ * V7-V11 是保存前的兜底（第一轮裁决 R17）：正常操作已经在 addValue/renameValue 里
+ * 拦住了（E4/E5/E6），这里主要防打开旧数据、或绕过输入框直接构造超限状态。
+ */
 export function validateSpecForm(dims: SpecDimension[], rows: SkuRow[]): string | null {
   if (dims.length === 0) return null
+  if (dims.length > MAX_DIMENSIONS) return msg.V7_TOO_MANY_DIMENSIONS
 
   for (let i = 0; i < dims.length; i++) {
     const d = dims[i]
     const label = msg.dimLabel(d.name, i)
+    if (normalizeValue(d.name).length > MAX_NAME_LENGTH) return msg.msgDimNameTooLong(label)
     if (d.values.length === 0) return msg.msgNoValues(label)
     const seen = new Set<string>()
     for (const raw of d.values) {
@@ -411,6 +445,11 @@ export function validateSpecForm(dims: SpecDimension[], rows: SkuRow[]): string 
       if (seen.has(v)) return msg.msgDuplicateValueInDim(label, v)
       seen.add(v)
     }
+    if (d.values.length > MAX_VALUES_PER_DIMENSION) return msg.msgTooManyValuesInDim(label)
+    for (const raw of d.values) {
+      const v = normalizeValue(raw)
+      if (v.length > MAX_NAME_LENGTH) return msg.msgValueTooLong(label, v)
+    }
   }
 
   if (rows.some((r) => r.specValues.includes(PLACEHOLDER))) {
@@ -418,6 +457,8 @@ export function validateSpecForm(dims: SpecDimension[], rows: SkuRow[]): string 
   }
 
   const expected = cartesian(dims)
+  if (expected.length > MAX_COMBINATIONS) return msg.msgTooManyCombosTotal(expected.length)
+
   const rowKeys = rows.map((r) => rowKey(r.specValues))
   const rowKeySet = new Set(rowKeys)
   const expectedKeySet = new Set(expected.map(rowKey))
