@@ -61,6 +61,7 @@
   function renderBase() {
     root.innerHTML = '<div class="page ' + (local ? 'page-local' : '') + '">' + header() +
       '<div class="promo-bar"><span class="promo-badge">减</span><span class="promo-summary">全店满减　满 66 减 6 · 满 108 减 12</span><span class="promo-detail">详情 ›</span></div>' +
+      (local ? '<div id="freeship-bar" class="promo-bar" style="display:' + (state.mode === 'PICKUP' ? 'none' : '') + '"><span class="promo-badge">免</span><span class="promo-summary">免运费　满 ¥58 免运费（2 km 内）· 多买免更远</span><span class="promo-detail">详情 ›</span></div>' : '') +
       '<div id="search-chip" class="category-tag-bar" hidden></div>' + toolbar() +
       '<div class="body catalog-body"><div id="category-rail" class="cat-panel"></div><div class="prod-wrap"><div id="product-panel" class="prod-panel"></div></div></div>' +
       '<div id="cart-spacer" class="cart-spacer"></div></div><div id="cart-host"></div>' +
@@ -203,6 +204,10 @@
       document.getElementById('notice-text').textContent = state.mode === 'PICKUP' ? '当前已打烊，自取仍可预约。请先选择合适的自取时间；实际可预约时段以小程序为准。' : '当前已打烊，您可以提前下单，营业后将按顺序安排配送。若您想预约自取，可切换到自取查看可预约时段。'
       var rulesRow = document.getElementById('rules-row')
       if (rulesRow) rulesRow.outerHTML = rulesRowHtml(state.mode)
+      // 自取模式不显示免运费条（不用 hidden 属性：.promo-bar { display:flex } 会压过
+      // UA 的 [hidden]{display:none}）
+      var fs = document.getElementById('freeship-bar')
+      if (fs) fs.style.display = state.mode === 'PICKUP' ? 'none' : ''
       renderCart(); updateLayout()
     }) })
     else {
