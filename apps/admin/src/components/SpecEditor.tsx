@@ -11,6 +11,7 @@ import {
   renameDimension as renameDimensionLogic,
   renameValue as renameValueLogic,
   rowKey,
+  PLACEHOLDER,
   type DimensionTemplate,
   type SkuRow,
   type SpecEditorState,
@@ -36,12 +37,30 @@ interface ValueEditing {
   draft: string
 }
 
+/**
+ * Esc 取消改名：不能只调用 React 合成事件的 stopPropagation。项目里的 Modal
+ * （编辑商品弹窗）在 document 上单独注册了原生 keydown 监听来处理 Esc 关闭，
+ * 那个监听器与 React 的事件委托是两条独立的原生事件路径，只有 stopPropagation
+ * 不保证能拦住它；这里额外调用 nativeEvent.stopImmediatePropagation() 从源头
+ * 掐断，确保编辑商品弹窗不会被规格值的 Esc 连带关掉。
+ */
+export function handleEscapeKey(e: {
+  preventDefault: () => void
+  stopPropagation: () => void
+  nativeEvent?: { stopImmediatePropagation?: () => void }
+}): void {
+  e.preventDefault()
+  e.stopPropagation()
+  e.nativeEvent?.stopImmediatePropagation?.()
+}
+
 export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
   // 每个维度一个「新值」输入框的临时文本
   const [valueDrafts, setValueDrafts] = useState<string[]>([])
   // 正在改名的规格值
   const [editingValue, setEditingValue] = useState<ValueEditing | null>(null)
-  // 新增维度、还没有值时的旧行快照，用于给该维度补第一个值时找回价格/库存
+  // 给「当前无值的维度」加第一个值时的快照，供该维度后续再加值时找回默认价格/库存；
+  // 只在编辑器内存活，保存或关闭编辑器（组件卸载）时随组件状态一起消失
   const [template, setTemplate] = useState<DimensionTemplate | null>(null)
   const [batchPrice, setBatchPrice] = useState('')
   const [batchStock, setBatchStock] = useState('')
@@ -56,9 +75,9 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
   // ---------- 维度 ----------
 
   const handleAddDimension = async () => {
-    const state = currentState()
-    if (state.dimensions.length >= 3) return
-    const hasSavedRows = state.rows.some((r) => r.id !== undefined)
+    const before = currentState()
+    if (before.dimensions.length >= 3) return
+    const hasSavedRows = before.rows.some((r) => r.id !== undefined)
     if (hasSavedRows) {
       const ok = await confirmDialog({
         title: '新增规格维度',
@@ -68,24 +87,32 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
       })
       if (!ok) return
     }
+    // 确认期间数据可能已变化，执行前重新取最新状态
+    const state = currentState()
+    if (state.dimensions.length >= 3) return
     commit(addDimensionLogic(state, '').state)
   }
 
   const handleRemoveDimension = async (i: number) => {
-    const state = currentState()
-    const dim = state.dimensions[i]
-    const hasSavedRows = state.rows.some((r) => r.id !== undefined)
+    const before = currentState()
+    const dim = before.dimensions[i]
+    if (!dim) return
+    const hasSavedRows = before.rows.some((r) => r.id !== undefined)
     if (dim.values.length > 0 && hasSavedRows) {
-      const isLast = state.dimensions.length === 1
+      const preview = removeDimensionLogic(before, i)
+      const isLast = before.dimensions.length === 1
       const content = isLast
         ? '删除最后一个维度后，商品会变成单规格。保存后所有规格都会被删除并重新创建，' +
           '顾客购物车里选了这些规格的商品会一起清空。确定删除？'
-        : `删除维度「${dim.name || `维度${i + 1}`}」后，现有组合会按值合并，每组价格/库存取合并前第一行的，请保存前逐行核对。\n` +
+        : `删除维度「${dim.name || `维度${i + 1}`}」后，现有 ${preview.mergedFrom} 个组合会合并为 ${preview.mergedTo} 个，` +
+          '每组价格/库存取合并前第一行的，请保存前逐行核对。\n' +
           '保存后对应规格会被删除并重新创建，顾客购物车里选了这些规格的商品会一起清空。确定删除？'
       const ok = await confirmDialog({ title: '删除规格维度', content, danger: true })
       if (!ok) return
     }
     setEditingValue(null)
+    // 确认期间数据可能已变化，执行前重新取最新状态
+    const state = currentState()
     commit(removeDimensionLogic(state, i).state)
   }
 
@@ -117,19 +144,22 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
   }
 
   const handleRemoveValue = async (i: number, v: string) => {
-    const result = removeValueLogic(currentState(), i, v)
-    if (result.affectedSavedRows > 0) {
+    const before = currentState()
+    const preview = removeValueLogic(before, i, v)
+    if (preview.affectedSavedRows > 0) {
       const ok = await confirmDialog({
         title: '删除规格值',
         content:
-          `删除规格值「${v}」后，保存时会删除 ${result.affectedSavedRows} 个已保存的规格，` +
+          `删除规格值「${v}」后，保存时会删除 ${preview.affectedSavedRows} 个已保存的规格，` +
           '顾客购物车里选了这个规格的商品会一起清空。确定删除？',
         danger: true,
       })
       if (!ok) return
     }
     if (editingValue?.dimIndex === i && editingValue.oldValue === v) setEditingValue(null)
-    commit(result.state)
+    // 确认期间数据可能已变化，执行前重新取最新状态
+    const state = currentState()
+    commit(removeValueLogic(state, i, v).state)
   }
 
   const handleMoveValue = (i: number, valueIndex: number, direction: 'prev' | 'next') => {
@@ -162,13 +192,24 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
   const batchFill = () => {
     onChange(
       dimensions,
-      skuRows.map((r) => ({
-        ...r,
-        ...(batchPrice !== '' ? { price: batchPrice } : {}),
-        ...(batchStock !== '' ? { stock: Number(batchStock) } : {}),
-      }))
+      skuRows.map((r) =>
+        r.specValues.includes(PLACEHOLDER)
+          ? r
+          : {
+              ...r,
+              ...(batchPrice !== '' ? { price: batchPrice } : {}),
+              ...(batchStock !== '' ? { stock: Number(batchStock) } : {}),
+            }
+      )
     )
   }
+
+  // 维度还没配好值时，对应的组合行只是内部占位，不在表格/卡片里展示；
+  // 用原始下标配对，updateRow 仍按 skuRows 的真实下标写入。
+  const visibleEntries = skuRows
+    .map((row, idx) => ({ row, idx }))
+    .filter(({ row }) => !row.specValues.includes(PLACEHOLDER))
+  const hasPendingDimension = dimensions.some((d) => d.values.length === 0)
 
   return (
     <div className="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/50">
@@ -266,6 +307,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                           e.preventDefault()
                           commitRenameValue(true)
                         } else if (e.key === 'Escape') {
+                          handleEscapeKey(e)
                           setEditingValue(null)
                         }
                       }}
@@ -322,12 +364,20 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               className={`${inputCls} w-full sm:w-36`}
             />
           </div>
+          {dim.values.length === 0 && (
+            <p className="text-xs text-amber-600">添加规格值后显示组合</p>
+          )}
         </div>
       ))}
 
       {/* 组合表格 */}
-      {skuRows.length > 0 && (
+      {visibleEntries.length > 0 && (
         <div className="space-y-2">
+          {hasPendingDimension && (
+            <p className="text-xs text-amber-600">
+              有维度还没有规格值，下面暂时只显示已配好的组合，请为每个维度都添加规格值后再保存。
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-gray-500">批量填充</span>
             <input
@@ -370,7 +420,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {skuRows.map((row, idx) => (
+                {visibleEntries.map(({ row, idx }) => (
                   <tr key={rowKey(row.specValues)} className="border-t border-gray-100">
                     {row.specValues.map((v, vi) => (
                       <td key={vi} className="px-3 py-1.5 text-gray-700 whitespace-nowrap">
@@ -416,7 +466,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
 
           {/* <md：组合卡片列表（触控友好） */}
           <div className="md:hidden space-y-2">
-            {skuRows.map((row, idx) => (
+            {visibleEntries.map(({ row, idx }) => (
               <div key={rowKey(row.specValues)} className="border border-gray-200 rounded-md bg-white p-3">
                 <p className="text-sm font-medium text-gray-800 mb-2">{row.specValues.join(' / ')}</p>
                 <div className="grid grid-cols-3 gap-2">
@@ -459,7 +509,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
             ))}
           </div>
           <p className="text-xs text-gray-400">
-            共 {skuRows.length} 个规格组合。商品售价将自动取最低规格价，总库存为各规格之和。
+            共 {visibleEntries.length} 个规格组合。商品售价将自动取最低规格价，总库存为各规格之和。
           </p>
         </div>
       )}

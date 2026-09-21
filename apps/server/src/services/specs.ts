@@ -52,7 +52,14 @@ export function validateSpecs(
   }
 
   const seenSpecText = new Set<string>()
+  const seenId = new Set<number>()
   for (const sku of skuList) {
+    if (sku.id !== undefined) {
+      if (seenId.has(sku.id)) {
+        throw new AppError(40001, '规格 id 重复', 400)
+      }
+      seenId.add(sku.id)
+    }
     if (sku.specValues.length !== dims.length) {
       throw new AppError(40001, `规格「${sku.specText}」的值数量与维度数不一致`, 400)
     }
@@ -70,6 +77,23 @@ export function validateSpecs(
     }
     seenSpecText.add(sku.specText)
   }
+
+  // 组合行必须恰好覆盖 dims 的完整笛卡尔积（不缺、不多），否则小程序里会出现
+  // 永远选不出对应 SKU 的规格值组合（第一轮裁决 R6，用户选定服务端也校验）。
+  const expectedCombos = dims.reduce<string[][]>(
+    (acc, d) => acc.flatMap((combo) => d.values.map((v) => [...combo, v])),
+    [[]]
+  )
+  if (skuList.length !== expectedCombos.length) {
+    throw new AppError(40001, '规格组合数量与规格值不一致，请检查各维度的规格值后重试', 400)
+  }
+  const expectedKeys = new Set(expectedCombos.map((c) => JSON.stringify(c)))
+  for (const sku of skuList) {
+    if (!expectedKeys.has(JSON.stringify(sku.specValues))) {
+      throw new AppError(40001, '规格组合与规格值不一致，请检查各维度的规格值后重试', 400)
+    }
+  }
+
   return { dims, skuList }
 }
 

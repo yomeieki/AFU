@@ -11,6 +11,8 @@ import {
   renameValue,
   removeValue,
   validateSpecForm,
+  cartesian,
+  PLACEHOLDER,
   type SkuRow,
   type SpecDimension,
 } from '../src/components/specLogic'
@@ -170,25 +172,33 @@ test('A4 维度排序：交换维度后每行 specValues 与行顺序同步调�
   assert.deepEqual(byId.get(5)!.specValues, ['带骨', '特辣'])
 })
 
-// ---- A5 / A6 新增维度保留数据 ----
-test('A5 新增维度保留数据（第一个值）：补值后行数据从原组合复制，无 id', () => {
+// ---- A5' / A6' 新增维度保留数据（占位符机制，第一轮复核 R2/R3 修订后） ----
+test("A5' 新增维度（占位）：现有行原样保留（含 originalPrice），补第一个值后从占位行复制价格/库存", () => {
   const dims: SpecDimension[] = [
     { name: '辣度', values: ['微辣', '中辣'] },
     { name: '骨型', values: ['带骨', '去骨'] },
   ]
   const rows: SkuRow[] = [
-    row(1, ['微辣', '带骨'], '10', 1),
-    row(2, ['微辣', '去骨'], '11', 2),
-    row(3, ['中辣', '带骨'], '20', 3),
-    row(4, ['中辣', '去骨'], '21', 4),
+    row(1, ['微辣', '带骨'], '10', 1, '12'),
+    row(2, ['微辣', '去骨'], '11', 2, ''),
+    row(3, ['中辣', '带骨'], '20', 3, '25'),
+    row(4, ['中辣', '去骨'], '21', 4, ''),
   ]
+  const before = clone(rows)
   const state = createState(dims, rows)
 
   const added = addDimension(state, '重量').state
   assert.equal(added.dimensions.length, 3)
   assert.deepEqual(added.dimensions[2].values, [])
-  // 行数为 0 或不可提交均可
-  assert.equal(added.rows.length, 0)
+  // 新增维度不再清空组合行：4 行原样保留，只是末尾多一个占位符位置
+  assert.equal(added.rows.length, 4)
+  added.rows.forEach((r, i) => {
+    assert.deepEqual(r.specValues, [...before[i].specValues, PLACEHOLDER])
+    assert.equal(r.id, before[i].id)
+    assert.equal(r.price, before[i].price)
+    assert.equal(r.originalPrice, before[i].originalPrice)
+    assert.equal(r.stock, before[i].stock)
+  })
 
   const filled = addValue(added, 2, '250g')
   assert.ok(filled.state)
@@ -201,12 +211,14 @@ test('A5 新增维度保留数据（第一个值）：补值后行数据从原�
   }
   const byPrefix = new Map(s.rows.map((r) => [r.specValues[0] + '/' + r.specValues[1], r]))
   assert.equal(byPrefix.get('微辣/带骨')!.price, '10')
+  assert.equal(byPrefix.get('微辣/带骨')!.originalPrice, '12')
   assert.equal(byPrefix.get('微辣/带骨')!.stock, 1)
   assert.equal(byPrefix.get('中辣/去骨')!.price, '21')
+  assert.equal(byPrefix.get('中辣/去骨')!.originalPrice, '')
   assert.equal(byPrefix.get('中辣/去骨')!.stock, 4)
 })
 
-test('A6 新增维度保留数据（后续值）：再加一个值时新出现的行同样复制原数据，已有值的行不变', () => {
+test("A6' 新增维度后续值：再加一个值同样复制原数据，250g 不变；对另一维度加值后模板已失效，新值为空白默认值", () => {
   const dims: SpecDimension[] = [
     { name: '辣度', values: ['微辣', '中辣'] },
     { name: '骨型', values: ['带骨', '去骨'] },
@@ -237,6 +249,18 @@ test('A6 新增维度保留数据（后续值）：再加一个值时新出现�
     the250gRowsAfter.sort((a, b) => (a.specValues.join() > b.specValues.join() ? 1 : -1)),
     the250gRowsBefore.sort((a, b) => (a.specValues.join() > b.specValues.join() ? 1 : -1))
   )
+
+  // 再对「辣度」（另一个维度）加值，占位行早已被 250g/500g 填满，不再有可复制的模板
+  const afterOtherDim = addValue(afterSecond, 0, '特辣').state!
+  const after1kg = addValue(afterOtherDim, 2, '1kg').state!
+  const the1kgRows = after1kg.rows.filter((r) => r.specValues[2] === '1kg')
+  assert.equal(the1kgRows.length, 6) // 3 个辣度值 × 2 个骨型值
+  for (const r of the1kgRows) {
+    assert.equal('id' in r, false)
+    assert.equal(r.price, '')
+    assert.equal(r.originalPrice, '')
+    assert.equal(r.stock, 0)
+  }
 })
 
 // ---- A7 删除维度合并 ----
@@ -277,7 +301,7 @@ test('A7 删除维度合并：多行合并取当前行顺序第一行，返回 m
   assert.equal(removeSpicy.state.rows[1].stock, 2)
 })
 
-test('A8 删除刚新增、还没有值的维度：恢复到删除前的快照，不触发合并', () => {
+test("A8' 删除刚新增、还没有值的维度：行与新增前深比较相等（含 id），不触发合并", () => {
   const dims: SpecDimension[] = [
     { name: '辣度', values: ['微辣', '中辣'] },
     { name: '骨型', values: ['带骨', '去骨'] },
@@ -416,6 +440,27 @@ test('A13 保存前校验：空值/重复值/空白值/价格缺失都有明确�
   assert.equal(r5, null)
 })
 
+test('A13(f)(g) 覆盖度校验：行数/组合与 cartesian(dims) 不一致时拒绝，完整覆盖时通过', () => {
+  const dims3x2: SpecDimension[] = [
+    { name: '辣度', values: ['微辣', '中辣', '特辣'] },
+    { name: '骨型', values: ['带骨', '去骨'] },
+  ]
+  const full = cartesian(dims3x2).map((v) => row(undefined, v, '10', 1))
+
+  // (f) 只给 5 行，缺一个组合
+  const missingOne = full.slice(0, 5)
+  const rMissing = validateSpecForm(dims3x2, missingOne)
+  assert.ok(rMissing && rMissing.length > 0)
+
+  // (f) 多一行重复组合（['微辣','带骨'] 出现两次）
+  const withDuplicate = [...full, row(undefined, ['微辣', '带骨'], '10', 1)]
+  const rDup = validateSpecForm(dims3x2, withDuplicate)
+  assert.ok(rDup && rDup.length > 0)
+
+  // (g) 完整覆盖 6 行 → null
+  assert.equal(validateSpecForm(dims3x2, full), null)
+})
+
 test('A14 sortOrder 与行顺序：排序后的首行对应 sortOrder 0', () => {
   const dims: SpecDimension[] = [
     { name: '辣度', values: ['微辣', '中辣'] },
@@ -432,6 +477,107 @@ test('A14 sortOrder 与行顺序：排序后的首行对应 sortOrder 0', () => 
   const payload = moved.rows.map((r, i) => ({ specText: r.specValues.join('/'), sortOrder: i }))
   assert.equal(payload[0].sortOrder, 0)
   assert.equal(payload[0].specText, '带骨/微辣')
+})
+
+// ---- A16-A19：第一轮复核 R2/R3 触发条件的回归用例 ----
+test('A16（R2-A）：新增空维度期间对已有维度加值，再删掉那个空维度，行按 cartesian 顺序恰为 3 行', () => {
+  const dims: SpecDimension[] = [{ name: '辣度', values: ['微辣', '中辣'] }]
+  const rows: SkuRow[] = [row(1, ['微辣'], '10', 1), row(2, ['中辣'], '20', 2)]
+  const state = createState(dims, rows)
+
+  const added = addDimension(state, '重量').state
+  const afterAddValue = addValue(added, 0, '特辣').state!
+  const removed = removeDimension(afterAddValue, 1) // 删掉新增的空维度（下标 1）
+
+  assert.deepEqual(removed.state.dimensions.map((d) => d.name), ['辣度'])
+  assert.equal(removed.state.rows.length, 3)
+  assert.deepEqual(
+    removed.state.rows.map((r) => r.specValues),
+    [['微辣'], ['中辣'], ['特辣']]
+  )
+  assert.equal(removed.state.rows[0].id, 1)
+  assert.equal(removed.state.rows[0].price, '10')
+  assert.equal(removed.state.rows[1].id, 2)
+  assert.equal(removed.state.rows[1].price, '20')
+  assert.equal('id' in removed.state.rows[2], false)
+  assert.equal(removed.state.rows[2].price, '')
+
+  // 注：「特辣」行是新出现的组合，价格从未被填过，天然是空白默认值。
+  // 第一轮裁决 plan.md 里 A16 写的是 validateSpecForm 应返回 null，
+  // 但按 A13(d)/A11 既有规则「行价格必须 > 0」，这里必然是非空提示——
+  // 与 A16 字面断言冲突，已在报告的「上报」栏说明，此处按更基础的
+  // 价格必填规则断言（不能反过来放宽 A13(d)）。
+  assert.ok(validateSpecForm(removed.state.dimensions, removed.state.rows) !== null)
+})
+
+test('A17（R2-B）：新增空维度期间改名已有维度的值，再删掉那个空维度，不残留旧值', () => {
+  const dims: SpecDimension[] = [{ name: '辣度', values: ['微辣', '中辣'] }]
+  const rows: SkuRow[] = [row(1, ['微辣'], '10', 1), row(2, ['中辣'], '20', 2)]
+  const state = createState(dims, rows)
+
+  const added = addDimension(state, '重量').state
+  const afterRename = renameValue(added, 0, '微辣', '小辣')
+  assert.ok(afterRename.state)
+  const removed = removeDimension(afterRename.state!, 1)
+
+  assert.deepEqual(removed.state.rows.map((r) => r.specValues), [['小辣'], ['中辣']])
+  assert.equal(removed.state.rows[0].id, 1)
+  assert.equal(removed.state.rows[1].id, 2)
+  assert.equal(validateSpecForm(removed.state.dimensions, removed.state.rows), null)
+  assert.ok(!removed.state.rows.some((r) => r.specValues.includes('微辣')))
+})
+
+test('A18（R3）：新增空维度期间删除另一个有值维度必须能识别出已保存行，合并后不带 id', () => {
+  const dims: SpecDimension[] = [
+    { name: '辣度', values: ['微辣', '中辣'] },
+    { name: '骨型', values: ['带骨', '去骨'] },
+  ]
+  const rows: SkuRow[] = [
+    row(1, ['微辣', '带骨'], '10', 1),
+    row(2, ['微辣', '去骨'], '12', 2),
+    row(3, ['中辣', '带骨'], '20', 3),
+    row(4, ['中辣', '去骨'], '22', 4),
+  ]
+  const state = createState(dims, rows)
+  const added = addDimension(state, '重量').state
+
+  // 此刻仍能看出这些行里有已保存（带 id）的行——不再是空数组
+  assert.ok(added.rows.some((r) => r.id !== undefined))
+
+  const removed = removeDimension(added, 0) // 删「辣度」（有值维度），新维度位置仍是占位符
+  assert.equal(removed.mergedFrom, 4)
+  assert.equal(removed.mergedTo, 2)
+  assert.ok(removed.state.rows.every((r) => r.id === undefined))
+  assert.ok(validateSpecForm(removed.state.dimensions, removed.state.rows) !== null)
+})
+
+test('A19：删除维度最后一个值后回到占位状态，行数不变、id 保留；再补值时从占位行复制、无 id', () => {
+  const dims: SpecDimension[] = [
+    { name: '辣度', values: ['微辣'] },
+    { name: '骨型', values: ['带骨', '去骨'] },
+  ]
+  const rows: SkuRow[] = [row(1, ['微辣', '带骨'], '10', 1), row(2, ['微辣', '去骨'], '12', 2)]
+  const state = createState(dims, rows)
+
+  const afterRemove = removeValue(state, 0, '微辣')
+  assert.deepEqual(afterRemove.state.dimensions[0].values, [])
+  assert.equal(afterRemove.state.rows.length, 2)
+  assert.deepEqual(afterRemove.state.rows[0].specValues, [PLACEHOLDER, '带骨'])
+  assert.equal(afterRemove.state.rows[0].id, 1)
+  assert.equal(afterRemove.state.rows[0].price, '10')
+  assert.deepEqual(afterRemove.state.rows[1].specValues, [PLACEHOLDER, '去骨'])
+  assert.equal(afterRemove.state.rows[1].id, 2)
+
+  const afterAddBack = addValue(afterRemove.state, 0, '轻辣')
+  assert.ok(afterAddBack.state)
+  const s = afterAddBack.state!
+  assert.equal(s.rows.length, 2)
+  for (const r of s.rows) {
+    assert.equal('id' in r, false)
+    assert.equal(r.specValues[0], '轻辣')
+  }
+  assert.equal(s.rows.find((r) => r.specValues[1] === '带骨')!.price, '10')
+  assert.equal(s.rows.find((r) => r.specValues[1] === '去骨')!.price, '12')
 })
 
 test('addDimension 达到上限（3 个）后不再新增', () => {
