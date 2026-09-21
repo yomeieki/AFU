@@ -37,7 +37,8 @@ import { useIsPhone } from '../hooks/useIsPhone'
 import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn, todayKey } from '../utils/time'
 import { providerLabel, callStrategyLabel } from '../utils/providers'
 
-type ColKey = keyof WorkbenchSnapshot['columns']
+// scheduled 不是显示列：出票前的预约单渲染在待接单列的折叠组里（colKey='pending'），它只是快照里的一个桶
+type ColKey = Exclude<keyof WorkbenchSnapshot['columns'], 'scheduled'>
 
 const COLUMNS: { key: ColKey; title: string }[] = [
   { key: 'pending', title: '待接单' }, { key: 'preparing', title: '备餐中' },
