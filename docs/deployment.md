@@ -204,6 +204,19 @@ deploy.sh 会自动完成：**预检（生产环境缺 COS 配置会在动服务
 
 > ⚠️ 首次部署本版本前，务必先在 `apps/server/.env` 填好 `COS_SECRET_ID/KEY/BUCKET/REGION`，否则预检会直接拒绝部署（这是有意的：新版图片上传只走 COS，配置缺失时启动即失败）。
 
+### 规格数据体检（只读，部署「规格改名/排序」版本时跑一次）
+
+新版后台打开商品编辑时会自动整理旧的规格数据（去空格、去重、补缺的组合），保存时服务端会要求规格组合完整。部署后用下面的脚本扫一遍库，看看哪些商品会被自动整理、哪些需要留意。脚本只做查询，不改任何数据，部署前后跑结果一样：
+
+```bash
+cd /www/food-shop/apps/server
+npx ts-node --compiler-options '{"module":"CommonJS"}' scripts/audit-specs.ts
+# 需要明细文件时：
+npx ts-node --compiler-options '{"module":"CommonJS"}' scripts/audit-specs.ts --json /www/backups/spec-audit.json
+```
+
+结果分三档：**[自动整理]** 新版本打开编辑时自动处理，店员按黄色提示填价格保存即可；**[需留意]** 不影响现在售卖，下次编辑该商品时会看到中文提示；**[需处理]** 数据本身有问题，把报告发给开发。
+
 ---
 
 ## 七、Nginx 配置
