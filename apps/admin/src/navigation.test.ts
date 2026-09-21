@@ -34,8 +34,9 @@ test('uses express when a catalog URL has no valid channel', () => {
 test('defines the approved child tabs for every business center', () => {
   assert.deepEqual(centerTabs.catalog.map((tab) => tab.label), ['商品列表', '分类管理'])
   assert.deepEqual(centerTabs.orders.map((tab) => tab.label), ['同城配送', '全国邮寄'])
-  // 页签名不带「设置」：与「订单管理」的渠道叫法统一，也让四项在 375px 手机上一行放得下
-  assert.deepEqual(centerTabs.settings.map((tab) => tab.label), ['全国邮寄', '同城配送', '到店自取', '营业时间'])
+  // 页签名不带「设置」：与「订单管理」的渠道叫法统一，也让页签在 375px 手机上更容易放下
+  // （2026-09-22 加「预约送达」后共五项，375px 实际是否一行放下未重新实测，仅沿用简称策略）
+  assert.deepEqual(centerTabs.settings.map((tab) => tab.label), ['全国邮寄', '同城配送', '到店自取', '预约送达', '营业时间'])
   assert.deepEqual(centerTabs.promotion.map((tab) => tab.label), ['优惠券', '满减', '积分赠品', '轮播图', '会员设置'])
 })
 
