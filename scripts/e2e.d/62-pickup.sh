@@ -246,6 +246,25 @@ sched '{"cancelAutoRejectMin":1}' >/dev/null
 assert_eq "自取单的取消申请不被自动驳回" "$(sql "SELECT cancel_requested_at IS NOT NULL FROM orders WHERE id=$P62_O6;")" "1"
 req POST "/api/admin/orders/$P62_O6/cancel-request/approve" "$AT" >/dev/null
 
+echo "-- ⑭ R3：pickup_at 缺失（数据异常）时两个取消端点给出专门文案，不再互相矛盾 --"
+# 复核 R3 根因：pickupAt 缺失是数据异常（正常下单路径不产生），canSelfCancelOf/cancelWindowOf 对它
+# 都返回拒绝——改前 PUT /cancel 抛「已临近约定时间，请改为『申请取消』」，顾客照做去 POST
+# /cancel-request 又被同一根因拒绝、抛「当前可直接取消订单，无需申请」，两条文案互相指向对方，
+# 顾客没有出路。改后两个端点都先判出这种缺字段情形，给同一条「数据异常」文案。
+P62_SLOT8=$(req GET /api/local/pickup-slots | jq -r '[.data.days[].slots[]][0].startAt')
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_SLOT8\",\"pickupContact\":{\"phone\":\"13800008888\"}}")
+P62_O8=$(jq -r .data.orderId <<<"$R"); req POST "/api/orders/$P62_O8/pay" "$UT" >/dev/null
+sql "UPDATE orders SET pickup_at=NULL WHERE id=$P62_O8;"
+R=$(req PUT "/api/orders/$P62_O8/cancel" "$UT")
+assert_eq "R3：pickup_at 缺失时自助取消 42229（不再误判成功，安全性不退化）" "$(code "$R")" "42229"
+[[ "$(jq -r .message <<<"$R")" == *"数据异常"* ]] && ok "R3：PUT /cancel 文案含「数据异常」" || fail "R3：PUT /cancel 文案不对" "$R"
+R=$(req POST "/api/orders/$P62_O8/cancel-request" "$UT" '{"note":"测试"}')
+assert_eq "R3：申请取消同样 42229" "$(code "$R")" "42229"
+[[ "$(jq -r .message <<<"$R")" == *"数据异常"* ]] && ok "R3：POST /cancel-request 文案同样含「数据异常」，两端点不再互相矛盾" || fail "R3：POST /cancel-request 文案不对" "$R"
+assert_eq "R3：两次均未误判成功，订单仍 PAID" "$(p62_ord "$P62_O8" | jq -r .data.status)" "PAID"
+sql "DELETE FROM print_jobs WHERE order_id=$P62_O8;"
+sql "UPDATE orders SET status='CANCELLED', cancelled_at=NOW(3), cancel_reason='e2e 收尾 R3' WHERE id=$P62_O8 AND status='PAID';"
+
 echo "-- 收尾：恢复同城设置、停用本段券模板、清本段打印作业 --"
 req PUT /api/admin/settings/local-delivery "$AT" "$P62_ORIG" >/dev/null
 for t in ${P62_TID:-} ${P62_TID2:-}; do req PUT "/api/admin/coupon-templates/$t" "$AT" '{"status":"OFF"}' >/dev/null 2>&1 || true; done

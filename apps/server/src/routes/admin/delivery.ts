@@ -142,6 +142,12 @@ router.post('/:id/ready', async (req: Request, res: Response, next: NextFunction
     if (!o) throw new AppError(40401, '订单不存在', 404)
     if (o.deliveryType !== 'LOCAL' || !o.scheduledAt) throw new AppError(42292, '仅预约单可标记「已备好」；立即单请直接呼叫骑手')
     if (o.status !== 'PREPARING') throw new AppError(42204, `订单状态为 ${o.status}，仅备餐中订单可标记已备好`)
+    // 复核 R4：distanceM 为 null（数据异常，正常下单路径不产生）时 scheduleTimeline 算不出 callAt，
+    // 静默返回 called:false 会让这单一直挂着——Task 6 的 autoCallScheduled 同样按 distanceM 判定，永远不会补呼。
+    // 这里选择报错而不是自动呼叫：数据异常状态下对外发起真实呼叫费用，方向上不保守。必须在写 readyAt 之前
+    // 判断，否则会留下「readyAt 已写但接口报错」的半状态，店员重试看到的是幂等回放而不是这条错误。
+    // scheduledCallGuard 对 distanceM===null 直接放行（:82-90），店员仍可走「立即呼叫」或「自己送」处理。
+    if (o.distanceM === null) throw new AppError(42292, '该单缺少配送距离，无法推算呼叫时刻；请直接用「立即呼叫」或「自己送」处理')
     if (await getActiveDelivery(id)) throw new AppError(42228, '该订单已有在途配送单')
     // 幂等：重复点只回原时刻，不覆盖
     const readyAt = o.readyAt ?? new Date()
