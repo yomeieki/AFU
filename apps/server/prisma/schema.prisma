@@ -332,6 +332,15 @@ model Order {
   // 不从设置反推——活动会变，这单当时减了多少不该跟着变（2026-09-17 全店满减设计 §3.2）。
   // 命中的档位不单独存，需要时从金额反推。
   promoDiscountAmount         Int       @default(0) @map("promo_discount_amount")
+  // ── 预约送达（deliveryType=LOCAL 且 scheduledAt 非空；spec 2026-09-21-scheduled-delivery-design §3.1）──
+  // 顾客选的送达时段起点。空 = 立即单。四个倒推时刻不存库，每次由 services/delivery/schedule.ts 按当时设置重算
+  scheduledAt                 DateTime? @map("scheduled_at")
+  // 店员点「已备好」/「立即呼叫」/「自己送」的时刻；到点自动呼叫只看它非空
+  readyAt                     DateTime? @map("ready_at")
+  // 备餐票已出（含企微「该开始备餐了」）的打标列——打印机关着时 PrintJob 不建行，所以不能拿它当标记（计划差异①）
+  prepTicketAt                DateTime? @map("prep_ticket_at")
+  // 「应备好未备好」上一次提醒的时刻；耗尽告警也复用它（上次时刻 ≥ 耗尽点 = 告警过了）
+  scheduleRemindedAt          DateTime? @map("schedule_reminded_at")
   // 客户端下单幂等键（UUID）。治的是「服务端已创建、客户端超时没收到响应」这一类重复下单：
   // 顾客点一次、网络卡住、他再点一次，库里就是两张单、库存扣两次、券核销两次。
   // 客户端每进一次结算页生成一个，重试沿用同一个；服务端见到重复的就把原单原样返回。
@@ -358,6 +367,7 @@ model Order {
   @@index([userId, status])
   @@index([status, createdAt])
   @@index([status, pointsSettledAt, completedAt])
+  @@index([deliveryType, scheduledAt])
   @@map("orders")
 }
 
@@ -687,6 +697,9 @@ model Delivery {
   // 本次呼叫用的策略：SOLO（引擎选的单家）| ALL（并呼）| MANUAL（店员指定）|
   // SOLO_HELD（该升级但预估取消费 >0，放弃自动升级）。NULL = 策略上线前的历史行。
   callStrategy            String?   @map("call_strategy") @db.VarChar(16)
+  // 呼叫来源（计划差异②）：SCHEDULED_AUTO = 预约单已备好后到点自动发单；MANUAL_EARLY = 店员「立即呼叫」提前发单；
+  // NULL = 普通手动 / 升级任务。与 callStrategy（挑运力的策略）是两个维度，报表按它区分「人为提前」
+  callOrigin              String?   @map("call_origin") @db.VarChar(16)
   // batchOrder 响应 fee[] 原样：[{provider, feeFen, distanceM}]，与 quoteSnapshot.quotes 同结构。
   // 这是**下单那一刻各家真预扣**的金额（快递100 后台那几行扣费明细就是它），比呼叫前的
   // 免费查价快照更权威——actualFee 认领中标运力报价时优先查它。

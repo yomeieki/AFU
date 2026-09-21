@@ -78,6 +78,17 @@ export interface TicketOrderInput {
   /** 全店满减（分，2026-09-17 设计 §6）。>0 时配送/取餐联在自取优惠之后、券之前打一行；厨房联不打 */
   promoDiscountAmount?: number
   announceNo?: number | null
+  // ── 预约送达（channel==='LOCAL' 且 scheduledAt 非空；2026-09-21）──
+  scheduledAt?: Date | null
+  /** 「9月22日（周二）12:00–12:30」，调用方用 slots.ticketLabel 算好传进来（本文件不算时区） */
+  scheduleSlotLabel?: string | null
+  /** 票头戳：'' 今天送（不盖）/ '明日单' / '9月22日单' */
+  scheduleDayStamp?: string | null
+  /** 'HH:mm'：开始备餐 / 该呼叫，来自 scheduleTimeline */
+  schedulePrepStart?: string | null
+  scheduleCall?: string | null
+  /** PREP 备餐票：非空即按备餐票排版（票头「开始备餐」+ 时刻行 + 未接单警示）。NEW_ORDER 不传 */
+  prep?: { unaccepted: boolean } | null
 }
 
 const TICKET_BYTE_LIMIT = 5000
@@ -298,9 +309,14 @@ const HR = '-'.repeat(LINE_WIDTH)
 export function renderOrderTicket(o: TicketOrderInput): string {
   const isLocal = o.channel === 'LOCAL'
   const isPickup = o.channel === 'PICKUP'
+  const isScheduled = isLocal && !!o.scheduledAt
   const hasKitchen = isLocal || isPickup // 自取也是后厨现拌 + 柜台装袋，两联
   const header: string[] = [
-    `<CB>${isPickup ? '到店自取' : isLocal ? '同城配送' : '全国邮寄'}</CB>`,
+    o.prep ? '<CB>开始备餐</CB>' : `<CB>${isPickup ? '到店自取' : isScheduled ? '预约配送' : isLocal ? '同城配送' : '全国邮寄'}</CB>`,
+    // 备餐票：第一行就是操作指令；[未接单] 提醒店员先接单
+    ...(o.prep ? [`<B>${esc(o.schedulePrepStart ?? '')} 开始备餐 · ${esc(o.scheduleCall ?? '')} 前备好</B>`, ...(o.prep.unaccepted ? ['<CB>[未接单]</CB>'] : [])] : []),
+    // 来单票：非今日送达盖戳（同自取），备餐票不盖——它就是当天出的
+    ...(isScheduled && !o.prep && o.scheduleDayStamp ? [`<CB>【${esc(o.scheduleDayStamp)}】</CB>`] : []),
     // 非今日取的自取单盖一枚大字戳：票面日期已是绝对日期，这枚戳只负责「今天先别做」
     ...(isPickup && o.pickupDayStamp ? [`<CB>【${esc(o.pickupDayStamp)}】</CB>`] : []),
     ...(o.announceNo !== null && o.announceNo !== undefined ? [`<C>第 ${o.announceNo} 次催单</C>`] : []),
@@ -338,7 +354,9 @@ export function renderOrderTicket(o: TicketOrderInput): string {
           `<B>地址 ${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}</B>`,
           `电话 ${maskPhone(esc(o.receiverPhone))}`,
           ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
-          ...(o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
+          ...(isScheduled
+            ? [`<B>送达 ${esc(o.scheduleSlotLabel ?? '')}</B>`, `开始备餐 ${esc(o.schedulePrepStart ?? '')} · 呼叫骑手 ${esc(o.scheduleCall ?? '')}`]
+            : o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
         ]
       : [
           `<B>收件人 ${esc(o.receiverName)}</B>`,
@@ -393,6 +411,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
       // 厨房联也用尾号（PO 2026-09-08 定）：两联靠同一个数联系，后厨出菜装袋时对得上配送联。
       // 尾号 4 位不是完整手机号，不算泄漏联系方式。
       `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
+      ...(isScheduled ? [`<B>送达 ${esc(o.scheduleSlotLabel ?? '')}</B>`] : []),
       ...tablewareBlock,
       HR,
       ...items.flatMap((it) => kitchenItemLines(it, level)),
@@ -457,6 +476,18 @@ export function renderReminderTicket(input: { channel: TicketChannel; waitedMin:
     '请到工作台接单',
   ]
   return assemble(lines)
+}
+
+/** 预约单「应备好未备好」催促小条（PO 2026-09-21 S7）。语音款硬件靠出票触发播报，所以它是一张精简票 */
+export function renderReadyDueTicket(input: { receiverPhone: string; slotLabel: string; call: string; seq: number }): string {
+  return assemble([
+    '<CB>预约单催备好</CB>',
+    `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
+    `<B>应于 ${esc(input.call)} 前备好</B>`,
+    `送达 ${esc(input.slotLabel)}`,
+    `第 ${input.seq} 次提醒`,
+    '请到工作台点「已备好」或「立即呼叫」',
+  ])
 }
 
 /** 取消/退款提醒票 */

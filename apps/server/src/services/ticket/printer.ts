@@ -15,7 +15,7 @@
  *  PO 定「取消流程只留一张票，厨房不用管、店员会通知」，驳回改为在工作台卡片上显示。
  *  这个字面量保留在联合类型里**只为让历史 print_jobs 行仍能被读回**（库里存的是字符串，
  *  移除会让旧行在任何按 kind 收窄的读取处失配）。**不要给它新增生产者。** */
-export type PrintJobKind = 'NEW_ORDER' | 'REPEAT' | 'CANCEL' | 'REPRINT' | 'TEST' | 'CANCEL_REQUEST' | 'RESUME'
+export type PrintJobKind = 'NEW_ORDER' | 'REPEAT' | 'CANCEL' | 'REPRINT' | 'TEST' | 'CANCEL_REQUEST' | 'RESUME' | 'PREP' | 'READY_DUE'
 
 /** PrintJob.provider */
 export type PrinterProviderName = 'FEIE' | 'MOCK' | 'XPYUN'

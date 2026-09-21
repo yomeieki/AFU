@@ -42,6 +42,31 @@ export interface PickupSettings {
 }
 
 /**
+ * 预约送达（spec 2026-09-21-scheduled-delivery-design §3.4）。四个倒推时刻的全部参数；
+ * 路上时间、呼叫到取走、高峰窗口沿用顶层值，预约单与立即单没理由不同。
+ */
+export interface ScheduleSettings {
+  /** 预约外送总开关，默认关 */
+  enabled: boolean
+  /** 时段粒度（分钟），15–120 */
+  slotMinutes: number
+  /** 0 = 只当天，1 = 当天 + 明天，0–3 */
+  daysAhead: number
+  /** 接单缓冲：接单截止 = 开始备餐 − 它 */
+  acceptBufferMin: number
+  /** 预约单备餐时长，默认与立即单相同，独立可调（热菜怕冷时调短） */
+  prepMinutes: number
+  /** 备餐票提前量：出票 = 开始备餐 − 它 */
+  prepTicketLeadMin: number
+  /** 应备好未备好的追加小条间隔（分钟） */
+  readyRemindEveryMin: number
+  /** 小条上限：callAt + every×max 之后不再出，告警一次 */
+  readyRemindMaxTimes: number
+  /** 「该呼叫时刻」前后容忍窗口，只影响卡片提示与「过早呼叫」的 42292 */
+  callToleranceMin: number
+}
+
+/**
  * 打包费（2026-09-13 打包费设计 §2.3）：同城外送 + 到店自取按份收，全店一个默认值；
  * 每道菜可在商品上单独覆盖（`Product.packingFeeFen`：null=跟随本节 perItemFen，0=不收，>0=改这个数）。
  * `enabled` 是总开关——关掉整店临时不收，商品上的覆盖值原样保留，重新打开立刻按原样生效。
@@ -148,6 +173,9 @@ export interface LocalDeliverySettings {
    */
   holiday: { until: string | null; reason: string } | null
   pickup: PickupSettings
+  schedule: ScheduleSettings
+  /** 自取与预约外送共用：约定时刻前多少分钟内关闭顾客自助秒退（spec §4.6，店主 2026-09-21 定 120） */
+  selfCancelLeadMin: number
   packing: PackingSettings
   promotion: PromotionSettings
   businessHours: BusinessHour[]
@@ -284,6 +312,11 @@ export const DEFAULT_LOCAL_SETTINGS: LocalDeliverySettings = {
     minOrderAmountFen: 0, discount: { type: 'NONE', value: 0 },
     autoCompleteAfterMin: 120, unpickedRemindAfterMin: 30,
   },
+  schedule: {
+    enabled: false, slotMinutes: 30, daysAhead: 1, acceptBufferMin: 5, prepMinutes: 20,
+    prepTicketLeadMin: 15, readyRemindEveryMin: 3, readyRemindMaxTimes: 5, callToleranceMin: 5,
+  },
+  selfCancelLeadMin: 120,
   // 默认开、¥1/份（P2/P7）：新店直接生效，不用店主上线当天先记得来开一次开关。
   packing: { enabled: true, perItemFen: 100 },
   // 默认关（P4/风险预案）：存量生产库没有这个块，回落到这份默认值——部署后活动关着，
@@ -386,6 +419,7 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
     ? kd.providers.filter((p): p is string => typeof p === 'string' && (KD100_PROVIDERS as readonly string[]).includes(p))
     : D.kd100.providers
   const pk = asObj(o.pickup), pkd = asObj(pk.discount)
+  const sc = asObj(o.schedule)
   const pkg = asObj(o.packing)
   const promo = asObj(o.promotion)
   const promoChannels = asObj(promo.channels)
@@ -477,6 +511,18 @@ export function sanitizeLocalSettings(raw: unknown): LocalDeliverySettings {
       autoCompleteAfterMin: int(pk.autoCompleteAfterMin, D.pickup.autoCompleteAfterMin, 10, 1440),
       unpickedRemindAfterMin: int(pk.unpickedRemindAfterMin, D.pickup.unpickedRemindAfterMin, 5, 1440),
     },
+    schedule: {
+      enabled: bool(sc.enabled, false),
+      slotMinutes: int(sc.slotMinutes, D.schedule.slotMinutes, 15, 120),
+      daysAhead: int(sc.daysAhead, D.schedule.daysAhead, 0, 3),
+      acceptBufferMin: int(sc.acceptBufferMin, D.schedule.acceptBufferMin, 0, 30),
+      prepMinutes: int(sc.prepMinutes, D.schedule.prepMinutes, 0, 180),
+      prepTicketLeadMin: int(sc.prepTicketLeadMin, D.schedule.prepTicketLeadMin, 0, 60),
+      readyRemindEveryMin: int(sc.readyRemindEveryMin, D.schedule.readyRemindEveryMin, 1, 15),
+      readyRemindMaxTimes: int(sc.readyRemindMaxTimes, D.schedule.readyRemindMaxTimes, 1, 10),
+      callToleranceMin: int(sc.callToleranceMin, D.schedule.callToleranceMin, 0, 15),
+    },
+    selfCancelLeadMin: int(o.selfCancelLeadMin, D.selfCancelLeadMin, 0, 720),
     packing: {
       enabled: bool(pkg.enabled, D.packing.enabled),
       perItemFen: int(pkg.perItemFen, D.packing.perItemFen, 0, 10_000),
@@ -574,6 +620,7 @@ export function validateLocalSettings(s: LocalDeliverySettings): string[] {
   if (s.promotion.enabled && s.promotion.tiers.length === 0) {
     errs.push('启用满减至少要配一档')
   }
+  if (s.schedule.enabled && s.businessHours.length === 0) errs.push('开通预约配送须先设置营业时间')
   return errs
 }
 
@@ -1095,6 +1142,8 @@ export function publicLocalMeta(s: LocalDeliverySettings, now: Date = new Date()
       enabled: s.enabled, isOpen: isOpenNow(s, now),
       paused: isPaused(s, now) ? { reason: s.paused?.reason ?? '', until: s.paused?.until ?? null } : null,
       closedKind: closedKind(s, now), nextOpenText: nextOpenText(s, now),
+      // 预约送达（2026-09-21）。earliestScheduleText 由 routes/local.ts 补（它要算时段，本文件不 import schedule.ts 免循环）
+      scheduleEnabled: s.schedule.enabled, slotMinutes: s.schedule.slotMinutes, selfCancelLeadMin: s.selfCancelLeadMin,
     },
     pickup: {
       enabled: s.pickup.enabled,

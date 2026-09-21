@@ -6,11 +6,13 @@ import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import {
   callRider, voidUnknownDelivery, precancelDelivery, cancelDelivery, addTip, selfDeliver, markDelivered,
+  getActiveDelivery,
 } from '../../services/delivery/orchestrator'
 import { refreshOrderQuote, kickOffQuote, isQuoteStale, QUOTE_FRESH_MS } from '../../services/delivery/quote'
 import { getCourierLocationByOrder } from '../../services/delivery/courier-location'
 import { getLocalSettings, haversineM, estimateMinutes } from '../../services/local-settings'
 import { rejectCancelRequest } from '../../services/cancel-request'
+import { scheduleTimeline } from '../../services/delivery/schedule'
 
 const router = Router()
 
@@ -24,7 +26,7 @@ const ADMIN_DELIVERY_SELECT = {
   providerTaskId: true, providerOrderId: true,
   courierCompany: true, courierName: true, courierMobile: true,
   quotedFee: true, actualFee: true, quoteSnapshot: true, quotedAt: true, calledProviders: true,
-  callStrategy: true, orderFees: true,
+  callStrategy: true, callOrigin: true, orderFees: true,
   tipFee: true, cancelFee: true, providerDistanceM: true,
   errorCode: true, failReason: true,
   calledAt: true, acceptedAt: true, pickedUpAt: true, deliveredAt: true, cancelledAt: true, cancelReason: true,
@@ -34,7 +36,7 @@ const ADMIN_DELIVERY_SELECT = {
 } satisfies Prisma.DeliverySelect
 
 async function doAccept(id: number) {
-  const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true, distanceM: true } })
+  const target = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true, distanceM: true, scheduledAt: true } })
   if (!target) throw new AppError(40401, '订单不存在', 404)
   // 自取（PICKUP）与邮寄（EXPRESS）都被这里拒掉：自取单走通用的 POST /admin/orders/:id/accept
   // （routes/admin/orders.ts），只有同城才需要下面这段「算预计送达」的额外逻辑。
@@ -45,7 +47,8 @@ async function doAccept(id: number) {
   // 距离取不到（理论上同城单必有）就不写，宁可页面显示「—」也不要一个编出来的时刻。
   const acceptedAt = new Date()
   const s = await getLocalSettings()
-  const estimatedDeliveryAt = target.distanceM != null
+  // 预约单下单时已把 estimatedDeliveryAt 写成 scheduledAt，接单不重算（spec §4.5）
+  const estimatedDeliveryAt = target.scheduledAt ? null : target.distanceM != null
     ? new Date(acceptedAt.getTime() + estimateMinutes(s, target.distanceM, acceptedAt) * 60 * 1000)
     : null
   const moved = await prisma.order.updateMany({
@@ -66,7 +69,25 @@ async function doAccept(id: number) {
 
 // 规格 §10：指定运力用具名列表覆盖设置里的默认列表，不做成 oneToOne 布尔值。
 // v1 界面不传这个字段，接口先把口子留好。
-const callSchema = z.object({ providers: z.array(z.string().trim().min(1).max(32)).min(1).max(10).optional() })
+const callSchema = z.object({
+  providers: z.array(z.string().trim().min(1).max(32)).min(1).max(10).optional(),
+  /** 预约单「立即呼叫」：跳过「该呼叫时刻」的等待，记 MANUAL_EARLY */
+  force: z.boolean().optional(),
+})
+
+/**
+ * 预约单的呼叫时机守卫（spec §4.5）：早于 callAt − callToleranceMin 且未带 force → 42292；带 force → MANUAL_EARLY。
+ * 立即单、缺距离的单一律放行（返回 undefined = 普通手动呼叫）。
+ */
+async function scheduledCallGuard(id: number, force: boolean): Promise<'MANUAL_EARLY' | undefined> {
+  const o = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, scheduledAt: true, distanceM: true } })
+  if (!o || o.deliveryType !== 'LOCAL' || !o.scheduledAt || o.distanceM === null) return undefined
+  const s = await getLocalSettings()
+  const tl = scheduleTimeline(s, o.scheduledAt, o.distanceM)
+  if (Date.now() >= tl.callAt.getTime() - s.schedule.callToleranceMin * 60_000) return undefined
+  if (!force) throw new AppError(42292, `距该呼叫时刻还有 ${Math.ceil((tl.callAt.getTime() - Date.now()) / 60_000)} 分钟，如需提前请用「立即呼叫」`)
+  return 'MANUAL_EARLY'
+}
 
 // POST /api/admin/local/orders/:id/accept — 同城接单（PAID → PREPARING）
 router.post('/:id/accept', async (req: Request, res: Response, next: NextFunction) => {
@@ -85,6 +106,8 @@ router.post('/:id/accept-and-call', async (req: Request, res: Response, next: Ne
   try {
     const id = Number(req.params.id)
     const { providers } = callSchema.parse(req.body ?? {})
+    const t = await prisma.order.findUnique({ where: { id }, select: { scheduledAt: true } })
+    if (t?.scheduledAt) throw new AppError(42292, '预约单请先「接单」，到点后点「已备好」由系统呼叫')
     await doAccept(id)
     // 同样预取，但不等它：呼叫要立刻发出去。占位创建时快照多半赶不上（异步查价还没落库），
     // 但外呼本身耗时数秒，成功落库那一刻 orchestrator 会再读一次订单补上（见其注释）——
@@ -104,9 +127,46 @@ router.post('/:id/accept-and-call', async (req: Request, res: Response, next: Ne
 router.post('/:id/call', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
-    const { providers } = callSchema.parse(req.body ?? {})
-    const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN', providers })
+    const { providers, force } = callSchema.parse(req.body ?? {})
+    const origin = await scheduledCallGuard(id, !!force)
+    const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN', providers, origin })
     success(res, r)
+  } catch (e) { next(e) }
+})
+
+// POST /api/admin/local/orders/:id/ready — 预约单「已备好」（spec §4.5）：写 readyAt；已到该呼叫时刻立即发单，否则等定时任务到点发
+router.post('/:id/ready', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const o = await prisma.order.findUnique({ where: { id }, select: { deliveryType: true, status: true, scheduledAt: true, distanceM: true, readyAt: true } })
+    if (!o) throw new AppError(40401, '订单不存在', 404)
+    if (o.deliveryType !== 'LOCAL' || !o.scheduledAt) throw new AppError(42292, '仅预约单可标记「已备好」；立即单请直接呼叫骑手')
+    if (o.status !== 'PREPARING') throw new AppError(42204, `订单状态为 ${o.status}，仅备餐中订单可标记已备好`)
+    if (await getActiveDelivery(id)) throw new AppError(42228, '该订单已有在途配送单')
+    // 幂等：重复点只回原时刻，不覆盖
+    const readyAt = o.readyAt ?? new Date()
+    if (!o.readyAt) {
+      // 复核 R2：条件写必须判 count——:78 读到的是几毫秒前的快照，这期间订单可能已被并发的秒退/
+      // 取消/接单翻走。命中 0 行就不能装作成功：重读当前状态再报错，同 doAccept（:57-58）的写法。
+      const moved = await prisma.order.updateMany({ where: { id, status: 'PREPARING', readyAt: null }, data: { readyAt } })
+      if (moved.count === 0) {
+        const now = await prisma.order.findUnique({ where: { id }, select: { status: true } })
+        const cur = now?.status ?? o.status
+        throw new AppError(42204, `订单状态为 ${cur}，仅备餐中订单可标记已备好`)
+      }
+    }
+    const s = await getLocalSettings()
+    const tl = o.distanceM === null ? null : scheduleTimeline(s, o.scheduledAt, o.distanceM)
+    if (tl && Date.now() >= tl.callAt.getTime()) {
+      try {
+        const r = await callRider({ orderId: id, operator: req.adminUsername!, source: 'ADMIN', origin: 'SCHEDULED_AUTO' })
+        return success(res, { readyAt: readyAt.toISOString(), called: true, callAt: tl.callAt.toISOString(), ...r })
+      } catch (e) {
+        if (e instanceof AppError) e.message = '已记录备好，' + e.message
+        throw e
+      }
+    }
+    success(res, { readyAt: readyAt.toISOString(), called: false, callAt: tl?.callAt.toISOString() ?? null })
   } catch (e) { next(e) }
 })
 

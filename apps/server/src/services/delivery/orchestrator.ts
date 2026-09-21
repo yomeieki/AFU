@@ -56,6 +56,11 @@ export interface CallRiderInput {
    * 这三段逻辑，不用在升级任务里再抄一份。
    */
   forceMode?: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'
+  /**
+   * **内部字段，不从 HTTP 收**：预约单的呼叫来源（计划差异②）。SCHEDULED_AUTO = 已备好后到点自动发单
+   * （schedule-tasks / `/ready` 到点即呼）；MANUAL_EARLY = 店员「立即呼叫」跳过等待；不传 = 普通手动 / 升级。
+   */
+  origin?: DeliveryCallOrigin
 }
 
 /**
@@ -70,6 +75,8 @@ export interface CallRiderInput {
 export type DeliveryCallStrategy =
   | 'SOLO' | 'CHEAPEST' | 'ALL' | 'MANUAL'
   | 'SOLO_HELD' | 'CHEAPEST_HELD' | 'MANUAL_HELD'
+
+export type DeliveryCallOrigin = 'SCHEDULED_AUTO' | 'MANUAL_EARLY'
 
 /**
  * 超时未接时，各策略对应的「放弃升级」标记。没有对应值的策略不参与自动升级。
@@ -230,6 +237,14 @@ export async function callRider(input: CallRiderInput) {
   const snapshotForDelivery = fresh?.snapshot ?? order.quoteSnapshot
   const quotedAtForDelivery = fresh?.quotedAt ?? order.quotedAt
 
+  // 预约单：呼叫即视为已备好（spec §4.5 不变量：有在途配送单 ⇒ readyAt 非空）。呼叫失败也保留——店员表达过「好了」。
+  // 复核 R1：必须挪到占位 delivery.create 之前写——这样任何时刻只要有 delivery 行存在，readyAt 必已非空，
+  // 不再有「占位已建但 readyAt 仍为 null」的窗口（下面的原子复核在占位创建之后才跑，补不上这半程）。
+  // where 补 status: 'PREPARING'：此刻订单可能已被并发的秒退/取消翻走，不带状态条件会在 REFUNDING 上误写 readyAt。
+  if (order.scheduledAt && !order.readyAt) {
+    await prisma.order.updateMany({ where: { id: orderId, status: 'PREPARING', readyAt: null }, data: { readyAt: new Date() } })
+  }
+
   // 占位事务：activeOrderId 唯一索引 = 并发防线
   const seq = (await prisma.delivery.count({ where: { orderId } })) + 1
   const deliveryNo = `D${orderId}-${seq}`
@@ -248,7 +263,7 @@ export async function callRider(input: CallRiderInput) {
       // 店员最急。空缺会在外呼成功后的落库事务里补（:129 附近），不会一直空着。
       quoteSnapshot: (snapshotForDelivery ?? Prisma.DbNull) as Prisma.InputJsonValue | typeof Prisma.DbNull,
       quotedAt: quotedAtForDelivery,
-      calledProviders, callStrategy,
+      calledProviders, callStrategy, callOrigin: input.origin ?? null,
     } })
     deliveryId = created.id
   } catch (e) {
@@ -554,7 +569,10 @@ export async function selfDeliver(input: { orderId: number; name: string; phone:
       } })
       // 注意：Order 没有 shippedAt 列（发货时间只存在于 Shipment，而 LOCAL 单永不写 Shipment）。
       // 同城单的「出发时间」以 Delivery.pickedUpAt 为准。
-      const moved = await tx.order.updateMany({ where: { id: input.orderId, deliveryType: 'LOCAL', status: 'PREPARING' }, data: { status: 'SHIPPED' } })
+      const moved = await tx.order.updateMany({
+        where: { id: input.orderId, deliveryType: 'LOCAL', status: 'PREPARING' },
+        data: { status: 'SHIPPED', ...(order.scheduledAt && !order.readyAt ? { readyAt: now } : {}) },
+      })
       if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新')
       await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `店内自送：${input.name} ${input.phone}`, operator: input.operator })
       return { deliveryId: d.id, deliveryNo }

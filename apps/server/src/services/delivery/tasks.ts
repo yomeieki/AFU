@@ -97,7 +97,7 @@ export async function remindUnknownGhost(min = 10): Promise<number> {
 export async function remindLocalUncalled(min = 10): Promise<number> {
   const rows = await prisma.order.findMany({
     where: {
-      deliveryType: 'LOCAL', status: 'PREPARING', cancelRequestedAt: null,
+      deliveryType: 'LOCAL', scheduledAt: null, status: 'PREPARING', cancelRequestedAt: null,
       acceptedAt: { lt: ago(min) }, localUncalledRemindedAt: null,
       deliveries: { none: { activeOrderId: { not: null } } },
     },
@@ -166,7 +166,7 @@ export async function autoRejectStaleCancelRequests(min?: number): Promise<numbe
       status: 'PREPARING',
       cancelRequestedAt: { not: null },
       OR: [
-        { deliveryType: 'LOCAL', acceptedAt: { lt: ago(localThreshold) } },
+        { deliveryType: 'LOCAL', scheduledAt: null, acceptedAt: { lt: ago(localThreshold) } },
         { deliveryType: 'EXPRESS', acceptedAt: { lt: ago(expressThreshold) } },
       ],
     },
@@ -364,7 +364,7 @@ export async function autoCallRiders(delayMin?: number): Promise<number> {
   if (isCircuitTripped()) return 0
   const orders = await prisma.order.findMany({
     where: {
-      deliveryType: 'LOCAL', status: 'PREPARING', cancelRequestedAt: null,
+      deliveryType: 'LOCAL', scheduledAt: null, status: 'PREPARING', cancelRequestedAt: null,
       acceptedAt: { lt: ago(delay) },
       deliveries: { none: { activeOrderId: { not: null } } },
     },

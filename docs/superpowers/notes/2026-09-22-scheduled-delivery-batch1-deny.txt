@@ -1,0 +1,12 @@
+apps/admin/**
+apps/miniapp/**
+apps/server/src/services/refund.ts
+apps/server/src/services/cancel-request.ts
+apps/server/src/routes/admin/system.ts
+apps/server/src/services/delivery/callback.ts
+apps/server/src/services/delivery/kd100.ts
+apps/server/prisma/migrations/2026090*/**
+apps/server/prisma/migrations/2026091*/**
+apps/server/prisma/migrations/20260921*/**
+scripts/e2e.sh
+.env*

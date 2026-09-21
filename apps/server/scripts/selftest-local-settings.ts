@@ -273,4 +273,22 @@ t('isPickupPaused 与 minutesInPeak', () => {
   assert.strictEqual(minutesInPeak(peak, 11 * 60), false)
 })
 
+t('schedule 默认关、默认值齐全', () => {
+  const s = sanitizeLocalSettings({})
+  assert.strictEqual(s.schedule.enabled, false)
+  assert.deepStrictEqual(s.schedule, { enabled: false, slotMinutes: 30, daysAhead: 1, acceptBufferMin: 5, prepMinutes: 20, prepTicketLeadMin: 15, readyRemindEveryMin: 3, readyRemindMaxTimes: 5, callToleranceMin: 5 })
+  assert.strictEqual(s.selfCancelLeadMin, 120)
+})
+// 裁决（Fable，上报 1）：brief 原「schedule 越界夹取：slotMinutes 5→15、daysAhead 9→3、
+// selfCancelLeadMin 9999→720」错在方案——越界不做夹取，字段语义不动，仍用 int() helper
+// 回落默认值，与同文件 perItemFen 用例同口径，故改为下面这条断言回落默认值的测试。
+t('schedule 越界回落默认值（与 int() helper 及 perItemFen 同口径）：slotMinutes 5→30、daysAhead 9→1、selfCancelLeadMin 9999→120', () => {
+  const s = sanitizeLocalSettings({ schedule: { slotMinutes: 5, daysAhead: 9 }, selfCancelLeadMin: 9999 })
+  assert.strictEqual(s.schedule.slotMinutes, 30); assert.strictEqual(s.schedule.daysAhead, 1); assert.strictEqual(s.selfCancelLeadMin, 120)
+})
+t('开通预约但没有营业时间 → 校验报错', () => {
+  const s = sanitizeLocalSettings({ schedule: { enabled: true }, businessHours: [] })
+  assert.ok(validateLocalSettings(s).some((e) => e.includes('预约配送')))
+})
+
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

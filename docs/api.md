@@ -2108,3 +2108,68 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 进程启动时（`config.ts`，`dotenv` 加载之后、任何业务 `Date` 使用之前）无条件把 `process.env.TZ` 覆盖为 `Asia/Shanghai`（不是缺省才填——PM2 显式配了 `TZ=UTC` 也会被纠正），随后自检：偏移必须是 `-480` 且 `Intl.DateTimeFormat().resolvedOptions().timeZone` 必须是 `Asia/Shanghai`（赋一个不存在的时区名会静默回落到 UTC，`offset` 会变 0，靠这个自检能抓到）。生产环境自检失败直接拒绝启动（`pm2 logs` 会看到 `[timezone] … 拒绝启动`）；非生产只警告不拦截。PM2 侧 `ecosystem.config.js` 的 `env_production` 也加了 `TZ: 'Asia/Shanghai'` 作第二道保险。
 
 `GET /api/admin/system/status` 新增 `timezone: { name, offsetMin, ok, overriddenFrom }`（`overriddenFrom` 是被覆盖前的原值，未发生覆盖则为 `null`）。启动日志新增一行 `[server] timezone: Asia/Shanghai (offset -480)`；若环境原本设了别的 TZ，会先打一行 `[timezone] 环境 TZ=<原值> 已被覆盖为 Asia/Shanghai`。
+
+## 附录 M：同城预约送达（2026-09-21）
+
+设计依据 `docs/superpowers/specs/2026-09-21-scheduled-delivery-design.md`。预约单 = `deliveryType=LOCAL` 且 `scheduledAt` 非空；四个倒推时刻由 `services/delivery/schedule.ts` 的 `scheduleTimeline` 唯一给出。
+
+### 数据
+
+`orders`：`scheduled_at / ready_at / prep_ticket_at / schedule_reminded_at`（均可空）；`deliveries`：`call_origin`（`SCHEDULED_AUTO | MANUAL_EARLY | NULL`）。
+
+### 设置（`local_delivery.schedule` + 顶层 `selfCancelLeadMin`）
+
+| 字段 | 默认 | 范围 | 含义 |
+|---|---|---|---|
+| `schedule.enabled` | false | — | 预约外送总开关 |
+| `schedule.slotMinutes` | 30 | 15–120 | 时段粒度 |
+| `schedule.daysAhead` | 1 | 0–3 | 0 只当天，1 当天+明天 |
+| `schedule.acceptBufferMin` | 5 | 0–30 | 接单截止 = 开始备餐 − 它 |
+| `schedule.prepMinutes` | 20 | 0–180 | 预约单备餐；高峰取与 `peak.prepMaxMinutes` 的大者 |
+| `schedule.prepTicketLeadMin` | 15 | 0–60 | 备餐票 = 开始备餐 − 它 |
+| `schedule.readyRemindEveryMin` | 3 | 1–15 | 催备好小条间隔 |
+| `schedule.readyRemindMaxTimes` | 5 | 1–10 | `callAt + every×max` 后停止小条并告警一次 |
+| `schedule.callToleranceMin` | 5 | 0–15 | 早于 `callAt − 它` 呼叫须 `force` |
+| `selfCancelLeadMin` | 120 | 0–720 | 自取与预约共用：约定前 N 分钟内关闭自助秒退 |
+
+### 接口
+
+| 接口 | 变化 |
+|---|---|
+| `GET /api/local/meta` | `delivery` 节加 `scheduleEnabled / slotMinutes / selfCancelLeadMin / earliestScheduleText` |
+| `GET /api/local/delivery-slots?distanceM=` | 新增，结构同 `pickup-slots` |
+| `POST /api/orders` | LOCAL 可传 `scheduledAt`；42290 未开通 / 42291 时段不可选；预约单跳过暂停与营业时间判定 |
+| `GET /api/orders/:id` | 加 `schedule` 节；`canSelfCancel`/`canRequestCancel` 按约定前 `selfCancelLeadMin` 判（自取同） |
+| `PUT /api/orders/:id/cancel` | 自取/预约：约定前 `selfCancelLeadMin` 之外 PAID/PREPARING 均可秒退；之内 42229 |
+| `POST /api/orders/:id/cancel-request` | 自取/预约：PAID 也可申请 |
+| `POST /admin/local/orders/:id/accept` | 预约单不重算 `estimatedDeliveryAt` |
+| `POST /admin/local/orders/:id/accept-and-call` | 预约单 42292 |
+| `POST /admin/local/orders/:id/call` | 加 `force`；预约单早于 `callAt − callToleranceMin` 无 force → 42292 |
+| `POST /admin/local/orders/:id/ready` | 新增；`{ readyAt, called, callAt }` |
+| `GET /admin/orders` | 加 `schedule=SCHEDULED|ASAP` |
+| `GET /admin/orders/:id` | 加 `schedule` 节 |
+| `GET /admin/workbench/snapshot` | 加 `columns.scheduled`、卡片 `local.schedule`、顶层 `scheduleEnabled / scheduleBar` |
+
+### 定时任务（`scheduler.ts`，无 override 键）
+
+| 键 | 函数 | 触发 |
+|---|---|---|
+| `schedPrepTicket` | `printPrepTickets` | `ticketAt`，每单一次（`prep_ticket_at`） |
+| `schedUnaccepted` | `remindScheduledUnaccepted` | max(付款+15, `acceptDueAt`)，每单一次 |
+| `schedNotReady` | `remindScheduledNotReady` | `callAt` 起每 `readyRemindEveryMin`，`every×max` 后告警一次 |
+| `schedAutoCall` | `autoCallScheduled` | 已备好且 `callAt` 到 |
+| `schedLate` | `remindScheduledLate` | `scheduledAt`+10 分未取餐，限频 60 分钟 |
+
+`remindUnacceptedOrders / autoCallRiders / remindLocalUncalled / autoRejectStaleCancelRequests` 排除预约单；`repeatAnnounce` 对预约单锚在 `acceptDueAt`。
+
+### 小票
+
+`PrintJob.kind` 加 `PREP`（去重 seq 0）、`READY_DUE`（seq = 第几次）。版式见 spec §4.8。
+
+### 错误码
+
+| 码 | 含义 |
+|---|---|
+| 42290 | 预约配送未开通 |
+| 42291 | 送达时段不可选 |
+| 42292 | 操作与预约单状态不符（接单并呼叫 / 过早呼叫 / 对立即单点已备好） |

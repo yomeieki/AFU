@@ -82,8 +82,14 @@ assert_eq "详情 pickup.store.name" "$(jq -r '.data.pickup.store.name | length 
 assert_eq "待付款 canSelfCancel=true" "$(jq -r '.data.canSelfCancel' <<<"$R")" "true"
 req POST "/api/orders/$P62_O2/pay" "$UT" >/dev/null
 assert_eq "O2 已付款" "$(p62_ord "$P62_O2" | jq -r .data.status)" "PAID"
+# O2 建单时用的 P62_SLOT2（第 4 格）相对「现在」的偏移量约 115–145 分钟，天然跨在两小时自助取消截止两侧，
+# 随脚本跑到这里已流逝的时间而漂移——钉到 90 分钟后确定性地落进「距取餐不足两小时」一侧。
+sql "UPDATE orders SET pickup_at=DATE_ADD(NOW(3), INTERVAL 90 MINUTE) WHERE id=$P62_O2;"
 R=$(req PUT "/api/orders/$P62_O2/cancel" "$UT")
-assert_eq "付款后、开始备餐前自助取消 code 0" "$(code "$R")" "0"
+assert_eq "付款后、距取餐不足两小时自助取消 42229（2026-09-21 起）" "$(code "$R")" "42229"
+sql "UPDATE orders SET pickup_at=DATE_ADD(NOW(3), INTERVAL 3 HOUR) WHERE id=$P62_O2;"
+R=$(req PUT "/api/orders/$P62_O2/cancel" "$UT")
+assert_eq "钉到 3 小时后：自助取消 code 0" "$(code "$R")" "0"
 assert_eq "O2 → REFUNDED（mock 即时）" "$(p62_ord "$P62_O2" | jq -r .data.status)" "REFUNDED"
 
 echo "-- ⑦ 已到开始备餐时刻：自助取消 42229、可申请取消（PAID 也行）；接单后仍可申请 --"
@@ -167,6 +173,10 @@ assert_eq "pending 列排序 同城 < 自取 < 邮寄" "$P62_RANKS" "true"
 
 echo "-- ⑩ 取消申请：同意 = 全额退并清标记；驳回留痕；admin 列表 channel=LOCAL 含自取 --"
 req POST "/api/admin/orders/$P62_O3/accept" "$AT" >/dev/null
+# P62_SLOT2（第 4 格）相对当前时刻的偏移落在约 115–145 分钟，会跨在两小时自助取消截止（selfCancelLeadMin=120，
+# 2026-09-21 起自取共用）两侧、随脚本跑到这里时已流逝的时间而漂移——钉到 90 分钟后确定性地落进「已超自助取消窗口，
+# 需走申请取消」一侧（canRequestCancel=true），不然本段会随时钟偶发红/绿。
+sql "UPDATE orders SET pickup_at=DATE_ADD(NOW(3), INTERVAL 90 MINUTE) WHERE id=$P62_O3;"
 R=$(req POST "/api/orders/$P62_O3/cancel-request" "$UT" '{"note":"不要了"}')
 assert_eq "接单后申请取消 code 0" "$(code "$R")" "0"
 R=$(req POST "/api/admin/orders/$P62_O3/cancel-request/reject" "$AT")
