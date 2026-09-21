@@ -51,7 +51,8 @@ function buildContent(order: NotifyOrderInfo, items: NotifyItemInfo[]) {
     : []
   return [
     order.deliveryType === 'PICKUP' ? `**🏪 自取新订单${order.pickupSlotLabel ? ` · ${order.pickupSlotLabel} 取` : ''}**`
-      : order.deliveryType === 'LOCAL' ? `**🛵 同城新订单**` : `**🔔 新订单待发货**`,
+      : order.deliveryType === 'LOCAL' ? (order.scheduleSlotLabel ? `**📅 同城预约单 · ${order.scheduleSlotLabel} 送达**` : `**🛵 同城新订单**`)
+      : `**🔔 新订单待发货**`,
     `订单号：${order.orderNo}`,
     ...discountLine,
     `金额：**¥${fmtYuan(order.actualAmount)}**`,

@@ -10,6 +10,8 @@ import { sendPaidSubscribeMessage } from '../services/subscribe-message'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getLocalSettings } from '../services/local-settings'
 import { pickupSlotLabel } from '../services/pickup'
+// 别名避免与下方本地变量 slotLabel（自取时段文案）同名冲突
+import { slotLabel as computeScheduleSlotLabel } from '../services/slots'
 
 interface NotifyBody {
   event_type?: string
@@ -278,6 +280,16 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
               console.error('[wechat-notify] 计算取餐时段文案失败:', (err as Error).message)
             }
           }
+          // Task 8：预约单来单推送标题带送达时段，与 orders.ts mock 支付路径同一口径。
+          // 失败不影响支付回调主流程，也不影响上面已经算好的 pickupSlotLabel。
+          let scheduleSlotLabel: string | undefined
+          if (paid.deliveryType === 'LOCAL' && paid.scheduledAt) {
+            try {
+              scheduleSlotLabel = computeScheduleSlotLabel(paid.scheduledAt, (await getLocalSettings()).schedule.slotMinutes)
+            } catch (err) {
+              console.error('[wechat-notify] 计算预约时段文案失败:', (err as Error).message)
+            }
+          }
           try {
             notifyOrderPaid(
               {
@@ -293,6 +305,7 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
                 // 这条真实回调路径是手拼字面量，漏了它生产上自取单的推送标题就永远是「新订单待发货」。
                 deliveryType: paid.deliveryType,
                 pickupSlotLabel: slotLabel,
+                scheduleSlotLabel,
               },
               paid.items
             )

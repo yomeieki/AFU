@@ -17,6 +17,8 @@ import { BOOKING_STATUS_LABEL } from '../../services/delivery/express-booking-st
 import { rejectCancelRequest } from '../../services/cancel-request'
 import { settlePoints } from '../../services/member/points'
 import { parseLocalDayStart, localDayBounds } from '../../utils/local-day'
+import { scheduleView } from '../../services/delivery/schedule'
+import { getLocalSettings } from '../../services/local-settings'
 
 const router = Router()
 
@@ -49,6 +51,10 @@ const orderListSelect = {
   pickupAt: true,
   pickupReadyAt: true,
   pickupDiscountAmount: true,
+  // 预约送达（2026-09-21）：列表 schedule 筛选与预约单标识要用
+  scheduledAt: true,
+  readyAt: true,
+  prepTicketAt: true,
   promoDiscountAmount: true,
   // 会员优惠（M2）。userId 是 M3「发赔偿券」要用的——发券端点按用户维度，列表里没有它
   // 就得先点进详情再回来，店员在售后场景下最不需要的就是多两次跳转。
@@ -124,10 +130,15 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       createdAtWhere = { createdAt: bounds }
     }
 
+    // 预约 / 尽快筛选（2026-09-21）；不传不过滤
+    const sc = req.query.schedule ? z.enum(['SCHEDULED', 'ASAP']).parse(req.query.schedule) : undefined
+    const scWhere: Prisma.OrderWhereInput = sc === 'SCHEDULED' ? { scheduledAt: { not: null } } : sc === 'ASAP' ? { scheduledAt: null } : {}
+
     const where = {
       ...(status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}),
       ...dtWhere,
       ...createdAtWhere,
+      ...scWhere,
       ...(keyword
         ? {
             OR: [
@@ -255,6 +266,8 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       coupon,
       receiverDisplayAddress: displayAddress(order, order.deliveryType === 'LOCAL' || order.deliveryType === 'PICKUP'),
       remainingRefundable: remainingRefundable(order),
+      // 预约送达（2026-09-21）：非预约单或计算不出（缺距离）为 null，见 scheduleView
+      schedule: order.deliveryType === 'LOCAL' && order.scheduledAt ? scheduleView(await getLocalSettings(), order, new Date()) : null,
     })
   } catch (e) {
     next(e)

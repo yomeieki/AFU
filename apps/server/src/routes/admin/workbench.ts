@@ -12,6 +12,7 @@ import { getLocalSettings, isOpenNow } from '../../services/local-settings'
 import { getExpressSettings } from '../../services/express-settings'
 import { bookingView } from '../../services/delivery/express-booking'
 import { prepStartAt, pickupSlotLabel } from '../../services/pickup'
+import { scheduleView } from '../../services/delivery/schedule'
 import { REAL_ORDERS } from '../../utils/stats-scope'
 import { getWorkbenchPrinterHealth, PrinterHealthEntry } from '../../services/ticket'
 
@@ -73,7 +74,7 @@ async function loadOrders() {
   })
 }
 
-function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: BookingRow | null, pk: { prepStartAt: string; slotLabel: string } | null = null): Record<string, unknown> {
+function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: BookingRow | null, pk: { prepStartAt: string; slotLabel: string } | null = null, sc: ReturnType<typeof scheduleView> = null): Record<string, unknown> {
   const units = o.items.reduce((n, it) => n + it.quantity, 0)
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
@@ -109,6 +110,8 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
           acceptedAt: o.acceptedAt?.toISOString() ?? null,
           // provider 给「已完成」列用：SELF 要显示「自送 店员小李」而不是「骑手 店员小李」
           delivery: d ? { status: d.status, provider: d.provider ?? null, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
+          // 预约送达（2026-09-21）：非预约单或计算不出（缺距离）为 null，见 scheduleView
+          schedule: sc,
         }
       : null,
     pickup: o.deliveryType === 'PICKUP'
@@ -127,11 +130,18 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
   }
 }
 
-/** 规格 §2：同城恒排自取之上、自取恒排邮寄之上；同渠道内等待久的在上（done 列新在上） */
+/**
+ * 规格 §2：同城恒排自取之上、自取恒排邮寄之上；同渠道内等待久的在上（done 列新在上）。
+ * 预约送达（spec §6.1）：同渠道内预约单按 prepStartAt 升序排在立即单之前。
+ */
 const CHANNEL_RANK: Record<string, number> = { LOCAL: 0, PICKUP: 1, EXPRESS: 2 }
-function sortColumn(cards: { channel: string; waitSince: string }[], newestFirst = false) {
+type SortableCard = { channel: string; waitSince: string; local?: { schedule?: { prepStartAt: string } | null } | null }
+function sortColumn(cards: SortableCard[], newestFirst = false) {
   cards.sort((a, b) => {
     if (a.channel !== b.channel) return (CHANNEL_RANK[a.channel] ?? 9) - (CHANNEL_RANK[b.channel] ?? 9)
+    const sa = a.local?.schedule?.prepStartAt ?? null, sb = b.local?.schedule?.prepStartAt ?? null
+    if (sa && sb) return sa.localeCompare(sb)
+    if (sa !== sb) return sa ? -1 : 1
     return newestFirst ? b.waitSince.localeCompare(a.waitSince) : a.waitSince.localeCompare(b.waitSince)
   })
 }
@@ -169,25 +179,29 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       : []
     const bookingByOrder = new Map(bookings.map((b) => [b.orderId, b]))
 
-    const cols: Record<string, ReturnType<typeof toCard>[]> = { pending: [], preparing: [], waitingCourier: [], delivering: [], done: [] }
+    const cols: Record<string, ReturnType<typeof toCard>[]> = { scheduled: [], pending: [], preparing: [], waitingCourier: [], delivering: [], done: [] }
+    const now = new Date()
     for (const o of orders) {
       const pk = o.deliveryType === 'PICKUP' && o.pickupAt
         ? { prepStartAt: prepStartAt(settings, o.pickupAt).toISOString(), slotLabel: pickupSlotLabel(o.pickupAt, settings.pickup.slotMinutes) }
         : null
       const d = byOrder.get(o.id) ?? null
-      if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d, bookingByOrder.get(o.id) ?? null, pk))
+      const sc = o.deliveryType === 'LOCAL' && o.scheduledAt ? scheduleView(settings, o, now, !!d?.pickedUpAt) : null
+      // 预约单出票之前收进折叠分组，不进五列（spec §6.1 WAITING）
+      if (sc?.phase === 'WAITING' && (o.status === 'PAID' || o.status === 'PREPARING') && !d) { cols.scheduled.push(toCard(o, o.paidAt, d, null, null, sc)); continue }
+      if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d, bookingByOrder.get(o.id) ?? null, pk, sc))
       else if (o.status === 'PREPARING') {
         const b = bookingByOrder.get(o.id) ?? null
-        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d, null, null))
+        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d, null, null, sc))
         else if (o.deliveryType === 'EXPRESS' && b && b.activeOrderId === o.id) cols.waitingCourier.push(toCard(o, b.bookedAt ?? b.createdAt, null, b, null))
-        else cols.preparing.push(toCard(o, o.acceptedAt, d, b, pk))
+        else cols.preparing.push(toCard(o, o.acceptedAt, d, b, pk, sc))
       }
       // Order 没有 shippedAt 列——同城取配送单的取货时间，邮寄取运单的发货时间，都缺则退回接单时间
-      else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, d?.pickedUpAt ?? o.shipment?.shippedAt ?? o.acceptedAt, d, bookingByOrder.get(o.id) ?? null, pk))
-      else if (o.status === 'COMPLETED') cols.done.push(toCard(o, o.completedAt, d, bookingByOrder.get(o.id) ?? null, pk))
+      else if (o.status === 'SHIPPED') cols.delivering.push(toCard(o, d?.pickedUpAt ?? o.shipment?.shippedAt ?? o.acceptedAt, d, bookingByOrder.get(o.id) ?? null, pk, sc))
+      else if (o.status === 'COMPLETED') cols.done.push(toCard(o, o.completedAt, d, bookingByOrder.get(o.id) ?? null, pk, sc))
     }
-    for (const k of ['pending', 'preparing', 'waitingCourier', 'delivering'] as const) sortColumn(cols[k] as never)
-    sortColumn(cols.done as never, true)
+    for (const k of ['scheduled', 'pending', 'preparing', 'waitingCourier', 'delivering'] as const) sortColumn(cols[k] as SortableCard[])
+    sortColumn(cols.done as SortableCard[], true)
     cols.done = cols.done.slice(0, 30)
 
     const today = startOfToday()
@@ -229,6 +243,15 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       },
       pendingAlerts: cancelReqCount + badDeliveries + (circuit.tripped ? 1 : 0),
       now: new Date().toISOString(),
+      scheduleEnabled: settings.schedule.enabled,
+      // 常驻倒计时条：WAITING/TICKETED 里 prepStartAt 最近的一张 + 总数（spec §6.1）
+      scheduleBar: (() => {
+        const all = [...cols.scheduled, ...cols.pending, ...cols.preparing]
+          .map((c) => c as unknown as { orderId: number; local: { schedule: { prepStartAt: string; slotLabel: string; phase: string } | null } | null })
+          .filter((c) => c.local?.schedule && (c.local.schedule.phase === 'WAITING' || c.local.schedule.phase === 'TICKETED'))
+          .sort((a, b) => a.local!.schedule!.prepStartAt.localeCompare(b.local!.schedule!.prepStartAt))
+        return all.length ? { orderId: all[0].orderId, prepStartAt: all[0].local!.schedule!.prepStartAt, slotLabel: all[0].local!.schedule!.slotLabel, count: all.length } : null
+      })(),
     }
     cache = { at: Date.now(), data }
     success(res, data)
