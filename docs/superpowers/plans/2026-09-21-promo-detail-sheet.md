@@ -124,3 +124,51 @@ iOS + Android 各：分类页点满减「详情」和免运费「详情」→ �
 - 验收 A7 改为：`git diff a3b76c2..HEAD -- tests/miniapp/freeship-bar.test.cjs | grep -c '^-[^-]'` ≤ 6，且 `promo.test.cjs`、`cart-bar-page.test.cjs` diff 为空；执行记录里逐行列出该用例改前/改后。
 - 组件桩：该测试里 `promoBarComponent()` 构造的 `c` 若没有 `setData` 合并语义，按文件内既有桩写法补（只在测试桩内改，不改组件）。
 - 其余 T1–T4、A/B/D、§8 不变。
+
+## 11. 执行记录（01 · sonnet，2026-09-21）
+
+### 各 T 提交
+- T1 `74d3f15` feat(miniapp): T1 活动详情弹层行数据纯函数 + 测试先红后绿
+- T2 `46718c0` feat(miniapp): T2 组件内自绘弹层替换 wx.showModal
+- T2 修补 `d46a64b` fix(miniapp): T2 修正源码级断言遗漏——遮罩必须自带关闭事件（D2 验证时发现自己写的源码级断言只数全文 `onCloseSheet` 出现次数≥2，删掉遮罩上的 `catchtap` 后因为✕和按钮还各一处，计数仍然≥2、测试假绿；改成额外断言遮罩标签自身带 `catchtap="onCloseSheet"`，下限提到 3，用 D2 手法验证过红绿）
+- T3 `75d0236` feat(preview): T3 预览台镜像补活动详情弹层，可点开可关闭
+- T4（本次提交，含本节与 README 一句）
+
+### A（脚本化验收，2026-09-21 18:2X 在 HEAD=75d0236 上实跑，T4 提交前）
+| # | 命令 | 实际输出 | 结论 |
+|---|---|---|---|
+| A1 | `npm run -s test:miniapp \| grep ...` | `tests 286` / `pass 286` / `fail 0` | 通过（273 基线 + 10 T1 + 3 T2 = 286 ≥ 281） |
+| A2 | `node --test tests/miniapp/promo-sheet.test.cjs \| grep ...` | `pass 13` / `fail 0` | 通过 |
+| A3 | `node scripts/check-miniapp-es5.mjs .../index.js .../sheet.js` | `ES5 ✔` ×2，`EXIT=0` | 通过 |
+| A4 | `grep -c "showModal" .../index.js` | `0` | 通过 |
+| A5 | `git diff --name-only a3b76c2..HEAD -- apps/miniapp/utils apps/miniapp/pages app.wxss app.json app.js apps/server apps/admin package*.json scripts` | 空 | 通过 |
+| A6 | `git diff --name-only a3b76c2..HEAD \| grep -v -E '^(components/promo-bar/\|promo-sheet.test.cjs\|freeship-bar.test.cjs\|tools/miniapp-preview/\|docs/)'` | 空 | 通过 |
+| A7（§10 改版） | `git diff a3b76c2..HEAD -- tests/miniapp/freeship-bar.test.cjs \| grep -c '^-[^-]'` | `5`（≤6） | 通过；`promo.test.cjs`/`cart-bar-page.test.cjs` diff 均为空 |
+| A8 | `node -e "...sheetRowsOf('freeship',null,{radiusKm:8,fee:{freeShipTiers:[58/2,198/7,88/3]}})..."` | 3 行按 58/88/198 升序，`em` 为 `2 km`/`3 km`/`7 km`，`note` 含 `8 km`（原样：`{"rows":[{"left":"满 ¥58","right":"免运费 ","em":"2 km","tail":" 内"},{"left":"满 ¥88","right":"免运费 ","em":"3 km","tail":" 内"},{"left":"满 ¥198","right":"免运费 ","em":"7 km","tail":" 内"}],"note":"按下单地址到门店的距离判断 · 配送范围 8 km"}`） | 通过 |
+| A9 | `git status --porcelain` | T3 提交后为空；本次追加 T4 文档后再跑一次同样为空（见下） | 通过 |
+
+### B（预览台实测，375×812，Playwright 驱动已缓存的 Chromium；也用 Claude Browser 交互复核过一遍）
+- `index-local.html`：满减「详情」→ 弹层出现，2 行（对应 2 档），行高实测 44.5px（CSS 定义 44rpx=44px，含 1px 边框，四舍五入到 rpx 精度属预期）；免运费「详情」→ 5 行（对应 5 档），标题栏高实测 52.5px（定义 52px）；两者均无横向溢出（`document.documentElement.scrollWidth === clientWidth`）。
+- `product-list-local.html` / `product-list.html`：满减「详情」行数与档数一致（本地 2 档、镜像样例 66/108）；`product-list-local.html` 免运费「详情」5 行；`product-list.html`（非同城渠道）没有免运费条，点满减不报错、控制台无错误。
+- 关闭三种方式实测：点遮罩（真实点击，非 JS 调用）关闭；点✕（真实点击）关闭；点「知道了」（真实点击）关闭；点面板本身（`dispatchEvent` 到面板中心）不关闭，确认 `catchtap="noop"`/`stopPropagation` 生效。
+- 「满减关闭时页面无弹层残留节点」：对应的是真实组件 `wx:if="{{sheetOpen}}"`（`sheetOpen=false` 时整个 `<view>` 不渲染），已由源码级测试钉住（`promo-sheet.test.cjs` 的三条 T2 断言）；预览台镜像用 `style.display` 模拟显隐（DOM 节点保留、样式隐藏），二者语义不同但预览台本身只是可视化，不代表真实组件行为，已在 T3 提交信息与本记录中注明。
+- 截图：`docs/superpowers/previews/2026-09-21-promo-detail-sheet-shots/{index-local-promo,index-local-freeship,product-list-local-promo,product-list-local-freeship}.png`，53KB~77KB（均 <300KB）。
+
+### D（回退验证，先提交后验证；均在 T1/T2 提交后的工作树上做，验证完还原到与提交一致）
+- **D1**：`sheet.js` 的 `freeShipRows` 去掉 `.sort(...)` → A8 用乱序输入变成 `58/198/88`（未按门槛升序），`node --test promo-sheet.test.cjs` 从 `pass 13` 变 `pass 12 / fail 1`（`sheetRowsOf 免运费档位乱序输入，按门槛升序排列` 报错）→ **红**；还原后重跑 A8 恢复 `58/88/198`，`node --test` 恢复 `pass 13 / fail 0`，`git status --porcelain` 为空（与已提交内容逐字节相同）→ **绿**。
+- **D2**：`index.wxml` 删掉遮罩标签上的 `catchtap="onCloseSheet"` → 第一版源码级断言（只数全文出现次数 ≥2）**未能** 变红（✕和按钮上还各一处，计数仍 ≥2），判定为自己测试的覆盖漏洞，当场加固断言（见上方 T2 修补提交）；加固后的断言（要求遮罩标签自身带 `catchtap="onCloseSheet"`，且总数 ≥3）重新验证：删掉遮罩事件 → `node --test` 变 `pass 12 / fail 1`（`index.wxml 含弹层遮罩、逐行 wx:for、三处关闭（遮罩/✕/按钮）` 报错）→ **红**；还原后 `pass 13 / fail 0`，`git status --porcelain` 为空 → **绿**。
+
+### 偏离逐条
+1. §10 裁定给出的三条新断言字段名统筹写的是 `c.data.sheetOpen`/`c.data.sheet.title`/`c.data.sheet.rows.length`/`c.data.sheet.note`，实现完全照此字段命名，无偏离。
+2. D2 的源码级断言在第一次实现时覆盖不足（只数总出现次数），属于自己写测试时的疏漏，不是方案偏离；发现后当场加固并在 T2 范围内单独提交说明，未新增白名单外文件。
+3. T3 联调时发现：弹层 DOM 若放在 `.mp-page` 之外，`--card`/`--divider`/`--brand` 等 CSS 变量解析不到（面板背景透明），已改为放在 `.mp-page` 内部；`product-list-preview.js` 因为 `#preview-root` 本身就是 `.mp-page`，不受影响。均在 T3 commit message 与本文件里记录，未偏离白名单（只改了标记位置，不是文件范围）。
+4. 其余均按方案 §4/§5 原样实现，无偏离。
+
+### 是否命中 §8 上报触发条件
+执行过程中命中过一次（`freeship-bar.test.cjs` 既有断言与 T2 硬约束互斥），已按流程停下上报、统筹裁定（`401238c`）后按裁定续做，见上文与对话记录。续做阶段（T1–T4）未再命中 §8 任一条。
+
+### C（真机，店主）
+以下按方案 §6 C 原样列出，未执行（真机验证不在 01 · sonnet 职责范围内，需店主在 iOS + Android 上做）：
+- 分类页点满减「详情」和免运费「详情」→ 一档一行、距离/金额红色、说明一行、「知道了」和点空白都能关；
+- 关掉后页面滚动位置不变；
+- 分类页收起吸顶状态下打开再关，页面不跳。
