@@ -2,3 +2,15 @@
 .promo-badge { flex-shrink: 0; background: var(--brand); color: #fff; font-size: 21rpx; border-radius: 6rpx; padding: 1rpx 6rpx; }
 .promo-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .promo-detail { flex-shrink: 0; color: var(--text-3); font-size: 23rpx; }
+
+/* 活动详情弹层（替换系统弹窗）；遮罩/层级抄 tableware-sheet 同级写法。 */
+.promo-sheet-mask { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 100; }
+.promo-sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--card); border-radius: 32rpx 32rpx 0 0; padding-bottom: calc(44rpx + env(safe-area-inset-bottom)); }
+.promo-sheet-head { display: flex; align-items: center; justify-content: center; position: relative; height: 104rpx; font-size: 32rpx; font-weight: 600; color: var(--text-1); border-bottom: 1rpx solid var(--divider); }
+.promo-sheet-close { position: absolute; right: 28rpx; top: 28rpx; width: 48rpx; height: 48rpx; border-radius: 24rpx; background: var(--divider); color: var(--text-3); text-align: center; line-height: 48rpx; font-size: 28rpx; }
+.promo-sheet-row { display: flex; align-items: center; height: 88rpx; padding: 0 40rpx; border-bottom: 1rpx solid var(--divider); font-size: 30rpx; }
+.promo-sheet-k { width: 184rpx; flex-shrink: 0; color: var(--text-1); font-weight: 600; }
+.promo-sheet-v { flex: 1; color: var(--text-2); }
+.promo-sheet-em { color: var(--brand); font-weight: 600; }
+.promo-sheet-note { display: block; padding: 24rpx 40rpx 8rpx; font-size: 24rpx; color: var(--text-3); line-height: 1.6; }
+.promo-sheet-ok { margin: 24rpx 40rpx 0; }

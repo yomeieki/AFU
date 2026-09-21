@@ -104,3 +104,21 @@ test('一致性：promo 行数据与 promo.js detailLines 逐档等价（去空�
     assert.equal(joined, stripped(detailRows[i]))
   })
 })
+
+// T2：组件源码级断言（方案 §5 T2）。
+test('index.js 不含 showModal', () => {
+  const js = read('components/promo-bar/index.js')
+  assert.doesNotMatch(js, /showModal/)
+})
+test('index.wxml 含弹层遮罩、逐行 wx:for、两处关闭', () => {
+  const wxml = read('components/promo-bar/index.wxml')
+  assert.match(wxml, /promo-sheet-mask/)
+  assert.match(wxml, /wx:for="\{\{sheet\.rows\}\}"/)
+  const closeMatches = wxml.match(/onCloseSheet/g)
+  assert.ok(closeMatches && closeMatches.length >= 2)
+})
+test('index.wxss 含品牌色强调与安全区', () => {
+  const wxss = read('components/promo-bar/index.wxss')
+  assert.match(wxss, /\.promo-sheet-em[^}]*var\(--brand\)/)
+  assert.match(wxss, /env\(safe-area-inset-bottom\)/)
+})

@@ -156,12 +156,13 @@ test('promo-bar 组件：kind=freeship 走 freeShipBarOf，deliveryType 非 LOCA
   config.observers['kind, promotion, meta, deliveryType'].call(c)
   assert.equal(c.data.bar.show, true)
   assert.equal(c.data.bar.badge, '免')
+  // 统筹裁定（2026-09-21，见方案 §10）：详情改为组件内自绘弹层，不再走 wx.showModal。
   c.onTapDetail()
-  assert.equal(showModalCalls.length, 1)
-  assert.equal(showModalCalls[0].title, '免运费')
-  assert.equal(showModalCalls[0].content, c.data.bar.detailLines.join('\n'))
-  assert.equal(showModalCalls[0].showCancel, false)
-  assert.equal(showModalCalls[0].confirmText, '知道了')
+  assert.equal(c.data.sheetOpen, true)
+  assert.equal(c.data.sheet.title, '免运费')
+  assert.equal(c.data.sheet.rows.length, 5)
+  assert.match(c.data.sheet.note, /8 km/)
+  assert.equal(showModalCalls.length, 0)
 
   c.properties = { kind: 'freeship', meta: liveMeta, promotion: null, deliveryType: 'PICKUP' }
   config.observers['kind, promotion, meta, deliveryType'].call(c)

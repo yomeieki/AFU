@@ -3,3 +3,14 @@
   <text class="promo-summary">{{bar.name}}　{{bar.summary}}</text>
   <text class="promo-detail">详情 ›</text>
 </view>
+<view wx:if="{{sheetOpen}}" class="promo-sheet-mask" catchtap="onCloseSheet">
+  <view class="promo-sheet" catchtap="noop">
+    <view class="promo-sheet-head"><text class="promo-sheet-title">{{sheet.title}}</text><view class="promo-sheet-close" catchtap="onCloseSheet">✕</view></view>
+    <view class="promo-sheet-row" wx:for="{{sheet.rows}}" wx:key="left">
+      <text class="promo-sheet-k">{{item.left}}</text>
+      <text class="promo-sheet-v">{{item.right}}<text wx:if="{{item.em}}" class="promo-sheet-em">{{item.em}}</text>{{item.tail}}</text>
+    </view>
+    <text wx:if="{{sheet.note}}" class="promo-sheet-note">{{sheet.note}}</text>
+    <view class="promo-sheet-ok btn-primary" catchtap="onCloseSheet">知道了</view>
+  </view>
+</view>
