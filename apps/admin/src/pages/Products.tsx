@@ -3,6 +3,7 @@ import { Plus, Search, Download, QrCode } from 'lucide-react'
 import { getProducts, getCategories, createProduct, updateProduct, deleteProduct, generateQrCode, batchGenerateQrCodes, batchProductStatus } from '../api/admin'
 import ImageUploader from '../components/ImageUploader'
 import SpecEditor, { type SkuRow } from '../components/SpecEditor'
+import { validateSpecForm } from '../components/specLogic'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
@@ -136,10 +137,8 @@ export default function Products() {
     if (!hasSkus && !form.price) { setError('请输入价格'); return }
     if (specDims.length > 0) {
       if (specDims.some((d) => !d.name.trim())) { setError('请填写规格维度名'); return }
-      if (specDims.some((d) => d.values.length === 0)) { setError('请为每个规格维度至少添加一个规格值'); return }
-      if (specDims.some((d) => new Set(d.values).size !== d.values.length)) { setError('同一维度内规格值不能重复'); return }
-      if (skuRows.length === 0) { setError('请为规格维度添加规格值'); return }
-      if (skuRows.some((r) => !r.price || parseFloat(r.price) <= 0)) { setError('请填写所有规格组合的价格'); return }
+      const specError = validateSpecForm(specDims, skuRows)
+      if (specError) { setError(specError); return }
     }
     setSaving(true)
     setError('')

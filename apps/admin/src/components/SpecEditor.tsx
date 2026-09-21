@@ -1,15 +1,24 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, X } from 'lucide-react'
 import type { SpecDimension } from '../types'
+import {
+  addDimension as addDimensionLogic,
+  addValue as addValueLogic,
+  moveDimension as moveDimensionLogic,
+  moveValue as moveValueLogic,
+  removeDimension as removeDimensionLogic,
+  removeValue as removeValueLogic,
+  renameDimension as renameDimensionLogic,
+  renameValue as renameValueLogic,
+  rowKey,
+  type DimensionTemplate,
+  type SkuRow,
+  type SpecEditorState,
+} from './specLogic'
+import { confirmDialog } from './ui/ConfirmDialog'
+import { toast } from './ui/Toast'
 
-/** 表单态 SKU 行：价格以「元」字符串保存，提交时统一转分 */
-export interface SkuRow {
-  id?: number
-  specValues: string[]
-  price: string
-  originalPrice: string
-  stock: number
-}
+export type { SkuRow }
 
 interface Props {
   dimensions: SpecDimension[]
@@ -17,68 +26,13 @@ interface Props {
   onChange: (dimensions: SpecDimension[], skuRows: SkuRow[]) => void
 }
 
-/** 维度还没有任何值时，组合行里该位置用空串占位（保存前会被校验拦下） */
-const PLACEHOLDER = ''
-
-/** 内部匹配键：不用 "/" 拼接，避免规格值本身含 "/"（如 500g/袋）时串位 */
-const rowKey = (values: string[]) => values.join('\u0000')
-
-/** 维度值笛卡尔积；没有维度时返回空，某维度暂无值时该位置以占位符参与组合 */
-function cartesian(dims: SpecDimension[]): string[][] {
-  if (dims.length === 0) return []
-  return dims.reduce<string[][]>(
-    (acc, d) => {
-      const values = d.values.length ? d.values : [PLACEHOLDER]
-      return acc.flatMap((combo) => values.map((v) => [...combo, v]))
-    },
-    [[]]
-  )
-}
-
-/**
- * 按新维度重新生成组合行，并尽量沿用旧行数据。
- * 1. 值完全一致 → 沿用整行（含 id，保存时是「更新」而非「删了重建」）
- * 2. 旧行在某些位置是占位符（维度刚加、还没值）→ 沿用价格/库存，不带 id
- * 3. 都匹配不上 → 空行
- * 调用方负责先把旧行的 specValues 按改名/换序同步好，这样改名和排序都不会丢数据。
- */
-export function rebuildRows(dims: SpecDimension[], oldRows: SkuRow[]): SkuRow[] {
-  const old = new Map<string, SkuRow>()
-  for (const r of oldRows) {
-    const k = rowKey(r.specValues)
-    if (!old.has(k)) old.set(k, r)
-  }
-  return cartesian(dims).map((values) => {
-    const exact = old.get(rowKey(values))
-    if (exact) return { ...exact, specValues: values }
-    // 逐个/成组把位置换成占位符去找（最多 3 维，穷举子集代价可忽略）
-    const n = values.length
-    for (let mask = 1; mask < 1 << n; mask++) {
-      const probe = values.map((v, i) => ((mask >> i) & 1 ? PLACEHOLDER : v))
-      const hit = old.get(rowKey(probe))
-      if (hit) {
-        return { specValues: values, price: hit.price, originalPrice: hit.originalPrice, stock: hit.stock }
-      }
-    }
-    return { specValues: values, price: '', originalPrice: '', stock: 0 }
-  })
-}
-
-export function moveItem<T>(list: T[], from: number, to: number): T[] {
-  if (to < 0 || to >= list.length || from === to) return list
-  const next = [...list]
-  const [item] = next.splice(from, 1)
-  next.splice(to, 0, item)
-  return next
-}
-
 const inputCls =
   'border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400'
 const iconBtnCls = 'p-0.5 rounded text-gray-400 hover:text-brand-600 disabled:opacity-30 disabled:hover:text-gray-400'
 
 interface ValueEditing {
-  dim: number
-  value: string
+  dimIndex: number
+  oldValue: string
   draft: string
 }
 
@@ -86,129 +40,114 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
   // 每个维度一个「新值」输入框的临时文本
   const [valueDrafts, setValueDrafts] = useState<string[]>([])
   // 正在改名的规格值
-  const [editing, setEditing] = useState<ValueEditing | null>(null)
+  const [editingValue, setEditingValue] = useState<ValueEditing | null>(null)
+  // 新增维度、还没有值时的旧行快照，用于给该维度补第一个值时找回价格/库存
+  const [template, setTemplate] = useState<DimensionTemplate | null>(null)
   const [batchPrice, setBatchPrice] = useState('')
   const [batchStock, setBatchStock] = useState('')
 
-  /** 维度或行变化后统一重算组合行 */
-  const apply = (dims: SpecDimension[], rows: SkuRow[] = skuRows) => {
-    onChange(dims, rebuildRows(dims, rows))
-  }
+  const currentState = (): SpecEditorState => ({ dimensions, rows: skuRows, template })
 
-  /** 已保存（有 id）且含指定维度值的行数，用于删除前提示 */
-  const savedRowsWith = (di: number, v: string) =>
-    skuRows.filter((r) => r.id && r.specValues[di] === v).length
+  const commit = (state: SpecEditorState) => {
+    setTemplate(state.template)
+    onChange(state.dimensions, state.rows)
+  }
 
   // ---------- 维度 ----------
 
-  const addDimension = () => {
-    if (dimensions.length >= 3) return
-    // 现有行在新位置补占位符，等该维度有值后按「占位符匹配」把价格/库存带过去
-    const rows = skuRows.map((r) => ({ ...r, specValues: [...r.specValues, PLACEHOLDER] }))
-    apply([...dimensions, { name: '', values: [] }], rows)
-  }
-
-  const removeDimension = (i: number) => {
-    const dim = dimensions[i]
-    const hasValues = dim.values.length > 0
-    if (hasValues && dimensions.length > 1) {
-      const groups = skuRows.length / Math.max(1, dim.values.length)
-      const ok = window.confirm(
-        `删除维度「${dim.name || `维度${i + 1}`}」后，现有 ${skuRows.length} 个组合会合并为 ${groups} 个，` +
-          `每组价格/库存取原来第一行的，请保存前逐行核对。\n\n` +
-          `保存后原有规格会被删除并重新创建，顾客购物车里对应的规格会被清空。确定删除？`
-      )
-      if (!ok) return
-    } else if (hasValues && skuRows.some((r) => r.id)) {
-      const ok = window.confirm(
-        '删除最后一个维度后商品会变成单规格，保存后所有规格及顾客购物车里对应的规格都会被清空。确定删除？'
-      )
+  const handleAddDimension = async () => {
+    const state = currentState()
+    if (state.dimensions.length >= 3) return
+    const hasSavedRows = state.rows.some((r) => r.id !== undefined)
+    if (hasSavedRows) {
+      const ok = await confirmDialog({
+        title: '新增规格维度',
+        content:
+          '新增维度后，原有规格组合会按当前价格/库存复制到新组合上，请保存前逐行核对。\n' +
+          '保存后原有规格会重新创建，顾客购物车里选了这些规格的商品会被清空。确定新增？',
+      })
       if (!ok) return
     }
-    const dims = dimensions.filter((_, idx) => idx !== i)
-    // 合并（或纯去占位）后按剩余值匹配；真正合并时去掉 id，让服务端重建 SKU
-    const rows = skuRows.map((r) => {
-      const { id, ...rest } = r
-      const specValues = r.specValues.filter((_, idx) => idx !== i)
-      return hasValues ? { ...rest, specValues } : { id, ...rest, specValues }
-    })
-    setEditing(null)
-    apply(dims, rows)
+    commit(addDimensionLogic(state, '').state)
   }
 
-  const renameDimension = (i: number, name: string) => {
-    // 改维度名不影响组合行，直接透传当前行
-    onChange(
-      dimensions.map((d, idx) => (idx === i ? { ...d, name } : d)),
-      skuRows
-    )
+  const handleRemoveDimension = async (i: number) => {
+    const state = currentState()
+    const dim = state.dimensions[i]
+    const hasSavedRows = state.rows.some((r) => r.id !== undefined)
+    if (dim.values.length > 0 && hasSavedRows) {
+      const isLast = state.dimensions.length === 1
+      const content = isLast
+        ? '删除最后一个维度后，商品会变成单规格。保存后所有规格都会被删除并重新创建，' +
+          '顾客购物车里选了这些规格的商品会一起清空。确定删除？'
+        : `删除维度「${dim.name || `维度${i + 1}`}」后，现有组合会按值合并，每组价格/库存取合并前第一行的，请保存前逐行核对。\n` +
+          '保存后对应规格会被删除并重新创建，顾客购物车里选了这些规格的商品会一起清空。确定删除？'
+      const ok = await confirmDialog({ title: '删除规格维度', content, danger: true })
+      if (!ok) return
+    }
+    setEditingValue(null)
+    commit(removeDimensionLogic(state, i).state)
   }
 
-  const moveDimension = (from: number, to: number) => {
-    if (to < 0 || to >= dimensions.length) return
-    const dims = moveItem(dimensions, from, to)
-    const rows = skuRows.map((r) => ({ ...r, specValues: moveItem(r.specValues, from, to) }))
-    setEditing(null)
-    apply(dims, rows)
+  const handleRenameDimension = (i: number, name: string) => {
+    onChange(renameDimensionLogic(currentState(), i, name).dimensions, skuRows)
+  }
+
+  const handleMoveDimension = (i: number, direction: 'prev' | 'next') => {
+    setEditingValue(null)
+    commit(moveDimensionLogic(currentState(), i, direction).state)
   }
 
   // ---------- 规格值 ----------
 
-  /** notify=false 用于失焦自动添加：重复时静默保留草稿，不弹窗打断 */
-  const addValue = (i: number, notify = true) => {
-    const v = (valueDrafts[i] ?? '').trim()
-    if (!v) return
-    if (dimensions[i].values.includes(v)) {
-      if (notify) window.alert(`规格值「${v}」已存在`)
+  const handleAddValue = (i: number, notify: boolean) => {
+    const raw = valueDrafts[i] ?? ''
+    if (!raw.trim()) return
+    const result = addValueLogic(currentState(), i, raw)
+    if ('error' in result) {
+      if (notify) toast.error(result.error)
       return
     }
-    const drafts = [...valueDrafts]
-    drafts[i] = ''
-    setValueDrafts(drafts)
-    apply(dimensions.map((d, idx) => (idx === i ? { ...d, values: [...d.values, v] } : d)))
+    setValueDrafts((prev) => {
+      const next = [...prev]
+      next[i] = ''
+      return next
+    })
+    commit(result.state)
   }
 
-  const removeValue = (i: number, v: string) => {
-    const saved = savedRowsWith(i, v)
-    if (saved > 0) {
-      const ok = window.confirm(
-        `删除规格值「${v}」会删除 ${saved} 个已保存的规格（保存后生效），顾客购物车里对应的规格会被清空。确定删除？`
-      )
+  const handleRemoveValue = async (i: number, v: string) => {
+    const result = removeValueLogic(currentState(), i, v)
+    if (result.affectedSavedRows > 0) {
+      const ok = await confirmDialog({
+        title: '删除规格值',
+        content:
+          `删除规格值「${v}」后，保存时会删除 ${result.affectedSavedRows} 个已保存的规格，` +
+          '顾客购物车里选了这个规格的商品会一起清空。确定删除？',
+        danger: true,
+      })
       if (!ok) return
     }
-    apply(
-      dimensions.map((d, idx) => (idx === i ? { ...d, values: d.values.filter((x) => x !== v) } : d))
-    )
+    if (editingValue?.dimIndex === i && editingValue.oldValue === v) setEditingValue(null)
+    commit(result.state)
   }
 
-  const moveValue = (i: number, from: number, to: number) => {
-    const dim = dimensions[i]
-    if (to < 0 || to >= dim.values.length) return
-    apply(dimensions.map((d, idx) => (idx === i ? { ...d, values: moveItem(d.values, from, to) } : d)))
+  const handleMoveValue = (i: number, valueIndex: number, direction: 'prev' | 'next') => {
+    commit(moveValueLogic(currentState(), i, valueIndex, direction).state)
   }
 
-  const startRename = (i: number, v: string) => setEditing({ dim: i, value: v, draft: v })
+  const startRename = (i: number, v: string) => setEditingValue({ dimIndex: i, oldValue: v, draft: v })
 
-  const commitRename = () => {
-    if (!editing) return
-    const { dim: i, value: oldV } = editing
-    const newV = editing.draft.trim()
-    setEditing(null)
-    if (!newV || newV === oldV) return
-    if (dimensions[i].values.includes(newV)) {
-      window.alert(`规格值「${newV}」已存在`)
+  const commitRenameValue = (notify: boolean) => {
+    if (!editingValue) return
+    const { dimIndex, oldValue } = editingValue
+    const result = renameValueLogic(currentState(), dimIndex, oldValue, editingValue.draft)
+    if ('error' in result) {
+      if (notify) toast.error(result.error)
       return
     }
-    // 维度值和每一行的对应位置同步改名，行 id/价格/库存全部保留
-    const dims = dimensions.map((d, idx) =>
-      idx === i ? { ...d, values: d.values.map((x) => (x === oldV ? newV : x)) } : d
-    )
-    const rows = skuRows.map((r) =>
-      r.specValues[i] === oldV
-        ? { ...r, specValues: r.specValues.map((x, idx) => (idx === i ? newV : x)) }
-        : r
-    )
-    apply(dims, rows)
+    setEditingValue(null)
+    commit(result.state)
   }
 
   // ---------- 组合行 ----------
@@ -231,9 +170,6 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
     )
   }
 
-  const hasPlaceholder = skuRows.some((r) => r.specValues.includes(PLACEHOLDER))
-  const showValue = (v: string) => (v === PLACEHOLDER ? '—' : v)
-
   return (
     <div className="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/50">
       <div className="flex items-center justify-between">
@@ -241,7 +177,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
         {dimensions.length < 3 && (
           <button
             type="button"
-            onClick={addDimension}
+            onClick={handleAddDimension}
             className="inline-flex items-center gap-1 text-sm text-brand-600 hover:text-brand-700"
           >
             <Plus className="w-4 h-4" />
@@ -266,7 +202,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
           <div className="flex items-center gap-2">
             <input
               value={dim.name}
-              onChange={(e) => renameDimension(i, e.target.value)}
+              onChange={(e) => handleRenameDimension(i, e.target.value)}
               placeholder={`维度名，如 ${['辣度', '重量', '骨型'][i] ?? '口味'}`}
               className={`${inputCls} flex-1 min-w-0 sm:flex-none sm:w-36`}
             />
@@ -275,7 +211,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                 <>
                   <button
                     type="button"
-                    onClick={() => moveDimension(i, i - 1)}
+                    onClick={() => handleMoveDimension(i, 'prev')}
                     disabled={i === 0}
                     className={iconBtnCls}
                     title="维度上移"
@@ -284,7 +220,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => moveDimension(i, i + 1)}
+                    onClick={() => handleMoveDimension(i, 'next')}
                     disabled={i === dimensions.length - 1}
                     className={iconBtnCls}
                     title="维度下移"
@@ -295,7 +231,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
               )}
               <button
                 type="button"
-                onClick={() => removeDimension(i)}
+                onClick={() => handleRemoveDimension(i)}
                 className="p-0.5 text-gray-400 hover:text-red-500"
                 title="删除该维度"
               >
@@ -305,7 +241,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             {dim.values.map((v, vi) => {
-              const isEditing = editing?.dim === i && editing.value === v
+              const isEditing = editingValue?.dimIndex === i && editingValue.oldValue === v
               return (
                 <span
                   key={v}
@@ -313,7 +249,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                 >
                   <button
                     type="button"
-                    onClick={() => moveValue(i, vi, vi - 1)}
+                    onClick={() => handleMoveValue(i, vi, 'prev')}
                     disabled={vi === 0}
                     className={iconBtnCls}
                     title="前移"
@@ -323,17 +259,17 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                   {isEditing ? (
                     <input
                       autoFocus
-                      value={editing.draft}
-                      onChange={(e) => setEditing({ ...editing, draft: e.target.value })}
+                      value={editingValue.draft}
+                      onChange={(e) => setEditingValue({ ...editingValue, draft: e.target.value })}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault()
-                          commitRename()
+                          commitRenameValue(true)
                         } else if (e.key === 'Escape') {
-                          setEditing(null)
+                          setEditingValue(null)
                         }
                       }}
-                      onBlur={commitRename}
+                      onBlur={() => commitRenameValue(false)}
                       className="bg-white border border-brand-300 rounded px-1 py-0.5 text-xs text-gray-800 w-20 focus:outline-none"
                     />
                   ) : (
@@ -348,7 +284,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                   )}
                   <button
                     type="button"
-                    onClick={() => moveValue(i, vi, vi + 1)}
+                    onClick={() => handleMoveValue(i, vi, 'next')}
                     disabled={vi === dim.values.length - 1}
                     className={iconBtnCls}
                     title="后移"
@@ -357,7 +293,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => removeValue(i, v)}
+                    onClick={() => handleRemoveValue(i, v)}
                     className="p-0.5 text-brand-400 hover:text-red-500"
                     title="删除该规格值"
                   >
@@ -369,17 +305,19 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
             <input
               value={valueDrafts[i] ?? ''}
               onChange={(e) => {
-                const drafts = [...valueDrafts]
-                drafts[i] = e.target.value
-                setValueDrafts(drafts)
+                setValueDrafts((prev) => {
+                  const next = [...prev]
+                  next[i] = e.target.value
+                  return next
+                })
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  addValue(i)
+                  handleAddValue(i, true)
                 }
               }}
-              onBlur={() => addValue(i, false)}
+              onBlur={() => handleAddValue(i, false)}
               placeholder="输入规格值后回车"
               className={`${inputCls} w-full sm:w-36`}
             />
@@ -390,11 +328,6 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
       {/* 组合表格 */}
       {skuRows.length > 0 && (
         <div className="space-y-2">
-          {hasPlaceholder && (
-            <p className="text-xs text-amber-600">
-              有维度还没有规格值（表中显示为 —），请为每个维度至少添加一个规格值后再保存。
-            </p>
-          )}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-gray-500">批量填充</span>
             <input
@@ -441,7 +374,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
                   <tr key={rowKey(row.specValues)} className="border-t border-gray-100">
                     {row.specValues.map((v, vi) => (
                       <td key={vi} className="px-3 py-1.5 text-gray-700 whitespace-nowrap">
-                        {showValue(v)}
+                        {v}
                       </td>
                     ))}
                     <td className="px-3 py-1.5">
@@ -485,9 +418,7 @@ export default function SpecEditor({ dimensions, skuRows, onChange }: Props) {
           <div className="md:hidden space-y-2">
             {skuRows.map((row, idx) => (
               <div key={rowKey(row.specValues)} className="border border-gray-200 rounded-md bg-white p-3">
-                <p className="text-sm font-medium text-gray-800 mb-2">
-                  {row.specValues.map(showValue).join(' / ')}
-                </p>
+                <p className="text-sm font-medium text-gray-800 mb-2">{row.specValues.join(' / ')}</p>
                 <div className="grid grid-cols-3 gap-2">
                   <label className="block">
                     <span className="block text-xs text-gray-500 mb-1">价格(元) *</span>

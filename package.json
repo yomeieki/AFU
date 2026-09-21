@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "test": "node scripts/test.mjs",
     "dev:server": "npm run dev --workspace=apps/server",
     "build:server": "npm run build --workspace=apps/server",
     "build:admin": "npm run build --workspace=apps/admin",

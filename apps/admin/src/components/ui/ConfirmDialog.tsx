@@ -54,7 +54,7 @@ export function ConfirmDialogHost() {
         </>
       }
     >
-      {options.content ? <p className="text-sm text-gray-600">{options.content}</p> : null}
+      {options.content ? <p className="text-sm text-gray-600 whitespace-pre-line">{options.content}</p> : null}
     </Modal>
   )
 }
