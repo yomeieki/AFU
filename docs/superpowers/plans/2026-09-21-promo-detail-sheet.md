@@ -114,3 +114,13 @@ iOS + Android 各：分类页点满减「详情」和免运费「详情」→ �
 
 ## 9. 待店主确认
 无（版式已按预览确认）。
+
+## 10. 统筹裁定（2026-09-21，01 上报后）
+
+01 上报：`tests/miniapp/freeship-bar.test.cjs:153-169`（用例「promo-bar 组件：kind=freeship 走 freeShipBarOf，deliveryType 非 LOCAL 隐藏」）硬断言 `onTapDetail()` 调 `wx.showModal` 及其 title/content/showCancel/confirmText；与 T2「不再调 showModal」和 A4 互斥；而 §7 禁改既有测试。**成立，责任在 00 规划**（写方案时没检查既有测试对被替换行为的断言）。
+
+裁定（按 01 给的选项 1）：
+- **白名单放开**：允许修改 `tests/miniapp/freeship-bar.test.cjs` **仅该一条用例内**关于 `showModal` 的断言（约 160–164 行），改为断言新行为：`c.onTapDetail()` 后 `c.data.sheetOpen === true`、`c.data.sheet.title === '免运费'`、`c.data.sheet.rows.length === 5`（与 `liveMeta` 五档一致）、`c.data.sheet.note` 含「8 km」；`showModalCalls.length === 0`。该用例其余断言（`kind` 分派、非 LOCAL 隐藏）与文件内其余 15 例**逐字不动**。
+- 验收 A7 改为：`git diff a3b76c2..HEAD -- tests/miniapp/freeship-bar.test.cjs | grep -c '^-[^-]'` ≤ 6，且 `promo.test.cjs`、`cart-bar-page.test.cjs` diff 为空；执行记录里逐行列出该用例改前/改后。
+- 组件桩：该测试里 `promoBarComponent()` 构造的 `c` 若没有 `setData` 合并语义，按文件内既有桩写法补（只在测试桩内改，不改组件）。
+- 其余 T1–T4、A/B/D、§8 不变。
