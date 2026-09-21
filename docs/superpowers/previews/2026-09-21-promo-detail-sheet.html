@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>活动详情弹层 · 预览</title>
+<style>
+:root{--brand:#e5441e;--t1:#1f2329;--t2:#4e5969;--t3:#86909c;--div:#eef0f2}
+*{box-sizing:border-box}body{margin:0;background:#e6e8eb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;color:var(--t1)}
+.hd{background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;padding:16px 24px}.hd h1{margin:0;font-size:17px}.hd p{margin:4px 0 0;font-size:13px;opacity:.93}
+.wrap{padding:18px 24px 60px;display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+.col{display:flex;flex-direction:column;gap:6px}.cap{font-size:12px;color:#4e5969}.cap b{color:#1f2329}
+.phone{width:375px;height:560px;flex-shrink:0;background:#f5f6f7;border:1px solid #cdd2d8;border-radius:22px;overflow:hidden;position:relative}
+.dim{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+.bg{padding:12px;font-size:13px;color:#999}.bg .row{height:44px;background:#fff;border-radius:8px;margin-bottom:8px}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:16px 16px 0 0;padding:0 0 22px}
+.sh-h{display:flex;align-items:center;justify-content:center;position:relative;height:52px;font-size:16px;font-weight:600;border-bottom:1px solid var(--div)}
+.sh-h .x{position:absolute;right:14px;top:14px;width:24px;height:24px;border-radius:12px;background:#f2f3f5;color:#86909c;text-align:center;line-height:24px;font-size:14px}
+.tier{display:flex;align-items:center;padding:0 20px;height:44px;border-bottom:1px solid var(--div);font-size:15px}
+.tier .k{width:92px;color:var(--t1);font-weight:600}
+.tier .v{flex:1;color:var(--t2)}
+.tier .v b{color:var(--brand);font-weight:600}
+.note{padding:12px 20px 4px;font-size:12px;color:var(--t3);line-height:1.6}
+.ok{margin:12px 20px 0;height:44px;border-radius:22px;background:linear-gradient(135deg,#ff6a3d,#e5441e);color:#fff;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center}
+</style></head><body>
+<div class="hd"><h1>活动详情弹层 · 预览</h1><p>替换系统弹窗。从底部弹出，一档一行，左边门槛、右边优惠；满减和免运费同一套。</p></div>
+<div class="wrap">
+<div class="col"><div class="cap"><b>免运费</b> 详情</div>
+<div class="phone"><div class="bg"><div class="row"></div><div class="row"></div><div class="row"></div></div><div class="dim"></div>
+<div class="sheet">
+ <div class="sh-h">免运费<span class="x">✕</span></div>
+ <div class="tier"><span class="k">满 ¥58</span><span class="v">免运费 <b>2 km</b> 内</span></div>
+ <div class="tier"><span class="k">满 ¥88</span><span class="v">免运费 <b>3 km</b> 内</span></div>
+ <div class="tier"><span class="k">满 ¥128</span><span class="v">免运费 <b>4 km</b> 内</span></div>
+ <div class="tier"><span class="k">满 ¥168</span><span class="v">免运费 <b>5 km</b> 内</span></div>
+ <div class="tier"><span class="k">满 ¥198</span><span class="v">免运费 <b>7 km</b> 内</span></div>
+ <div class="note">按下单地址到门店的距离判断 · 配送范围 8 km</div>
+ <div class="ok">知道了</div>
+</div></div></div>
+<div class="col"><div class="cap"><b>满减</b> 详情（同一套）</div>
+<div class="phone"><div class="bg"><div class="row"></div><div class="row"></div><div class="row"></div></div><div class="dim"></div>
+<div class="sheet">
+ <div class="sh-h">全店满减<span class="x">✕</span></div>
+ <div class="tier"><span class="k">满 ¥66</span><span class="v">减 <b>¥6.6</b></span></div>
+ <div class="tier"><span class="k">满 ¥108</span><span class="v">减 <b>¥10.8</b></span></div>
+ <div class="note">与优惠券可叠加 · 运费、打包费不参与</div>
+ <div class="ok">知道了</div>
+</div></div></div>
+</div></body></html>
