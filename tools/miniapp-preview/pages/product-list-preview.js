@@ -6,6 +6,31 @@
   var local = channel === 'LOCAL'
   var names = ['凉菜', '熟食', '卤味', '礼盒', '自贡特产', '小吃', '下饭菜', '时令推荐', '素菜', '甜品', '汤羹', '面食', '调味', '预制菜', '酒水/饮料']
   var state = { mode: 'DELIVERY', cartCount: 7, active: 0, search: '', searchPage: 0, loading: false }
+
+  // 活动详情弹层镜像（T3）：结构/类名同 components/promo-bar/index.wxml §4.2，样式来自该组件真实
+  // wxss（serve.mjs 已把 promo-bar 登记进 product-list/product-list-local 的组合 CSS）。
+  // 行数据是本页固定样例（与顶部 promo-bar 摘要一致），不读真实接口。
+  var PROMO_SHEETS = {
+    promo: {
+      title: '全店满减',
+      rows: [
+        { left: '满 ¥66', right: '减 ', em: '¥6', tail: '' },
+        { left: '满 ¥108', right: '减 ', em: '¥12', tail: '' }
+      ],
+      note: '与优惠券可叠加 · 运费、打包费不参与'
+    },
+    freeship: {
+      title: '免运费',
+      rows: [
+        { left: '满 ¥58', right: '免运费 ', em: '2 km', tail: ' 内' },
+        { left: '满 ¥88', right: '免运费 ', em: '3 km', tail: ' 内' },
+        { left: '满 ¥128', right: '免运费 ', em: '4 km', tail: ' 内' },
+        { left: '满 ¥168', right: '免运费 ', em: '5 km', tail: ' 内' },
+        { left: '满 ¥198', right: '免运费 ', em: '7 km', tail: ' 内' }
+      ],
+      note: '按下单地址到门店的距离判断 · 配送范围 8 km'
+    }
+  }
   var root = document.getElementById('preview-root')
   var raf = 0
   var clickLockUntil = 0
@@ -60,12 +85,18 @@
 
   function renderBase() {
     root.innerHTML = '<div class="page ' + (local ? 'page-local' : '') + '">' + header() +
-      '<div class="promo-bar"><span class="promo-badge">减</span><span class="promo-summary">全店满减　满 66 减 6 · 满 108 减 12</span><span class="promo-detail">详情 ›</span></div>' +
-      (local ? '<div id="freeship-bar" class="promo-bar" style="display:' + (state.mode === 'PICKUP' ? 'none' : '') + '"><span class="promo-badge">免</span><span class="promo-summary">免运费　满 ¥58 免运费（2 km 内）· 多买免更远</span><span class="promo-detail">详情 ›</span></div>' : '') +
+      '<div class="promo-bar" id="promo-bar-promo" data-kind="promo"><span class="promo-badge">减</span><span class="promo-summary">全店满减　满 66 减 6 · 满 108 减 12</span><span class="promo-detail">详情 ›</span></div>' +
+      (local ? '<div id="freeship-bar" class="promo-bar" data-kind="freeship" style="display:' + (state.mode === 'PICKUP' ? 'none' : '') + '"><span class="promo-badge">免</span><span class="promo-summary">免运费　满 ¥58 免运费（2 km 内）· 多买免更远</span><span class="promo-detail">详情 ›</span></div>' : '') +
       '<div id="search-chip" class="category-tag-bar" hidden></div>' + toolbar() +
       '<div class="body catalog-body"><div id="category-rail" class="cat-panel"></div><div class="prod-wrap"><div id="product-panel" class="prod-panel"></div></div></div>' +
       '<div id="cart-spacer" class="cart-spacer"></div></div><div id="cart-host"></div>' +
-      '<button id="cart-toggle" class="preview-control" type="button">预览：切换空车</button>'
+      '<button id="cart-toggle" class="preview-control" type="button">预览：切换空车</button>' +
+      '<div class="promo-sheet-mask" id="promo-sheet-mask" style="display:none">' +
+      '<div class="promo-sheet"><div class="promo-sheet-head"><span class="promo-sheet-title" id="promo-sheet-title"></span>' +
+      '<div class="promo-sheet-close" id="promo-sheet-close">✕</div></div>' +
+      '<div id="promo-sheet-rows"></div>' +
+      '<span class="promo-sheet-note" id="promo-sheet-note"></span>' +
+      '<div class="promo-sheet-ok btn-primary" id="promo-sheet-ok">知道了</div></div></div>'
     document.getElementById('category-rail').innerHTML = groups.map(function (group, index) {
       return '<button type="button" class="cat-item' + (index === 0 ? ' active' : '') + '" data-index="' + index + '" id="cat-' + group.id + '"><span class="cat-item-bar"></span><span class="cat-item-name">' + esc(group.name) + '</span></button>'
     }).join('')
@@ -192,6 +223,21 @@
 
   function loadMore() { if (state.search) { state.searchPage += 1; renderGroups() } }
 
+  function openPromoSheet(kind) {
+    var data = PROMO_SHEETS[kind]
+    if (!data) return
+    document.getElementById('promo-sheet-title').textContent = data.title
+    document.getElementById('promo-sheet-rows').innerHTML = data.rows.map(function (row) {
+      return '<div class="promo-sheet-row"><span class="promo-sheet-k">' + esc(row.left) + '</span><span class="promo-sheet-v">' + esc(row.right) + (row.em ? '<span class="promo-sheet-em">' + esc(row.em) + '</span>' : '') + esc(row.tail) + '</span></div>'
+    }).join('')
+    document.getElementById('promo-sheet-note').textContent = data.note
+    document.getElementById('promo-sheet-mask').style.display = 'block'
+  }
+
+  function closePromoSheet() {
+    document.getElementById('promo-sheet-mask').style.display = 'none'
+  }
+
   function bind() {
     document.getElementById('category-rail').addEventListener('click', function (event) {
       var item = event.target.closest('.cat-item')
@@ -215,6 +261,13 @@
       document.getElementById('catalog-search').addEventListener('input', function (event) { document.getElementById('search-confirm').hidden = !event.target.value })
       document.getElementById('catalog-search').addEventListener('keydown', function (event) { if (event.key === 'Enter') startSearch() })
     }
+    document.querySelectorAll('.promo-bar').forEach(function (bar) {
+      bar.addEventListener('click', function () { openPromoSheet(bar.dataset.kind) })
+    })
+    document.getElementById('promo-sheet-mask').addEventListener('click', closePromoSheet)
+    document.getElementById('promo-sheet-close').addEventListener('click', closePromoSheet)
+    document.getElementById('promo-sheet-ok').addEventListener('click', closePromoSheet)
+    document.querySelector('.promo-sheet-mask .promo-sheet').addEventListener('click', function (event) { event.stopPropagation() })
     window.addEventListener('resize', updateLayout)
     window.addEventListener('scroll', function () {
       if (raf) return

@@ -24,8 +24,8 @@
       <div class="store-title-row"><div class="store-name-wrap"><div class="store-icon icon icon-shop"></div><span class="store-name">丹桂阿福凉菜</span><span class="status-pill status-pill-open">营业中</span></div></div>
       <div class="delivery-rules-row"><span class="delivery-rules">配送范围 5 km · 满 ¥20 起送 · 基础运费 ¥3 起</span><span class="delivery-rules-arrow">›</span></div>
     </div>
-    <div class="promo-bar"><span class="promo-badge">减</span><span class="promo-summary">全店满减　满 200 减 20 · 满 300 减 35</span><span class="promo-detail">详情 ›</span></div>
-    <div class="promo-bar"><span class="promo-badge">免</span><span class="promo-summary">免运费　满 ¥58 免运费（2 km 内）· 多买免更远</span><span class="promo-detail">详情 ›</span></div>
+    <div class="promo-bar" onclick="openPromoSheet('promo')"><span class="promo-badge">减</span><span class="promo-summary">全店满减　满 200 减 20 · 满 300 减 35</span><span class="promo-detail">详情 ›</span></div>
+    <div class="promo-bar" onclick="openPromoSheet('freeship')"><span class="promo-badge">免</span><span class="promo-summary">免运费　满 ¥58 免运费（2 km 内）· 多买免更远</span><span class="promo-detail">详情 ›</span></div>
     <div class="mode-bar">
       <div class="mode-tab active"><span class="mode-name">外送</span></div>
       <div class="mode-tab"><span class="mode-name">自取</span></div>
@@ -100,6 +100,59 @@
     <div class="cart-spacer" style="height:72px"></div>
   </div>
 <div class="cart-dock"><div class="cart-tip cart-tip-done"><span class="cart-tip-em">已减 ¥20 · 已免运费</span></div><div class="local-cart-bar"><div class="cart-summary"><div class="cart-icon"><div class="cart-drawing"></div><div class="cart-badge">7</div></div><div class="cart-summary-text"><div class="cart-summary-main"><span class="cart-summary-amount">¥191.00</span><span class="cart-summary-orig">¥211.00</span></div><span class="cart-summary-sub">共 7 件 · 已减 ¥20</span></div></div><div class="checkout-btn btn-primary">去结算 · 外送</div></div></div>
+
+<!-- 活动详情弹层镜像（T3）：结构/类名同 components/promo-bar/index.wxml §4.2，样式来自该组件真实
+     wxss（serve.mjs 已把 promo-bar 登记进 index-local 的组合 CSS）。点满减/免运费「详情」展开，
+     点遮罩/✕/「知道了」都关闭。行数据是本页固定样例，不读真实接口。
+     必须放在 .mp-page 内部——CSS 变量（--card/--divider/--brand…）挂在 .mp-page 上，
+     挪到它外面 var() 会解析不到，面板背景会变透明（T3 联调时发现过一次）。 -->
+<div class="promo-sheet-mask" id="promo-sheet-mask" style="display:none" onclick="closePromoSheet()">
+  <div class="promo-sheet" onclick="event.stopPropagation()">
+    <div class="promo-sheet-head"><span class="promo-sheet-title" id="promo-sheet-title"></span><div class="promo-sheet-close" onclick="closePromoSheet()">✕</div></div>
+    <div id="promo-sheet-rows"></div>
+    <span class="promo-sheet-note" id="promo-sheet-note"></span>
+    <div class="promo-sheet-ok btn-primary" onclick="closePromoSheet()">知道了</div>
+  </div>
 </div>
+</div>
+<script>
+  var PROMO_SHEETS = {
+    promo: {
+      title: '全店满减',
+      rows: [
+        { left: '满 ¥200', right: '减 ', em: '¥20', tail: '' },
+        { left: '满 ¥300', right: '减 ', em: '¥35', tail: '' }
+      ],
+      note: '与优惠券可叠加 · 运费、打包费不参与'
+    },
+    freeship: {
+      title: '免运费',
+      rows: [
+        { left: '满 ¥58', right: '免运费 ', em: '2 km', tail: ' 内' },
+        { left: '满 ¥88', right: '免运费 ', em: '3 km', tail: ' 内' },
+        { left: '满 ¥128', right: '免运费 ', em: '4 km', tail: ' 内' },
+        { left: '满 ¥168', right: '免运费 ', em: '5 km', tail: ' 内' },
+        { left: '满 ¥198', right: '免运费 ', em: '7 km', tail: ' 内' }
+      ],
+      note: '按下单地址到门店的距离判断 · 配送范围 8 km'
+    }
+  }
+  function promoSheetEsc(value) {
+    return String(value).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] })
+  }
+  function openPromoSheet(kind) {
+    var data = PROMO_SHEETS[kind]
+    if (!data) return
+    document.getElementById('promo-sheet-title').textContent = data.title
+    document.getElementById('promo-sheet-rows').innerHTML = data.rows.map(function (row) {
+      return '<div class="promo-sheet-row"><span class="promo-sheet-k">' + promoSheetEsc(row.left) + '</span><span class="promo-sheet-v">' + promoSheetEsc(row.right) + (row.em ? '<span class="promo-sheet-em">' + promoSheetEsc(row.em) + '</span>' : '') + promoSheetEsc(row.tail) + '</span></div>'
+    }).join('')
+    document.getElementById('promo-sheet-note').textContent = data.note
+    document.getElementById('promo-sheet-mask').style.display = 'block'
+  }
+  function closePromoSheet() {
+    document.getElementById('promo-sheet-mask').style.display = 'none'
+  }
+</script>
 </body>
 </html>
