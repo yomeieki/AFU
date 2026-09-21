@@ -24,6 +24,9 @@ import {
   remindLocalUncalled, remindCancelRequestPending, autoRejectStaleCancelRequests, autoCallRiders, autoCompleteLocalDelivered,
   housekeepingDelivery, refreshStaleQuotes, escalateSoloCalls,
 } from './delivery/tasks'
+import {
+  printPrepTickets, remindScheduledUnaccepted, remindScheduledNotReady, autoCallScheduled, remindScheduledLate,
+} from './delivery/schedule-tasks'
 import { remindExpressUnaccepted, remindExpressUnpicked, reconcileExpressUnknown, reconcileExpressStale } from './delivery/express-booking-tasks'
 import {
   processQueue as printQueueSweep, repeatAnnounce as printRepeatAnnounce, printerHealthTask,
@@ -117,6 +120,12 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['pickupUnaccepted', () => remindPickupUnaccepted(overrides.remindAfterMin)],
     ['pickupUnpicked', () => remindPickupUnpicked(overrides.pickupUnpickedMin)],
     ['pickupAutoComplete', () => autoCompletePickup(overrides.pickupAutoCompleteMin)],
+    // 预约送达五任务（spec 2026-09-21 §4.7）：阈值全由时段倒推，无 override 键
+    ['schedPrepTicket', printPrepTickets],
+    ['schedUnaccepted', () => remindScheduledUnaccepted(overrides.remindAfterMin)],
+    ['schedNotReady', remindScheduledNotReady],
+    ['schedAutoCall', autoCallScheduled],
+    ['schedLate', remindScheduledLate],
     ['lowStock', pushLowStock],
     ['localCallTimeout', () => remindCallTimeout(overrides.callTimeoutMin)],
     // 只呼最低价的单等太久 → 取消重呼并呼。排在 localAutoCall 之前：升级会先撤单再建新单，
@@ -237,7 +246,7 @@ export { ACCEPT_REMIND_AFTER_MIN } from '../utils/constants'
 export async function remindUnacceptedOrders(afterMin = ACCEPT_REMIND_AFTER_MIN): Promise<number> {
   const deadline = new Date(Date.now() - afterMin * 60 * 1000)
   const stale = await prisma.order.findMany({
-    where: { status: 'PAID', acceptRemindedAt: null, paidAt: { lt: deadline }, deliveryType: { not: 'PICKUP' } },
+    where: { status: 'PAID', acceptRemindedAt: null, paidAt: { lt: deadline }, deliveryType: { not: 'PICKUP' }, scheduledAt: null },
     select: { id: true, orderNo: true, actualAmount: true, receiverName: true, receiverPhone: true, paidAt: true },
     take: BATCH,
     orderBy: { paidAt: 'asc' },

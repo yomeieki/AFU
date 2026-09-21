@@ -28,6 +28,7 @@ import {
 } from './content'
 import { getLocalSettings, isShopOpenNow, LocalDeliverySettings } from '../local-settings'
 import { pickupTicketLabel, prepStartAt } from '../pickup'
+import { scheduleTimeline } from '../delivery/schedule'
 
 const BATCH = 100
 /**
@@ -648,7 +649,7 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
 
   const candidates = await prisma.order.findMany({
     where: { status: 'PAID', paidAt: { not: null } },
-    select: { id: true, deliveryType: true, paidAt: true, announceCount: true, lastAnnouncedAt: true, pickupAt: true },
+    select: { id: true, deliveryType: true, paidAt: true, announceCount: true, lastAnnouncedAt: true, pickupAt: true, scheduledAt: true, distanceM: true },
     orderBy: { paidAt: 'asc' },
     take: BATCH,
   })
@@ -679,6 +680,15 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
       if (!order.pickupAt) continue
       if (now < prepStartAt(localSettings, order.pickupAt).getTime() - 15 * 60_000) continue
     }
+    // 预约外送：接单截止之前不催也不推进计数（明天中午送的单今晚不该响）；之后按普通节奏，
+    // 等待时长从接单截止起算，而不是从付款起算（否则票上会印「已等待 600 分钟」）
+    let anchor = order.paidAt.getTime()
+    if (order.deliveryType === 'LOCAL' && order.scheduledAt && localSettings) {
+      if (order.distanceM === null) continue
+      const due = scheduleTimeline(localSettings, order.scheduledAt, order.distanceM).acceptDueAt.getTime()
+      if (now < due) continue
+      anchor = Math.max(anchor, due - settings.repeat.localAfterMin * 60_000)
+    }
     // 邮寄单：非营业时间一律不催（深夜没人在店里，催了也没人看）。
     // 同城单：不受门控，打烊后继续催 —— 钱已经收了，19:58 进来的单不能因为 20:00 一到
     // 就没人提醒；同城单本来也只能在营业时间下单，催单最多延续到打烊后一小段。
@@ -688,7 +698,7 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
     // 那正好是这个门控要避免的相反效果。
     if (order.deliveryType !== 'LOCAL' && !shopOpen) continue
     const afterMin = order.deliveryType === 'EXPRESS' ? settings.repeat.expressAfterMin : settings.repeat.localAfterMin
-    const waitedMs = now - order.paidAt.getTime()
+    const waitedMs = now - anchor
     const waitedMin = waitedMs / 60_000
     if (waitedMs < (testMinWaitMsOverride ?? afterMin * 60_000)) continue
     if (order.announceCount >= settings.repeat.maxTimes) {

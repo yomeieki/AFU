@@ -141,13 +141,13 @@ export async function notifyCancelRequest(
  * 不传的既有调用点行为不受影响。被抑制期间的次数会拼进真正发出的那条消息里
  * （「（期间抑制 N 次）」），与 notifySystemAlert 的口径保持一致。
  */
-export function notifyLocalDeliveryAlert(title: string, lines: string[], opts: { key?: string } = {}): void {
+export function notifyLocalDeliveryAlert(title: string, lines: string[], opts: { key?: string; windowMs?: number } = {}): void {
   const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
   if (!wecom && !pushplusToken) return
   let suppressedLine = ''
   if (opts.key) {
-    const { send, suppressed } = shouldSendAlert(opts.key)
+    const { send, suppressed } = shouldSendAlert(opts.key, opts.windowMs)
     if (!send) return
     if (suppressed > 0) suppressedLine = `\n> （期间抑制 ${suppressed} 次同类告警）`
   }
@@ -328,4 +328,17 @@ export function notifyPickupAutoCompleted(orders: { orderNo: string; receiverPho
   ].join('\n')
   if (wecom) sendWecomMarkdown(wecom, content)
   if (pushplusToken) sendPushPlus(pushplusToken, '自取单自动完成', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
+/** 预约单到「接单截止」仍未接单的催单（schedule-tasks）。文案带送达时段，与立即单的「超过 15 分钟」区分 */
+export function notifyScheduledAcceptReminder(
+  orders: { orderNo: string; actualAmount: number; receiverName: string; receiverPhone: string; slotLabel: string }[]
+): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const lines = orders.slice(0, 10).map((o) => `- ${o.orderNo} ¥${fmtYuan(o.actualAmount)} 尾号${o.receiverPhone.slice(-4)}（${o.slotLabel} 送达）`)
+  const content = [`**📅 ${orders.length} 张预约单已到接单截止仍未接单**`, ...lines, orders.length > 10 ? `…其余 ${orders.length - 10} 单` : '', '请立即到工作台接单，备餐票已出/即将出'].filter(Boolean).join('\n')
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, `${orders.length} 张预约单待接单`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }
