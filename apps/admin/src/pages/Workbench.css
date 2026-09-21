@@ -149,6 +149,10 @@
 .wb__nonote { margin-top:6px; font-size:12px; color:var(--text-2); }
 .wb__tableware { margin: 4px 0; font-size: 13px; font-weight: 600; color: var(--text-1); }
 .wb__fields { margin-top:6px; font-size:12px; color:var(--text-2); display:flex; flex-wrap:wrap; gap:4px 10px; }
+.wb__sched { font-weight:600; color:var(--local); }
+.wb__schedbar { margin:6px 12px 0; padding:6px 10px; border-radius:8px; font-size:12px; font-weight:600;
+  background:color-mix(in srgb, var(--local) 12%, var(--surface)); color:var(--text-1); border:1px solid color-mix(in srgb, var(--local) 40%, var(--line));
+  display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer; }
 .wb__strip { margin-top:8px; border-radius:6px; padding:5px 8px; font-size:12px; font-weight:600;
   display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .wb__strip--warn { background:var(--note-bg); color:var(--warn); border:1px solid var(--note-line); }
