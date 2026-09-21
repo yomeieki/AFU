@@ -347,3 +347,20 @@ return {
 - 落点：`utils/promo.js` 的 `yuanShort`（现只去 `.00`）改为去末尾零：`(fen/100).toFixed(2).replace(/\.?0+$/, '')`；它是提示文案的唯一格式化入口，`promoBarOf` / `progressTipOf` / 新增 `freeShipBarOf` 全部经它，改一处即全覆盖。
 - 验收补：`freeship-bar.test.cjs` 加 `yuanShort` 五例（660/3800/450/3705/1080）；`promo.test.cjs` 里凡断言含 `6.60` 类文案的期望值随之改为 `6.6`（列入 §6-A5 的允许改动范围，逐行列出改前/改后）；§4.3 判定表与 C 类真机清单中的「6.60」一律按 `6.6` 读。
 - 不得把 `yuanShort` 用到应付金额、商品价上；`price.wxs`/`formatPrice` 不动。
+
+## 12. 统筹裁定（2026-09-21，店主追加：「自取享 9.5 折」改红字）
+
+店主要求把门店头规则行里的「自取享 9.5 折」改成红色、更显眼。**只改这一段的颜色，其余文字、内容、位置不变；外送模式的规则行不变。**
+
+**已查实：**
+- 文案来自 `meta.pickup.discountText`（服务端下发，例「自取享 9.5 折」），`utils/local-catalog.js:109-118` `pickupRulesText(meta)` 把它与「满 ¥15 起」「门店地址」用 ` · ` 拼成**一个字符串**；`components/local-store-header/index.js:47` 在 `mode === 'PICKUP'` 时把它赋给 `rulesText`；`index.wxml:14` 用**单个** `<text class="delivery-rules">` 渲染，所以现在没法只给前半段上色。
+- `utils/local-catalog.js` 属本方案禁改文件（§7），`pickupRulesText` 与其测试 `tests/miniapp/local-catalog.test.cjs` **一律不动**。
+
+**新增 T6（在 T4 预览台镜像之前做）：**
+1. `components/local-store-header/index.js`：`observers['meta, mode']` 里新增 `rulesLead`——`mode === 'PICKUP'` 且 `meta.pickup.discountText` 非空时取该串，否则 `''`；`rulesText` 在有 `rulesLead` 时改为**去掉首段后的剩余部分**（即 `pickupRulesText(meta)` 去掉开头的 `rulesLead + ' · '`；若剩余为空则 `''`）。DELIVERY 模式 `rulesLead` 恒 `''`、`rulesText` 走原 `buildRules`，逐字不变。用字符串前缀裁剪，不重写拼接逻辑，保证与 `pickupRulesText` 同源。
+2. `index.wxml:13-16`：规则行改为 `<text wx:if="{{rulesLead}}" class="delivery-rules delivery-rules-em">{{rulesLead}}</text><text wx:if="{{rulesLead && rulesText}}" class="delivery-rules delivery-rules-sep"> · </text><text wx:if="{{rulesText}}" class="delivery-rules">{{rulesText}}</text>`，行容器与 `canNavigate` 箭头不动（整行仍可点开地图）。
+3. `index.wxss`：新增 `.delivery-rules-em { color: var(--brand); font-weight: 600; }`；`.delivery-rules-row .delivery-rules` 现有 `flex: 1` 只应作用于最后那段（改为 `.delivery-rules-row .delivery-rules:last-of-type`），前两段 `flex-shrink: 0; white-space: nowrap`，避免红字被压缩省略。
+4. 测试：`tests/miniapp/channel-badge-page.test.cjs` 已挂门店头，补两条——PICKUP 下 `rulesLead === meta.pickup.discountText` 且 `rulesText` 以「满 ¥」或地址开头、不再含 discountText；DELIVERY 下 `rulesLead === ''` 且 `rulesText` 与改前一致。源码级：`index.wxml` 含 `delivery-rules-em`，`index.wxss` 含 `.delivery-rules-em` 且 `color: var(--brand)`。
+5. 预览台：`tools/miniapp-preview/pages/index-local-pickup.html:25` 与 `product-list-preview.js` 里自取态的规则行同步拆成两段（红字 + 灰字）。
+
+**验收补：** A 类加上述断言；B 类在 375 宽自取模式核对：红字段完整不省略、与后文用「 · 」隔开、整行仍可点；外送模式规则行与 `3cb5ae9` 逐字一致（源码级 diff 对照 `buildRules` 未动）。**白名单加**：`components/local-store-header/index.{js,wxml,wxss}`、`tools/miniapp-preview/pages/index-local-pickup.html`。上报条件加：若 `discountText` 在某些配置下不是 `pickupRulesText` 的首段（前缀裁剪失败），停下上报，不得改 `local-catalog.js`。
