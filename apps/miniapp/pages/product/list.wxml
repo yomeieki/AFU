@@ -73,6 +73,7 @@
   </view>
 
   <promo-bar promotion="{{promotion}}" delivery-type="{{promoType}}" />
+  <promo-bar kind="freeship" meta="{{meta}}" delivery-type="{{promoType}}" />
 
   <!-- Active search chip（搜索模式：点 × 清除并回到分组视图） -->
   <view class="category-tag-bar" wx:if="{{searchKeyword}}">

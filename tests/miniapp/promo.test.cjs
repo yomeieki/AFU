@@ -33,7 +33,8 @@ test('自取满减失败提供重新计算动作', () => {
   assert.deepEqual(r, { disabled: false, text: '重新计算优惠', amountState: 'pending', action: 'promo' })
 })
 test('未达满减门槛', () => {
-  assert.deepEqual(require(promoPath).progressTipOf({ active: true, discountFen: 0, nextTierGapFen: 13100, nextTierCutFen: 2000 }, local), { show: true, text: '再买 ¥131 减 ¥20', tone: 'hint' })
+  // 统筹裁定（2026-09-21）：满减开着、未达档时也追加免运费第二段（店主确认的预览为准）。
+  assert.deepEqual(require(promoPath).progressTipOf({ active: true, discountFen: 0, nextTierGapFen: 13100, nextTierCutFen: 2000 }, local), { show: true, text: '再买 ¥131 减 ¥20 · 再买 ¥29 免运费', tone: 'hint' })
 })
 test('已满减未免运和已免运', () => {
   const tip = require(promoPath).progressTipOf
@@ -49,9 +50,10 @@ test('免运金额和范围随后台配置变化，已达档选最大范围', ()
 })
 test('关活动隐藏，自取与邮寄不出免运段，下一档按服务端响应', () => {
   const tip = require(promoPath).progressTipOf
-  assert.equal(tip({ ...preview, active: false }, local).show, false)
-  assert.equal(tip(null, local).show, false)
-  assert.equal(tip({ active: true, discountFen: 0 }, local).show, false)
+  // 补漏洞（2026-09-21）：满减关闭/未命中时不再直接隐藏，改为只提示免运费进度。
+  assert.deepEqual(tip({ ...preview, active: false }, local), { show: true, text: '再买 ¥29 免运费', tone: 'hint' })
+  assert.deepEqual(tip(null, local), { show: true, text: '再买 ¥29 免运费', tone: 'hint' })
+  assert.deepEqual(tip({ active: true, discountFen: 0 }, local), { show: true, text: '再买 ¥29 免运费', tone: 'hint' })
   for (const deliveryType of ['PICKUP', 'EXPRESS']) {
     assert.equal(tip(preview, { ...local, deliveryType }).text, '已减 ¥20')
     assert.equal(tip({ ...preview, nextTierGapFen: 3000, nextTierCutFen: 3000 }, { ...local, deliveryType }).text, '已减 ¥20 · 再买 ¥30 可减 ¥30')
