@@ -435,7 +435,12 @@ Page({
    */
   syncPayAmount: function() {
     var d = this.data
-    if (!d.quoteToken || d.blockReason || d.quoteError) return
+    if (!d.quoteToken || d.blockReason || d.quoteError) {
+      // 报价失败/阻塞时不算应付（保持「待计算」），但明细里的券行与传给券组件的 otherDiscount
+      // 不能停在上一次报价的旧值——否则「换地址超范围再改券」会显示过时的抵扣（02 复核 2026-09-21）
+      if (d.couponDiscount || d.totalCut || d.otherDiscount) this.setData({ couponDiscount: 0, totalCut: 0, otherDiscount: 0 })
+      return
+    }
     var fee = (d.quote && d.quote.fee) || 0
     var r = composePay({ subtotal: d.subtotal, pickupDiscount: 0, promoFen: d.promoFen,
       couponDiscount: d.discount, shippingFee: fee, packingFee: d.packingFee })

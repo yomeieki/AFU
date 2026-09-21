@@ -66,3 +66,11 @@ test('订单详情在自取优惠与优惠券之间显示满减快照', () => {
 test('购物车页同一固定容器内展示活动进度提示', () => {
   assert.match(read('pages/cart/index.wxml'), /class="cart-tip/)
 })
+// 02 复核（2026-09-21）：分类页整页滚动的几何值算得再对，页面不把它们绑到节点上就是空转。
+// 这三条锁住 WXML/WXSS 侧的契约——改坏绑定必须变红。
+test('分类页把算好的尾部补白与左栏吸顶几何真正绑到节点上', () => {
+  const wxml = read('pages/product/list.wxml')
+  assert.match(wxml, /class="group-tail"[^>]*style="[^"]*height:\s*\{\{tailHeight\}\}px/)
+  assert.match(wxml, /class="cat-panel"[^>]*style="[^"]*top:\s*\{\{pinnedHeight\}\}px[^"]*height:\s*\{\{sidebarHeight\}\}px/)
+  assert.match(read('pages/product/list.wxss'), /\.cat-panel\s*\{[^}]*position:\s*sticky/)
+})

@@ -152,3 +152,14 @@ test('pickupDateText：月日 + 星期按日历日算，非法输入给空', fun
   assert.deepEqual(st.pickupDateText('2026-10-01'), { monthDay: '10月1日', weekday: '周四' })
   assert.deepEqual(st.pickupDateText(''), { monthDay: '', weekday: '' })
 })
+
+// 02 复核（2026-09-21）：满减在途/失败时 payAmount 为 null，「请填写手机号」「还差 ¥X 起」两格
+// 曾把 amountState 写死成 'ready'，页面把 null 渲染成 ¥0.00。这里钉住：payAmount 为 null 一律 pending，
+// 有数时仍是 ready（旧行为不变）。
+test('手机号缺失 / 未达起送：金额未知时 amountState 是 pending，有数时才是 ready', function () {
+  const base = { blockReason: '', slotsLoading: false, slotsError: false, noSlots: false, hasSlot: true, slotStale: false }
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, base, { phoneValid: false, payAmount: null })).amountState, 'pending')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, base, { phoneValid: true, belowMinGap: 500, payAmount: null })).amountState, 'pending')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, base, { phoneValid: false, payAmount: 1234 })).amountState, 'ready')
+  assert.equal(st.pickupCheckoutAction(Object.assign({}, base, { phoneValid: true, belowMinGap: 500, payAmount: 1234 })).amountState, 'ready')
+})

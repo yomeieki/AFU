@@ -69,8 +69,10 @@ function pickupCheckoutAction(s) {
   // 与「未选餐具」一致：按钮可点，动作是打开时段选择器，不是提交
   if (!st.hasSlot) return result(false, TEXT.NO_SLOT, amt, 'slot')
   if (st.slotStale) return result(false, TEXT.SLOT_STALE, 'pending', 'reslot')
-  if (!st.phoneValid) return result(true, TEXT.NO_PHONE, 'ready', 'none')
-  if (st.belowMinGap > 0) return result(true, '还差 ¥' + formatPrice(st.belowMinGap) + ' 起', 'ready', 'none')
+  // 这两格也要跟着 amt 走：满减在途/失败时 payAmount 为 null，写死 'ready' 会让
+  // 「请填写手机号」「还差 ¥X 起」状态下的应付金额显示成 ¥0.00 而不是「待计算」（02 复核 2026-09-21）
+  if (!st.phoneValid) return result(true, TEXT.NO_PHONE, amt, 'none')
+  if (st.belowMinGap > 0) return result(true, '还差 ¥' + formatPrice(st.belowMinGap) + ' 起', amt, 'none')
   if (st.promoError) return result(false, TEXT.PROMO_RETRY, 'pending', 'promo')
   if (st.payAmount === null || st.payAmount === undefined) return result(true, TEXT.SUBMIT, 'pending', 'none')
   // 餐具必选（餐具设计 T2）。放在金额未知之后——amountState='ready' 时金额一定算得出来
