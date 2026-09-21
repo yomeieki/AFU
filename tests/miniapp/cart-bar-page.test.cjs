@@ -66,6 +66,35 @@ test('订单详情在自取优惠与优惠券之间显示满减快照', () => {
 test('购物车页同一固定容器内展示活动进度提示', () => {
   assert.match(read('pages/cart/index.wxml'), /class="cart-tip/)
 })
+// 统筹裁定 Q3（2026-09-21）：满减关闭时购物车 tabBar 页原先直接 promoTip:{show:false}，
+// 不经 progressTipOf，免运费进度也跟着消失——补齐与主页/分类页结算条一致的行为。
+test('购物车页满减关闭时仍经 progressTipOf 显示免运费进度，且不发满减预览请求', async () => {
+  const vm = require('node:vm')
+  let config
+  const file = path.join(__dirname, '../../apps/miniapp/pages/cart/index.js')
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
+    require: dep => {
+      if (dep === '../../api/cart') return { getCart: () => Promise.resolve({ items: [] }), updateCartItem: () => Promise.resolve(), deleteCartItem: () => Promise.resolve() }
+      if (dep === '../../api/local') return { getLocalMeta: () => Promise.resolve({}), getPromoPreview: () => { throw new Error('must not request') } }
+      if (dep === '../../utils/format') return { formatPrice: v => String(v) }
+      return require(path.resolve(path.dirname(file), dep))
+    },
+    Page: c => { config = c }, getApp: () => ({}), wx: {}, console,
+  })
+  config.data = structuredClone(config.data)
+  config.setData = function(p) { Object.assign(this.data, p) }
+  Object.assign(config.data, {
+    channel: 'LOCAL',
+    mode: 'DELIVERY',
+    selectedCount: 2,
+    totalAmount: 3800,
+    promotion: { active: false },
+    meta: { radiusKm: 8, fee: { freeShipTiers: [{ minAmountFen: 5800, maxKm: 2 }] } },
+  })
+  await config.loadPromo()
+  assert.equal(config.data.promoTip.show, true)
+  assert.equal(config.data.promoTip.text, '再买 ¥20 免运费（2 km 内）')
+})
 // 02 复核（2026-09-21）：分类页整页滚动的几何值算得再对，页面不把它们绑到节点上就是空转。
 // 这三条锁住 WXML/WXSS 侧的契约——改坏绑定必须变红。
 test('分类页把算好的尾部补白与左栏吸顶几何真正绑到节点上', () => {

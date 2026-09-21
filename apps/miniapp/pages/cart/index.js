@@ -120,15 +120,21 @@ Page({
     var seq = (this._promoSeq = (this._promoSeq || 0) + 1)
     var type = promo.promoTypeOf(this.data.channel, this.data.mode)
     var promotion = this.data.promotion
-    if (!this.data.selectedCount || (promotion && (!promotion.active || (promotion.channels || {})[type] === false))) {
+    var meta = this.data.meta || {}
+    var opts = { deliveryType: type, subtotal: this.data.totalAmount, freeShipTiers: (meta.fee || {}).freeShipTiers, radiusKm: meta.radiusKm }
+    if (!this.data.selectedCount) {
       this.setData({ promoTip: { show: false } })
+      return Promise.resolve()
+    }
+    // 满减关闭 / 本渠道未勾：与 local-cart-bar 的 apply(null) 同一处理——不请求，
+    // 但仍经 progressTipOf(null, opts) 走一遍，好让免运费进度显示出来（统筹裁定 Q3）。
+    if (promotion && (!promotion.active || (promotion.channels || {})[type] === false)) {
+      this.setData({ promoTip: promo.progressTipOf(null, opts) })
       return Promise.resolve()
     }
     return getPromoPreview(type, this.data.totalAmount).then(function(res) {
       if (seq !== self._promoSeq) return
-      var meta = self.data.meta || {}
-      self.setData({ promoTip: promo.progressTipOf(res, { deliveryType: type, subtotal: self.data.totalAmount,
-        freeShipTiers: (meta.fee || {}).freeShipTiers, radiusKm: meta.radiusKm }) })
+      self.setData({ promoTip: promo.progressTipOf(res, opts) })
     }, function() {
       if (seq === self._promoSeq) self.setData({ promoTip: { show: false } })
     })
