@@ -212,7 +212,7 @@ export interface ScheduleSettings {
   selfCancelLeadMin: 120,
 ```
 
-- [ ] **Step 4: sanitize**（`sanitizeLocalSettings` 里，在 `const pkg = asObj(o.packing)` 旁加 `const sc = asObj(o.schedule)`；返回对象里 `pickup: {...}` 之后加）
+- [ ] **Step 4: sanitize**（本文件 `int()` 的语义是**越界回落默认值**，不做夹取；执行裁决 2026-09-21）（`sanitizeLocalSettings` 里，在 `const pkg = asObj(o.packing)` 旁加 `const sc = asObj(o.schedule)`；返回对象里 `pickup: {...}` 之后加）
 
 ```ts
     schedule: {
@@ -256,9 +256,9 @@ t('schedule 默认关、默认值齐全', () => {
   assert.deepStrictEqual(s.schedule, { enabled: false, slotMinutes: 30, daysAhead: 1, acceptBufferMin: 5, prepMinutes: 20, prepTicketLeadMin: 15, readyRemindEveryMin: 3, readyRemindMaxTimes: 5, callToleranceMin: 5 })
   assert.strictEqual(s.selfCancelLeadMin, 120)
 })
-t('schedule 越界夹取：slotMinutes 5→15、daysAhead 9→3、selfCancelLeadMin 9999→720', () => {
+t('schedule 越界回落默认值（与 int() helper 及 perItemFen 同口径）：slotMinutes 5→30、daysAhead 9→1、selfCancelLeadMin 9999→120', () => {
   const s = sanitizeLocalSettings({ schedule: { slotMinutes: 5, daysAhead: 9 }, selfCancelLeadMin: 9999 })
-  assert.strictEqual(s.schedule.slotMinutes, 15); assert.strictEqual(s.schedule.daysAhead, 3); assert.strictEqual(s.selfCancelLeadMin, 720)
+  assert.strictEqual(s.schedule.slotMinutes, 30); assert.strictEqual(s.schedule.daysAhead, 1); assert.strictEqual(s.selfCancelLeadMin, 120)
 })
 t('开通预约但没有营业时间 → 校验报错', () => {
   const s = sanitizeLocalSettings({ schedule: { enabled: true }, businessHours: [] })
