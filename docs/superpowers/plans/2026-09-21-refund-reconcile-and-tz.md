@@ -437,3 +437,20 @@ tail -3 /tmp/e2e-rtz.log; grep '✘' /tmp/e2e-rtz.log
 ## 11. 给 02 复核（opus）的输入清单
 
 只给：§1 需求、§3 设计决策、§6 验收标准、最终 `git diff a3b76c2..HEAD`。**不给** §2 推理、不给执行对话。复核输出每条标 [阻断/需改/建议] 并指明违反 §6 哪一条。
+
+## 10. 统筹裁定（2026-09-21，01 在 T2 上报后）
+
+**上报成立，责任在 00 规划**：`initiateRefund`（`services/refund.ts:268-276`）在微信同步返回 ABNORMAL/CLOSED 时**先把 `status` 直接写成目标值**，再调 `markRefundAbnormal/markRefundClosed` 只为触发通知；§3.1 把这两个函数改成「status 在 PENDING/PROCESSING（或 ACTIVE）内才写」后，这两处调用会命中 0 行直接返回，店员群与老板告警**每次必失**——确定性回归，不是竞态。§2.11 第 1 条「既有调用点状态都在守卫集合内」对 `refund.ts` 自身调用点判断错误。
+
+**裁定：白名单放开 `initiateRefund` 的 `:268-288` 这一段，且只做下面这一种改法**（状态流转只在 mark*/finalize 一处发生，与 SUCCESS 分支既有做法一致）：
+1. `:273` 的 `status: result.status === 'SUCCESS' ? 'PROCESSING' : result.status` 改为 **恒写 `'PROCESSING'`**（`wxRefundId/channel/wxResponseData` 照写）。注释同步改写：三种非 FAILED 结果都先落 PROCESSING，再由 `finalizeRefundSuccess / markRefundAbnormal / markRefundClosed` 完成到终态的**唯一一次**转移并发通知。
+2. `:284-288` 的分派保持不变（现在 mark* 会命中 PROCESSING 行，条件写生效，通知照发）。
+3. `catch` 里 `markRefundFailed` 分支不动（行仍 PENDING，守卫匹配）。
+4. **不得**放宽 mark* 守卫来「兼容已是目标状态」——那会破坏补查幂等（`selftest-refund-reconcile.ts` 用例 6）。
+
+**验收补（进 §6-A，04 也要核）**：
+- 新增自测用例（放 `selftest-refund-reconcile.ts` 或现有退款自测）：mock `createRefund` 同步返回 ABNORMAL → 行终态 ABNORMAL、`notifyRefundResult` 与 `notifySystemAlert` **各恰好一次**；同步返回 CLOSED → 终态 CLOSED、通知各一次；同步返回 SUCCESS → 与改前逐字节一致（PROCESSING → finalize → SUCCESS）；`createRefund` 抛错 → FAILED、通知一次。四条都要「改坏验证」：把 `:273` 改回原写法 → ABNORMAL/CLOSED 两条用例必须红（通知 0 次）。
+- `wechat-notify.ts:380-382` 回调路径与 `routes/admin/orders.ts` 调用点：用例证明行为不变（回调 ABNORMAL/CLOSED 到达时行是 PROCESSING → 命中 → 通知一次；回调重复到达 → 命中 0 行 → 不重复通知）。
+- 回退验证 R1–R4 照旧。
+
+**其它**：T2 迁移文件按原设计重新创建；执行结束前在本 worktree `npx prisma generate` 一次，使共享 client 与最终 schema 一致（上报里提到的三字段残留由此消掉）。主仓 `apps/server` 下那个 `ts-node-dev` 进程不是本批的，**不要碰**。
