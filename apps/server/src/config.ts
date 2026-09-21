@@ -1,5 +1,12 @@
 import 'dotenv/config'
 import { z } from 'zod'
+import { pinTimezone, enforceTimezone, TARGET_TZ } from './utils/timezone'
+
+// 服务端固定北京时间（2026-09-21）：必须在 dotenv 加载之后、任何业务 Date 使用之前，
+// 尽早无条件把 TZ 钉成 Asia/Shanghai——换服务器 / PM2 配置写成 UTC 时，经营概览/扫码统计/
+// 订单日期筛选/自取时段/营业时间/会员每日任务日切这类按进程本地时区换算的逻辑不会静默错 8 小时。
+// 见 utils/timezone.ts 头注释（含「赋错时区名会静默回落到 UTC」的实测）。
+const tzPin = pinTimezone()
 
 // 启动时集中校验环境变量：关键配置缺失立即退出，绝不静默回退
 const envSchema = z.object({
@@ -115,6 +122,11 @@ const env = parsed.data
 const isProduction = env.NODE_ENV === 'production'
 const publicBaseUrl = env.PUBLIC_BASE_URL ?? `http://localhost:${env.PORT}`
 
+// 时区自检：生产环境自检失败直接拒绝启动（此时全部按本地时区换算的自然日逻辑都会错 8 小时，
+// 带错上线比停下来修 tzdata 更糟）；非生产只警告。必须放在 mock 校验之前——两者都可能
+// 导致启动早退出，时区问题优先级更高、更容易被忽视，排前面更早被人看到。
+const tz = enforceTimezone({ isProduction, pin: tzPin })
+
 const isSet = (v: string | undefined): v is string => !!v && v.trim() !== ''
 const cosEnabled =
   isSet(env.COS_SECRET_ID) && isSet(env.COS_SECRET_KEY) && isSet(env.COS_BUCKET) && isSet(env.COS_REGION)
@@ -171,6 +183,12 @@ export const config = {
   nodeEnv: env.NODE_ENV,
   isProduction,
   port: env.PORT,
+  timezone: {
+    name: TARGET_TZ,
+    offsetMin: tz.offsetMin,
+    ok: tz.ok,
+    overriddenFrom: tz.overridden ? tz.previousEnvTz : null,
+  },
   jwt: {
     userSecret: env.JWT_SECRET,
     userExpiresIn: env.JWT_EXPIRES_IN,

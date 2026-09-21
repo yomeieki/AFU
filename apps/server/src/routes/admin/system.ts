@@ -95,6 +95,12 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         circuitTripped: isCircuitTripped(),
       },
       publicBaseUrl: config.publicBaseUrl,
+      timezone: {
+        name: config.timezone.name,
+        offsetMin: config.timezone.offsetMin,
+        ok: config.timezone.ok,
+        overriddenFrom: config.timezone.overriddenFrom,
+      },
     })
   } catch (e) {
     next(e)

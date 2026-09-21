@@ -9,6 +9,9 @@ module.exports = {
       env_production: {
         NODE_ENV: 'production',
         PORT: 3000,
+        // 进程内 config.ts 已经无条件把 TZ 钉成 Asia/Shanghai（见 utils/timezone.ts），这里是
+        // 第二道保险：换服务器/系统默认时区变化时，PM2 注入的这个值先兜一层。
+        TZ: 'Asia/Shanghai',
       },
       error_file: '/var/log/pm2/food-shop-server-error.log',
       out_file: '/var/log/pm2/food-shop-server-out.log',
