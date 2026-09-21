@@ -8,6 +8,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fs = require('node:fs')
 const promotion = { active: true, name: '秋日满减', channels: { LOCAL: true, PICKUP: false, EXPRESS: true }, tiers: [{ minFen: 5000, cutFen: 500 }] }
 const meta = { enabled: false, paused: { reason: '暂停外送' }, pickup: { enabled: false }, promotion }
 
@@ -177,4 +178,32 @@ test('页面不自己问许可：onPickChannel 存在，list.js 源码不含 ens
   assert.equal(typeof page.onPickChannel, 'function')
   const source = require('fs').readFileSync('apps/miniapp/pages/product/list.js', 'utf8')
   assert.ok(source.indexOf('ensurePrivacyAuthorize') === -1, '分类页不应自己拉起许可弹窗')
+})
+
+// 统筹裁定 T6（2026-09-21）：门店头「自取享 X 折」从规则行首段拆出来单独标红。
+test('门店头 PICKUP 模式：rulesLead 取 discountText，rulesText 是剩余部分且不再含它', function () {
+  const ctx = makeCtx('LOCAL')
+  const header = loadPage('../../apps/miniapp/components/local-store-header/index.js', ctx)
+  const pickupMeta = { store: { district: '自流井区', address: '丹桂街道丹桂40栋底楼' }, pickup: { discountText: '自取享 9.5 折', minOrderAmountFen: 1500, enabled: true } }
+  header.observers['meta, mode'].call(header, pickupMeta, 'PICKUP')
+  assert.equal(header.data.rulesLead, '自取享 9.5 折')
+  assert.ok(header.data.rulesText.indexOf('满 ¥') === 0 || header.data.rulesText.indexOf('自流井区') === 0, header.data.rulesText)
+  assert.equal(header.data.rulesText.indexOf('自取享 9.5 折'), -1)
+})
+
+test('门店头 DELIVERY 模式：rulesLead 恒为空串，rulesText 与改前逐字一致（buildRules）', function () {
+  const ctx = makeCtx('LOCAL')
+  const header = loadPage('../../apps/miniapp/components/local-store-header/index.js', ctx)
+  Object.keys(header.methods).forEach(function (k) { header[k] = header.methods[k] })
+  const deliveryMeta = { radiusKm: 5, fee: { minOrderAmount: 2000, baseFee: 300 } }
+  header.observers['meta, mode'].call(header, deliveryMeta, 'DELIVERY')
+  assert.equal(header.data.rulesLead, '')
+  assert.equal(header.data.rulesText, '配送范围 5 km · 满 ¥20 起送 · 基础运费 ¥3 起')
+})
+
+test('门店头源码级：wxml 含 delivery-rules-em，wxss 定义红色', function () {
+  const wxml = fs.readFileSync(path.join(__dirname, '../../apps/miniapp/components/local-store-header/index.wxml'), 'utf8')
+  const wxss = fs.readFileSync(path.join(__dirname, '../../apps/miniapp/components/local-store-header/index.wxss'), 'utf8')
+  assert.match(wxml, /delivery-rules-em/)
+  assert.match(wxss, /\.delivery-rules-em\s*\{[^}]*color:\s*var\(--brand\)/)
 })

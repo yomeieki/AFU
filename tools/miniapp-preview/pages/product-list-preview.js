@@ -37,10 +37,19 @@
 
   function channelBadge() { return '<a class="channel-badge" href="/pages/product-list' + (local ? '' : '-local') + '.html">' + (local ? '同城配送' : '全国邮寄') + '<span class="channel-badge-caret">⌄</span></a>' }
 
+  // 统筹裁定 T6（2026-09-21）：自取态规则行首段「自取享 X 折」拆出来单独标红，与真实
+  // components/local-store-header 的 rulesLead/rulesText 拆分一致；外送态原样不动。
+  function rulesRowHtml(mode) {
+    if (local && mode === 'PICKUP') {
+      return '<div class="delivery-rules-row" id="rules-row"><span class="delivery-rules delivery-rules-em">自取享 9.5 折</span><span class="delivery-rules delivery-rules-sep"> · </span><span class="delivery-rules">满 ¥15 起 · 自流井区丹桂街道丹桂40栋底楼</span><span class="delivery-rules-arrow">›</span></div>'
+    }
+    return '<div class="delivery-rules-row" id="rules-row"><span class="delivery-rules">配送范围 5 公里 · ¥30 起送 · 运费结算时算</span><span class="delivery-rules-arrow">›</span></div>'
+  }
+
   function header() {
     if (!local) return '<div class="catalog-toolbar search-bar"><div class="search-input-wrap"><span class="search-icon">🔍</span><input id="catalog-search" class="search-input" placeholder="搜索商品" aria-label="搜索商品"><button id="search-confirm" class="search-clear" type="button" hidden>搜索</button></div>' + channelBadge() + '</div>'
     return '<div class="store-head"><div class="store-title-row"><div class="store-name-wrap"><div class="icon icon-shop store-icon"></div><span class="store-name">自贡味道同城店</span><span class="status-pill status-pill-closed">已打烊</span></div>' + channelBadge() + '</div>' +
-      '<div class="delivery-rules-row"><span class="delivery-rules">配送范围 5 公里 · ¥30 起送 · 运费结算时算</span><span class="delivery-rules-arrow">›</span></div>' +
+      rulesRowHtml(state.mode) +
       '<div class="head-notice head-notice-soft"><span class="head-notice-text" id="notice-text">当前已打烊，您可以提前下单，营业后将按顺序安排配送。若您想预约自取，可切换到自取查看可预约时段。</span></div></div>'
   }
 
@@ -192,6 +201,8 @@
       state.mode = tab.dataset.mode
       document.querySelectorAll('.mode-tab').forEach(function (other) { other.classList.toggle('active', other === tab) })
       document.getElementById('notice-text').textContent = state.mode === 'PICKUP' ? '当前已打烊，自取仍可预约。请先选择合适的自取时间；实际可预约时段以小程序为准。' : '当前已打烊，您可以提前下单，营业后将按顺序安排配送。若您想预约自取，可切换到自取查看可预约时段。'
+      var rulesRow = document.getElementById('rules-row')
+      if (rulesRow) rulesRow.outerHTML = rulesRowHtml(state.mode)
       renderCart(); updateLayout()
     }) })
     else {

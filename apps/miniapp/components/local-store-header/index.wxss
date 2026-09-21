@@ -72,7 +72,13 @@
 }
 
 .delivery-rules-row { display: flex; align-items: center; gap: 8rpx; margin-top: 12rpx; }
-.delivery-rules-row .delivery-rules { margin-top: 0; flex: 1; min-width: 0; }
+.delivery-rules-row .delivery-rules { margin-top: 0; }
+/* 红字首段与分隔点不参与伸缩，避免被压缩省略；剩余的普通段占满余下宽度、按需省略。
+   不能用 :last-of-type——同一行末尾的 .delivery-rules-arrow 也是 <text>，会抢到 :last-of-type。 */
+.delivery-rules-row .delivery-rules:not(.delivery-rules-em):not(.delivery-rules-sep) { flex: 1; min-width: 0; }
+.delivery-rules-row .delivery-rules.delivery-rules-em,
+.delivery-rules-row .delivery-rules.delivery-rules-sep { flex-shrink: 0; white-space: nowrap; }
+.delivery-rules-em { color: var(--brand); font-weight: 600; }
 .delivery-rules-arrow { flex-shrink: 0; color: var(--text-3, #999); font-size: 28rpx; }
 /* 非阻塞的软提示（自取在营业时间外仍可预约）：灰底，不用橙色告警底 */
 .head-notice-soft { background: var(--gray-bg, #f3f4f6); }

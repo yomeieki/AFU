@@ -10,8 +10,10 @@
     <channel-badge wx:if="{{channel}}" channel="{{channel}}" bind:switch="onTapChannel" />
   </view>
 
-  <view wx:if="{{rulesText}}" class="delivery-rules-row" bindtap="onOpenStore">
-    <text class="delivery-rules">{{rulesText}}</text>
+  <view wx:if="{{rulesLead || rulesText}}" class="delivery-rules-row" bindtap="onOpenStore">
+    <text wx:if="{{rulesLead}}" class="delivery-rules delivery-rules-em">{{rulesLead}}</text>
+    <text wx:if="{{rulesLead && rulesText}}" class="delivery-rules delivery-rules-sep"> · </text>
+    <text wx:if="{{rulesText}}" class="delivery-rules">{{rulesText}}</text>
     <text wx:if="{{canNavigate}}" class="delivery-rules-arrow">›</text>
   </view>
   <view wx:if="{{notice}}" class="head-notice {{noticeBlocking ? '' : 'head-notice-soft'}}">

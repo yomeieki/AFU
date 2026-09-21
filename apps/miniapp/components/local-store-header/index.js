@@ -26,6 +26,9 @@ Component({
     label: '暂未营业',
     notice: '',
     noticeBlocking: false,
+    // 自取模式下把 pickupRulesText 的首段（discountText，例「自取享 9.5 折」）单独拎出来
+    // 标红显示；DELIVERY 模式恒为空串。
+    rulesLead: '',
     rulesText: '',
     // 通知里的出路：另一侧可用就「改用自取/改用外送」，否则「去全国邮寄」
     altMode: '',
@@ -39,12 +42,37 @@ Component({
       var notice = localCatalog.headNoticeOf(meta, mode)
       var alt = notice.blocking ? localCatalog.altModeOf(meta, mode) : null
       var store = meta && meta.store
+      // 统筹裁定（2026-09-21）：自取规则行首段「自取享 X 折」要单独标红。pickupRulesText
+      // 本身不改（禁改文件），这里只是用字符串前缀把它已经拼好的首段裁掉，剩余部分原样显示。
+      var rulesLead = ''
+      var rulesText = ''
+      if (mode === 'PICKUP') {
+        var full = localCatalog.pickupRulesText(meta)
+        var lead = meta && meta.pickup && meta.pickup.discountText
+        if (lead) {
+          rulesLead = lead
+          if (full === lead) {
+            rulesText = ''
+          } else if (full.indexOf(lead + ' · ') === 0) {
+            rulesText = full.slice((lead + ' · ').length)
+          } else {
+            // discountText 不是 pickupRulesText 的首段：按方案 §12 应停下上报；
+            // 现有 pickupRulesText 实现里 discountText 恒为第一段，这里兜底不裁剪。
+            rulesText = full
+          }
+        } else {
+          rulesText = full
+        }
+      } else {
+        rulesText = this.buildRules(meta)
+      }
       this.setData({
         tone: status.tone,
         label: status.label,
         notice: notice.text,
         noticeBlocking: notice.blocking,
-        rulesText: mode === 'PICKUP' ? localCatalog.pickupRulesText(meta) : this.buildRules(meta),
+        rulesLead: rulesLead,
+        rulesText: rulesText,
         altMode: alt || '',
         altLabel: alt === 'PICKUP' ? '改用自取' : alt === 'DELIVERY' ? '改用外送' : '去全国邮寄',
         canNavigate: mode === 'PICKUP' && !!(store && store.latE6 != null && store.lngE6 != null),
