@@ -62,6 +62,12 @@ function validateSpecs(
   }
   if (!dims) return { dims: null, skuList: [] }
 
+  for (const dim of dims) {
+    if (new Set(dim.values).size !== dim.values.length) {
+      throw new AppError(40001, `维度「${dim.name}」存在重复的规格值`, 400)
+    }
+  }
+
   const seen = new Set<string>()
   for (const sku of skuList) {
     if (sku.specValues.length !== dims.length) {
@@ -258,11 +264,24 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
 
         // diff 同步 SKU：有 id 且仍存在→更新；无 id→创建；库里有但本次未带→删除（cascade 清购物车）
         const existing = await tx.productSku.findMany({ where: { productId: id } })
+        const existingById = new Map(existing.map((e) => [e.id, e]))
         const keepIds = new Set(skuList.filter((s) => s.id).map((s) => s.id!))
         const toDelete = existing.filter((e) => !keepIds.has(e.id)).map((e) => e.id)
         if (toDelete.length) {
           await tx.productSku.deleteMany({ where: { id: { in: toDelete }, productId: id } })
         }
+
+        // 第一阶段：specText 有变化的已有 SKU 先改成临时名。
+        // 后台改名/换维度顺序后，两个 SKU 的 specText 可能互换（A→B、B→A），
+        // 逐条直接写会撞 (product_id, spec_text) 唯一索引；临时名以 id 区分，不会重复。
+        const renamed = skuList.filter(
+          (s) => s.id && existingById.has(s.id) && existingById.get(s.id)!.specText !== s.specText
+        )
+        for (const s of renamed) {
+          await tx.productSku.update({ where: { id: s.id }, data: { specText: `#tmp#${s.id}` } })
+        }
+
+        // 第二阶段：按最终值更新/创建
         for (let i = 0; i < skuList.length; i++) {
           const s = skuList[i]
           const payload = {
@@ -273,7 +292,7 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
             stock: s.stock,
             sortOrder: s.sortOrder ?? i,
           }
-          if (s.id && existing.some((e) => e.id === s.id)) {
+          if (s.id && existingById.has(s.id)) {
             await tx.productSku.update({ where: { id: s.id }, data: payload })
           } else {
             await tx.productSku.create({ data: { ...payload, productId: id } })
