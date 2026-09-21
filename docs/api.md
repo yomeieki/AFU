@@ -2107,6 +2107,8 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 
 进程启动时（`config.ts`，`dotenv` 加载之后、任何业务 `Date` 使用之前）无条件把 `process.env.TZ` 覆盖为 `Asia/Shanghai`（不是缺省才填——PM2 显式配了 `TZ=UTC` 也会被纠正），随后自检：偏移必须是 `-480` 且 `Intl.DateTimeFormat().resolvedOptions().timeZone` 必须是 `Asia/Shanghai`（赋一个不存在的时区名会静默回落到 UTC，`offset` 会变 0，靠这个自检能抓到）。生产环境自检失败直接拒绝启动（`pm2 logs` 会看到 `[timezone] … 拒绝启动`）；非生产只警告不拦截。PM2 侧 `ecosystem.config.js` 的 `env_production` 也加了 `TZ: 'Asia/Shanghai'` 作第二道保险。
 
+`GET /api/admin/system/status` 新增 `timezone: { name, offsetMin, ok, overriddenFrom }`（`overriddenFrom` 是被覆盖前的原值，未发生覆盖则为 `null`）。启动日志新增一行 `[server] timezone: Asia/Shanghai (offset -480)`；若环境原本设了别的 TZ，会先打一行 `[timezone] 环境 TZ=<原值> 已被覆盖为 Asia/Shanghai`。
+
 ## 附录 M：同城预约送达（2026-09-21）
 
 设计依据 `docs/superpowers/specs/2026-09-21-scheduled-delivery-design.md`。预约单 = `deliveryType=LOCAL` 且 `scheduledAt` 非空；四个倒推时刻由 `services/delivery/schedule.ts` 的 `scheduleTimeline` 唯一给出。
@@ -2171,5 +2173,3 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | 42290 | 预约配送未开通 |
 | 42291 | 送达时段不可选 |
 | 42292 | 操作与预约单状态不符（接单并呼叫 / 过早呼叫 / 对立即单点已备好） |
-
-`GET /api/admin/system/status` 新增 `timezone: { name, offsetMin, ok, overriddenFrom }`（`overriddenFrom` 是被覆盖前的原值，未发生覆盖则为 `null`）。启动日志新增一行 `[server] timezone: Asia/Shanghai (offset -480)`；若环境原本设了别的 TZ，会先打一行 `[timezone] 环境 TZ=<原值> 已被覆盖为 Asia/Shanghai`。
