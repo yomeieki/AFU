@@ -47,6 +47,21 @@ export type ReconcileOutcome =
 
 export type RefundQuery = (outRefundNo: string) => Promise<RefundQueryResult>
 
+/**
+ * F3（修补轮）：finalizeRefundSuccess/markRefundAbnormal/markRefundClosed/markRefundFailed
+ * 四个函数都是条件 updateMany，命中 0 行时静默返回（不改状态、不通知）——例如 ABNORMAL 行
+ * 被再次查到仍是 ABNORMAL 时，markRefundAbnormal 的守卫（status in PENDING/PROCESSING）必不中。
+ * 若 reconcileRefund 在这种「mark* 其实什么也没做」的情况下仍返回 SUCCESS/CLOSED/ABNORMAL/FAILED，
+ * 调用方 reconcileStuckRefunds 会把它错记进 `advanced`（本轮状态推进条数）。
+ * 这里在每次调用 mark* / finalize 之后重读一次 status：与函数开头读到的 refund.status 相同，
+ * 说明没有真正推进，改报 'SKIPPED'。
+ */
+async function outcomeAfterMark(refundId: number, priorStatus: string, outcome: ReconcileOutcome): Promise<ReconcileOutcome> {
+  const after = await prisma.refund.findUnique({ where: { id: refundId }, select: { status: true } })
+  if (after && after.status === priorStatus) return 'SKIPPED'
+  return outcome
+}
+
 /** ABNORMAL 行的复查间隔（分钟）：低频轮询兜住「店主在商户平台人工处理后微信回调也丢了」，不进 env */
 const ABNORMAL_INTERVAL_MIN = 60
 const ALERT_WINDOW_MS = 6 * 60 * 60 * 1000
@@ -57,7 +72,10 @@ export function defaultRefundQuery(): RefundQuery {
 
 /**
  * 单笔补查。返回值语义见 ReconcileOutcome：调用方（reconcileStuckRefunds）按
- * SUCCESS/CLOSED/ABNORMAL/FAILED 之和统计「本轮状态推进条数」。
+ * SUCCESS/CLOSED/ABNORMAL/FAILED 之和统计「本轮状态推进条数」——但这四个结果只在
+ * mark* / finalize 真正命中行（count>0）时才返回，命中 0 行（行早已是目标状态、
+ * mark* 的守卫没通过，例如 ABNORMAL 行重查仍是 ABNORMAL）时改报 'SKIPPED'，
+ * 不计入「本轮推进条数」（见 outcomeAfterMark）。
  */
 export async function reconcileRefund(refundId: number, query: RefundQuery = defaultRefundQuery()): Promise<ReconcileOutcome> {
   const refund = await prisma.refund.findUnique({ where: { id: refundId } })
@@ -85,14 +103,14 @@ export async function reconcileRefund(refundId: number, query: RefundQuery = def
     if (refund.status === 'PENDING') {
       // PENDING 且微信查无此单：发起阶段进程中断，微信侧根本没建单——唯一能释放 activeOrderId 的信号
       await markRefundFailed(refundId, 'RECONCILE_NOT_FOUND', '微信侧查无此退款单（发起阶段中断）')
-      return 'FAILED'
+      return outcomeAfterMark(refundId, refund.status, 'FAILED')
     }
     // PROCESSING/ABNORMAL 查无此单不合理（当初拿到过 refund_id），只记录 + 告警，不改状态
     await prisma.refund.update({ where: { id: refundId }, data: { reconcileLastError: '微信侧查无此退款单' } })
     notifySystemAlert(
       '退款补查：微信查无此单',
       [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, '请到微信商户平台核对退款记录'],
-      { key: `refund-reconcile-notfound:${refundId}` }
+      { key: `refund-reconcile-notfound:${refundId}`, windowMs: ALERT_WINDOW_MS }
     )
     return 'NOT_FOUND'
   }
@@ -104,6 +122,7 @@ export async function reconcileRefund(refundId: number, query: RefundQuery = def
     await prisma.refund.update({ where: { id: refundId }, data: { reconcileLastError: msg } })
     notifySystemAlert('退款补查金额不一致', [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, msg], {
       key: `refund-reconcile-mismatch:${refundId}`,
+      windowMs: ALERT_WINDOW_MS,
     })
     return 'AMOUNT_MISMATCH'
   }
@@ -120,13 +139,13 @@ export async function reconcileRefund(refundId: number, query: RefundQuery = def
         rawData,
         rawField: 'wxNotifyData',
       })
-      return 'SUCCESS'
+      return outcomeAfterMark(refundId, refund.status, 'SUCCESS')
     case 'CLOSED':
       await markRefundClosed(refundId, rawData)
-      return 'CLOSED'
+      return outcomeAfterMark(refundId, refund.status, 'CLOSED')
     case 'ABNORMAL':
       await markRefundAbnormal(refundId, rawData)
-      return 'ABNORMAL'
+      return outcomeAfterMark(refundId, refund.status, 'ABNORMAL')
     case 'PROCESSING':
     default:
       return 'PROCESSING'
@@ -203,8 +222,11 @@ export async function reconcileStuckRefunds(opts: ReconcileStuckOptions = {}): P
       where: { id: row.id },
       select: { status: true, reconcileCount: true, outRefundNo: true, orderNo: true, amount: true, reconcileLastError: true },
     })
-    if (!fresh || fresh.status === 'ABNORMAL' || fresh.reconcileCount < alertAfter) continue
-    const detail = fresh.status === 'PROCESSING' ? '处理中' : `查询失败: ${fresh.reconcileLastError ?? ''}`
+    if (!fresh || fresh.reconcileCount < alertAfter || !['PENDING', 'PROCESSING'].includes(fresh.status)) continue
+    // 走到这里的 outcome 只可能是 'PROCESSING'（微信侧仍在处理）或 'QUERY_FAILED'（查询本身失败）；
+    // 按本轮 outcome 判——而不是按 fresh.status（并发场景下行可能已被别的路径推成 SUCCESS 等
+    // 终态，此时 fresh.status 已不是 'PROCESSING'，若仍按它判会把「查询失败」误报成「未到账」）。
+    const detail = outcome === 'PROCESSING' ? '微信侧仍处理中' : `查询失败: ${fresh.reconcileLastError ?? ''}`
     notifySystemAlert(
       '退款长时间未到账',
       [

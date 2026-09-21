@@ -186,9 +186,11 @@ assert_eq "68.10 batch=1 只查一条" "$((RR68_C10+1))" "$(rr68_calls)"
 req POST /api/admin/system/run-scheduler "$AT" '{"refundReconcileAfterMin":0,"refundReconcileIntervalMin":0,"refundReconcileBatch":1}' >/dev/null
 assert_eq "68.10 再跑一次又查一条" "$((RR68_C10+2))" "$(rr68_calls)"
 
-echo "-- 68.11 /status 与 run-scheduler 响应带新字段（T5 完成后 timezone.ok 才有意义，这里先断言键存在）--"
+echo "-- 68.11 /status 与 run-scheduler 响应带新字段 --"
 RR68_STATUS=$(req GET /api/admin/system/status "$AT")
 assert_eq "68.11 status.order.refundReconcile.afterMin 存在" "$(jq -r 'if (.data.order.refundReconcile.afterMin|type)=="number" then "yes" else "no" end' <<<"$RR68_STATUS")" "yes"
+assert_eq "68.11 status.timezone.ok" "$(jq -r '.data.timezone.ok' <<<"$RR68_STATUS")" "true"
+assert_eq "68.11 status.timezone.name" "$(jq -r '.data.timezone.name' <<<"$RR68_STATUS")" "Asia/Shanghai"
 RR68_SCHED_KEYS=$(sched '{}')
 assert_eq "68.11 run-scheduler 响应带 refundReconcile 键" "$(jq -r 'if (.data|has("refundReconcile")) then "yes" else "no" end' <<<"$RR68_SCHED_KEYS")" "yes"
 

@@ -25,6 +25,13 @@
  *  15-16：markRefundAbnormal/markRefundClosed 的「回调路径」调用形态（第二个参数传 rawBody，
  *         模拟 wechat-notify.ts:380-382）：首次到达（PROCESSING→终态）通知一次，
  *         微信重推同一封回调（终态→同终态）不重复通知
+ *  17-19：2026-09-21 03 回判修补轮 F1-F3 新增：
+ *         17（F3）：ABNORMAL 行重查仍 ABNORMAL → reconcileRefund 报 'SKIPPED'（mark* 命中 0 行），
+ *                   reconcileStuckRefunds 的 advanced 不计入这一行
+ *         18（F2）：PENDING 行本轮查得 PROCESSING 且 reconcileCount 达阈值 →「退款长时间未到账」
+ *                   detail 含「微信侧仍处理中」、不含「查询失败」（按 outcome 判，不按 fresh.status）
+ *         19（F2）：并发场景——reconcileRefund 返回 outcome='PROCESSING' 期间该行被别的路径
+ *                   （模拟回调）并发推成 SUCCESS → 不发「退款长时间未到账」
  */
 import 'dotenv/config'
 import crypto from 'crypto'
@@ -95,10 +102,10 @@ async function main() {
   const refundMod = await import('../src/services/refund')
   const reconcileMod = await import('../src/services/refund-reconcile')
 
-  let alertCalls: { title: string; key?: string }[] = []
+  let alertCalls: { title: string; key?: string; windowMs?: number; lines: string[] }[] = []
   const origNotifySystemAlert = notifyMod.notifySystemAlert
-  notifyMod.notifySystemAlert = (title: string, _lines: string[], opts: { key?: string } = {}) => {
-    alertCalls.push({ title, key: opts.key })
+  notifyMod.notifySystemAlert = (title: string, lines: string[], opts: { key?: string; windowMs?: number } = {}) => {
+    alertCalls.push({ title, key: opts.key, windowMs: opts.windowMs, lines })
   }
   let refundResultCalls: { status: string }[] = []
   const origNotifyRefundResult = orderNotifyMod.notifyRefundResult
@@ -354,7 +361,9 @@ async function main() {
       kind: 'found',
       refund: { refund_id: 'wxr6', status: 'ABNORMAL' },
     }))
-    assert.strictEqual(outcome, 'ABNORMAL')
+    // F3（修补轮）：markRefundAbnormal 命中 0 行（已是 ABNORMAL），reconcileRefund 改报 'SKIPPED'，
+    // 不再谎称 'ABNORMAL'（那会被 reconcileStuckRefunds 错记进 advanced，见用例 17）。
+    assert.strictEqual(outcome, 'SKIPPED')
     const alertCountAfterSecond = alertCalls.filter((c) => c.key === `refund-abnormal:${refund.id}`).length
     assert.strictEqual(alertCountAfterSecond, 1, '重复 ABNORMAL 不应新增告警（守卫 count=0）')
   })
@@ -393,7 +402,9 @@ async function main() {
     const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
     assert.strictEqual(r.status, 'PROCESSING')
     assert.ok(r.reconcileLastError?.includes('查无'))
-    assert.ok(alertCalls.some((c) => c.key === `refund-reconcile-notfound:${refund.id}`))
+    const notfoundAlert = alertCalls.find((c) => c.key === `refund-reconcile-notfound:${refund.id}`)
+    assert.ok(notfoundAlert)
+    assert.strictEqual(notfoundAlert!.windowMs, 6 * 60 * 60 * 1000, 'F1：查无此单告警应带 6 小时限频窗口')
   })
 
   console.log('== 9. 金额不符 ==')
@@ -411,7 +422,9 @@ async function main() {
     assert.strictEqual(r.status, 'PROCESSING')
     assert.strictEqual(o.refundedAmount, 0)
     assert.ok(r.reconcileLastError?.includes('金额'))
-    assert.ok(alertCalls.some((c) => c.key === `refund-reconcile-mismatch:${refund.id}`))
+    const mismatchAlert = alertCalls.find((c) => c.key === `refund-reconcile-mismatch:${refund.id}`)
+    assert.ok(mismatchAlert)
+    assert.strictEqual(mismatchAlert!.windowMs, 6 * 60 * 60 * 1000, 'F1：金额不一致告警应带 6 小时限频窗口')
   })
 
   console.log('== 10. 扫描与告警（reconcileStuckRefunds） ==')
@@ -603,6 +616,104 @@ async function main() {
     assert.strictEqual(r.status, 'CLOSED')
     assert.strictEqual(refundResultCalls.length, 1, '重复回调不应再次推送')
     assert.strictEqual(alertCalls.filter((c) => c.key === `refund-closed:${refund.id}`).length, 1, '重复回调不应再次告警')
+  })
+
+  // ────────────────────────────────────────────────────────────────
+  // 2026-09-21 03 回判修补轮验收：F1-F3 的新增用例（先红后绿，详见方案 §13/§14）
+  // ────────────────────────────────────────────────────────────────
+  console.log('== 17. F3：ABNORMAL 行重查仍 ABNORMAL → SKIPPED，不计入 advanced ==')
+  await t('用例 17', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'REFUNDING' })
+    const refund = await makeRefund(order.id, {
+      status: 'ABNORMAL',
+      amount: 100,
+      totalAmount: 100,
+      activeOrderId: order.id,
+      reconcileCheckedAt: new Date(Date.now() - 5 * 60 * 1000),
+    })
+    resetCounters()
+    const stubAbnormal = async () => ({ kind: 'found' as const, refund: { refund_id: 'wxr17', status: 'ABNORMAL' as const } })
+
+    const outcome = await reconcileMod.reconcileRefund(refund.id, stubAbnormal)
+    assert.strictEqual(outcome, 'SKIPPED', 'markRefundAbnormal 命中 0 行（已是 ABNORMAL），reconcileRefund 应报 SKIPPED')
+    assert.strictEqual(
+      alertCalls.filter((c) => c.key === `refund-abnormal:${refund.id}`).length,
+      0,
+      'markRefundAbnormal 守卫未通过（count=0），不应再告警'
+    )
+
+    const advanced = await reconcileMod.reconcileStuckRefunds({
+      afterMin: 0,
+      intervalMin: 0,
+      abnormalIntervalMin: 0,
+      batch: 10,
+      alertAfter: 999,
+      query: stubAbnormal,
+    })
+    assert.strictEqual(advanced, 0, 'SKIPPED 不应被 reconcileStuckRefunds 计入 advanced（本轮状态推进条数）')
+  })
+
+  console.log('== 18. F2：PENDING 行仍 PROCESSING 时「退款长时间未到账」按 outcome 判 detail ==')
+  await t('用例 18', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'REFUNDING' })
+    const refund = await makeRefund(order.id, {
+      status: 'PENDING',
+      amount: 100,
+      totalAmount: 100,
+      activeOrderId: order.id,
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+      reconcileCount: 5, // 本轮 CAS 会 +1 → 6，命中 alertAfter=6
+    })
+    resetCounters()
+    const advanced = await reconcileMod.reconcileStuckRefunds({
+      afterMin: 5,
+      intervalMin: 0,
+      batch: 10,
+      alertAfter: 6,
+      query: async () => ({ kind: 'found' as const, refund: { refund_id: 'wxr18', status: 'PROCESSING' as const } }),
+    })
+    assert.strictEqual(advanced, 0)
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    assert.strictEqual(r.status, 'PENDING', 'PROCESSING 结果不改行的 status（仍是 PENDING）——这正是旧 bug 的根源')
+    const stuckAlert = alertCalls.find((c) => c.key === `refund-reconcile-stuck:${refund.id}`)
+    assert.ok(stuckAlert, '应发出「退款长时间未到账」告警')
+    assert.ok(
+      stuckAlert!.lines.some((l) => l.includes('微信侧仍处理中')),
+      `detail 应含「微信侧仍处理中」，实际 ${JSON.stringify(stuckAlert!.lines)}`
+    )
+    assert.ok(
+      !stuckAlert!.lines.some((l) => l.includes('查询失败')),
+      `PROCESSING 场景不应出现「查询失败」，实际 ${JSON.stringify(stuckAlert!.lines)}`
+    )
+  })
+
+  console.log('== 19. F2：并发场景——reconcileRefund 返回 PROCESSING 时行已被并发推成 SUCCESS，不发「未到账」告警 ==')
+  await t('用例 19', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'PAID' })
+    const refund = await makeRefund(order.id, {
+      status: 'PENDING',
+      amount: 100,
+      totalAmount: 100,
+      activeOrderId: order.id,
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+      reconcileCount: 5,
+    })
+    resetCounters()
+    const advanced = await reconcileMod.reconcileStuckRefunds({
+      afterMin: 5,
+      intervalMin: 0,
+      batch: 10,
+      alertAfter: 6,
+      query: async () => {
+        // 模拟并发：查询期间该行已被别的路径（例如回调）推成 SUCCESS，
+        // 但 wechat 侧此刻返回的仍是 PROCESSING（查询发起时行还是 PENDING）。
+        await prisma.refund.update({ where: { id: refund.id }, data: { status: 'SUCCESS', activeOrderId: null } })
+        return { kind: 'found' as const, refund: { refund_id: 'wxr19', status: 'PROCESSING' as const } }
+      },
+    })
+    assert.strictEqual(advanced, 0, 'reconcileRefund 对这一行返回的是 PROCESSING，不计入 advanced')
+    const stuckAlert = alertCalls.find((c) => c.key === `refund-reconcile-stuck:${refund.id}`)
+    assert.strictEqual(stuckAlert, undefined, '行已被并发推成 SUCCESS，不应再发「退款长时间未到账」')
   })
 
   restoreAll()

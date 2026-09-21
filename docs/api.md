@@ -2087,7 +2087,7 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 
 **Refund 新增三列**（`refunds` 表）：`reconcile_checked_at`（上次补查时间，`DATETIME(3)` 可空）、`reconcile_count`（累计补查次数，默认 0）、`reconcile_last_error`（最近一次查询失败或金额不符的原因，`VARCHAR(255)` 可空）。`GET /admin/orders/:id` 响应的 `refunds[]` 每项随之带上这三个字段（只读，供人工核对补查进度）。
 
-**告警**：`PENDING`/`PROCESSING` 行连续 `alertAfter`（默认 6 次，约 30 分钟）补查后仍未到终态 → 「退款长时间未到账」（`key: refund-reconcile-stuck:<id>`，6 小时窗口内只发一次）。`ABNORMAL` 行不发这条告警（`markRefundAbnormal` 已经告警过，且本就要人工处理）。另外两个新告警：「退款补查：微信查无此单」（`key: refund-reconcile-notfound:<id>`）、「退款补查金额不一致」（`key: refund-reconcile-mismatch:<id>`），限频窗口同 `notifySystemAlert` 默认 5 分钟。三条都走既有 `notifySystemAlert` 通道（企微系统告警 webhook → 回退订单群；PushPlus 只给老板），不新开通道。
+**告警**：`PENDING`/`PROCESSING` 行连续 `alertAfter`（默认 6 次，约 30 分钟）补查后仍未到终态 → 「退款长时间未到账」（`key: refund-reconcile-stuck:<id>`，6 小时窗口内只发一次）。`ABNORMAL` 行不发这条告警（`markRefundAbnormal` 已经告警过，且本就要人工处理）。另外两个新告警：「退款补查：微信查无此单」（`key: refund-reconcile-notfound:<id>`）、「退款补查金额不一致」（`key: refund-reconcile-mismatch:<id>`），6 小时窗口内只发一次（与「退款长时间未到账」同）。三条都走既有 `notifySystemAlert` 通道（企微系统告警 webhook → 回退订单群；PushPlus 只给老板），不新开通道。
 
 **env 三键**（默认值见 `.env.example`）：`REFUND_RECONCILE_AFTER_MIN`（≥1，默认 5，既是年龄阈值也是复查间隔）、`REFUND_RECONCILE_ALERT_AFTER`（≥1，默认 6）、`REFUND_RECONCILE_BATCH`（1–100，默认 20）。
 

@@ -585,6 +585,10 @@ curl -s localhost:3000/api/admin/system/status -H "Authorization: Bearer <admin 
 pm2 env $(pm2 id food-shop-server) | grep TZ
 ```
 
+> `pm2 env` 只作参考——`pm2 reload --update-env` 对在线进程是否刷新 env 依 PM2 版本而异，即使没刷上，
+> 进程内的时区钉死逻辑（`utils/timezone.ts`）也已保证行为正确；实际以上面的 `[server] timezone` 日志
+> 与 `/api/admin/system/status` 的 `timezone.ok` 为准。
+
 ---
 
 ## 十三、监控与告警
@@ -618,8 +622,8 @@ pm2 env $(pm2 id food-shop-server) | grep TZ
 | 支付回调金额与订单不符 | `routes/wechat-notify.ts` | 每订单一次 |
 | 退款发起失败 / 退款异常 / 退款关闭 / 退款回调金额不符 | `services/refund.ts` | 每退款单一次 |
 | 退款长时间未到账（连续补查 6 次仍未成功，约 30 分钟） | `services/refund-reconcile.ts` | 6 小时一次（`key: refund-reconcile-stuck:<id>`） |
-| 退款补查：微信查无此单（不合理，当初拿到过 refund_id） | `services/refund-reconcile.ts` | 每退款单一次（`key: refund-reconcile-notfound:<id>`） |
-| 退款补查金额不一致 | `services/refund-reconcile.ts` | 每退款单一次（`key: refund-reconcile-mismatch:<id>`） |
+| 退款补查：微信查无此单（不合理，当初拿到过 refund_id） | `services/refund-reconcile.ts` | 每退款单 6 小时一次（`key: refund-reconcile-notfound:<id>`） |
+| 退款补查金额不一致 | `services/refund-reconcile.ts` | 每退款单 6 小时一次（`key: refund-reconcile-mismatch:<id>`） |
 
 被限频抑制的次数会附在下一条同类告警里。
 
