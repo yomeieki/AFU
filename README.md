@@ -29,8 +29,11 @@ food-shop/
 | [docs/order-flow.md](docs/order-flow.md) | 订单流程、状态流转 |
 | [docs/payment-design.md](docs/payment-design.md) | 支付设计（Mock + 微信支付） |
 | [docs/qrcode-design.md](docs/qrcode-design.md) | 包装二维码设计 |
-| [docs/development-plan.md](docs/development-plan.md) | 分阶段开发计划 |
+| [docs/design-system.md](docs/design-system.md) | 两端共享的视觉规范，样式改动的唯一事实源 |
 | [docs/deployment.md](docs/deployment.md) | 生产部署指南 |
+| [docs/payment-setup.md](docs/payment-setup.md) | 微信支付上线配置手册（写给运营者） |
+| [docs/miniapp-release-checklist.md](docs/miniapp-release-checklist.md) | 小程序上架提审清单（写给运营者） |
+| [docs/staff-guide.md](docs/staff-guide.md) | 店员日常操作手册 |
 
 ## 技术栈
 
