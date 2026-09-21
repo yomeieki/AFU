@@ -569,3 +569,14 @@ tail -3 /tmp/e2e-rtz.log; grep '✘' /tmp/e2e-rtz.log
 3. §13 措辞「四处改坏验证」与清单里明列的 F1/F2/F3 三条存在数量对不上，按「F1 拆成两处（两个独立 windowMs 落点、两条独立断言）+ F2 一处 + F3 一处 = 四处」执行，覆盖了全部新增/改动断言，未跳过任何一条应验证的点。
 
 **清理**：一次性库 `food_shop_rtz2`/`food_shop_rtz2_shadow` 已 DROP；3125 端口服务已停；`git status --porcelain` 为空。
+
+## 15. 03 回判（fable，2026-09-21，02 二审后）
+
+02 二审「可合并」，无阻断无需改；04 haiku 13/13 符合（自测 8.5 由 02 实跑 20/20）。三条建议处置：
+1. `docs/deployment.md` 十二节 `jq .timezone` → `jq .data.timezone`，并补 `pm2 logs … | grep timezone` 一行，引用块「上面的」措辞改掉——统筹直接改文（纯文档）。
+2. 同上，已随 1 处理。
+3. `notify.ts` `pruneAlertRecords` 在告警键 >500 时按固定 5 分钟淘汰，会让 6h 窗口键提前重发——既有边界、本店远达不到，记后续计划，与 §13 第 5 条（batch 超时）一起。
+
+说明：§13 验收 (c) 字面写「直接把行置 SUCCESS 再调 reconcileStuckRefunds」会因扫描 where 不取 SUCCESS 行而空过；执行方改为在 query 桩内并发置 SUCCESS，才真复现「查询期间被回调推进」——偏离正确，采纳。
+
+结论：合 main。部署待店主拍板。

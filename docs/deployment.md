@@ -579,14 +579,17 @@ tail -f /var/log/nginx/error.log
 pm2 conf pm2-logrotate
 
 # 查看服务端配置自检（含 2026-09-21 起的时区自检结果，timezone.ok 应为 true）
-curl -s localhost:3000/api/admin/system/status -H "Authorization: Bearer <admin token>" | jq .timezone
+curl -s localhost:3000/api/admin/system/status -H "Authorization: Bearer <admin token>" | jq .data.timezone
+
+# 启动日志里的时区行（应为 [server] timezone: Asia/Shanghai (offset -480)）
+pm2 logs food-shop-server --lines 20 --nostream | grep timezone
 
 # 确认 PM2 实际注入给进程的 TZ（应为 Asia/Shanghai）
 pm2 env $(pm2 id food-shop-server) | grep TZ
 ```
 
 > `pm2 env` 只作参考——`pm2 reload --update-env` 对在线进程是否刷新 env 依 PM2 版本而异，即使没刷上，
-> 进程内的时区钉死逻辑（`utils/timezone.ts`）也已保证行为正确；实际以上面的 `[server] timezone` 日志
+> 进程内的时区钉死逻辑（`utils/timezone.ts`）也已保证行为正确；实际以 `[server] timezone` 日志
 > 与 `/api/admin/system/status` 的 `timezone.ok` 为准。
 
 ---
