@@ -330,7 +330,106 @@ return {
 
 ## 11. 执行记录（01 执行方追加；每条注明「当前工序 0X · 模型」与提交 sha）
 
-（空）
+**工序 01 · sonnet**（2026-09-21，worktree `/Users/yumingyi/food-shop/.claude/worktrees/freeship-bar`，分支 `claude/freeship-bar`，基线 `4a16000`）。
+
+### 提交列表
+
+| 提交 | sha | 内容 |
+|---|---|---|
+| T1+T2（合并，见下方说明） | `47ba8be` | `utils/promo.js` 新增 `freeShipBarOf`/`freeShipTip`、`progressTipOf` 补漏洞并按统筹裁定追加免运段、`yuanShort` 去尾零；`promo-bar` 组件加 `kind`/`meta`；两页各插一行；新测试文件；`promo.test.cjs` 两处断言改写 |
+| Q3（方案外统筹裁定，无独立 T 编号） | `deeaae1` | `pages/cart/index.js:loadPromo` 满减关闭时改经 `progressTipOf(null, opts)`；`cart-bar-page.test.cjs` 补一条行为测试 |
+| T6 | `c01f5bf` | `local-store-header` 规则行首段标红；`channel-badge-page.test.cjs` 补三条；预览台 `index-local-pickup.html` |
+| T4 | `71d8e4f` | `index-local.html`、`product-list-preview.js` 补免运费条镜像；375 宽实测截图 |
+
+**T1/T2 合并说明**：方案 §5-T1 的完成条件是「跑 `freeship-bar.test.cjs`、`promo.test.cjs` 绿再提交」，但该测试文件按 §5-T1 第 4 条本就包含 `promo-bar` 组件 `kind` 分派与两页源码级位置断言——这些只有在 T2 的组件/wxml 改动落地后才能通过。若严格按 T1/T2 两次提交拆分，T1 那次提交会带着红测试。为保证每次提交测试都是绿的（`verification-before-completion`），把 T2 的文件改动一并放进了这一次提交，未单独为 T2 再开一次提交。T5（本记录）单独成立，T3 无独立提交（见下）。
+
+### T3：分类页几何核实（只读，未改代码）
+
+逐条读 `apps/miniapp/pages/product/list.js`，对照 §2.6 四条触发路径核实：
+
+1. **`loadMeta(resolve)`**（`list.js` 约 152-166 行）：setData 前调 `self._captureAnchor()`，setData 后（LOCAL 与 EXPRESS 分支）都调 `self.afterGroupsRendered()`。免运费条随 `meta`/`promoType` 在同一次 setData 出现/消失，被这次重量覆盖。
+2. **`applyMode(mode)`**（外送/自取切换，约 662-668 行）：函数开头 `_captureAnchor()`，setData 后 `afterGroupsRendered()`（注释明写"外送/自取切换会改页头高度，要重量"）。自取模式下免运费条消失（`freeShipBarOf` 对非 LOCAL 返回 hidden），此路径已覆盖。
+3. **切渠道 `reloadForChannel`**（约 118-148 行）：函数一开始就 `this.scrollPageTo(0, 0)` 把滚动位置清零，随后各自调用 `this.loadCatalog()`（自带 `afterGroupsRendered()`）与 `this.loadMeta(...)`（同第 1 点的覆盖）。滚动已归零，锚点补偿在此路径是多余但无害。
+4. **`onShow()`**（约 68-77 行）：无条件调用 `this.loadMeta()`（不传 resolve）与 `this.afterGroupsRendered()`；即使 `meta` 数值未变（例如后台没改任何配置），也会重新量一次——不会漏掉后台在小程序切到后台期间改了免运费档位的情况。
+
+另确认：`measureOffsets()` 里补偿用的 `bodyTop` 取自 `.catalog-body` 的位置，免运费条位于 `.catalog-body` **之上**（不在 sticky 的 `.catalog-toolbar` 内），所以条的显示/隐藏只改变 `bodyTop`、不改变 `pinnedHeight`，与既有补偿逻辑（`anchor.bodyTop !== bodyTop || anchor.pinnedHeight !== pinnedHeight` 触发 `scrollPageTo`）完全对应。
+
+**结论**：四条触发路径均已被现有 `_captureAnchor`/`afterGroupsRendered` 覆盖，未发现缺口，**不触发 R3**。未新增任何几何代码。
+
+### T4：375 宽 B 类实测（§6-B2/B3/B4）
+
+预览服务：`node tools/miniapp-preview/serve.mjs --port 5203`（后台启动，`curl` 轮询 1 秒后 200 就绪）。
+
+**B2**（浏览器 375×812 视口，控制台跑方案给定探针函数）：
+
+| 页面 | 元素 | bar | summaryBox | summaryContent | fits |
+|---|---|---|---|---|---|
+| `pages/product-list-local.html` | 满减条 | 375 | 287 | 287 | true |
+| `pages/product-list-local.html` | 免运费条 | 375 | 287 | 287 | true |
+| `pages/index-local.html` | 满减条 | 375 | 287 | 287 | true |
+| `pages/index-local.html` | 免运费条 | 375 | 287 | 287 | true |
+
+两页免运费条摘要「免运费　满 ¥58 免运费（2 km 内）· 多买免更远」在 375 宽下 `scrollWidth(287) <= clientWidth(287)`，不省略。**未触发 R4**。
+
+**B3**：`product-list-local.html` 点「自取」→ `#freeship-bar` 的 `getComputedStyle().display` 由 `flex` 变 `none`；同时 `#rules-row` 局部刷新为红字+灰字两段；点回「外送」→ `display` 恢复 `flex`。`index-local-pickup.html` 本就没有 `#freeship-bar` 元素（A6 grep 计数为 0，见下）。
+
+**B4**：截图存 `docs/superpowers/previews/2026-09-21-freeship-bar-shots/product-list-local.png`（113941 字节）与 `.../index-local.png`（68303 字节），均 < 300 KB。人工核对：免运费条紧贴满减条下方、同底色（`#fff7f2`）、红色「免」徽标，位置与 `docs/superpowers/previews/2026-09-21-freeship-bar.html` §① 左图一致。
+
+### D 类回退验证（先提交再做，用 `git checkout -- <file>` 复原）
+
+| # | 操作 | 结果 |
+|---|---|---|
+| D1 | `progressTipOf` 开头临时加回 `if (!preview \|\| !preview.active) return hidden` | 红：`progressTipOf 满减关闭/未命中：S1/S2/S3 三态…`、`progressTipOf 满减关闭：单档 radius 等于 maxKm 时已免运费`、`关活动隐藏，自取与邮寄不出免运段，下一档按服务端响应`（共 3 例，`tests 39 / pass 36 / fail 3`）；`git checkout --` 复原后 `tests 39 / pass 39 / fail 0`，`git status --porcelain` 为空 |
+| D2 | 删掉 `pages/index/index.wxml` 的 `kind="freeship"` 那行 | 红：`两页 wxml 各恰好一个 kind="freeship" 的 promo-bar，且位置正确`（`tests 16 / pass 15 / fail 1`）；复原后 `pass 16 / fail 0`，工作区干净 |
+| D3 | `freeShipBarOf` 的 `badge` 临时改成 `'减'` | 红：`freeShipBarOf 线上五档：摘要与详情`、`promo-bar 组件：kind=freeship 走 freeShipBarOf，deliveryType 非 LOCAL 隐藏`（`tests 16 / pass 14 / fail 2`）；复原后 `pass 16 / fail 0`，工作区干净 |
+
+### A 类实测输出（最终态，HEAD `71d8e4f`）
+
+- **A1** `npm run -s test:miniapp` → `tests 273 / pass 273 / fail 0`（基线 253 + 20 新增：`freeship-bar.test.cjs` 16 例 + `cart-bar-page.test.cjs` 1 例 + `channel-badge-page.test.cjs` 3 例）。
+- **A2** `node --test tests/miniapp/freeship-bar.test.cjs` → `tests 16 / pass 16 / fail 0`；`grep -c "^test(" tests/miniapp/freeship-bar.test.cjs` = `16`。
+- **A3** `node scripts/check-miniapp-es5.mjs apps/miniapp/utils/promo.js apps/miniapp/components/promo-bar/index.js apps/miniapp/components/local-cart-bar/index.js` → 三个文件全部 `ES5 ✔`。
+- **A4**（偏离，见下）`git diff --stat b046f37..HEAD -- <排除集合>` → **非空**：`apps/miniapp/pages/cart/index.js | 14 ++++++++++----`（`1 file changed, 10 insertions(+), 4 deletions(-)`）。原排除集合把整个 `apps/miniapp/pages/cart` 目录列为禁改，但统筹裁定 Q3（§10）明确授权改 `pages/cart/index.js` 这一处 `loadPromo`；排除集合本身没有随 Q3 更新。核对结论：该文件之外，排除集合内其余路径 diff 为空。
+- **A5**（偏离，见下）`git diff --name-only b046f37..HEAD` 共 19 个文件（见下方逐一核对）；`promo.test.cjs` 删除行数 = **4**（不是原定的 3），hunk 头 `@@ -36 +36,2 @@`、`@@ -52,3 +53,4 @@`——统筹裁定 Q1（§10）把允许改动范围从「三行」放宽到「满减未达档那一条用例 + 满减关闭三行」，4 = 1（未达档那行）+ 3（关闭三行），与放宽后的范围一致。
+- **A6** `grep -c 'promo-badge">免' index-local.html product-list-preview.js index-local-pickup.html index.html` → `1、1、0、0`，与预期一致。
+- **A7** `grep -c 'kind="freeship"' index/index.wxml product/list.wxml` → `1、1`，与预期一致。
+- **A8**（第 5 行偏离，见下）`node -e "..."` 输出五行：
+  1. `{"show":true,"badge":"免","name":"免运费","summary":"满 ¥58 免运费（2 km 内）· 多买免更远",...}` —— 与 §4.2 期望逐字一致。
+  2. `{"show":true,"text":"再买 ¥20 免运费（2 km 内）","tone":"hint"}` —— 与期望一致。
+  3. `{"show":true,"text":"2 km 内免运费 · 再买 ¥30 免 3 km 内运费","tone":"hint"}` —— 与期望一致。
+  4. `{"show":true,"text":"7 km 内免运费","tone":"done"}` —— 与期望一致。
+  5. `{"show":true,"text":"再买 ¥28 减 ¥6.6 · 7 km 内免运费","tone":"hint"}` —— 与方案原定的 `再买 ¥28 减 ¥6.60`（不带免运段）不同，原因见下方偏离说明第③④条；`· 7 km 内免运费` 是因为方案给的这条 `node -e` 命令复用了同一个 `o` 对象，前面三次 `forEach` 把 `o.subtotal` 改到了 `19800` 才调这第五行，属于命令本身的写法，不是本次改动引入的额外差异。
+
+### 与方案的偏离（逐条）
+
+1. **T1/T2 合并为一次提交**：原因见上方"提交列表"说明，非内容偏离，只是提交切分方式变化。
+2. **`freeShipBarOf` 的 summary 拼接去掉了 §4.2 代码片段里 `' · 多买免更远'` 的前导空格**：方案 §4.2 的可执行代码片段写的是 `' · 多买免更远'`（带一个前导空格），但同一节的期望文案（§4.2 正文、T4 镜像 markup、§6-A8）三处都写的是「…内）· 多买免更远」（`）`与`·`之间无空格）。判定代码片段是笔误，以文字口径为准，实现为 `'· 多买免更远'`（无前导空格）。已用 `node -e` 实测验证与三处文字口径一致。
+3. **`progressTipOf` 第 5 行按统筹裁定 Q1 追加免运段**：方案原始 §6-A8 期望第 5 行「不带免运费段」，但这是统筹裁定 Q1（§10）明确要改的行为，本条不是新偏离，只是把 A8 表格里尚未更新的期望值在此记录更正。
+4. **`yuanShort` 改动后 660 分显示为 `6.6`**：这是店主追加的统筹裁定（§11 标题「提示文案金额格式」）要求的效果，§6-A8 原表格里的 `6.60` 属于该统筹裁定之前写的期望值，未同步更新，此处按裁定后的口径执行。
+5. **`local-store-header/index.wxml` 规则行容器可见性用 `{{rulesLead || rulesText}}`，未按方案原样保留 `{{rulesText}}`**：方案 §12 第 2 点写「行容器…不动」，隐含还是 `wx:if="{{rulesText}}"`。但把 discountText 从 `rulesText` 里拆到 `rulesLead` 后，若门店只配了 `pickup.discountText`、没配起送线/门店地址，`rulesText` 会是空串——若容器仍只看 `rulesText`，会把整行（连同红字）一起隐藏，与"红字要显眼"的需求相悖。改为 `{{rulesLead || rulesText}}` 修复这个边界，属于必要的正确性修正，不改变正常配置（有起送线/地址）下的可见性判断结果。
+6. **`local-store-header/index.wxss` 未按方案字面用 `:last-of-type` 选择器**：方案 §12 第 3 点给的选择器是 `.delivery-rules-row .delivery-rules:last-of-type`。但该行末尾的 `<text class="delivery-rules-arrow">` 也是 `<text>` 标签（`canNavigate` 为真时才渲染），`:last-of-type` 按标签类型取"同类型最后一个"，会被 `.delivery-rules-arrow` 抢到，导致真正的末段普通文字反而拿不到 `flex:1`（在自取+有门店坐标的场景，恰好就是箭头会出现的场景，等于这个 bug 会在最常见的自取场景里发作）。改用 `.delivery-rules-row .delivery-rules:not(.delivery-rules-em):not(.delivery-rules-sep)` 精确定位末段，效果与方案意图一致，只是选择器写法不同。
+7. **T4 的 `product-list-preview.js` 免运费条实现细节**：方案 §5-T4 第 2 条给的字符串拼接方式是「满减条字符串之后拼接 `(local ? '<div id="freeship-bar" ...>...</div>' : '')`」且未提及自取模式下的初始 `display`。本方案实现为拼接时按 `state.mode` 直接算好初始 `style="display:..."`（而不是先渲染出来再在另一处强制隐藏），效果一致，写法更直接。
+8. **规则行拆分（T6）在 `product-list-preview.js` 里没有对应的既有实现可"同步"**：方案 §12 第 5 点假设 `product-list-preview.js` 已有随模式变化的规则行文本（类比 `index-local-pickup.html` 那样的静态镜像），但实际读码发现 `header()` 函数原先对 DELIVERY/PICKUP 渲染的是**同一段固定文字**（只有 `notice-text` 会随模式切换）。本次新增了 `rulesRowHtml(mode)` 函数与 `#rules-row` 局部刷新逻辑，使其行为对齐真实组件（PICKUP 显示拆分的红字+灰字，DELIVERY 保留原固定文字）；这是补齐一个此前不存在的能力，不是"同步"一个已有实现。
+
+### 未命中任何上报触发条件
+
+逐条核对方案 §10 R1-R9：R1（未改 `local-cart-bar` 高度机制，机制天然覆盖，见 T3）、R2（`promo.test.cjs:35-49、55-58` 中除已按统筹裁定明确要改的两处外全部保持绿且逐字回归覆盖）、R3（T3 未发现几何缺口）、R4（B2 实测 `fits:true`）、R5（未触碰白名单外文件——`pages/cart/index.js` 与两个 `tests/*.test.cjs` 均由统筹裁定 Q3/T6 明确授权）、R6（`/local/meta` 形状未变，本次未接触服务端）、R7（Q1-Q7 内已覆盖的偏离已如上逐条说明；本节第 5、6、8 条是执行层面的正确性修正，不是对已确认预览/文案/结构的取舍性偏离）、R8（A3 三文件全 ✔）、R9（A1 273 ≥ 253+20，除统筹裁定授权的三个测试文件外未改动其它既有 `tests/miniapp/*.test.cjs`）。**均未命中，未升 L。**
+
+### 白名单核对（含统筹裁定追加）
+
+实际改动的 19 个文件（A5 name-only 输出）逐一对照：`utils/promo.js`、`components/promo-bar/index.{js,wxml}`、`pages/index/index.wxml`（1 行）、`pages/product/list.wxml`（1 行）、`tests/miniapp/freeship-bar.test.cjs`（新）、`tests/miniapp/promo.test.cjs`（4 行，见 A5）— 均属方案 §7 原始白名单；`tools/miniapp-preview/pages/index-local.html`、`product-list-preview.js`、`README.md`、`docs/superpowers/previews/2026-09-21-freeship-bar-shots/*.png`（新，2 个）、本方案文件（本次 §11 追加）— 均属原始白名单；`pages/cart/index.js`、`tests/miniapp/cart-bar-page.test.cjs` — 统筹裁定 Q3（§10）授权；`components/local-store-header/index.{js,wxml,wxss}`、`tools/miniapp-preview/pages/index-local-pickup.html`、`tests/miniapp/channel-badge-page.test.cjs` — 统筹裁定 T6（§12）授权（其中 `channel-badge-page.test.cjs` 未被 §12 白名单逐字列出文件名，但 §12 第 4 点明文要求"补两条"到该文件，视为同一授权的一部分）。**无白名单外文件被改动。**
+
+### C 类真机验收清单（原样列出，供店主用体验版验）
+
+| # | 操作 | 期望 |
+|---|---|---|
+| C1 | 后台满减**开**：主页（同城·外送）与分类页 | 顶部两条叠着：「减」满减条在上、「免」免运费条在下，同底色；点免运费条「详情 ›」弹系统弹窗，标题「免运费」，五档 + 末行「按下单地址到门店的距离判断；配送范围 8 km」；加 1 件（≈¥38）看结算条上方：「再买 ¥28 减 ¥6.6」（统筹裁定后不带 `.60`）**追加**「· 再买 ¥X 免运费（… km 内）」（统筹裁定 Q1，与方案原文「不带免运段」不同，以此为准）；加到满减档后显示「已减 ¥… · 再买 ¥… 免运费（2 km 内）」。 |
+| C2 | 后台满减**关**：同两页 | 满减条消失、免运费条仍在；结算条上方随金额三态：<¥58 「再买 ¥X 免运费（2 km 内）」→ ¥58–87 「2 km 内免运费 · 再买 ¥X 免 3 km 内运费」→ ≥¥198 绿底「7 km 内免运费」。提示行出现/消失时页面底部占位跟着变（最后一件商品不被遮）。购物车 tabBar 页现在也有同样的免运费进度（统筹裁定 Q3）。 |
+| C3 | 切「自取」 | 免运费条消失；结算条上方不出现免运费进度（满减开着时仍按自取渠道显示满减提示）；门店头规则行「自取享 X 折」变红。切回「外送」恢复原色规则行。切「全国邮寄」两页都没有免运费条。 |
+| C4 | 分类页（同城）上滑让门店头、两条提示、模式栏收起到吸顶，再下拉刷新 / 切外送↔自取 / 切后台（onShow 回来） | 页面不跳动、左侧高亮不乱；若跳动 → R3（本次 T3 只读核实未发现缺口，仍需真机复验）。 |
+| C5 | 后台把免运费档位清空（保存空数组）后重进 | 免运费条不渲染、结算条上方无免运费进度；恢复档位后再进恢复。 |
+| C6 | 320 宽机型或开发者工具 iPhone 5 | 免运费条摘要允许省略号（375 才是硬要求）；「详情 ›」仍可点。 |
+
+（体验版需先合并到 main、上传，二者均**不由执行方做**，按方案 §0/§8 要求，此清单只交给店主自行操作验证。）
 
 ## 10. 统筹裁定（2026-09-21，开工前）
 
