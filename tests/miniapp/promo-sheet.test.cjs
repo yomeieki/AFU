@@ -110,12 +110,15 @@ test('index.js 不含 showModal', () => {
   const js = read('components/promo-bar/index.js')
   assert.doesNotMatch(js, /showModal/)
 })
-test('index.wxml 含弹层遮罩、逐行 wx:for、两处关闭', () => {
+test('index.wxml 含弹层遮罩、逐行 wx:for、三处关闭（遮罩/✕/按钮）', () => {
   const wxml = read('components/promo-bar/index.wxml')
   assert.match(wxml, /promo-sheet-mask/)
   assert.match(wxml, /wx:for="\{\{sheet\.rows\}\}"/)
+  // 遮罩本身必须带关闭事件——不能只数全文出现次数，否则删掉遮罩上的
+  // catchtap 仍会因为 ✕/按钮上还有两处而被漏判（D2 回退验证钉住这点）。
+  assert.match(wxml, /class="promo-sheet-mask"[^>]*catchtap="onCloseSheet"/)
   const closeMatches = wxml.match(/onCloseSheet/g)
-  assert.ok(closeMatches && closeMatches.length >= 2)
+  assert.ok(closeMatches && closeMatches.length >= 3)
 })
 test('index.wxss 含品牌色强调与安全区', () => {
   const wxss = read('components/promo-bar/index.wxss')
