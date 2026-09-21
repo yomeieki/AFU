@@ -91,10 +91,19 @@ app.listen(PORT, () => {
   console.log(`[server] running on http://localhost:${PORT}`)
   console.log(`[server] env: ${config.nodeEnv}`)
   console.log(`[server] version: ${APP_VERSION}`)
+  console.log(`[server] timezone: ${config.timezone.name} (offset ${config.timezone.offsetMin})`)
   startScheduler()
   if (config.isProduction) {
     // 生产启动打点：频繁收到即说明重启风暴
-    notifySystemAlert('服务启动', [`端口 ${PORT}`], { key: 'boot', windowMs: 60 * 1000 })
+    notifySystemAlert(
+      '服务启动',
+      [
+        `端口 ${PORT}`,
+        `时区 ${config.timezone.name}`,
+        ...(config.timezone.overriddenFrom ? [`（环境 TZ=${config.timezone.overriddenFrom} 已覆盖）`] : []),
+      ],
+      { key: 'boot', windowMs: 60 * 1000 }
+    )
   }
 })
 

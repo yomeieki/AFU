@@ -2,7 +2,8 @@
 # 后端 API 全链路回归（本机 mock 模式）
 # 前置：后端以 PORT=3100 WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true SCHEDULER_DISABLED=true 启动
 #      （SCHEDULER_DISABLED=true 必须带：后台心跳会吃掉 mock 的指令队列并打乱精确计数断言；§59/§60 尤其依赖），
-#      MySQL 已 seed（admin/admin123456）
+#      MySQL 已 seed（admin/admin123456）；退款补查分片 68 依赖 WECHAT_PAY_MOCK=true 挂载的
+#      /api/admin/system/pay-mock/* 控制面（见 routes/admin/pay-mock.ts）
 # 用法：bash scripts/e2e.sh            （BASE 默认 http://localhost:3100）
 #       BASE=http://localhost:3000 bash scripts/e2e.sh
 set -uo pipefail

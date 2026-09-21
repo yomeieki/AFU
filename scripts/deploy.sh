@@ -260,7 +260,11 @@ echo "[8/9] 重启后端服务（PM2）..."
 mkdir -p "${LOG_DIR}"
 cd "${SERVER_DIR}"
 if pm2 describe food-shop-server >/dev/null 2>&1; then
-  pm2 reload food-shop-server --update-env
+  # `pm2 reload <进程名>` 不会重读 ecosystem.config.js（只重启进程、复用已注册的旧 env）；
+  # 2026-09-21 起 ecosystem.config.js 的 env_production 加了 TZ，必须从文件 reload 才会生效。
+  # fork 模式（本项目 exec_mode: 'fork'）下 reload 本来就等于 restart（零停机 reload 只有
+  # cluster 模式才有），所以这里改法对现有行为无影响，只是让 ecosystem 里的改动能生效。
+  pm2 reload ecosystem.config.js --env production --update-env
 else
   pm2 start ecosystem.config.js --env production
   pm2 save

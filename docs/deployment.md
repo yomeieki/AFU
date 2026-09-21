@@ -119,6 +119,11 @@ COS_BASE_URL=""   # 留空即用 https://afu-images-1342627167.cos.ap-shanghai.m
 PORT=3000
 NODE_ENV="production"
 
+# 退款状态自动补查（2026-09-21）：微信退款回调丢失时定时去微信核对，按结果推进状态
+# REFUND_RECONCILE_AFTER_MIN=5      # 年龄阈值/复查间隔（分钟），默认 5
+# REFUND_RECONCILE_ALERT_AFTER=6    # 连续几次没结果告警老板，默认 6（约 30 分钟）
+# REFUND_RECONCILE_BATCH=20         # 每轮最多处理几笔，默认 20
+
 # Mock 开关（生产全部关闭，config.ts 启动校验会强制拦截 true）
 WECHAT_QRCODE_MOCK=false
 
@@ -351,6 +356,8 @@ deploy.sh 会自动完成：**预检（生产环境缺 COS 配置会在动服务
 
 > ⚠️ 首次部署本版本前，务必先在 `apps/server/.env` 填好 `COS_SECRET_ID/KEY/BUCKET/REGION`，否则预检会直接拒绝部署（这是有意的：新版图片上传只走 COS，配置缺失时启动即失败）。
 
+> **2026-09-21 起「PM2 热重载」这一步改为 `pm2 reload ecosystem.config.js --env production --update-env`**（原来是 `pm2 reload food-shop-server --update-env`）：`pm2 reload <进程名>` 不会重读 `ecosystem.config.js`，而这次给 `env_production` 加了 `TZ: 'Asia/Shanghai'`（进程内 `config.ts` 已经无条件钉死 TZ，这是第二道保险），必须从文件 reload 才会生效。本项目 `exec_mode: 'fork'`，reload 本来就等于 restart（零停机 reload 只有 cluster 模式才有），所以这处改动对现有部署行为没有额外影响。
+
 ### 本次部署（含 `20260906000000_member_points_coupon`、`20260907000000_review_fixes` 两个迁移）前置清单
 
 - [ ] **第 0 步，先于 `git bundle` 那一套**：`scripts/deploy.sh` 本轮改了迁移失败时的恢复指引，**必须把新版 `scripts/deploy.sh` 一起传到生产机 `/home/ubuntu/deploy.sh`**（`scp` 命令见上面「⚠️ 前置」小节的第 ② 步，已经包含这一步，不要漏）。生产机上跑的是部署前那一版旧脚本，这次改动不只是 B2（else 分支不再硬编码上一批次的表名，改成动态读迁移文件里的 `CREATE TABLE`），第二轮复核又发现旧脚本这版有两个自己的坑，都已在这版修掉：
@@ -492,6 +499,18 @@ DEPLOY_REF=<commit-hash> bash scripts/deploy.sh  # 重新编译 + 迁移（已�
 
 > ⚠️ **不要**先 `git checkout <commit-hash>` / `git reset --hard <commit-hash>` 再裸跑 `bash scripts/deploy.sh`：脚本 [2/9] 会无条件 `reset --hard origin/main`，把刚回滚掉的版本原样装回去，等于没回滚（还会留下 detached HEAD）。每次部署结束脚本都会打印带 `DEPLOY_REF=<部署前 sha>` 的回滚命令，直接复制即可。
 
+### 时区自检拒绝启动时的处置（2026-09-21 起）
+
+症状：`pm2 logs food-shop-server` 出现 `[timezone] 进程时区不是 Asia/Shanghai（…）：多半是服务器缺 tzdata 或 Node 不支持运行时改 TZ，服务拒绝启动`，`pm2 status` 该进程为 `errored`（`max_restarts` 10 次后停止重试）。
+
+处置（优先修环境，不回滚）：
+1. `ls /usr/share/zoneinfo/Asia/Shanghai` 确认 tzdata 里有这个时区；没有就 `sudo apt install tzdata`（Debian/Ubuntu）。
+2. `timedatectl set-timezone Asia/Shanghai`（确认系统时区本身也对，不是必须但建议顺手修）。
+3. `pm2 restart food-shop-server`。
+4. 确认恢复：`pm2 logs food-shop-server --lines 20` 看到 `[server] timezone: Asia/Shanghai (offset -480)`，`curl -s localhost:3000/api/admin/system/status`（带 token）里 `timezone.ok=true`。
+
+环境一时修不了、需要先止血：`DEPLOY_REF=<上一版 sha> bash scripts/deploy.sh` 回滚代码。**回滚后旧版不带时区自检，时区仍可能是错的**（如果本来就是 tzdata 缺失，旧版只是不会因此拒绝启动，不代表时区问题解决了），要尽快回来修环境、再重新部署新版。
+
 ### 数据库回滚
 
 Prisma 不支持自动回滚迁移。操作方式：
@@ -558,7 +577,20 @@ tail -f /var/log/nginx/error.log
 
 # 日志轮转状态（deploy.sh 已自动装 pm2-logrotate：20M × 14 份，每日 0 点）
 pm2 conf pm2-logrotate
+
+# 查看服务端配置自检（含 2026-09-21 起的时区自检结果，timezone.ok 应为 true）
+curl -s localhost:3000/api/admin/system/status -H "Authorization: Bearer <admin token>" | jq .data.timezone
+
+# 启动日志里的时区行（应为 [server] timezone: Asia/Shanghai (offset -480)）
+pm2 logs food-shop-server --lines 20 --nostream | grep timezone
+
+# 确认 PM2 实际注入给进程的 TZ（应为 Asia/Shanghai）
+pm2 env $(pm2 id food-shop-server) | grep TZ
 ```
+
+> `pm2 env` 只作参考——`pm2 reload --update-env` 对在线进程是否刷新 env 依 PM2 版本而异，即使没刷上，
+> 进程内的时区钉死逻辑（`utils/timezone.ts`）也已保证行为正确；实际以 `[server] timezone` 日志
+> 与 `/api/admin/system/status` 的 `timezone.ok` 为准。
 
 ---
 
@@ -592,6 +624,9 @@ pm2 conf pm2-logrotate
 | 生产启动打点（短时间频繁收到 = 重启风暴） | `app.ts` | 1 分钟一次 |
 | 支付回调金额与订单不符 | `routes/wechat-notify.ts` | 每订单一次 |
 | 退款发起失败 / 退款异常 / 退款关闭 / 退款回调金额不符 | `services/refund.ts` | 每退款单一次 |
+| 退款长时间未到账（连续补查 6 次仍未成功，约 30 分钟） | `services/refund-reconcile.ts` | 6 小时一次（`key: refund-reconcile-stuck:<id>`） |
+| 退款补查：微信查无此单（不合理，当初拿到过 refund_id） | `services/refund-reconcile.ts` | 每退款单 6 小时一次（`key: refund-reconcile-notfound:<id>`） |
+| 退款补查金额不一致 | `services/refund-reconcile.ts` | 每退款单 6 小时一次（`key: refund-reconcile-mismatch:<id>`） |
 
 被限频抑制的次数会附在下一条同类告警里。
 

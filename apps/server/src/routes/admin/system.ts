@@ -70,6 +70,11 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         payTimeoutMin: config.order.payTimeoutMin,
         autoCompleteDays: config.order.autoCompleteDays,
         schedulerEnabled: config.schedulerEnabled,
+        refundReconcile: {
+          afterMin: config.refundReconcile.afterMin,
+          alertAfter: config.refundReconcile.alertAfter,
+          batch: config.refundReconcile.batch,
+        },
       },
       subscribe: {
         paidTemplateSet: !!config.subscribe.paidTemplateId && !!config.subscribe.paidFields,
@@ -90,6 +95,12 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         circuitTripped: isCircuitTripped(),
       },
       publicBaseUrl: config.publicBaseUrl,
+      timezone: {
+        name: config.timezone.name,
+        offsetMin: config.timezone.offsetMin,
+        ok: config.timezone.ok,
+        overriddenFrom: config.timezone.overriddenFrom,
+      },
     })
   } catch (e) {
     next(e)
@@ -130,6 +141,12 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         // 到店自取（批次一）：过时未取提醒 / 自动完成的分钟阈值
         pickupUnpickedMin: num(body.pickupUnpickedMin),
         pickupAutoCompleteMin: num(body.pickupAutoCompleteMin),
+        // 退款状态自动补查（2026-09-21）
+        refundReconcileAfterMin: num(body.refundReconcileAfterMin),
+        refundReconcileIntervalMin: num(body.refundReconcileIntervalMin),
+        refundReconcileAbnormalIntervalMin: num(body.refundReconcileAbnormalIntervalMin),
+        refundReconcileAlertAfter: num(body.refundReconcileAlertAfter),
+        refundReconcileBatch: num(body.refundReconcileBatch),
       })
     )
   } catch (e) {

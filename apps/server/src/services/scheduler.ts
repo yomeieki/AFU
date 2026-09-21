@@ -8,6 +8,8 @@
  *  ……（同城配送相关任务见各自注释）
  *  + 出票三任务（规格 §8b，M2b 接入）：printQueueSweep 兜扫队列 / repeatAnnounce 未接单重复播报 /
  *    printerHealth 打印机离线-恢复告警与补打，实现在 services/ticket/index.ts。
+ *  + 退款状态自动补查（2026-09-21）：refundReconcile，微信退款回调丢失时定时去问微信这笔退款
+ *    到底成没成，按结果走既有状态流转；实现在 services/refund-reconcile.ts。
  */
 import prisma from '../utils/prisma'
 import { config } from '../config'
@@ -31,6 +33,7 @@ import { settlePoints, expirePointsBatch } from './member/points'
 import { expireCouponsBatch } from './member/coupons'
 import { getMemberSettings } from './member/settings'
 import { getCronState, patchCronState, isSameLocalDay } from './member/cron-state'
+import { reconcileStuckRefunds } from './refund-reconcile'
 
 const TICK_MS = 60 * 1000
 const LOW_STOCK_PUSH_INTERVAL_MS = 12 * 60 * 60 * 1000
@@ -90,6 +93,16 @@ export interface SchedulerOverrides {
   /** 自取：过时未取提醒 / 自动完成的分钟阈值（不传读同城设置的 pickup.*） */
   pickupUnpickedMin?: number
   pickupAutoCompleteMin?: number
+  /**
+   * 退款状态自动补查（2026-09-21）：年龄阈值 / 复查间隔（分钟，不传都读 config.refundReconcile.afterMin）、
+   * ABNORMAL 行的复查间隔（分钟，不传用 60 分钟常量）、连续几轮未果告警、每轮限量。
+   * e2e 传 0 是「立刻命中」（不是「关掉」），与本文件其它同类阈值同一约定。
+   */
+  refundReconcileAfterMin?: number
+  refundReconcileIntervalMin?: number
+  refundReconcileAbnormalIntervalMin?: number
+  refundReconcileAlertAfter?: number
+  refundReconcileBatch?: number
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -137,6 +150,18 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['settleMissedPoints', () => settleMissedPoints(overrides.settleMissedPointsAfterMin)],
     ['expirePoints', () => runMemberDailyTask('lastExpirePointsAt', expirePointsBatch, overrides.forceDailyMemberTasks, overrides.dailyTaskBatchLimit)],
     ['expireCoupons', () => runMemberDailyTask('lastExpireCouponsAt', expireCouponsBatch, overrides.forceDailyMemberTasks, overrides.dailyTaskBatchLimit)],
+    // 退款状态自动补查（2026-09-21）：见 services/refund-reconcile.ts 文件头注释
+    [
+      'refundReconcile',
+      () =>
+        reconcileStuckRefunds({
+          afterMin: overrides.refundReconcileAfterMin,
+          intervalMin: overrides.refundReconcileIntervalMin,
+          abnormalIntervalMin: overrides.refundReconcileAbnormalIntervalMin,
+          alertAfter: overrides.refundReconcileAlertAfter,
+          batch: overrides.refundReconcileBatch,
+        }),
+    ],
   ]
   try {
     for (const [name, fn] of tasks) {
