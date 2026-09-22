@@ -1028,6 +1028,8 @@ function LegendContent() {
       <span className="wb__legend-g">
         <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
         <span>骑手送，恒排在邮寄单上面</span>
+        <span className="wb__badge wb__badge--sched"><Clock className="w-3.5 h-3.5" />同城预约</span>
+        <span>顾客约了送达时段，出票前收在「预约单」组里，出票后进正常列</span>
         <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
         <span>可以稍后处理</span>
         <span className="wb__badge wb__badge--pickup"><Store className="w-3.5 h-3.5" />到店自取</span>
