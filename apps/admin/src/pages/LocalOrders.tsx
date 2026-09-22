@@ -12,6 +12,7 @@ import type { DeliveryInfo, Order } from '../types'
 import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
 import { showWorkbenchLink } from '../utils/order-list'
+import { canRefund, hasActiveRefund, refundLabel } from '../utils/order-actions'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -239,9 +240,11 @@ export default function LocalOrders() {
                   去工作台 ›
                 </Link>
               )}
-              {o.remainingRefundable > 0 && (
-                <Button size="sm" variant="danger" onClick={() => openRefund(o)}>
-                  {o.refundedAmount > 0 ? '再退款' : '退款'}
+              {/* 显示规则在 utils/order-actions.ts 一处判定（2026-09-22 前这里只看余额，
+                  没付款就取消的单也画出了退款按钮） */}
+              {canRefund(o) && (
+                <Button size="sm" variant="danger" onClick={() => openRefund(o)} disabled={hasActiveRefund(o)} title={hasActiveRefund(o) ? '有退款处理中' : ''}>
+                  {refundLabel(o)}
                 </Button>
               )}
             </>

@@ -4,6 +4,7 @@ import Button from '../../ui/Button'
 import { toast } from '../../ui/Toast'
 import { reprintOrder } from '../../../api/admin'
 import type { OrderDetail } from '../../../types'
+import { canRefund, hasActiveRefund, refundLabel, canReprint } from '../../../utils/order-actions'
 
 interface Props {
   order: OrderDetail
@@ -39,18 +40,18 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
   }
 
   const r = order.latestRefund
-  const refundActive = !!r && ['PENDING', 'PROCESSING', 'ABNORMAL'].includes(r.status)
+  const refundActive = hasActiveRefund(order)
 
+  // 显示规则在 utils/order-actions.ts 一处判定，与 Orders / LocalOrders 共用
   const refundButton = (() => {
-    if (['PAID', 'PREPARING', 'SHIPPED', 'COMPLETED'].includes(order.status)) {
-      if (order.remainingRefundable <= 0) return null
+    if (order.status !== 'REFUNDING') {
+      if (!canRefund(order)) return null
       return (
         <Button variant="danger" disabled={refundActive} title={refundActive ? '有退款处理中' : ''} onClick={onRefund} className="flex-1 md:flex-none whitespace-nowrap">
-          {order.refundedAmount > 0 ? `再退款（还可退 ¥${(order.remainingRefundable / 100).toFixed(2)}）` : `退款（还可退 ¥${(order.remainingRefundable / 100).toFixed(2)}）`}
+          {refundLabel(order)}（还可退 ¥{(order.remainingRefundable / 100).toFixed(2)}）
         </Button>
       )
     }
-    if (order.status !== 'REFUNDING') return null
     return (
       <>
         {!refundActive && (
@@ -69,7 +70,7 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
 
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      {order.status !== 'PENDING_PAYMENT' && (
+      {canReprint(order) && (
         <Button variant="secondary" loading={reprinting} onClick={handleReprint} className="shrink-0 whitespace-nowrap" title="重打该单小票">
           <Printer className="w-4 h-4" />
           重打小票

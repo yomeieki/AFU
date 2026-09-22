@@ -16,6 +16,7 @@ import OrderListTable from '../components/orders/OrderListTable'
 import OrderDateFilter from '../components/orders/OrderDateFilter'
 import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
+import { canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon } from '../utils/order-actions'
 
 // 状态 Tab（含「全部」；REFUNDED 单量少，并入「退款」）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -229,18 +230,18 @@ export default function Orders() {
   }
 
   // 退款相关按钮（卡片与表格共用同一套样式，见 renderActions 的说明）
+  // 显示规则在 utils/order-actions.ts 一处判定，与 LocalOrders / DetailActions 共用
   const renderRefundActions = (order: Order, cls: { danger: string; muted: string }) => {
     const r = order.latestRefund
-    const active = r && ['PENDING', 'PROCESSING', 'ABNORMAL'].includes(r.status)
-    if (['PAID', 'PREPARING', 'SHIPPED', 'COMPLETED'].includes(order.status)) {
-      if (order.remainingRefundable <= 0) return null
+    const active = hasActiveRefund(order)
+    if (order.status !== 'REFUNDING') {
+      if (!canRefund(order)) return null
       return (
-        <button onClick={() => setRefundTarget(order)} className={cls.danger} disabled={!!active} title={active ? '有退款处理中' : ''}>
-          {order.refundedAmount > 0 ? '再退款' : '退款'}
+        <button onClick={() => setRefundTarget(order)} className={cls.danger} disabled={active} title={active ? '有退款处理中' : ''}>
+          {refundLabel(order)}
         </button>
       )
     }
-    if (order.status !== 'REFUNDING') return null
     return (
       <>
         {!active && (
@@ -288,13 +289,13 @@ export default function Orders() {
       {/* 「发赔偿券」对**有成功支付记录**的单显示（M3 D2 默认），与「退款」并列且可单独使用——
           spec §7：可以只发券不退款。待付款与已取消的单没有可赔偿的交易，不显示。
           order.userId 来自 orderListSelect（M2 加的），列表里就有，不用先点进详情 */}
-      {order.userId !== undefined && !['PENDING_PAYMENT', 'CANCELLED'].includes(order.status) && (
+      {canIssueCoupon(order) && (
         <button onClick={() => setCouponTarget(order)} className={cls.muted} title="给这位顾客发一张赔偿券（不退款）">
           发赔偿券
         </button>
       )}
       {order.status === 'PENDING_PAYMENT' && <button onClick={() => handleCancel(order)} className={cls.danger}>取消</button>}
-      {order.status !== 'PENDING_PAYMENT' && (
+      {canReprint(order) && (
         <button onClick={() => handleReprint(order)} disabled={reprintingId === order.id} className={`${cls.muted} disabled:opacity-40 inline-flex items-center gap-1`} title="重打该单小票（票卡纸/被撕坏/没看见时用）">
           <Printer className="w-3.5 h-3.5" />
           {reprintingId === order.id ? '发送中...' : '重打小票'}
