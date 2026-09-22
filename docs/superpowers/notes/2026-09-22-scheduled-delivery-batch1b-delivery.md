@@ -1,5 +1,5 @@
 【工序】交付 【模型】Fable 【等级】M
-状态：BLOCKED（两项非代码原因：① 验收标准 4 的 e2e 有 1 条红，是批次一 e2e 脚本 §62 ⑬ 的时间依赖，文件不在本批授权范围，待店主授权修；② 范围检查脚本不存在。代码层面：Sonnet 复核两轮后无阻断项）
+状态：BLOCKED → **合并后补记（2026-09-22）**：§62 ⑬ 的时钟依赖已由另一会话在 ece4bd0 修掉（两个窗口曾同时改同一段，本批那份已撤回），1b 以 8f4a13c 合入 main；main 上 admin tsc/test(107)/build、server tsc 均过，干净隔离库全量 e2e `================ 通过 2010 / 失败 0 ================`（TZ=Asia/Shanghai，端口 3104，库 food_shop_e2e_main）。验收标准 1–5 全部满足；唯一未满足的是 §2.5 第 4 条范围检查（脚本不存在），按协议严格读仍记 BLOCKED，代码与验收层面无遗留。
 定级依据：§2.2 第 3 条——新功能的后台界面；不含迁移/认证/支付/并发一致性（呼叫与退款守卫在批次一服务端已由 Opus 复核关闭，本批只调用既有端点）。
 运行模式：正常。规划由本会话（Fable）担任；执行 Sonnet 子 agent 逐 Task 串行（在独立 worktree `sched-1b-admin`、分支 `claude/scheduled-delivery-1b-admin`，基线 d5a3a91）；复核 Sonnet 新会话。
 完成内容：方案 docs/superpowers/plans/2026-09-22-scheduled-delivery-batch1b-admin.md 的 Task 1–6：
