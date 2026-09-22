@@ -66,8 +66,6 @@ RR68_C2=$(rr68_calls)
 rr68_sched
 assert_eq "68.2 再补查 refunded_amount 不变" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RR68_O2;")" "$RR68_AMT2"
 assert_eq "68.2 已终态不再计入 calls" "$RR68_C2" "$(rr68_calls)"
-RR68_R=$(req POST "/api/admin/orders/$RR68_O2/refund-complete" "$AT")
-assert_eq "68.2 已自动退完再标记完成被拒 42204" "$(code "$RR68_R")" "42204"
 
 echo "-- 68.3 部分 SUCCESS：订单仍 PAID，剩余可退款正确 --"
 RR68_O3_TMP=$(rr68_stuck partial PROCESSING)

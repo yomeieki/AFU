@@ -158,8 +158,6 @@ export const loginWithWebviewCode = (code: string) =>
     }>
   >('/admin/login/webview', { code })
 
-export const completeRefund = (id: number) =>
-  client.post<ApiResponse<Order>>(`/admin/orders/${id}/refund-complete`)
 
 export const cancelOrder = (id: number) =>
   client.put<ApiResponse<Order>>(`/admin/orders/${id}/status`, { status: 'CANCELLED' })

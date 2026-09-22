@@ -159,11 +159,6 @@ C1=$(code "$(cat $R1)"); C2=$(code "$(cat $R2)")
 if { [[ "$C1" == "0" && "$C2" != "0" ]] || [[ "$C2" == "0" && "$C1" != "0" ]]; }; then ok "并发一成一败 ($C1 / $C2)"; else fail "并发保护" "$C1 / $C2"; fi
 assert_eq "订单 → REFUNDED" "$(order_status $O3)" "REFUNDED"
 
-echo "== 9. 人工兜底 refund-complete（仅退款中订单）=="
-O4=$(make_paid_order); [[ -n "$O4" ]] && ok "订单 #$O4 已支付" || { fail "下单/支付"; exit 1; }
-req PUT "/api/orders/$O4/cancel" "$UT" >/dev/null
-R=$(req POST "/api/admin/orders/$O4/refund-complete" "$AT"); assert_eq "已自动退完的订单再标记被拒 42204" "$(code "$R")" "42204"
-
 echo "== 10. pending-count 字段 =="
 R=$(req GET /api/admin/orders/pending-count "$AT")
 [[ "$(jq -r .data.refundingCount <<<"$R")" != "null" ]] && ok "refundingCount 存在" || fail "refundingCount 缺失"

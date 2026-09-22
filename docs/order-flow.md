@@ -134,7 +134,7 @@ SHIPPED（已发货）
 | PAID | SHIPPED | 管理员 |
 | PAID | REFUNDING | 用户申请（第一版手动处理） |
 | SHIPPED | COMPLETED | 用户确认收货 |
-| REFUNDING | REFUNDED | 退款回调 / 管理员手动标记 |
+| REFUNDING | REFUNDED | 退款回调 / 自动补查查到成功（「管理员手动标记」2026-09-22 已删） |
 | SHIPPED | COMPLETED | 管理员「标记完成」或定时任务（7 天） |
 | COMPLETED | REFUNDING → REFUNDED | 管理员全额退款（货已出不回滚库存） |
 | CANCELLED | REFUNDING → REFUNDED | 已取消订单收到迟到的支付成功回调：自动全额退款并告警 |

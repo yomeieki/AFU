@@ -844,9 +844,9 @@
 { "code": 0, "data": { "order": { "status": "REFUNDING" }, "refund": { "outRefundNo": "refund_12_1725...", "status": "PROCESSING" }, "mode": "wechat" } }
 ```
 
-#### POST /api/admin/orders/:id/refund-complete
+#### ~~POST /api/admin/orders/:id/refund-complete~~（2026-09-22 已删除）
 
-人工兜底：确认商户平台已退款成功但系统未收到回调时，把 `REFUNDING` 订单标记为 `REFUNDED`（同时把进行中的退款记录标 SUCCESS）。仅 `REFUNDING` 可调用；重复调用 `42204`。**2026-09-21 起有自动补查（附录 L）**：微信退款回调丢失时定时任务会自动去微信核对并推进状态，本接口只作最后兜底（自动补查还没查到、或需要立即处理时用）。
+原「人工标记退款完成」兜底：不问微信、不核金额就把 `REFUNDING` 订单标成 `REFUNDED`，误点即一笔假退款。自动补查（附录 L）上线后回调丢失的场景由系统自己查微信落账，此接口与后台按钮一并去掉。店主在商户平台手动打款而不经系统的情况，现无接口可记，需要时按运维流程改库。
 
 `GET /api/admin/orders` 列表每项附带 `latestRefund`（最近一条退款记录：`status` / `outRefundNo` / `amount` / `mode` / `errorMessage`）。
 
@@ -1247,7 +1247,7 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 | 取消申请被驳回 | `POST /api/admin/local/orders/:id/cancel-request/reject` | `printCancel=true` 时出 `RESUME` 票，提醒厨房「顾客还是要这一单，继续制作」（H6） |
 | 顾客自助秒退（D6①） | `PUT /api/orders/:id/cancel`（`PAID` 且未接单分支） | 决定取消即出票，不等退款请求/回调确认完成 |
 | 退款成功、订单累计退完全款 | `services/refund.ts` 的 `finalizeRefundSuccess`（事务提交后，`flippedToRefunded` 时） | 覆盖**全部**退款入口——后台一键退款（含 mock 同步 SUCCESS）、售后同意、顾客自助取消触发的退款、微信异步退款回调，各入口不必各自记得补一次；部分退款不出票；`CANCEL` 的 `dedupeKey` 固定 `seq=0`，同一单被多个入口重复推进只会真出一张 |
-| 商家拒单 / 人工标记退款完成 | `routes/admin/orders.ts` 的 `reject` / `refund-complete` | 只在「付过款、店里理论上已经知道这单」时补票；未付款单从没出过接单票，不需要补取消票（详见 `cb27694`） |
+| 商家拒单 | `routes/admin/orders.ts` 的 `reject` | 只在「付过款、店里理论上已经知道这单」时补票；未付款单从没出过接单票，不需要补取消票（详见 `cb27694`）。原「人工标记退款完成」入口 2026-09-22 已删 |
 | 店员手动重打 | `POST /api/admin/orders/:id/reprint` | `enqueueOrderTicket(orderId,'REPRINT')`，每次都新开一条记录，不做幂等 |
 | 后台打印测试页 | `POST /api/admin/printers/:sn/test` | `orderId=0`、`orderNo='TEST'` |
 
@@ -1403,10 +1403,9 @@ pointsCost`（M1 未使用）。字段定义与枚举取值见 spec §4。
 >
 > `finalizeRefundSuccess` 里的扣回失败**不是**「靠微信回调重试补」——那只对走真实微信异步
 > 退款回调（`wechat-refund-notify`）的路径成立（`finalizeRefundSuccess` 抛错时该 handler
-> `replyFail`，微信按其重试策略重新投递通知）。`routes/admin/orders.ts` 的 `refund-complete`
-> 人工兜底路径（确认商户平台已退款但系统未收到回调时用）没有任何微信重试：这条路径存在的
-> 前提正是「不会再有回调」，`finalizeRefundSuccess` 在这里抛错只会让本次 HTTP 请求 500，
-> 需要店员人工重新点击重试，不会有第二次机会自动补上。
+> `replyFail`，微信按其重试策略重新投递通知）。自动补查（`services/refund-reconcile.ts`）
+> 路径下 `finalizeRefundSuccess` 抛错则记 `QUERY_FAILED`，下一轮 tick 再试，同样不会漏。
+> （原 `refund-complete` 人工兜底路径 2026-09-22 已删除。）
 
 ### scheduler 新增三任务
 

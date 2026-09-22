@@ -92,50 +92,10 @@ sleep 0.3
 assert_eq "R10 回归：MOCK 模式全额退款仍恰好 1 条 CANCEL（提前出票与 finalize 出票去重正常）" \
   "$(jq -r '[.data.list[] | select(.kind=="CANCEL")] | length' <<<"$(req GET "/api/admin/print-jobs?orderId=$G2R10_O1" "$AT")")" "1"
 
-echo "-- R11：人工标记退款完成（无在途退款单分支）会漏扣积分——修复：同事务补调 deductPointsOnRefund --"
-IFS=$'\t' read -r G2R11_TOKEN G2R11_UID < <(m1_login "a${G2_TAG}G2R11")
-[[ -n "$G2R11_TOKEN" ]] && ok "R11 测试用户登录" || fail "R11 测试用户登录失败"
-G2R11_ADDR=$(req POST /api/addresses "$G2R11_TOKEN" '{"receiverName":"G2R11","receiverPhone":"13900001011","province":"四川省","city":"自贡市","district":"自流井区","detail":"G2R11测试地址","isDefault":1}' | jq -r .data.id)
-# 造一单并结算得 100 分（rate=1，实付 ¥100）
-G2R11_O1=$(m1_completed_order "$G2R11_TOKEN" "$G2R11_ADDR" 10000)
-req POST /api/admin/system/run-scheduler "$AT" '{"settleMissedPointsAfterMin":0}' >/dev/null
-G2R11_EARNED=$(sql "SELECT points_earned FROM orders WHERE id=$G2R11_O1;")
-assert_eq "R11 前置：订单已结算得 100 分" "$G2R11_EARNED" "100"
-G2R11_BAL_BEFORE=$(sql "SELECT points_balance FROM users WHERE id=$G2R11_UID;")
-assert_eq "R11 前置：结算后余额 100" "$G2R11_BAL_BEFORE" "100"
-# 复现 R11 描述的场景：直接把订单状态 SQL 改成 REFUNDING（模拟"微信回调丢失、且这单
-# 从未经系统内 initiateRefund 走过在途退款——如顾客线下要求退款、店员在商户平台手动打款"，
-# 对应 routes/admin/orders.ts 里 refund-complete 端点自己的注释：
-# "无在途退款单（如用户自助取消后员工在商户平台手动打款）"），此时 order.refunds 为空，
-# 命中的正是没有 active 退款单的那条分支——不经 finalizeRefundSuccess，全仓唯一的
-# deductPointsOnRefund 调用点够不着它，这正是 R11 的缺陷所在。
-sql "UPDATE orders SET status='REFUNDING', cancelled_at=NOW(), cancel_reason='R11测试:线下已退款' WHERE id=$G2R11_O1;"
-R=$(req POST "/api/admin/orders/$G2R11_O1/refund-complete" "$AT")
-assert_eq "R11：人工标记退款完成请求成功" "$(code "$R")" "0"
-G2R11_STATUS=$(jq -r '.data.status' <<<"$R")
-assert_eq "R11：订单状态已翻转为 REFUNDED" "$G2R11_STATUS" "REFUNDED"
-G2R11_REFUNDED_AMT=$(sql "SELECT refunded_amount FROM orders WHERE id=$G2R11_O1;")
-assert_eq "R11：refundedAmount 已补记为实付全额 10000" "$G2R11_REFUNDED_AMT" "10000"
-G2R11_MANUAL_REFUND=$(sql "SELECT id FROM refunds WHERE order_id=$G2R11_O1 AND out_refund_no LIKE 'manual_%' ORDER BY id DESC LIMIT 1;")
-[[ -n "$G2R11_MANUAL_REFUND" ]] && ok "R11：已补建 manual_ 前缀的 Refund 行（#$G2R11_MANUAL_REFUND）" || fail "R11：未找到补建的 Refund 行"
-G2R11_DEDUCT_DELTA=$(sql "SELECT delta FROM points_ledgers WHERE type='REFUND_DEDUCT' AND ref_type='REFUND' AND ref_id='$G2R11_MANUAL_REFUND';")
-assert_eq "R11：修复后写了 REFUND_DEDUCT 流水，扣回恰好 100 分（修复前：0 条流水，余额纹丝不动）" "$G2R11_DEDUCT_DELTA" "-100"
-G2R11_BAL_AFTER=$(sql "SELECT points_balance FROM users WHERE id=$G2R11_UID;")
-assert_eq "R11：余额已扣回至 0（修复前会停在 100，钱退了分没扣）" "$G2R11_BAL_AFTER" "0"
-
-echo "-- R11 弱回归：有在途退款单（active 分支）走 finalizeRefundSuccess，本就正确，未被本次改动破坏 --"
-G2R11B_O1=$(pay_new_order "$PID" "$ADDR")
-req POST "/api/admin/orders/$G2R11B_O1/accept" "$AT" >/dev/null
-sleep 0.3
-G2R11B_AMOUNT=$(req GET "/api/admin/orders/$G2R11B_O1" "$AT" | jq -r .data.actualAmount)
-R=$(req POST "/api/admin/orders/$G2R11B_O1/refund" "$AT" "{\"amount\":$G2R11B_AMOUNT,\"reason\":\"R11弱回归\"}")
-assert_eq "R11 弱回归：MOCK 模式全额退款直接成功（走 finalizeRefundSuccess，非 refund-complete 分支）" "$(code "$R")" "0"
-G2R11B_STATUS=$(sql "SELECT status FROM orders WHERE id=$G2R11B_O1;")
-assert_eq "R11 弱回归：订单已是 REFUNDED（未经 refund-complete 人工分支）" "$G2R11B_STATUS" "REFUNDED"
+# R11（人工标记退款完成漏扣积分）用例已随 refund-complete 端点一起删除（2026-09-22）
 
 # 收尾：还原打印机/会员设置、删掉本段创建的测试地址
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
 req PUT /api/admin/settings/printer "$AT" "$ORIG_PRINTER_SETTINGS_46" >/dev/null
 req PUT /api/admin/settings/member "$AT" "$ORIG_MEMBER_SETTINGS_46" >/dev/null
 req DELETE "/api/addresses/$G2R3_ADDR" "$G2R3_TOKEN" >/dev/null
-req DELETE "/api/addresses/$G2R11_ADDR" "$G2R11_TOKEN" >/dev/null

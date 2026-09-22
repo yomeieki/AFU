@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Copy, Phone, Printer, RefreshCw, Search, Truck } from 'lucide-react'
-import { getOrders, acceptOrder, shipOrder, cancelOrder, completeRefund, completeOrder, reprintOrder } from '../api/admin'
+import { getOrders, acceptOrder, shipOrder, cancelOrder, completeOrder, reprintOrder } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 import { confirmDialog } from '../components/ui/ConfirmDialog'
 import Button from '../components/ui/Button'
@@ -181,17 +181,6 @@ export default function Orders() {
     withToast(() => completeOrder(order.id), '订单已完成', '操作失败')
   }
 
-  const handleCompleteRefund = async (order: Order) => {
-    const ok = await confirmDialog({
-      title: '手动标记退款完成',
-      content: `仅在已确认微信商户平台退款成功、但系统未收到回调时使用。确认将订单 ${order.orderNo} 标记为已退款？`,
-      danger: true,
-      confirmText: '确认标记',
-    })
-    if (!ok) return
-    withToast(() => completeRefund(order.id), '已标记退款完成', '操作失败')
-  }
-
   const handleCancel = async (order: Order) => {
     const ok = await confirmDialog({
       title: '取消订单',
@@ -252,9 +241,8 @@ export default function Orders() {
           </button>
         )}
         {hint === '微信处理中' ? <span className={cls.muted}>{hint}</span> : hint === '退款异常' ? <span className="text-red-500">{hint}</span> : null}
-        <button onClick={() => handleCompleteRefund(order)} className={cls.muted}>
-          手动标记完成
-        </button>
+        {/* 「手动标记完成」2026-09-22 已去掉：不问微信、不核金额就把单标成已退款，误点就是一笔假退款；
+            回调丢失的场景由自动补查（services/refund-reconcile.ts）自己查微信落账 */}
       </>
     )
   }

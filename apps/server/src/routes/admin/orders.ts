@@ -6,7 +6,7 @@ import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { rollbackOrderStock } from '../../utils/order-stock'
 import { releaseOrderBenefits } from '../../services/member/checkout'
-import { ACTIVE_REFUND_STATUSES, finalizeRefundSuccess, initiateRefund, remainingRefundable } from '../../services/refund'
+import { initiateRefund, remainingRefundable } from '../../services/refund'
 import { deductPointsOnRefund } from '../../services/member/points'
 import { sendShipSubscribeMessage, sendPickupReadySubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
@@ -580,108 +580,6 @@ router.post('/:id/reject', async (req: Request, res: Response, next: NextFunctio
     }
     success(res, { orderId: id, refund, offShelfCount, cancelReason })
   } catch (e) { next(e) }
-})
-
-// POST /api/admin/orders/:id/refund-complete — 人工兜底：确认已在商户平台退款成功但系统未收到回调时标记
-router.post('/:id/refund-complete', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = Number(req.params.id)
-    const order = await prisma.order.findUnique({ where: { id }, include: { refunds: true } })
-    if (!order) throw new AppError(40401, '订单不存在', 404)
-    if (order.status !== 'REFUNDING') {
-      throw new AppError(42204, `订单状态为 ${order.status}，仅退款中订单可标记完成`)
-    }
-    const active = order.refunds.find((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))
-    if (active) {
-      await finalizeRefundSuccess({ refundId: active.id, operator: `manual:${req.adminUsername ?? ''}` })
-    } else {
-      // 无在途退款单（如用户自助取消后员工在商户平台手动打款）：直接把剩余款项记为已退。
-      //
-      // 整段包进事务，并且钱的写法从「事务外算 remaining + increment」改成「事务内 CAS + 写绝对值」：
-      // 老写法的 remaining 来自 :343 那次事务外快照，微信退款回调若插在读与写之间先 increment 了一次，
-      // 这里再 increment 一遍，refundedAmount 就越过 actualAmount，可退余额变负、对账永远差一笔。
-      //  · 写绝对值 actualAmount 而不是 increment：天然以实付封顶，重复执行也不会超额；
-      //  · where 里带上读到的 refundedAmount 做 CAS：回调若抢先落库，这里 count=0，让店员刷新后再看，
-      //    不猜「到底谁退的」——与 refund.ts:251 事务内条件写 + 判 count 同一范式。
-      const now = new Date()
-      await prisma.$transaction(async (tx) => {
-        const fresh = await tx.order.findUnique({
-          where: { id },
-          select: {
-            orderNo: true,
-            userId: true,
-            actualAmount: true,
-            refundedAmount: true,
-            pointsEarned: true,
-            pointsBase: true,
-            payment: { select: { outTradeNo: true } },
-          },
-        })
-        if (!fresh) throw new AppError(40401, '订单不存在', 404)
-        const remaining = remainingRefundable(fresh)
-        const moved = await tx.order.updateMany({
-          where: { id, status: 'REFUNDING', refundedAmount: fresh.refundedAmount },
-          // remaining === 0（钱其实已经退完，只剩状态没翻）时不碰金额，只把状态收尾
-          data: { status: 'REFUNDED', refundedAt: now, ...(remaining > 0 ? { refundedAmount: fresh.actualAmount } : {}) },
-        })
-        if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
-        if (remaining > 0) {
-          // 补建 Refund 行：这条路以前只改 order.refundedAmount 不建退款单，
-          // sum(refunds.amount) 与 order.refundedAmount 从此永久对不上，退款明细里也查不到这笔钱去哪了。
-          // 来源全部用现有字段表达（不加迁移）：
-          //  · outRefundNo 用 manual_ 前缀，与 buildOutRefundNo 的 refund_ 前缀区分开——
-          //    这个号从未发给微信，别让人拿它去商户平台查单；唯一索引顺带挡住重复补记。
-          //  · operator 沿用 :350 的 manual: 前缀，reason 写明是人工补记。
-          //  · activeOrderId 置 null：这是终态，不能占住在途位挡掉以后的退款。
-          const manualRefund = await tx.refund.create({
-            data: {
-              orderId: id,
-              orderNo: fresh.orderNo,
-              outTradeNo: fresh.payment?.outTradeNo ?? null,
-              outRefundNo: `manual_${id}_${now.getTime()}`,
-              amount: remaining,
-              totalAmount: fresh.actualAmount,
-              status: 'SUCCESS',
-              // 钱确实是在微信商户平台退的，只是不是本系统发起的；「人工」由 operator/reason/单号前缀承载
-              mode: 'WECHAT',
-              reason: '人工补记：商户平台已退款，系统未收到回调',
-              operator: `manual:${req.adminUsername ?? ''}`,
-              successTime: now,
-              activeOrderId: null,
-            },
-          })
-          // R11：这条路自己在事务里翻转 Refund/Order 状态，不经 finalizeRefundSuccess——
-          // 全仓唯一的 deductPointsOnRefund 调用点在那个函数里，够不着这里。不补的话：
-          // 订单已结算发分 → 全额退款 → 微信回调丢失 → 店员用本接口人工收尾 →
-          // 钱退了、积分一分没扣，且这次 updateMany 已经把 order 状态收尾成 REFUNDED，
-          // 兜底任务也不会再碰。同事务内调用：扣回失败要能让整笔人工标记回滚，
-          // 不留「钱退了、分没扣」的半截状态（与 finalizeRefundSuccess 同一取舍）。
-          await deductPointsOnRefund(
-            tx,
-            {
-              id, userId: fresh.userId, orderNo: fresh.orderNo, pointsEarned: fresh.pointsEarned,
-              pointsBase: fresh.pointsBase, actualAmount: fresh.actualAmount, refundedAmount: fresh.actualAmount,
-            },
-            { id: manualRefund.id, amount: remaining }
-          )
-        }
-        await tx.payment.updateMany({ where: { orderId: id }, data: { status: 'REFUNDED' } })
-      })
-    }
-    // 出票：这条路能走到这里，说明订单原本是 REFUNDING，即一定付过款、出过 NEW_ORDER 票。
-    // 该不该补 CANCEL，取决于「店里到底被通知过没有」，而这恰好由 dedupeKey 自动答对：
-    //  · 顾客自助取消、商家拒单进来的：CANCEL 早在决定那一刻就出过了，这里撞唯一索引直接跳过；
-    //  · 后台 /refund 发起退款进来的：那条路只在微信退款回调里出 CANCEL，而本接口存在的前提
-    //    正是「回调丢了」——不补的话，这单从头到尾没有任何一张纸告诉厨房它被退了。
-    // 所以真正会打出来的，只有确实没通知过的那一类；其余全是 no-op，不存在重复出票。
-    // 时效性上它确实可能晚（对账通常隔一段时间才做），但一张迟到的取消票也好过没有。
-    enqueueOrderTicket(id, 'CANCEL').catch((err) => {
-      console.error('[admin/orders] enqueueOrderTicket 失败（人工标记退款完成）:', (err as Error).message)
-    })
-    success(res, await prisma.order.findUnique({ where: { id } }))
-  } catch (e) {
-    next(e)
-  }
 })
 
 // PUT /api/admin/orders/:id/status — 受限状态流转（当前仅支持取消未付款订单）

@@ -233,7 +233,7 @@ export async function reconcileStuckRefunds(opts: ReconcileStuckOptions = {}): P
         `订单 ${fresh.orderNo}`,
         `退款单 ${fresh.outRefundNo} · ¥${(fresh.amount / 100).toFixed(2)}`,
         `已自动核对 ${fresh.reconcileCount} 次仍未成功（最近：${detail}）`,
-        '可到微信商户平台查退款记录；确认已退成功但后台未变，再用「手动标记完成」',
+        '可到微信商户平台查退款记录；系统会继续每 5 分钟核对，到账后自动变已退款',
       ],
       { key: `refund-reconcile-stuck:${row.id}`, windowMs: ALERT_WINDOW_MS }
     )
