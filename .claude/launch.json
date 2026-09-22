@@ -131,6 +131,15 @@
         "cd /Users/yumingyi/food-shop/apps/admin && VITE_PROXY_TARGET=http://localhost:3110 npm run dev -- --port 5197 --strictPort"
       ],
       "port": 5197
+    },
+    {
+      "name": "api-e2e-3106",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd apps/server && PORT=3106 DATABASE_URL=\"mysql://foodshop_user:foodshop_password@localhost:3306/food_shop_e2e\" WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true WECHAT_QRCODE_MOCK=true LOCAL_DELIVERY_PROVIDER_MOCK=true EXPRESS_PROVIDER_MOCK=true PRINTER_PROVIDER_MOCK=true SCHEDULER_DISABLED=true npx ts-node-dev --respawn --transpile-only src/app.ts"
+      ],
+      "port": 3106
     }
   ]
 }
