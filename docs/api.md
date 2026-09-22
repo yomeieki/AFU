@@ -856,7 +856,10 @@
 
 用户列表。
 
-**Query Params:** page, pageSize, keyword（按昵称/手机号搜索）
+**Query Params:**
+- page, pageSize
+- keyword：匹配昵称、微信绑定手机号（users.phone，目前实际总是空），或**该用户任一订单**的收货人姓名/收货人手机号（子串匹配，天然支持只输尾号）
+- hasOrders：只认字面量 `1`——只列「下过单的」（orders 表任一状态 ≥1 条，与 orderCount 列同一口径）。不传或传其他值都不过滤，默认返回全部用户（后台前端默认勾选「只看下过单的」发 `hasOrders=1`，但接口本身不预设这个过滤，调用方不传就是不过滤）
 
 **Response:**
 ```json
@@ -872,14 +875,25 @@
         "phone": "138****8000",
         "status": 1,
         "orderCount": 5,
+        "pointsBalance": 120,
+        "availableCoupons": 2,
         "lastLoginAt": "2024-01-01T10:00:00Z",
-        "createdAt": "2024-01-01T10:00:00Z"
+        "createdAt": "2024-01-01T10:00:00Z",
+        "latestOrder": {
+          "orderNo": "ORD202409010001",
+          "receiverName": "张三",
+          "receiverPhone": "13800008000",
+          "status": "PAID",
+          "createdAt": "2024-09-01T10:00:00Z"
+        }
       }
     ],
     "total": 100
   }
 }
 ```
+
+`latestOrder`：该用户 createdAt 最新的一张订单快照，**不排除任何状态**（含 PENDING_PAYMENT、CANCELLED、isTest），没下过单则为 `null`。这是订单收货人信息，不代表用户本人改过昵称或绑定过这个手机号——users.phone/nickname/avatarUrl 目前只在极少数场景被写入，`latestOrder` 是后台前端用来兜底展示「这串号码最近打给谁用过」的依据，不是身份认证结果。
 
 ---
 

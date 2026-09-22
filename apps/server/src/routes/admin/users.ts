@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
@@ -28,18 +29,74 @@ async function requireUser(req: Request): Promise<number> {
   return userId
 }
 
+interface LatestOrder {
+  orderNo: string
+  receiverName: string
+  receiverPhone: string
+  status: string
+  createdAt: Date
+}
 
-// GET /api/admin/users — 用户列表（分页 + 昵称/手机号搜索）
+/**
+ * 批量取「本页每个用户的最近一单」（createdAt 最新，不排除任何状态）——唯一实现，别改回
+ * Prisma 的嵌套关系 select 加一个「限定条数」参数那种写法。
+ *
+ * 2026-09-22 复核发现：Prisma 5.22 对 MySQL 的默认关系加载策略**不会**把嵌套的「每个父行限定
+ * 条数」下推成 LIMIT/窗口函数，而是一条 `WHERE user_id IN (本页 id)` 把这批用户名下的**全部
+ * 历史订单**都搬回 Node 层，裁剪在客户端做——语句数是 O(1) 没错，但返回行数随这批用户的历史
+ * 订单总量线性增长（实测 21 用户/248 单的库，16 个用户一页能拉回 248 行）。改用下面这条窗口
+ * 函数查询，一条 SQL、返回行数恒等于 min(本页用户数, 有订单的用户数)。
+ */
+async function latestOrderByUserIds(userIds: number[]): Promise<Map<number, LatestOrder>> {
+  if (userIds.length === 0) return new Map() // Prisma.join([]) 对空数组会抛错，必须提前短路
+
+  const rows = await prisma.$queryRaw<
+    { userId: number; orderNo: string; receiverName: string; receiverPhone: string; status: string; createdAt: Date }[]
+  >(Prisma.sql`
+    SELECT user_id AS userId, order_no AS orderNo, receiver_name AS receiverName,
+           receiver_phone AS receiverPhone, status, created_at AS createdAt
+    FROM (
+      SELECT o.user_id, o.order_no, o.receiver_name, o.receiver_phone, o.status, o.created_at,
+             ROW_NUMBER() OVER (PARTITION BY o.user_id ORDER BY o.created_at DESC, o.id DESC) AS rn
+      FROM orders o
+      WHERE o.user_id IN (${Prisma.join(userIds)})
+    ) t
+    WHERE t.rn = 1
+  `)
+
+  return new Map(rows.map(({ userId, ...o }) => [userId, o]))
+}
+
+
+// GET /api/admin/users — 用户列表（分页 + 昵称/手机号/订单收货人搜索 + 只看下过单的）
+//
+// users.phone/nickname/avatarUrl 从登录起就没被写入过（登录只建 openid 行，见 routes/auth.ts），
+// 所以「手机号」列长期全是「-」，店主没法用它锁定顾客。真正有值的是订单快照
+// orders.receiverName/receiverPhone。这里不改小程序、不接微信手机号授权，改成：
+// 搜索同时匹配这两处；列表附带每个用户「最近一单」的收货人姓名/手机号供前端兜底展示。
+//
+// 「最近一单」= createdAt 最新的一条，**不排除任何状态**（含未付款、已取消、测试单）——
+// 店主要的是「这串号码最近打给谁用过」，不是「最近一笔成交」，付款状态在这里不重要。
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { page, pageSize } = readPage(req)
     const keyword = (req.query.keyword as string | undefined)?.trim()
+    // 只认字面量 '1'；不传或传别的值都不过滤，保持 §48 e2e 的既有假设（默认列出全部用户）。
+    const hasOrders = req.query.hasOrders === '1'
 
-    const where = keyword
-      ? {
-          OR: [{ nickname: { contains: keyword } }, { phone: { contains: keyword } }],
-        }
-      : {}
+    const where = {
+      ...(keyword
+        ? {
+            OR: [
+              { nickname: { contains: keyword } },
+              { phone: { contains: keyword } },
+              // 尾号模糊搜索：contains 天然支持子串匹配，不需要额外处理。
+              { orders: { some: { OR: [{ receiverName: { contains: keyword } }, { receiverPhone: { contains: keyword } }] } } },
+            ],
+          }
+        : {}),
+      ...(hasOrders ? { orders: { some: {} } } : {}),
+    }
 
     const [list, total] = await prisma.$transaction([
       prisma.user.findMany({
@@ -74,6 +131,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         })
       : []
     const couponsByUser = new Map(counts.map((c) => [c.userId, c._count._all]))
+    const latestOrderByUser = await latestOrderByUserIds(list.map((u) => u.id))
 
     paginate(
       res,
@@ -81,6 +139,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         ...u,
         orderCount: _count.orders,
         availableCoupons: couponsByUser.get(u.id) ?? 0,
+        latestOrder: latestOrderByUser.get(u.id) ?? null,
       })),
       total,
       page,

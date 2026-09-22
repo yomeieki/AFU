@@ -346,6 +346,11 @@ export interface AdminUser {
   pointsBalance: number
   /** M3：可用券张数（UNUSED 且未过期，服务端按时间判，不依赖定时任务跑没跑） */
   availableCoupons: number
+  /**
+   * 2026-09-22：users.phone 从登录起就没被写过（登录只建 openid 行），这里不是微信绑定号，
+   * 是该用户**最近一单**（不排除任何状态）的收货人快照，供店主锁定顾客用。没下过单则为 null。
+   */
+  latestOrder: { orderNo: string; receiverName: string; receiverPhone: string; status: OrderStatus; createdAt: string } | null
 }
 
 export interface UserOrder {

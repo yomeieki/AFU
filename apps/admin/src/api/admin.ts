@@ -163,7 +163,7 @@ export const cancelOrder = (id: number) =>
   client.put<ApiResponse<Order>>(`/admin/orders/${id}/status`, { status: 'CANCELLED' })
 
 // Users
-export const getUsers = (params?: { page?: number; pageSize?: number; keyword?: string }) =>
+export const getUsers = (params?: { page?: number; pageSize?: number; keyword?: string; hasOrders?: 1 }) =>
   client.get<ApiResponse<PaginatedData<AdminUser>>>('/admin/users', { params })
 
 export const getUserOrders = (userId: number, params?: { page?: number; pageSize?: number }) =>

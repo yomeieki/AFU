@@ -12,8 +12,9 @@ import { toast } from '../components/ui/Toast'
 import IssueCouponModal from '../components/IssueCouponModal'
 import type { AdminUser, UserOrder, PointsLedgerRow, UserCouponRow } from '../types'
 import { fmtDate, fmtDateTime } from '../utils/time'
+import { userDisplayName, userPhoneInfo } from '../utils/user-label'
 
-const userLabel = (u: AdminUser) => u.nickname ?? `用户 #${u.id}`
+const userLabel = userDisplayName
 const yuan = (fen: number) => (fen / 100).toFixed(2)
 const CHANNEL_LABEL: Record<string, string> = { ALL: '通用', LOCAL: '仅同城', EXPRESS: '仅邮寄' }
 const SOURCE_LABEL: Record<string, string> = {
@@ -52,6 +53,9 @@ export default function Users() {
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [keyword, setKeyword] = useState('')
+  // 「只看下过单的」默认勾上——店主找人多半是为了对一张订单，压根没下过单的行只会添乱。
+  // 与「订单数」列同一口径（orders: some {}，任一状态都算），见 utils/order-actions 同款注释风格。
+  const [hasOrders, setHasOrders] = useState(true)
   const [loading, setLoading] = useState(true)
 
   // 用户订单弹窗
@@ -83,7 +87,7 @@ export default function Users() {
   const load = (p = page) => {
     setLoading(true)
     setLoadFailed(false)
-    getUsers({ page: p, pageSize, keyword: keyword || undefined })
+    getUsers({ page: p, pageSize, keyword: keyword || undefined, hasOrders: hasOrders ? 1 : undefined })
       .then((res) => {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
@@ -92,11 +96,21 @@ export default function Users() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
+  // hasOrders 进依赖：勾选状态一变就自动重载，不用每个改状态的地方都记得手动 load()。
+  useEffect(() => { load() }, [page, hasOrders]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
     setPage(1)
     load(1)
+  }
+
+  // 勾选/取消「只看下过单的」：先回第 1 页再改状态——顺序反过来的话，若当前停在第 3 页，
+  // setHasOrders 触发的 effect 会先用旧页码打一次接口，页码没变时接口没变、只是浪费一次请求，
+  // 但更糟的是 setPage(1) 和 setHasOrders 都各自触发 effect 依赖变化，React 会合并成一次渲染
+  // 只跑一次 effect——保险起见仍然两个都设，靠依赖数组去重，不手动再多调一次 load()。
+  const handleHasOrdersChange = (checked: boolean) => {
+    setHasOrders(checked)
+    setPage(1)
   }
 
   const loadLedger = (user: AdminUser, p: number) => {
@@ -155,14 +169,23 @@ export default function Users() {
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索昵称/手机号"
-            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-44"
+            placeholder="搜收货人姓名/手机号（可只输尾号）"
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-56"
           />
         </div>
         <Button variant="secondary" size="sm" onClick={handleSearch}>
           <Search className="w-4 h-4" />
           搜索
         </Button>
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 pb-1.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hasOrders}
+            onChange={(e) => handleHasOrdersChange(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          只看下过单的
+        </label>
       </div>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
@@ -176,7 +199,7 @@ export default function Users() {
           columns={9}
           loading={loading}
           isEmpty={list.length === 0}
-          emptyText="暂无用户"
+          emptyText={hasOrders ? '暂无下过单的用户，可取消勾选「只看下过单的」再看看' : '暂无用户'}
           head={
             <tr>
               <th className="text-left px-4 py-3">用户</th>
@@ -192,7 +215,9 @@ export default function Users() {
           }
           mobileCards={
             <>
-              {list.map((u) => (
+              {list.map((u) => {
+                const phoneInfo = userPhoneInfo(u)
+                return (
                 <div key={u.id} className="border border-gray-100 rounded-lg p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
@@ -203,15 +228,19 @@ export default function Users() {
                           {(u.nickname ?? 'U').slice(0, 1)}
                         </span>
                       )}
-                      <span className="text-sm text-gray-800 truncate">{u.nickname ?? `用户 #${u.id}`}</span>
+                      <span className="text-sm text-gray-800 truncate">{userLabel(u)}</span>
                     </div>
                     <span className={`px-2 py-0.5 rounded-full text-xs shrink-0 ${u.status === 1 ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
                       {u.status === 1 ? '正常' : '禁用'}
                     </span>
                   </div>
                   <p className="text-xs text-gray-500 mt-1.5">
-                    {u.phone ?? '未绑定手机'}　订单 {u.orderCount}　注册 {fmtDate(u.createdAt)}
+                    {phoneInfo ? phoneInfo.phone : '无手机号'}　订单 {u.orderCount}　注册 {fmtDate(u.createdAt)}
                   </p>
+                  {/* 号码来自订单收货人快照而非微信绑定号时，必须标出来源，不然店主会当成本人手机号 */}
+                  {phoneInfo?.source === 'order' && u.latestOrder && (
+                    <p className="text-xs text-gray-400">最近一单收货人 · {fmtDate(u.latestOrder.createdAt)}</p>
+                  )}
                   <p className="text-xs text-gray-500 mt-1">
                     积分 <span className="text-gray-800 font-medium">{u.pointsBalance}</span> · 可用券{' '}
                     <span className="text-gray-800 font-medium">{u.availableCoupons}</span>
@@ -224,11 +253,14 @@ export default function Users() {
                     <button onClick={() => openCoupons(u)} className="text-blue-500">券记录</button>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </>
           }
         >
-          {list.map((u) => (
+          {list.map((u) => {
+            const phoneInfo = userPhoneInfo(u)
+            return (
             <tr key={u.id} className="hover:bg-gray-50">
               <td className="px-4 py-3">
                 <div className="flex items-center gap-2">
@@ -239,10 +271,19 @@ export default function Users() {
                       {(u.nickname ?? 'U').slice(0, 1)}
                     </span>
                   )}
-                  <span className="text-gray-800">{u.nickname ?? `用户 #${u.id}`}</span>
+                  <span className="text-gray-800">{userLabel(u)}</span>
                 </div>
               </td>
-              <td className="px-4 py-3 text-gray-600">{u.phone ?? '-'}</td>
+              <td className="px-4 py-3 text-gray-600">
+                {phoneInfo ? (
+                  <>
+                    <div>{phoneInfo.phone}</div>
+                    {phoneInfo.source === 'order' && u.latestOrder && (
+                      <div className="text-xs text-gray-400">最近一单收货人 · {fmtDate(u.latestOrder.createdAt)}</div>
+                    )}
+                  </>
+                ) : '-'}
+              </td>
               <td className="px-4 py-3 text-right text-gray-800">{u.orderCount}</td>
               <td className="px-4 py-3 text-right text-gray-800">{u.pointsBalance}</td>
               <td className="px-4 py-3 text-right text-gray-800">{u.availableCoupons}</td>
@@ -266,7 +307,8 @@ export default function Users() {
                 </div>
               </td>
             </tr>
-          ))}
+            )
+          })}
         </Table>
         )}
         {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
@@ -275,7 +317,7 @@ export default function Users() {
       {/* 用户订单弹窗 */}
       {ordersModal && (
         <Modal
-          title={`${ordersModal.nickname ?? `用户 #${ordersModal.id}`} 的订单`}
+          title={`${userLabel(ordersModal)} 的订单`}
           width="lg"
           onClose={() => setOrdersModal(null)}
           footer={
