@@ -62,7 +62,7 @@
       <text wx:elif="{{slotSelected}}" class="slot-text {{slotStale ? 'slot-stale' : ''}}">预计 {{slotSelected.text}} 送达<text wx:if="{{slotStale}}" class="slot-stale-tip"> 该时段已过，请重选</text></text>
       <text wx:elif="{{hasAnySlot}}" class="slot-muted">请选择送达时段 ›</text>
       <text wx:else class="slot-muted">暂无可选时段</text>
-      <text wx:if="{{slotSelected}}" class="slot-change">更改 ›</text>
+      <text wx:if="{{slotSelected && hasAnySlot && !slotsError}}" class="slot-change">更改 ›</text>
     </view>
   </view>
 

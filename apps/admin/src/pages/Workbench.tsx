@@ -205,7 +205,7 @@ type Urgency = '' | 'warn' | 'late'
  * 原来五列共用一套 3 分钟 / 6 分钟阈值，于是备餐中的卡片开工六分钟后**全部**变红——
  * 全红等于没有红（§0：红是这一屏最稀缺的信号）。所以阈值按列给，备餐那一档
  * 直接取设置里的备餐时长（高峰自动取高峰值），店主改设置这里跟着走。
- * 邮寄单图例写明「可以稍后处理」，给一套宽得多的阈值：只有真被忘了才亮。
+ * 邮寄单图例写明「可稍后处理」，给一套宽得多的阈值：只有真被忘了才亮。
  * 返回 null = 这一列不看停留时长（配送中在路上多久取决于距离，只看承诺送达）。
  */
 function dwellBudget(colKey: ColKey, channel: OrderChannel, prepMin: number): [number, number] | null {
@@ -2020,7 +2020,7 @@ export default function Workbench() {
     // 否则抽屉里的胶囊会和它背后那张卡片显示不同的颜色——自取单与 Card 共用 pickupCapsule，
     // 不然抽屉和它背后那张卡片会显示不一致的等待文案/颜色（见 pickupCapsule 顶部注释）
     const urg = urgencyOf(card, colKey, now, prepMin)
-    const w = (card.local?.schedule ? scheduleCapsule(card.local.schedule, colKey, now) : null)
+    const w = (card.local?.schedule ? scheduleCapsule(card.local.schedule, colKey, now, card.status) : null)
       ?? pickupCapsule(card, colKey, now, urg)
       ?? (colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg))
     const canReject = !!o && ['PENDING_PAYMENT', 'PAID', 'PREPARING'].includes(o.status)

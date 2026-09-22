@@ -44,7 +44,7 @@ export function scheduleCapsule(sc: ScheduleInfo, colKey: ScheduleColKey, now: n
   const cls = scheduleUrgency(sc.phase) === 'late' ? 'wb__wait--danger' : scheduleUrgency(sc.phase) === 'warn' ? 'wb__wait--warn' : ''
   switch (sc.phase) {
     case 'WAITING':
-      return { text: `${status ? (status === 'PAID' ? '待接单' : '已接单') + ' · ' : ''}${fmtHHmm(sc.prepStartAt)} 开始备餐`, cls }
+      return { text: `${status && colKey === 'pending' ? (status === 'PAID' ? '待接单' : '已接单') + ' · ' : ''}${fmtHHmm(sc.prepStartAt)} 开始备餐`, cls }
     case 'TICKETED':
       return { text: `${fmtHHmm(sc.prepStartAt)} 开始备餐`, cls }
     case 'PREPPING':

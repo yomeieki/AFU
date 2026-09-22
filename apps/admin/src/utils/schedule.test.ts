@@ -34,6 +34,10 @@ test('胶囊文案七态；done 列返回 null', () => {
   assert.deepEqual(scheduleCapsule(base('LATE'), 'delivering', NOON + min(11)), { text: '已超约定时间 11 分', cls: 'wb__wait--danger' })
   assert.equal(scheduleCapsule(base('CALLED'), 'done', NOON), null)
 })
+test('胶囊前缀（R2）：WAITING + status 只在 colKey 为 pending 时加「待接单/已接单」前缀，折叠组已接单卡出票前落到 waitingCourier 等展示列不该再带前缀', () => {
+  const now = NOON - min(50)
+  assert.ok(!scheduleCapsule(base('WAITING'), 'waitingCourier', now, 'PREPARING')!.text.includes('接单'))
+})
 test('折叠：只折 WAITING 且无取消申请', () => {
   const card = (phase: ScheduleInfo['phase'], cancelRequested = false) =>
     ({ channel: 'LOCAL', local: { schedule: base(phase), cancelRequested } } as unknown as WorkbenchCard)
