@@ -8,6 +8,7 @@ var localApi = require('../../api/local')
 var timeUtil = require('../../utils/time')
 var getLocalMeta = localApi.getLocalMeta
 var quoteLocal = localApi.quoteLocal
+var getDeliverySlots = localApi.getDeliverySlots
 var orderApi = require('../../api/order')
 var createOrder = orderApi.createOrder
 var getOrderMeta = orderApi.getOrderMeta
@@ -17,15 +18,34 @@ var checkoutState = require('../../utils/local-checkout-state')
 var checkoutAction = checkoutState.checkoutAction
 var newClientRequestId = checkoutState.newClientRequestId
 var packingFeeOf = checkoutState.packingFeeOf
+// 预约送达（2026-09-21 §5.2）复用自取页已有的时段小工具（第一格/是否仍在列表/日期文案），
+// 两边时段结构同构（services/slots.ts 同一个 buildSlots），不重复实现一遍。
+var st = require('../../utils/pickup-checkout-state')
 var tableware = require('../../utils/tableware')
 var app = getApp()
 
-function getHeadNotice(quote) {
+// scheduleAvailable 第二参（2026-09-21 §5.2）：打烊但预约开着时不再阻塞，
+// 改成软提示「本单为预约配送」；预约关着才走老的阻塞文案。
+function getHeadNotice(quote, scheduleAvailable) {
   if (!quote) return { text: '', blocking: false }
   if (!quote.enabled) return { text: '同城配送暂未开通', blocking: true }
   if (quote.paused) return { text: '暂停接单' + (quote.paused.reason ? '：' + quote.paused.reason : ''), blocking: true }
-  if (!quote.isOpen) return { text: quote.nextOpenText || '当前非营业时间', blocking: true }
+  if (!quote.isOpen) {
+    if (scheduleAvailable) {
+      var nextOpen = quote.nextOpenText
+      return { text: '本单为预约配送' + (nextOpen ? '，' + nextOpen : ''), blocking: false }
+    }
+    return { text: quote.nextOpenText || '当前非营业时间', blocking: true }
+  }
   return { text: '', blocking: false }
+}
+
+// text 带具体日期「明天 9月23日 12:00–12:30」，与自取页 pickup.js 的 decorateSlot 同一份实现
+// （不改 utils/pickup-checkout-state.js 抽公共函数——那是禁止修改清单里的文件，只读用）。
+function decorateSlot(slot, day) {
+  if (!slot) return null
+  var dateText = day.monthDay ? ' ' + day.monthDay : ''
+  return { startAt: slot.startAt, endAt: slot.endAt, label: slot.label, dayLabel: day.label, text: day.label + dateText + ' ' + slot.label }
 }
 
 // 北京时间（utils/time.js）。原来用 getHours()：按运行设备时区解读，
@@ -104,6 +124,19 @@ Page({
     feeFlash: false,
     subscribeTemplateIds: [],
     payTimeoutMin: 15,
+    // ── 预约送达（2026-09-21 §5.2）。scheduleMode 默认 ASAP：营业中不改动老流程一个字节；
+    // 打烊时 refreshQuote 的成功分支会把它自动切到 SCHEDULED（S8）。
+    scheduleMode: 'ASAP',
+    scheduleAvailable: false,
+    closedNow: false,
+    slotDays: [],
+    slotActiveDay: 0,
+    slotSelected: null,   // { startAt, endAt, label, dayLabel, text }
+    slotStale: false,
+    slotsLoading: false,
+    slotsError: '',
+    hasAnySlot: false,
+    pickerOpen: false,
   },
 
   onLoad: function(options) {
@@ -141,6 +174,12 @@ Page({
       // 前先刷一次 meta，让 self._metaNotice 跟上最新状态。
       this.loadMeta()
       this.reloadAddressAndQuote()
+      // 预约模式下回到本页：独立重拉一次时段（不等 reloadAddressAndQuote 里那趟报价
+      // 请求回来才拉）。已选的格子不在最新列表里，loadSlots 会把它标 stale，而不是
+      // 悄悄清掉——顾客离开这一刻是自己选好了的，不该被无声撤销。
+      if (this.data.scheduleMode === 'SCHEDULED' && this.data.quote) {
+        this.loadSlots(this.data.quote.distanceM, false)
+      }
     }
   },
 
@@ -184,10 +223,28 @@ Page({
       // refreshQuote 的三个早退分支（缺地址/缺坐标/购物车为空）会读它兜底；报价成功
       // 之后头条一律以报价结果为准（见下面 refreshQuote 的 .then），不会被这里写死——
       // 否则店铺恢复营业/报价成功后，这条提示会一直钉在顶部，直到离开本页才消失。
-      var notice = getHeadNotice(meta)
+      var scheduleAvailable = !!(meta && meta.delivery && meta.delivery.scheduleEnabled)
+      var notice = getHeadNotice(meta, scheduleAvailable)
       self._metaNotice = notice
       self.setData({ meta: meta })
       self.recomputePackingFee()
+      // loadMeta 与 refreshQuote 是两路独立异步请求，谁先回来不定。报价若先回来，
+      // 那一刻 self.data.scheduleAvailable 还是初值 false——quote.isOpen=false 时
+      // refreshQuote 会先把它判成老的阻塞（blockReason）。等 meta 后到、发现预约其实
+      // 开着，要在这里补一次纠正：退出阻塞、切到预约模式并按当前报价距离拉时段
+      // （自动预选最早格，S8），否则顾客会一直卡在「暂不可配送」，直到下一次重新报价。
+      if (self.data.closedNow && scheduleAvailable && !self.data.scheduleAvailable && self.data.quote) {
+        // quoteToken 在报价先回来那一刻被（当时判定为阻塞的）分支清空了——它本身还在
+        // self.data.quote.quoteToken 里（decorateQuote 用 Object.assign 保留了原始字段，
+        // 清空的只是顶层 data.quoteToken），这里原样取回，不重新报价。
+        self.setData({
+          scheduleAvailable: true, scheduleMode: 'SCHEDULED', blockReason: '',
+          quoteToken: self.data.quote.quoteToken,
+        })
+        self.syncPayAmount()
+        self.syncAction()
+        self.loadSlots(self.data.quote.distanceM, true)
+      }
     }).catch(function() {
       // 报价结果才是确认页的最终状态；meta 仅为报价前的店头信息兜底，拉取失败不影响主流程。
     })
@@ -247,7 +304,12 @@ Page({
       .then(function(rawQuote) {
         if (seq !== self._quoteSeq) return
         var quote = decorateQuote(rawQuote)
-        var notice = getHeadNotice(quote)
+        // 预约是否开着只由 meta 决定，报价响应里没有这个字段（服务端契约速查）。
+        // loadMeta 与本次报价是两路独立异步，meta 还没拉到时按 false 算——这一刻若
+        // 恰好打烊，会先走老的阻塞分支；meta 后到时 loadMeta 的 .then 里有一次纠正
+        // （见该函数注释），不在这里等 meta。
+        var scheduleAvailable = !!(self.data.meta && self.data.meta.delivery && self.data.meta.delivery.scheduleEnabled)
+        var notice = getHeadNotice(quote, scheduleAvailable)
         // 报价成功即拿到了最新状态，头条一律以这次报价结果为准——不再让 loadMeta
         // 记下的旧结论（self._metaNotice）盖过它。之前反过来「meta 阻塞就优先」会把
         // 头条粘死：店铺恢复营业/报价成功、按钮已能提交，顶部仍钉着「暂停接单」，
@@ -266,6 +328,13 @@ Page({
           headNotice: notice.text,
           headBlocking: notice.blocking,
           quoteError: '',
+          // closedNow / scheduleAvailable 是「此刻的真实状态」，不论下面这轮报价最终判成
+          // 阻塞还是放行都要写——**不能只放进成功分支**：loadMeta 的竞态纠正（该函数注释）
+          // 靠 self.data.closedNow 判断「现在是不是打烊」，报价一旦落进阻塞分支（比如
+          // meta 还没到、scheduleAvailable 当时算出 false）这两个字段就会一直停在初值，
+          // 纠正条件永远不成立，顾客只能等下一次重新报价才能脱困。
+          closedNow: !quote.isOpen,
+          scheduleAvailable: scheduleAvailable,
         }
         // 服务端的状态结论优先级：未开通/暂停 > 打烊 > 超范围 > 未达起送。
         // m5: blockReason 生效时不保留可支付合计，避免底部展示收不到的金额。
@@ -277,7 +346,7 @@ Page({
           patch.blockReason = '暂停接单' + (quote.paused.reason ? '：' + quote.paused.reason : '')
           patch.quoteToken = null
           patch.payAmount = null
-        } else if (!quote.isOpen) {
+        } else if (!quote.isOpen && !scheduleAvailable) {
           patch.blockReason = quote.nextOpenText || '当前非营业时间'
           patch.quoteToken = null
           patch.payAmount = null
@@ -299,12 +368,21 @@ Page({
           // payAmount 交给 syncPayAmount 统一算（见下面 setData 之后那一行）——
           // 它读 this.data.quote，所以必须等 patch（含 quote/quoteToken/blockReason）
           // 真正落到 this.data 之后再调用。
+          // 打烊只能预约：自动切到预约并预选最早格（S8）；营业中保持顾客当前的选择
+          // （不强行改回 ASAP——顾客可能在营业中主动选了预约时段）。
+          if (!quote.isOpen) patch.scheduleMode = 'SCHEDULED'
         }
         // m1: 报价成功后复位，后续 42901 仍可自动重试一次
         self._retriedRateLimit = false
         self.setData(patch)
         self.syncPayAmount()
         self.syncAction()
+        // 报价一变（新的 distanceM）就该重拉时段：无论是刚自动切到预约，还是顾客
+        // 早就在预约模式（营业中主动选的）。第二参是否自动预选最早格，只在打烊强制
+        // 预约（S8）时才是 true——营业中顾客自己进预约模式不代为决定选哪一格。
+        if ((patch.scheduleMode === 'SCHEDULED' || self.data.scheduleMode === 'SCHEDULED') && quote.distanceM != null) {
+          self.loadSlots(quote.distanceM, !quote.isOpen)
+        }
       })
       .catch(function(err) {
         if (seq !== self._quoteSeq) return
@@ -344,11 +422,20 @@ Page({
    */
   invalidateCheckout: function(reason) {
     this._quoteSeq = (this._quoteSeq || 0) + 1
+    // 同一时刻也让在途的旧 loadSlots 响应作废（与 _quoteSeq 同一套理由）：不这样做的话，
+    // 换地址前发出的那次时段请求晚到时会看到 slotSelected 已被这里清空，把它当「未选」
+    // 处理，按 autoPick/回退逻辑重新选中一格——等于悄悄撤销了本该发生的清空。
+    this._slotSeq = (this._slotSeq || 0) + 1
     if (this._quoteTimer) {
       clearTimeout(this._quoteTimer)
       this._quoteTimer = null
     }
-    this.setData({ quoting: true, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null })
+    // 预约送达（2026-09-21 §5.2）：任何让 quoteToken 失效的操作，已选时段也同时失效——
+    // 换地址/改数量后旧时段对应的路上时间（distanceM）已经不对了。
+    this.setData({
+      quoting: true, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null,
+      slotSelected: null, slotStale: false,
+    })
     this.syncAction()
   },
 
@@ -372,6 +459,82 @@ Page({
   },
 
   /**
+   * 预约送达时段拉取（2026-09-21 §5.2）。时段依赖报价距离，只在报价成功后按
+   * quote.distanceM 拉；换地址/改数量会先 invalidateCheckout 把已选格清掉，
+   * 下一次报价成功再重新拉一轮。
+   *
+   * @param {number} distanceM 报价给出的路上距离
+   * @param {boolean} autoPick 打烊强制预约（S8）时为 true：自动预选最早一格；
+   *                            顾客在营业中自己切到预约模式时为 false，停在未选
+   */
+  loadSlots: function(distanceM, autoPick) {
+    var self = this
+    var seq = (this._slotSeq = (this._slotSeq || 0) + 1)
+    this.setData({ slotsLoading: true, slotsError: '' })
+    getDeliverySlots(distanceM).then(function(view) {
+      if (seq !== self._slotSeq) return
+      var days = (view.days || []).map(function(d) {
+        var dt = st.pickupDateText(d.date)
+        return { date: d.date, label: d.label, monthDay: dt.monthDay, dateText: dt.monthDay + ' ' + dt.weekday, slots: d.slots || [], empty: !(d.slots && d.slots.length) }
+      })
+      var hasAny = days.some(function(d) { return !d.empty })
+      var patch = { slotDays: days, slotsLoading: false, hasAnySlot: hasAny }
+      if (view.blocked) {
+        // 预约这一刻不可用（服务端刚关了/休业/暂停）：清已选、不判 stale（没有「新列表」可比对）
+        patch.slotSelected = null
+        patch.slotStale = false
+        patch.scheduleAvailable = false
+        // 打烊时退回老的阻塞文案——预约这条路也堵了，同城这会儿是真的下不了单
+        if (self.data.closedNow) patch.blockReason = view.blocked.text || (self.data.quote && self.data.quote.nextOpenText) || '当前非营业时间'
+      } else if (self.data.slotSelected) {
+        // 已有选择就只判它还在不在，不覆盖——别盖掉顾客在请求在途时刚点的格
+        patch.slotStale = !st.slotOffered(view, self.data.slotSelected.startAt)
+      } else if (autoPick) {
+        var first = st.firstSlot(view)
+        if (first) { patch.slotSelected = decorateSlot(first.slot, days[first.dayIndex]); patch.slotActiveDay = first.dayIndex }
+      } else {
+        var f = st.firstSlot(view)
+        patch.slotActiveDay = f ? f.dayIndex : 0
+      }
+      self.setData(patch)
+      self.syncAction()
+    }).catch(function(err) {
+      if (seq !== self._slotSeq) return
+      self.setData({ slotsLoading: false, slotsError: (err && err.message) || '时段获取失败', hasAnySlot: false })
+      self.syncAction()
+    })
+  },
+
+  // ── 预约模式切换与时段弹层（2026-09-21 §5.2） ──────────────────────
+  pickMode: function(e) {
+    var mode = e.currentTarget.dataset.mode
+    if (mode === 'ASAP' && this.data.closedNow) return   // 打烊时「尽快送达」置灰，点不动
+    if (mode === this.data.scheduleMode) return
+    this.setData({ scheduleMode: mode })
+    if (mode === 'SCHEDULED' && this.data.quote && this.data.quote.distanceM != null) this.loadSlots(this.data.quote.distanceM, false)
+    if (mode === 'SCHEDULED') this.openPicker()
+    this.syncAction()
+  },
+  openPicker: function() {
+    if (this.data.hasAnySlot) this.setData({ pickerOpen: true })
+  },
+  closePicker: function() {
+    this.setData({ pickerOpen: false })
+  },
+  onSlotDay: function(e) {
+    this.setData({ slotActiveDay: e.detail.idx })
+  },
+  onSlotPick: function(e) {
+    var day = this.data.slotDays[this.data.slotActiveDay]
+    var slot = day && day.slots[e.detail.idx]
+    if (!slot) return
+    this.setData({ slotSelected: decorateSlot(slot, day), slotStale: false, pickerOpen: false })
+    // 换了时段就是另一张单：超时重试的幂等只该在同一时段内成立（与自取页 selectSlot 同一条理由）
+    this._clientRequestId = newClientRequestId()
+    this.syncAction()
+  },
+
+  /**
    * 底部按钮的状态只由 checkoutAction 决定，页面不再各处拼三元表达式。
    * 每一处改变 quoting / quoteToken / blockReason / payAmount / submitting 的地方
    * 都要跟着调一次——漏调的表现是「文案变了按钮还能点」这种半吊子状态。
@@ -391,6 +554,11 @@ Page({
         quoteExpiresAt: d.quoteExpiresAtMs,
         payAmount: d.payAmount,
         hasTableware: !!d.tableware,
+        scheduleMode: d.scheduleMode,
+        scheduleAvailable: d.scheduleAvailable,
+        closedNow: d.closedNow,
+        hasSlot: !!d.slotSelected,
+        slotStale: d.slotStale,
       }),
     })
   },
@@ -603,6 +771,12 @@ Page({
       this.refreshQuote('retry')
       return
     }
+    // 预约送达：未选格 / 格已失效都是这个 action——两种情形都该打开时段选择器，
+    // 而不是提交（与「未选餐具」同一套处理，页面必须按 action 分派）
+    if (act.action === 'slot') {
+      this.openPicker()
+      return
+    }
     if (act.disabled || act.action !== 'submit') {
       // 过期那一格会走到这里（action=none 且文案是「正在计算运费」）：顺手触发重算，
       // 顾客不必自己找哪里能重试。
@@ -618,6 +792,9 @@ Page({
 
   doSubmit: function() {
     if (this.data.submitting || !this.data.quoteToken || !this.data.address || !this.data.tableware) return
+    // 预约模式：没选格 / 格已失效都不能提交——action 已经把按钮变成 slot 挡住了大多数
+    // 路径，这里是双保险（例如按钮判定与提交之间的极短窗口里时段被判成 stale）。
+    if (this.data.scheduleMode === 'SCHEDULED' && (!this.data.slotSelected || this.data.slotStale)) return
     this.setData({ submitting: true })
     this.syncAction()
     var self = this
@@ -631,6 +808,9 @@ Page({
       // 没选券/没加赠品时是 undefined，不会被序列化——请求体与改前一致
       couponId: this.data.couponId || undefined,
       gifts: this.data.gifts && this.data.gifts.length ? this.data.gifts : undefined,
+      // 预约单才带 scheduledAt（服务端 §4.4：传了即预约单，deliveryType 非 LOCAL 时传了报 40001，
+      // 本页只有 LOCAL 一条路径不涉及）；尽快单不传，undefined 不会被序列化，请求体与改前一致。
+      scheduledAt: (this.data.scheduleMode === 'SCHEDULED' && this.data.slotSelected) ? this.data.slotSelected.startAt : undefined,
       // 幂等键。**失败时故意不换**：网络超时这一类失败，服务端很可能已经把单建好了，
       // 只是响应没回来。顾客再按一次时带着同一个 id，服务端把那张单原样还回来，
       // 而不是再建一张。换新 id 等于没有幂等。
@@ -711,6 +891,23 @@ Page({
     // 顾客据此知道要加多少，比一句「无法下单 → 返回菜单」明确。
     if (code === 42210) {
       wx.showToast({ title: err.message || '未达起送金额', icon: 'none', duration: 2500 })
+      this.refreshQuote('retry')
+      return
+    }
+    // 42291 送达时段不可选：下单这一刻服务端重判发现格子刚过期/被关了。标 stale（按钮
+    // 变「时段已过，请重选」）、重拉时段——与自取页 42281 同一套处理。
+    if (code === 42291) {
+      wx.showToast({ title: err.message || '该时段已不可选，请重新选择', icon: 'none', duration: 2500 })
+      this.setData({ slotStale: true })
+      this.syncAction()
+      if (this.data.quote) this.loadSlots(this.data.quote.distanceM, false)
+      return
+    }
+    // 42290 预约配送未开通：店主在顾客填单这段时间关了预约开关。退回尽快模式；
+    // 若此刻恰好打烊，重新报价会让服务端把它判成老的阻塞（blockReason），走既有路径。
+    if (code === 42290) {
+      this.setData({ scheduleAvailable: false, scheduleMode: 'ASAP', slotSelected: null })
+      wx.showToast({ title: err.message || '预约配送暂未开通', icon: 'none', duration: 2500 })
       this.refreshQuote('retry')
       return
     }
