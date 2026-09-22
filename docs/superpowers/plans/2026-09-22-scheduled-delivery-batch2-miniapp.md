@@ -58,6 +58,7 @@ apps/miniapp/pages/local/confirm.*
 apps/miniapp/pages/local/pickup.wxml
 apps/miniapp/pages/local/pickup.wxss
 apps/miniapp/pages/local/pickup.json
+apps/miniapp/pages/local/pickup.js        （只允许改 selectDay/selectSlot 两处读 idx 的表达式：e.detail.idx 优先、缺则读 e.currentTarget.dataset.idx；其它改动须上报）
 apps/miniapp/pages/local/index.wxml
 apps/miniapp/pages/product/list.wxml
 apps/miniapp/pages/order/detail.*
@@ -77,7 +78,6 @@ apps/server/**
 apps/admin/**
 apps/miniapp/utils/channel.js
 apps/miniapp/utils/pickup-checkout-state.js
-apps/miniapp/pages/local/pickup.js
 apps/miniapp/pages/local/index.js
 apps/miniapp/pages/order/confirm.*
 apps/miniapp/utils/checkout-pay.js
@@ -86,13 +86,12 @@ apps/miniapp/config/**
 scripts/e2e.sh
 scripts/e2e.d/**
 ```
-（`pickup.js` 禁改：弹层抽组件只动 wxml/wxss/json，页面脚本的 `selectDay/selectSlot/closePicker/openPicker` 通过组件事件原样触发，行为锁 `pickup-page.test.cjs` 必须不改仍绿。若发现必须改 `pickup.js`，停下上报。）
+（`pickup.js` 只开放两处读 `idx` 的表达式：组件事件的 `idx` 在 `e.detail` 里，而页面原来读 `e.currentTarget.dataset.idx`；改成「`e.detail.idx` 优先、缺则读旧位置」两行即可，语义不变，行为锁 `pickup-page.test.cjs` 必须不改仍绿。）
 
 ### 上报条件
-- 需要改授权范围外的文件（尤其 `pickup.js`、`channel.js`、`pickup-checkout-state.js`、任何服务端文件）
+- 需要改授权范围外的文件（尤其 `channel.js`、`pickup-checkout-state.js`、任何服务端文件），或 `pickup.js` 里除那两处 idx 读取之外的任何改动
 - 发现服务端契约与附录 M 不符（例如 `quote` 不带 `isOpen`、`delivery-slots` 结构与 `pickup-slots` 不同、详情没有 `schedule` 节）
 - `tests/miniapp/pickup-page.test.cjs` 任一用例由绿转红
-- 抽组件后自取页需要改 `pickup.js` 才能保持行为
 - 结算页出现「按钮可点但 `quoteToken` 为空」或「`scheduledAt` 与所选格不一致」的路径
 
 ### 待用户决定
@@ -303,8 +302,11 @@ Component({
 <slot-picker show="{{pickerOpen}}" title="选择取餐时间" days="{{days}}" active-day="{{activeDay}}" selected-start-at="{{selected ? selected.startAt : ''}}"
   bind:daychange="selectDay" bind:select="selectSlot" bind:close="closePicker" />
 ```
-⚠ `pickup.js` 的 `selectDay(e)` 读 `e.currentTarget.dataset.idx`，组件事件里没有 `currentTarget.dataset`。**不能改 `pickup.js`**，所以组件抛事件时把 `idx` 同时放进 `detail` 与一个假的 `currentTarget.dataset`：在 `onDay/onSlot` 里 `this.triggerEvent('daychange', { idx: idx }, {})` 之后无法伪造 `currentTarget`——改为在 wxml 里给组件事件的宿主元素带 `data-idx`：不可行（事件对象由框架生成）。**正确做法**：组件的 `onDay/onSlot` 用 `this.triggerEvent('daychange', { idx: idx })`，而自取页 wxml 用一个极薄的中转：在 `pickup.wxml` 里不直接绑 `selectDay`，而是绑到组件事件后由页面……这仍要改 `pickup.js`。
-   → **裁定**：`pickup.js` 的 `selectDay/selectSlot` 改成同时兼容两种入口（`e.detail.idx` 优先，缺则读 `e.currentTarget.dataset.idx`），这是两行、语义不变、行为锁仍绿。为此把 `apps/miniapp/pages/local/pickup.js` **加入授权范围**，限定只能改这两处读取 `idx` 的表达式；其它任何改动仍须上报。（执行者：把这条写进报告的「偏离方案」。）
+`pickup.js` 只改两处（授权范围已限定）：`selectDay` 与 `selectSlot` 里读下标的表达式改为
+```js
+var idx = Number((e.detail && e.detail.idx != null) ? e.detail.idx : (e.currentTarget && e.currentTarget.dataset.idx))
+```
+（`selectDay` 原来 `|| 0` 兜底保留）。其余函数、`data`、`loadSlots`、`recompute` 一字不动。
 
 - [ ] **Step 3: 跑 `npm run test:miniapp`（`pickup-page.test.cjs` 必须仍绿）；预览工具打开自取页看弹层；提交**
 ```bash
