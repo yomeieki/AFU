@@ -237,10 +237,18 @@ R=$(sched '{"pickupUnpickedMin":30,"pickupAutoCompleteMin":30}')
 [[ "$(jq -r '.data.pickupAutoComplete // -1' <<<"$R")" -ge 1 ]] && ok "自动完成 ≥1" || fail "未自动完成" "$R"
 assert_eq "O5 → COMPLETED" "$(p62_ord "$P62_O5" | jq -r .data.status)" "COMPLETED"
 # 自动驳回任务：造一张 PREPARING 且申请取消、接单已超 10 分钟的自取单，跑一轮，申请必须还在
+# cancelWindowOf 的 PICKUP 分支只在 now>=pickupAt−selfCancelLeadMin（默认 120 分钟）才放行「申请取消」，
+# 而下单用的 $P62_TOMORROW（明天首格）通常在 20 多小时之后，远超该窗口——若不钉时钟，申请本身会被
+# 42229 拒绝、cancel_requested_at 压根没写上，下面的断言就变成「没申请所以没被驳回」的伪绿，且只有
+# 真实时刻恰好落在「明天首格前两小时内」才会偶然通过。这里先钉 pickup_at 到 90 分钟后（在 120 分钟
+# 窗口内），让申请真能被接受，再钉 accepted_at 触发自动驳回任务的候选范围。
 R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":1},\"deliveryType\":\"PICKUP\",\"pickupAt\":\"$P62_TOMORROW\",\"pickupContact\":{\"phone\":\"13800003333\"}}")
 P62_O6=$(jq -r .data.orderId <<<"$R"); req POST "/api/orders/$P62_O6/pay" "$UT" >/dev/null
 req POST "/api/admin/orders/$P62_O6/accept" "$AT" >/dev/null
-req POST "/api/orders/$P62_O6/cancel-request" "$UT" '{"note":"不要了"}' >/dev/null
+sql "UPDATE orders SET pickup_at=DATE_ADD(NOW(3), INTERVAL 90 MINUTE) WHERE id=$P62_O6;"
+R=$(req POST "/api/orders/$P62_O6/cancel-request" "$UT" '{"note":"不要了"}')
+assert_eq "钉进窗口后：申请取消本身先成立 code 0" "$(code "$R")" "0"
+assert_eq "申请取消已落库" "$(sql "SELECT cancel_requested_at IS NOT NULL FROM orders WHERE id=$P62_O6;")" "1"
 sql "UPDATE orders SET accepted_at=DATE_SUB(NOW(3), INTERVAL 10 MINUTE) WHERE id=$P62_O6;"
 sched '{"cancelAutoRejectMin":1}' >/dev/null
 assert_eq "自取单的取消申请不被自动驳回" "$(sql "SELECT cancel_requested_at IS NOT NULL FROM orders WHERE id=$P62_O6;")" "1"
