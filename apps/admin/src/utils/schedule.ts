@@ -64,6 +64,17 @@ export function scheduleFoldable(card: WorkbenchCard): boolean {
   return !!sc && sc.phase === 'WAITING' && !card.local?.cancelRequested
 }
 
+/**
+ * 给「配按钮」用的列键：折叠组渲染成 colKey='pending'，但预约单接单后（PREPARING）
+ * 在出票前仍然待在折叠组里——按钮必须按订单状态走（spec §6.1：PAID「接单」、PREPARING
+ * 「已备好/立即呼叫/自己送」），不能沿用展示列，否则店员看到的是已接单单子上的「接单」键。
+ * 其余情况（未接单的预约单、非折叠组的普通卡）原样返回 colKey。
+ */
+export function actionColKey(colKey: ScheduleColKey, card: WorkbenchCard): ScheduleColKey {
+  if (colKey === 'pending' && card.local?.schedule && card.status === 'PREPARING') return 'preparing'
+  return colKey
+}
+
 /** 顶部常驻倒计时条文案 */
 export function scheduleBarText(bar: { prepStartAt: string; slotLabel: string; count: number }, now: number): string {
   const left = minLeft(bar.prepStartAt, now)

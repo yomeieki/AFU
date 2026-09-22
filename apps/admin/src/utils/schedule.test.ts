@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn } from './schedule.ts'
+import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn, actionColKey } from './schedule.ts'
 import type { ScheduleInfo, WorkbenchCard, WorkbenchSnapshot } from '../types'
 
 // 2026-09-22 12:00 Asia/Shanghai = 04:00Z
@@ -60,4 +60,19 @@ test('现在呼叫预计送达 / 呼叫窗口判定 / 字段行', () => {
   assert.equal(isBeforeCallWindow(sc, NOON - min(30)), true)    // callAt 11:36 − 5 = 11:31，11:30 仍早
   assert.equal(isBeforeCallWindow(sc, NOON - min(29)), false)
   assert.equal(scheduleFieldsLine(sc), '今天 12:00–12:30 送达 · 11:16 开始备餐 · 11:36 呼叫')
+})
+test('actionColKey：折叠组里已接单的预约卡配按钮要按 preparing 走，其余原样返回 colKey（spec §6.1 按钮按订单状态，不按展示列）', () => {
+  const card = (status: string, hasSchedule: boolean) =>
+    ({ status, local: hasSchedule ? { schedule: base('WAITING') } : null } as unknown as WorkbenchCard)
+  // pending + 有预约 + 已接单（PREPARING）→ 映射到 preparing
+  assert.equal(actionColKey('pending', card('PREPARING', true)), 'preparing')
+  // pending + 有预约 + 未接单（PAID）→ 原样 pending
+  assert.equal(actionColKey('pending', card('PAID', true)), 'pending')
+  // pending + 无预约 + PREPARING → 原样 pending（不是预约单，折叠规则不适用）
+  assert.equal(actionColKey('pending', card('PREPARING', false)), 'pending')
+  // 其他 colKey 原样返回，不受 status/schedule 影响
+  assert.equal(actionColKey('preparing', card('PREPARING', true)), 'preparing')
+  assert.equal(actionColKey('waitingCourier', card('PREPARING', true)), 'waitingCourier')
+  assert.equal(actionColKey('delivering', card('PAID', false)), 'delivering')
+  assert.equal(actionColKey('done', card('PREPARING', true)), 'done')
 })

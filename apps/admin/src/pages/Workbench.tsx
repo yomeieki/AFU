@@ -18,6 +18,7 @@ import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor 
 import { tablewareLabel } from '../utils/tableware'
 import {
   scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn,
+  actionColKey,
 } from '../utils/schedule'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
@@ -1731,6 +1732,9 @@ export default function Workbench() {
     const { card, colKey } = drawer
     const { order, delivery } = detail
     const ch = card.channel
+    // 折叠组里已接单（PREPARING）的预约单渲染列仍是 colKey='pending'，按钮必须按订单状态走
+    // （spec §6.1），不能沿用展示列——下面配按钮全部用 aColKey，colKey 本身不改（找卡/换列仍用它）
+    const aColKey = actionColKey(colKey, card)
     const active = delivery && delivery.activeOrderId === order.id && !TERMINAL_DELIVERY.includes(delivery.status)
       ? delivery : null
     const confirm = (spec: ConfirmSpec) => setModal({ kind: 'confirm', spec })
@@ -1839,7 +1843,7 @@ export default function Workbench() {
     if (ch === 'PICKUP') {
       const pk = card.pickup
       const cancelPending = !!pk?.cancelRequested
-      if (colKey === 'pending') {
+      if (aColKey === 'pending') {
         btns.push(fill('accept', '接单', () => confirm({
           title: '接单', channel: ch, confirmText: '确认接单', okMsg: '已接单',
           what: `订单转入「备餐中」。${pk?.prepStartAt ? `建议 ${hhmm(pk.prepStartAt)} 开始备餐，` : ''}做好后点「已备好」通知顾客来取。`,
@@ -1848,7 +1852,7 @@ export default function Workbench() {
           run: () => acceptOrder(order.id),
         })))
       }
-      if (colKey === 'preparing') {
+      if (aColKey === 'preparing') {
         btns.push(fill('ready', '已备好', () => confirm({
           title: '已备好', channel: ch, confirmText: '确认已备好', okMsg: '已通知顾客取餐',
           what: '订单转「待取餐」，给顾客发取餐提醒。',
@@ -1871,7 +1875,7 @@ export default function Workbench() {
       return btns
     }
 
-    if (colKey === 'pending') {
+    if (aColKey === 'pending') {
       // 预约单接单文案倒推三个时刻（spec §4.5 表 S3）：ch 只可能是 LOCAL——预约只对同城开放
       const scPending = card.local?.schedule
       btns.push(fill('accept', '接单', () => confirm({
@@ -1893,7 +1897,7 @@ export default function Workbench() {
       }
     }
 
-    if (colKey === 'preparing') {
+    if (aColKey === 'preparing') {
       if (ch === 'LOCAL') {
         if (active?.status === 'UNKNOWN') {
           btns.push(fill('void-recall', '作废重呼', () => confirm(voidRecallSpec)))
