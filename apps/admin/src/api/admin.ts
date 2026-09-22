@@ -185,8 +185,10 @@ export const getPendingOrderCount = () =>
       count: number
       latestPaidAt: string | null
       refundingCount: number
-      /** 「退款待处理」角标，口径与 ?status=REFUND_ATTENTION 一致 */
+      /** 「退款待处理」全渠道数（侧栏「订单管理」角标），口径与 ?status=REFUND_ATTENTION 一致 */
       refundAttentionCount: number
+      /** 同口径按渠道拆：邮寄页 / 同城页各自的页签角标（LOCAL 含自取） */
+      refundAttentionByChannel: { EXPRESS: number; LOCAL: number }
       lowStockCount: number
       lowStockThreshold: number
       afterSaleCount: number

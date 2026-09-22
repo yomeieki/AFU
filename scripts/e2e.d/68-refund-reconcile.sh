@@ -29,8 +29,10 @@ rr68_q() { req POST /api/admin/system/pay-mock/refund-query "$AT" "{\"outRefundN
 rr68_calls() { req GET "/api/admin/system/pay-mock/calls?op=queryRefund" "$AT" | jq '.data | length'; }
 # rr68_attn <orderId> —— 该单是否在「退款待处理」列表里（伪状态 REFUND_ATTENTION，全渠道），输出 1/0
 rr68_attn() { req GET "/api/admin/orders?status=REFUND_ATTENTION&deliveryType=ALL&pageSize=50" "$AT" | jq --argjson id "$1" '[.data.list[].id] | index($id) != null | if . then 1 else 0 end'; }
-# rr68_attn_count —— pending-count 里的 refundAttentionCount
+# rr68_attn_count —— pending-count 里的 refundAttentionCount（全渠道）
 rr68_attn_count() { req GET /api/admin/orders/pending-count "$AT" | jq -r .data.refundAttentionCount; }
+# rr68_attn_ch <EXPRESS|LOCAL> —— pending-count 里按渠道拆的角标数
+rr68_attn_ch() { req GET /api/admin/orders/pending-count "$AT" | jq -r ".data.refundAttentionByChannel.$1"; }
 # RR68_sched —— 三个阈值全传 0（立刻命中），断言响应带 refundReconcile 键
 rr68_sched() {
   local r v
@@ -52,6 +54,7 @@ assert_eq "68.1 订单仍 REFUNDING" "$(order_status $RR68_O1)" "REFUNDING"
 # 「退款待处理」等价性（R3）：退款还在微信走（PROCESSING）→ 不算要人出手；关闭后 → 算
 assert_eq "68.1 PROCESSING 中不进「退款待处理」" "$(rr68_attn $RR68_O1)" "0"
 RR68_ATTN_BEFORE=$(rr68_attn_count)
+RR68_ATTN_EX_BEFORE=$(rr68_attn_ch EXPRESS); RR68_ATTN_LO_BEFORE=$(rr68_attn_ch LOCAL)
 assert_eq "68.1 并列传 REFUNDING,REFUND_ATTENTION → 40001" "$(code "$(req GET "/api/admin/orders?status=REFUNDING,REFUND_ATTENTION" "$AT")")" "40001"
 # 本用例故意让这笔一直停在 PROCESSING（验证「无指令」的安全默认），但 rr68_sched 每次都会
 # 扫全表（intervalMin 恒传 0）——留着不关，后面用例里任何一次 rr68_sched 都会把它也捎带查一遍，
@@ -59,6 +62,9 @@ assert_eq "68.1 并列传 REFUNDING,REFUND_ATTENTION → 40001" "$(code "$(req G
 sql "UPDATE refunds SET status='CLOSED', active_order_id=NULL WHERE out_refund_no='$RR68_RN1';"
 assert_eq "68.1 退款 CLOSED 后进「退款待处理」" "$(rr68_attn $RR68_O1)" "1"
 assert_eq "68.1 pending-count.refundAttentionCount 同口径 +1" "$((RR68_ATTN_BEFORE+1))" "$(rr68_attn_count)"
+# 页签角标按渠道拆（复核 R9）：make_paid_order 造的是邮寄单 → EXPRESS +1、LOCAL 不动
+assert_eq "68.1 refundAttentionByChannel.EXPRESS +1" "$((RR68_ATTN_EX_BEFORE+1))" "$(rr68_attn_ch EXPRESS)"
+assert_eq "68.1 refundAttentionByChannel.LOCAL 不变" "$RR68_ATTN_LO_BEFORE" "$(rr68_attn_ch LOCAL)"
 # 没有任何退款记录的 REFUNDING 单（取消后迟到付款、自动退款发起前抛错的形态）也要进
 RR68_O1N=$(make_paid_order)
 sql "UPDATE orders SET status='REFUNDING', cancelled_at=NOW(3), cancel_reason='e2e68 无退款记录' WHERE id=$RR68_O1N;"
@@ -150,6 +156,16 @@ rr68_sched
 assert_eq "68.7 PENDING 查无 → FAILED" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RR68_RN7';")" "FAILED"
 assert_eq "68.7 error_code=RECONCILE_NOT_FOUND" "$(sql "SELECT error_code FROM refunds WHERE out_refund_no='$RR68_RN7';")" "RECONCILE_NOT_FOUND"
 assert_eq "68.7 active_order_id NULL" "$(sql "SELECT active_order_id IS NULL FROM refunds WHERE out_refund_no='$RR68_RN7';")" "1"
+assert_eq "68.7 REFUNDING + FAILED 进「退款待处理」" "$(rr68_attn $RR68_O7)" "1"
+# 反向（复核 R11）：订单仍 PAID（部分退款）且退款 FAILED → 不进——锁住 where 的 status='REFUNDING' 半边
+RR68_O7C_TMP=$(rr68_stuck partial PENDING)
+IFS=$'\t' read -r RR68_O7C RR68_RN7C <<<"$RR68_O7C_TMP"
+[[ -n "$RR68_O7C" ]] && ok "68.7 造单 #$RR68_O7C（PAID 部分退款 PENDING）" || fail "68.7 造单失败"
+rr68_q "$RR68_RN7C" '{"kind":"not_found"}'
+rr68_sched
+assert_eq "68.7 部分退款 PENDING 查无 → FAILED" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RR68_RN7C';")" "FAILED"
+assert_eq "68.7 订单仍 PAID" "$(order_status $RR68_O7C)" "PAID"
+assert_eq "68.7 PAID + FAILED 不进「退款待处理」" "$(rr68_attn $RR68_O7C)" "0"
 
 RR68_O7B_TMP=$(rr68_stuck full PROCESSING)
 IFS=$'\t' read -r RR68_O7B RR68_RN7B <<<"$RR68_O7B_TMP"

@@ -39,9 +39,7 @@ export type ReconcileOutcome =
   | 'CLOSED'
   | 'ABNORMAL'
   | 'FAILED'
-  | 'NOT_FOUND'
   | 'PROCESSING'
-  | 'AMOUNT_MISMATCH'
   | 'QUERY_FAILED'
   | 'SKIPPED'
 

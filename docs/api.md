@@ -998,7 +998,7 @@
 | `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`；2026-09-22 起 `order.latestRefund`，后台据此禁点「同意并退款」） |
 | `POST /api/admin/after-sales/:id/approve` | `{ amount, reply? }` → 发起退款并置 APPROVED（回调成功 → DONE） |
 | `POST /api/admin/after-sales/:id/reject` | `{ reply }` → REJECTED |
-| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount`；2026-09-22 增 `refundAttentionCount`（「退款待处理」角标，口径与 `?status=REFUND_ATTENTION` 同一个 where） |
+| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount`；2026-09-22 增 `refundAttentionCount`（「退款待处理」全渠道数，侧栏角标）与 `refundAttentionByChannel {EXPRESS, LOCAL}`（两个订单页各自的页签角标，LOCAL 含自取），口径与 `?status=REFUND_ATTENTION` 同一个 where |
 | `POST /api/admin/webview-code` | admin token → 一次性 code（2 分钟） |
 | `POST /api/admin/login/webview` | `{ code }` → token（小程序 web-view `/m?code=` 用） |
 | `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖；2026-09-21 起新增 5 个退款补查覆盖键（附录 L） |

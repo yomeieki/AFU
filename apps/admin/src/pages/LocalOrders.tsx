@@ -72,7 +72,8 @@ export default function LocalOrders() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [deliveryCache, setDeliveryCache] = useState<Record<number, { delivery: DeliveryInfo | null; costFen: number }>>({})
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
-  const { refundAttentionCount } = usePendingOrders()
+  const { refundAttentionByChannel } = usePendingOrders()
+  const refundAttentionCount = refundAttentionByChannel.LOCAL
 
   const load = (p = page) => {
     if (dateErr) { setLoading(false); return }
@@ -201,7 +202,7 @@ export default function LocalOrders() {
               }`}
             >
               {t.label}
-              {/* 角标口径与 Tab 筛选同一个服务端 where；数的是全渠道，本页只列同城，所以角标可能比列表多 */}
+              {/* 角标口径与 Tab 筛选同一个服务端 where，且只数同城（含自取）——本页只列同城，角标必须与列表同渠道（复核 R9） */}
               {t.value === REFUND_ATTENTION_FILTER && refundAttentionCount > 0 && (
                 <span className="ml-1 inline-flex min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] items-center justify-center align-middle">
                   {refundAttentionCount}

@@ -68,7 +68,8 @@ export default function Orders() {
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
   const [couponTarget, setCouponTarget] = useState<Order | null>(null)
   const [reprintingId, setReprintingId] = useState<number | null>(null)
-  const { afterSaleCount, refundAttentionCount } = usePendingOrders()
+  const { afterSaleCount, refundAttentionByChannel } = usePendingOrders()
+  const refundAttentionCount = refundAttentionByChannel.EXPRESS
   const modalOpenRef = useRef(false)
   modalOpenRef.current = !!(shipModal || refundTarget)
   // 没有 catch 的话接口一挂就渲染「暂无订单」，店主会当成今天没单。
@@ -320,7 +321,7 @@ export default function Orders() {
                   {afterSaleCount}
                 </span>
               )}
-              {/* 角标口径与 Tab 筛选同一个服务端 where；数的是全渠道，本页只列邮寄，所以角标可能比列表多 */}
+              {/* 角标口径与 Tab 筛选同一个服务端 where，且只数邮寄——本页只列邮寄，角标必须与列表同渠道（复核 R9） */}
               {tab.value === REFUND_ATTENTION_FILTER && refundAttentionCount > 0 && (
                 <span className="ml-1 inline-flex min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] items-center justify-center align-middle">
                   {refundAttentionCount}

@@ -100,7 +100,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     // 一笔退款还在微信那边走（PENDING/PROCESSING）——剩下的都是要人出手的：没有退款记录（取消后
     // 迟到付款、自动退款发起前就抛错）、ABNORMAL（去商户平台处理）、CLOSED/FAILED（后台重试）。
     // 正常退款中的单不在这里：自动补查（services/refund-reconcile.ts）会把它们推到结局，店员不用盯。
-    // 与 admin 端 utils/order-actions.ts 的 refundNeedsHuman 是同一条规则的服务端版本。
+    // 规则只在此处定义一处（REFUND_ATTENTION_WHERE），前端不复刻，等价性由 e2e.d/68 锁住。
     const refundAttention = rawStatus === 'REFUND_ATTENTION'
     const statuses = rawStatus && !refundAttention ? rawStatus.split(',').filter(Boolean) : []
     // 与 channel 的 F16 同口径：伪状态和真状态并列传（如 REFUNDING,REFUND_ATTENTION）直接 400，
@@ -207,7 +207,7 @@ const REFUND_ATTENTION_WHERE: Prisma.OrderWhereInput = {
 // 注意：必须注册在 GET /:id 之前，否则会被 :id 匹配吞掉
 router.get('/pending-count', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const [count, latest, refundingCount, refundAttentionCount, lowStockCount, afterSaleCount, localPendingCount] = await Promise.all([
+    const [count, latest, refundingCount, refundAttentionCount, refundAttentionExpress, refundAttentionLocal, lowStockCount, afterSaleCount, localPendingCount] = await Promise.all([
       // 待处理 = 待接单(PAID) + 备餐中(PREPARING)（邮寄铃铛只数邮寄）
       prisma.order.count({ where: { status: { in: ['PAID', 'PREPARING'] }, deliveryType: 'EXPRESS' } }),
       prisma.order.findFirst({
@@ -218,8 +218,12 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
         select: { paidAt: true, createdAt: true },
       }),
       prisma.order.count({ where: { status: 'REFUNDING' } }),
-      // 「退款待处理」角标：口径与列表 ?status=REFUND_ATTENTION 完全一致（同一个 where 常量）
+      // 「退款待处理」角标：口径与列表 ?status=REFUND_ATTENTION 完全一致（同一个 where 常量）。
+      // 全渠道数给侧栏「订单管理」（前缀覆盖两个子页）；两个订单页各只列一个渠道，页签角标必须
+      // 按渠道拆——否则同城页会挂着红点指向一个空列表（复核 R9）。
       prisma.order.count({ where: REFUND_ATTENTION_WHERE }),
+      prisma.order.count({ where: { ...REFUND_ATTENTION_WHERE, deliveryType: 'EXPRESS' } }),
+      prisma.order.count({ where: { ...REFUND_ATTENTION_WHERE, deliveryType: { in: ['LOCAL', 'PICKUP'] } } }),
       prisma.product.count({
         where: { deletedAt: null, status: 'ON_SHELF', stock: { lte: LOW_STOCK_THRESHOLD } },
       }),
@@ -240,6 +244,7 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       latestPaidAt: latest ? (latest.paidAt ?? latest.createdAt) : null,
       refundingCount,
       refundAttentionCount,
+      refundAttentionByChannel: { EXPRESS: refundAttentionExpress, LOCAL: refundAttentionLocal },
       lowStockCount,
       lowStockThreshold: LOW_STOCK_THRESHOLD,
       afterSaleCount,
