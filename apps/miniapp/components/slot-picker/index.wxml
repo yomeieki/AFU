@@ -1,0 +1,24 @@
+<!-- 时段选择弹层：今天/明天切换 + 时段格子。无状态：谁选中由 selectedStartAt 决定 -->
+<view wx:if="{{show}}" class="sheet-mask" bindtap="onClose">
+  <view class="sheet" catchtap="noop">
+    <view class="sheet-head">
+      <text class="sheet-title">{{title}}</text>
+      <text class="sheet-close" bindtap="onClose">关闭</text>
+    </view>
+    <view class="day-tabs">
+      <view wx:for="{{days}}" wx:key="date" class="day-tab {{activeDay === index ? 'active' : ''}}" bindtap="onDay" data-idx="{{index}}">
+        <text>{{item.label}}</text>
+        <text class="day-date">{{item.dateText}}</text>
+        <text wx:if="{{item.empty}}" class="day-empty">无可取时段</text>
+      </view>
+    </view>
+    <scroll-view scroll-y class="slot-grid-wrap">
+      <view wx:if="{{days[activeDay] && days[activeDay].slots.length}}" class="slot-grid">
+        <view wx:for="{{days[activeDay].slots}}" wx:key="startAt"
+              class="slot-cell {{selectedStartAt === item.startAt ? 'active' : ''}}"
+              bindtap="onSlot" data-idx="{{index}}">{{item.label}}</view>
+      </view>
+      <view wx:else class="slot-grid-empty">这一天已无可取时段</view>
+    </scroll-view>
+  </view>
+</view>
