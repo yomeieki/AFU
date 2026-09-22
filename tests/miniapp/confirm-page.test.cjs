@@ -300,6 +300,46 @@ test('⑦报价先回、meta 后到（打烊竞态）：meta 落地后自动纠�
   assert.equal(page.data.action.text, '预约下单')
 })
 
+test('⑦b 报价先回（打烊竞态）纠正后头条同步改为预约软提示，不再是旧的阻塞文案（R1）', async function () {
+  const { ctx, page } = loadConfirm({
+    holdMeta: true,
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
+  })
+  // meta 还没回来：报价先落地，按老逻辑头条判成阻塞（旧「明天 09:00 营业」+ 可点的改邮寄按钮）
+  await settleAll()
+  assert.equal(page.data.headBlocking, true)
+  assert.ok(/明天 09:00 营业/.test(page.data.headNotice), page.data.headNotice)
+
+  // meta 落地纠正：headBlocking 必须转为 false，headNotice 改成与报价成功分支同一口径的
+  // 「本单为预约配送」软提示，blockReason 清空——三者必须同步，否则顶部仍显示「打烊/去
+  // 邮寄」的旧警示，与下面已可提交的预约单状态矛盾（R1）
+  ctx.releaseMeta()
+  await settleAll()
+  assert.equal(page.data.headBlocking, false)
+  assert.ok(/预约/.test(page.data.headNotice), page.data.headNotice)
+  assert.equal(page.data.blockReason, '')
+  assert.ok(page.data.quoteToken, 'quoteToken 应已恢复')
+  assert.equal(page.data.payAmount != null, true, 'payAmount 应已恢复为可提交的数字')
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  assert.equal(page.data.action.text, '预约下单')
+})
+
+test('⑧营业中 + 预约未开通：点「预约时段」不切模式、不拉时段（R3）', async function () {
+  const { ctx, page } = loadConfirm({
+    meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: false, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: true }),
+  })
+  await settleAll()
+  assert.equal(page.data.scheduleAvailable, false)
+  page.pickMode.call(page, { currentTarget: { dataset: { mode: 'SCHEDULED' } } })
+  await settleAll()
+  assert.equal(page.data.scheduleMode, 'ASAP', '预约未开通时点「预约时段」不应切换模式')
+  assert.equal(ctx.urls.some((u) => /\/local\/delivery-slots/.test(u)), false, ctx.urls.join(' '))
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  assert.equal(page.data.action.text, '提交订单')
+})
+
 test('onSubmit 在 action:slot 时只打开选择器，不提交订单', async function () {
   const { ctx, page } = loadConfirm({
     meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),

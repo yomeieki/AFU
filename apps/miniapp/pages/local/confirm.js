@@ -236,10 +236,19 @@ Page({
       if (self.data.closedNow && scheduleAvailable && !self.data.scheduleAvailable && self.data.quote) {
         // quoteToken 在报价先回来那一刻被（当时判定为阻塞的）分支清空了——它本身还在
         // self.data.quote.quoteToken 里（decorateQuote 用 Object.assign 保留了原始字段，
-        // 清空的只是顶层 data.quoteToken），这里原样取回，不重新报价。
+        // 清空的只是顶层 data.quoteToken），这里原样取回，不重新报价（不用 refreshQuote('meta')
+        // 再打一次 /local/quote：quote 数据本身没过期，重新报价只会多一轮网络往返，还会把
+        // promoFen/quoteToken 短暂置空、页面闪一下「待计算」，且需要另起一路 seq 处理竞态）。
+        // headNotice/headBlocking 同样要在这里纠正——它们只由 refreshQuote 的 .then（用
+        // getHeadNotice(quote, scheduleAvailable) 算）或 loadMeta 自己的早退兜底写，而这
+        // 次是报价先回落进了阻塞分支，头条被写成了旧的阻塞文案，纠正必须补上同一口径的
+        // getHeadNotice(quote, true) 调用，否则顶部会一直显示「打烊/去邮寄」，与下面已经
+        // 可提交的预约单状态矛盾（R1）。
+        var correctedNotice = getHeadNotice(self.data.quote, true)
         self.setData({
           scheduleAvailable: true, scheduleMode: 'SCHEDULED', blockReason: '',
           quoteToken: self.data.quote.quoteToken,
+          headNotice: correctedNotice.text, headBlocking: correctedNotice.blocking,
         })
         self.syncPayAmount()
         self.syncAction()
@@ -509,6 +518,7 @@ Page({
   pickMode: function(e) {
     var mode = e.currentTarget.dataset.mode
     if (mode === 'ASAP' && this.data.closedNow) return   // 打烊时「尽快送达」置灰，点不动
+    if (mode === 'SCHEDULED' && !this.data.scheduleAvailable) return   // 预约未开通时置灰，点不动（R3）
     if (mode === this.data.scheduleMode) return
     this.setData({ scheduleMode: mode })
     if (mode === 'SCHEDULED' && this.data.quote && this.data.quote.distanceM != null) this.loadSlots(this.data.quote.distanceM, false)
