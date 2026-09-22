@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bike, CircleAlert, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Store, Sun, X } from 'lucide-react'
+import { Bell, Bike, CircleAlert, Clock, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Store, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
   CourierLive, DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView,
@@ -18,7 +18,7 @@ import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor 
 import { tablewareLabel } from '../utils/tableware'
 import {
   scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn,
-  actionColKey,
+  actionColKey, pendingActionCount,
 } from '../utils/schedule'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
@@ -55,14 +55,16 @@ const COLUMNS: { key: ColKey; title: string }[] = [
 // 两边对不上会出现「手机 DOM 套桌面样式」，比两端都不改更糟。
 // 700 这条线是为了把 iPad 排除在外（iPad mini 竖屏 744、iPad 竖屏 768/810/834）。
 
-/** 渠道徽标：卡片与抽屉头共用（图例文案是「到店自取」，另写） */
-function ChannelBadge({ channel }: { channel: OrderChannel }) {
-  const cls = channel === 'LOCAL' ? 'wb__badge--local' : channel === 'PICKUP' ? 'wb__badge--pickup' : 'wb__badge--express'
-  const Icon = channel === 'LOCAL' ? Bike : channel === 'PICKUP' ? Store : Package
+/** 渠道徽标：卡片与抽屉头共用（图例文案是「到店自取」，另写）。
+ *  scheduled：同城预约单（未出票也好、已接单也好）显示时钟图标 +「同城预约」、琥珀色底，与立即单区分开 */
+function ChannelBadge({ channel, scheduled }: { channel: OrderChannel; scheduled?: boolean }) {
+  const sched = channel === 'LOCAL' && !!scheduled
+  const cls = sched ? 'wb__badge--sched' : channel === 'LOCAL' ? 'wb__badge--local' : channel === 'PICKUP' ? 'wb__badge--pickup' : 'wb__badge--express'
+  const Icon = sched ? Clock : channel === 'LOCAL' ? Bike : channel === 'PICKUP' ? Store : Package
   return (
     <span className={`wb__badge ${cls}`}>
       <Icon className="w-3.5 h-3.5" />
-      {channel === 'LOCAL' ? '同城配送' : channel === 'PICKUP' ? '自取' : '全国邮寄'}
+      {sched ? '同城预约' : channel === 'LOCAL' ? '同城配送' : channel === 'PICKUP' ? '自取' : '全国邮寄'}
     </span>
   )
 }
@@ -1103,7 +1105,7 @@ function ColumnTabs({ snap, active, onPick }: {
   return (
     <div className="wb__tabs" role="tablist" aria-label="订单列">
       {COLUMNS.map((col) => {
-        const n = snap ? snap.columns[col.key].length + (col.key === 'pending' ? snap.columns.scheduled.length : 0) : 0
+        const n = snap ? (col.key === 'pending' ? pendingActionCount(snap.columns.pending, snap.columns.scheduled) : snap.columns[col.key].length) : 0
         const on = col.key === active
         return (
           <button
@@ -1153,7 +1155,7 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
       ? `自送${d.courierName ? ` ${d.courierName}` : ''}`
       : `骑手 ${d.courierName ?? d.statusLabel}`
   // 自取胶囊的规则在 pickupCapsule 里；非自取单、或自取单落在已完成列时它返回 null，退回原逻辑
-  const w = (card.local?.schedule ? scheduleCapsule(card.local.schedule, colKey, now) : null)
+  const w = (card.local?.schedule ? scheduleCapsule(card.local.schedule, colKey, now, card.status) : null)
     ?? pickupCapsule(card, colKey, now, urg)
     ?? (colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg))
   // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
@@ -1168,7 +1170,7 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }}
     >
       <div className="wb__card-top">
-        <ChannelBadge channel={card.channel} />
+        <ChannelBadge channel={card.channel} scheduled={!!card.local?.schedule} />
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
@@ -2025,7 +2027,7 @@ export default function Workbench() {
         <div className="wb__mask" onClick={closeDrawer} />
         <aside className="wb__drawer" role="dialog" aria-modal="true">
           <div className="wb__drawer-head">
-            <ChannelBadge channel={card.channel} />
+            <ChannelBadge channel={card.channel} scheduled={!!card.local?.schedule} />
             <span><span className="wb__shortno">{card.receiver.phone ? `尾号${card.receiver.phone.slice(-4)}` : shortNo(card.orderNo)}</span></span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
@@ -2503,6 +2505,8 @@ export default function Workbench() {
           // 预约单出票前不进五列（服务端 columns.scheduled），在待接单列顶部折成一组；有取消申请的留在正常列（同明日自取的道理）
           const scheduledFold = col.key === 'pending' && snap ? snap.columns.scheduled.filter(scheduleFoldable) : []
           const scheduledLoose = col.key === 'pending' && snap ? snap.columns.scheduled.filter((c) => !scheduleFoldable(c)) : []
+          // 折叠组头「K 待接单」：K = 折叠组里还没接单（PAID）的预约单张数
+          const scheduledFoldPending = scheduledFold.filter((c) => c.status === 'PAID').length
           // 两处 <Card> 的 props 完全相同（正常列表与「明日自取」折叠组），抽成一份共用，别复制两份
           const renderCard = (c: WorkbenchCard) => (
             <Card
@@ -2537,7 +2541,7 @@ export default function Workbench() {
             <section className="wb__col" key={col.key}>
               <div className="wb__col-head">
                 <span>{col.title}</span>
-                <span className="wb__col-count">{list.length + (col.key === 'pending' ? scheduledFold.length + scheduledLoose.length : 0)}</span>
+                <span className="wb__col-count">{col.key === 'pending' && snap ? pendingActionCount(list, snap.columns.scheduled) : list.length}</span>
                 {col.key === 'done' && (
                   <button className="wb__iconbtn" onClick={() => setDoneOpen(false)}>收起</button>
                 )}
@@ -2549,7 +2553,7 @@ export default function Workbench() {
                 {scheduledFold.length > 0 && (
                   <div className="wb__fold" style={{ marginTop: 0, borderTop: 'none', paddingTop: 0, marginBottom: 8 }}>
                     <button type="button" className="wb__fold-t" onClick={() => setScheduledOpen((v) => !v)}>
-                      <span>预约单 <b style={{ color: 'var(--local)' }}>{scheduledFold.length}</b>{snap?.scheduleBar ? ` · 最近 ${hhmm(snap.scheduleBar.prepStartAt)} 开始备餐` : ''}</span>
+                      <span>预约单 <b style={{ color: 'var(--local)' }}>{scheduledFold.length}</b>{scheduledFoldPending > 0 ? <> · <b style={{ color: 'var(--local)' }}>{scheduledFoldPending}</b> 待接单</> : ''}{snap?.scheduleBar ? ` · 最近 ${hhmm(snap.scheduleBar.prepStartAt)} 开始备餐` : ''}</span>
                       <span>{scheduledOpen ? '收起' : '展开'}</span>
                     </button>
                     {scheduledOpen && scheduledFold.map(renderCard)}

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn, actionColKey } from './schedule.ts'
+import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn, actionColKey, pendingActionCount } from './schedule.ts'
 import type { ScheduleInfo, WorkbenchCard, WorkbenchSnapshot } from '../types'
 
 // 2026-09-22 12:00 Asia/Shanghai = 04:00Z
@@ -22,6 +22,11 @@ test('胶囊文案七态；done 列返回 null', () => {
   const now = NOON - min(50)
   assert.deepEqual(scheduleCapsule(base('WAITING'), 'pending', now), { text: '11:16 开始备餐', cls: '' })
   assert.deepEqual(scheduleCapsule(base('TICKETED'), 'pending', now), { text: '11:16 开始备餐', cls: '' })
+  // WAITING + status：传 'PAID' → 待接单前缀；传其他状态（已接单）→ 已接单前缀；TICKETED 传 'PAID' 不受影响（不含「待接单」）
+  assert.deepEqual(scheduleCapsule(base('WAITING'), 'pending', now, 'PAID'), { text: '待接单 · 11:16 开始备餐', cls: '' })
+  assert.deepEqual(scheduleCapsule(base('WAITING'), 'pending', now, 'PREPARING'), { text: '已接单 · 11:16 开始备餐', cls: '' })
+  assert.ok(!scheduleCapsule(base('WAITING'), 'pending', now)!.text.includes('接单'))
+  assert.ok(!scheduleCapsule(base('TICKETED'), 'pending', now, 'PAID')!.text.includes('待接单'))
   assert.deepEqual(scheduleCapsule(base('PREPPING'), 'preparing', NOON - min(30)), { text: '距应备好 6 分', cls: '' })
   assert.deepEqual(scheduleCapsule(base('CALL_DUE'), 'preparing', NOON - min(20)), { text: '应已备好 · 晚 4 分', cls: 'wb__wait--warn' })
   assert.deepEqual(scheduleCapsule(base('READY_WAITING', iso(NOON - min(40))), 'preparing', NOON - min(30)), { text: '已备好 · 11:36 自动呼叫', cls: '' })
@@ -75,4 +80,13 @@ test('actionColKey：折叠组里已接单的预约卡配按钮要按 preparing 
   assert.equal(actionColKey('waitingCourier', card('PREPARING', true)), 'waitingCourier')
   assert.equal(actionColKey('delivering', card('PAID', false)), 'delivering')
   assert.equal(actionColKey('done', card('PREPARING', true)), 'done')
+})
+
+test('pendingActionCount：待接单列头计数 = 正常待接单张数 + 折叠组里未接单/有取消申请的预约单张数', () => {
+  const schedCard = (status: string, cancelRequested = false) =>
+    ({ status, local: { cancelRequested } } as unknown as WorkbenchCard)
+  const pendingList = [{ orderId: 1 } as unknown as WorkbenchCard, { orderId: 2 } as unknown as WorkbenchCard]
+  const scheduled = [schedCard('PAID'), schedCard('PREPARING'), schedCard('PREPARING', true)]
+  // pending 2 张 + scheduled 中 PAID 1 张 + cancelRequested 1 张（PREPARING 但已接单未取消的那张不算）= 4
+  assert.equal(pendingActionCount(pendingList, scheduled), 4)
 })

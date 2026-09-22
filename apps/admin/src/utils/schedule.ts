@@ -37,12 +37,14 @@ export function scheduleUrgency(phase: SchedulePhase): ScheduleUrgency {
   return ''
 }
 
-/** 卡片右上角胶囊文案。done 列不归这里管（返回 null 走「完成于」） */
-export function scheduleCapsule(sc: ScheduleInfo, colKey: ScheduleColKey, now: number): { text: string; cls: string } | null {
+/** 卡片右上角胶囊文案。done 列不归这里管（返回 null 走「完成于」）。
+ *  status：折叠组卡片按接单状态区分「待接单/已接单」文案，仅 WAITING 阶段生效；不传保持原文案（兼容旧调用） */
+export function scheduleCapsule(sc: ScheduleInfo, colKey: ScheduleColKey, now: number, status?: string): { text: string; cls: string } | null {
   if (colKey === 'done') return null
   const cls = scheduleUrgency(sc.phase) === 'late' ? 'wb__wait--danger' : scheduleUrgency(sc.phase) === 'warn' ? 'wb__wait--warn' : ''
   switch (sc.phase) {
     case 'WAITING':
+      return { text: `${status ? (status === 'PAID' ? '待接单' : '已接单') + ' · ' : ''}${fmtHHmm(sc.prepStartAt)} 开始备餐`, cls }
     case 'TICKETED':
       return { text: `${fmtHHmm(sc.prepStartAt)} 开始备餐`, cls }
     case 'PREPPING':
@@ -62,6 +64,12 @@ export function scheduleCapsule(sc: ScheduleInfo, colKey: ScheduleColKey, now: n
 export function scheduleFoldable(card: WorkbenchCard): boolean {
   const sc = card.local?.schedule
   return !!sc && sc.phase === 'WAITING' && !card.local?.cancelRequested
+}
+
+/** 「待接单」列头计数：折叠组里已接单（PREPARING）且没有取消申请的预约单不需要店员动手，不算「待接」；
+ *  有取消申请的要处理，照算（与告警卡留在正常列同一道理） */
+export function pendingActionCount(pendingList: WorkbenchCard[], scheduled: WorkbenchCard[]): number {
+  return pendingList.length + scheduled.filter((c) => c.status === 'PAID' || !!c.local?.cancelRequested).length
 }
 
 /**

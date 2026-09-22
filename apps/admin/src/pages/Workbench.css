@@ -133,6 +133,7 @@
 .wb__badge--local { background:var(--local-soft); color:var(--local); }
 .wb__badge--express { background:var(--express-soft); color:var(--express); }
 .wb__badge--pickup { background:var(--pickup-soft); color:var(--pickup); }
+.wb__badge--sched { background:var(--urge-warn-bg); color:var(--urge-warn); }
 .wb__wait { font-variant-numeric:tabular-nums; border-radius:999px; padding:1px 8px; font-size:12px;
   background:var(--line); }
 .wb__wait--warn { background:var(--warn-soft); color:var(--warn); }
