@@ -105,26 +105,35 @@ export async function reconcileRefund(refundId: number, query: RefundQuery = def
       await markRefundFailed(refundId, 'RECONCILE_NOT_FOUND', '微信侧查无此退款单（发起阶段中断）')
       return outcomeAfterMark(refundId, refund.status, 'FAILED')
     }
-    // PROCESSING/ABNORMAL 查无此单不合理（当初拿到过 refund_id），只记录 + 告警，不改状态
+    // PROCESSING 查无此单不合理（当初拿到过 refund_id）。2026-09-22 前只记录 + 告警、不改状态，
+    // 结果这笔永远停在 PROCESSING：自动补查每 5 分钟查到同样结果，「退款待处理」按定义又不收它
+    // （有在途退款），三处页面也不画重试按钮，而人工兜底接口已删——钱没退、单卡死、后台零入口。
+    // 现在改成标 ABNORMAL：进「退款待处理」Tab 带「退款异常」提示、每 60 分钟低频复查、
+    // markRefundAbnormal 自带告警与顾客通知；ABNORMAL 行再查到查无 → markRefundAbnormal 守卫不中，
+    // 只更新 reconcileLastError，outcomeAfterMark 报 SKIPPED。
     await prisma.refund.update({ where: { id: refundId }, data: { reconcileLastError: '微信侧查无此退款单' } })
     notifySystemAlert(
       '退款补查：微信查无此单',
-      [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, '请到微信商户平台核对退款记录'],
+      [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, '已标退款异常，请到微信商户平台核对退款记录'],
       { key: `refund-reconcile-notfound:${refundId}`, windowMs: ALERT_WINDOW_MS }
     )
-    return 'NOT_FOUND'
+    await markRefundAbnormal(refundId)
+    return outcomeAfterMark(refundId, refund.status, 'ABNORMAL')
   }
 
   const r = result.refund
   if (r.amount && r.amount.refund !== refund.amount) {
-    // 金额比对口径与 wechat-notify.ts 的回调金额校验一致：与本地记录的退款金额不符，不改状态
+    // 金额比对口径与 wechat-notify.ts 的回调金额校验一致：与本地记录的退款金额不符。
+    // 同上（查无此单）：不再只记录，标 ABNORMAL 让它进「退款待处理」；金额不符是数据不一致，
+    // 无论如何都得人去商户平台核对，自动落账反而危险。
     const msg = `金额不一致：微信侧 ${r.amount.refund} 本地 ${refund.amount}`
     await prisma.refund.update({ where: { id: refundId }, data: { reconcileLastError: msg } })
-    notifySystemAlert('退款补查金额不一致', [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, msg], {
+    notifySystemAlert('退款补查金额不一致', [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, msg, '已标退款异常'], {
       key: `refund-reconcile-mismatch:${refundId}`,
       windowMs: ALERT_WINDOW_MS,
     })
-    return 'AMOUNT_MISMATCH'
+    await markRefundAbnormal(refundId)
+    return outcomeAfterMark(refundId, refund.status, 'ABNORMAL')
   }
 
   const rawData = JSON.stringify({ source: 'reconcile-query', ...r })

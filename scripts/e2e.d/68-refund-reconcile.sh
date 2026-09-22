@@ -27,6 +27,10 @@ rr68_stuck() {
 rr68_q() { req POST /api/admin/system/pay-mock/refund-query "$AT" "{\"outRefundNo\":\"$1\",\"directive\":$2}" >/dev/null; }
 # RR68_calls —— 已记录的 queryRefund 调用条数
 rr68_calls() { req GET "/api/admin/system/pay-mock/calls?op=queryRefund" "$AT" | jq '.data | length'; }
+# rr68_attn <orderId> —— 该单是否在「退款待处理」列表里（伪状态 REFUND_ATTENTION，全渠道），输出 1/0
+rr68_attn() { req GET "/api/admin/orders?status=REFUND_ATTENTION&deliveryType=ALL&pageSize=50" "$AT" | jq --argjson id "$1" '[.data.list[].id] | index($id) != null | if . then 1 else 0 end'; }
+# rr68_attn_count —— pending-count 里的 refundAttentionCount
+rr68_attn_count() { req GET /api/admin/orders/pending-count "$AT" | jq -r .data.refundAttentionCount; }
 # RR68_sched —— 三个阈值全传 0（立刻命中），断言响应带 refundReconcile 键
 rr68_sched() {
   local r v
@@ -45,10 +49,21 @@ assert_eq "68.1 退款仍 PROCESSING" "$(sql "SELECT status FROM refunds WHERE o
 assert_eq "68.1 reconcile_count=1" "$(sql "SELECT reconcile_count FROM refunds WHERE out_refund_no='$RR68_RN1';")" "1"
 assert_eq "68.1 calls +1" "$((RR68_C0+1))" "$(rr68_calls)"
 assert_eq "68.1 订单仍 REFUNDING" "$(order_status $RR68_O1)" "REFUNDING"
+# 「退款待处理」等价性（R3）：退款还在微信走（PROCESSING）→ 不算要人出手；关闭后 → 算
+assert_eq "68.1 PROCESSING 中不进「退款待处理」" "$(rr68_attn $RR68_O1)" "0"
+RR68_ATTN_BEFORE=$(rr68_attn_count)
+assert_eq "68.1 并列传 REFUNDING,REFUND_ATTENTION → 40001" "$(code "$(req GET "/api/admin/orders?status=REFUNDING,REFUND_ATTENTION" "$AT")")" "40001"
 # 本用例故意让这笔一直停在 PROCESSING（验证「无指令」的安全默认），但 rr68_sched 每次都会
 # 扫全表（intervalMin 恒传 0）——留着不关，后面用例里任何一次 rr68_sched 都会把它也捎带查一遍，
 # 把那些用例自己的「rr68_calls 不增/恰好 +1」断言带偏。这里在验完之后立刻收尾，后面同理。
 sql "UPDATE refunds SET status='CLOSED', active_order_id=NULL WHERE out_refund_no='$RR68_RN1';"
+assert_eq "68.1 退款 CLOSED 后进「退款待处理」" "$(rr68_attn $RR68_O1)" "1"
+assert_eq "68.1 pending-count.refundAttentionCount 同口径 +1" "$((RR68_ATTN_BEFORE+1))" "$(rr68_attn_count)"
+# 没有任何退款记录的 REFUNDING 单（取消后迟到付款、自动退款发起前抛错的形态）也要进
+RR68_O1N=$(make_paid_order)
+sql "UPDATE orders SET status='REFUNDING', cancelled_at=NOW(3), cancel_reason='e2e68 无退款记录' WHERE id=$RR68_O1N;"
+assert_eq "68.1 无退款记录的 REFUNDING 单进「退款待处理」" "$(rr68_attn $RR68_O1N)" "1"
+# 留在 REFUNDING（与 68.1 主单同样的收尾口径）：补查只扫 refunds 表，这张没有退款行的单不会被捎带
 
 echo "-- 68.2 全额 SUCCESS：终态 SUCCESS，订单 REFUNDED，再补查不重复累加 --"
 RR68_O2_TMP=$(rr68_stuck full PROCESSING)
@@ -126,7 +141,7 @@ assert_eq "68.6 timeout 后仍 PROCESSING" "$(sql "SELECT status FROM refunds WH
 assert_eq "68.6 reconcile_count=2" "$(sql "SELECT reconcile_count FROM refunds WHERE out_refund_no='$RR68_RN6';")" "2"
 sql "UPDATE refunds SET status='CLOSED', active_order_id=NULL WHERE out_refund_no='$RR68_RN6';"
 
-echo "-- 68.7 not_found：PENDING → FAILED 释放在途位；PROCESSING → 状态不变，记录「查无」 --"
+echo "-- 68.7 not_found：PENDING → FAILED 释放在途位；PROCESSING → ABNORMAL（2026-09-22 起，进「退款待处理」），记录「查无」 --"
 RR68_O7_TMP=$(rr68_stuck full PENDING)
 IFS=$'\t' read -r RR68_O7 RR68_RN7 <<<"$RR68_O7_TMP"
 [[ -n "$RR68_O7" ]] && ok "68.7 造单 #$RR68_O7（PENDING）" || fail "68.7 造单失败"
@@ -141,18 +156,26 @@ IFS=$'\t' read -r RR68_O7B RR68_RN7B <<<"$RR68_O7B_TMP"
 [[ -n "$RR68_O7B" ]] && ok "68.7 造单 #$RR68_O7B（PROCESSING）" || fail "68.7 造单失败"
 rr68_q "$RR68_RN7B" '{"kind":"not_found"}'
 rr68_sched
-assert_eq "68.7 PROCESSING 查无 → 状态不变" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RR68_RN7B';")" "PROCESSING"
+assert_eq "68.7 PROCESSING 查无 → ABNORMAL" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RR68_RN7B';")" "ABNORMAL"
+assert_eq "68.7 订单仍 REFUNDING" "$(order_status $RR68_O7B)" "REFUNDING"
+assert_eq "68.7 ABNORMAL 后进「退款待处理」" "$(rr68_attn $RR68_O7B)" "1"
 RR68_ERR7B=$(sql "SELECT reconcile_last_error FROM refunds WHERE out_refund_no='$RR68_RN7B';")
 [[ "$RR68_ERR7B" == *"查无"* ]] && ok "68.7 reconcile_last_error 含「查无」" || fail "68.7 reconcile_last_error 未含「查无」" "$RR68_ERR7B"
+# ABNORMAL 行再查到查无：守卫不中，状态不变，不重复推进
+RR68_C7B=$(rr68_calls)
+rr68_q "$RR68_RN7B" '{"kind":"not_found"}'
+rr68_sched
+assert_eq "68.7 ABNORMAL 再查无 → 仍 ABNORMAL" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RR68_RN7B';")" "ABNORMAL"
 sql "UPDATE refunds SET status='CLOSED', active_order_id=NULL WHERE out_refund_no='$RR68_RN7B';"
 
-echo "-- 68.8 金额不符：不改状态，refunded_amount 不变，记录「金额」 --"
+echo "-- 68.8 金额不符：标 ABNORMAL（2026-09-22 起），refunded_amount 不变，记录「金额」 --"
 RR68_O8_TMP=$(rr68_stuck full PROCESSING)
 IFS=$'\t' read -r RR68_O8 RR68_RN8 <<<"$RR68_O8_TMP"
 [[ -n "$RR68_O8" ]] && ok "68.8 造单 #$RR68_O8" || fail "68.8 造单失败"
 rr68_q "$RR68_RN8" '{"kind":"ok","status":"SUCCESS","amount":999999}'
 rr68_sched
-assert_eq "68.8 金额不符后仍 PROCESSING" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RR68_RN8';")" "PROCESSING"
+assert_eq "68.8 金额不符 → ABNORMAL" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RR68_RN8';")" "ABNORMAL"
+assert_eq "68.8 ABNORMAL 后进「退款待处理」" "$(rr68_attn $RR68_O8)" "1"
 assert_eq "68.8 refunded_amount=0" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RR68_O8;")" "0"
 RR68_ERR8=$(sql "SELECT reconcile_last_error FROM refunds WHERE out_refund_no='$RR68_RN8';")
 [[ "$RR68_ERR8" == *"金额"* ]] && ok "68.8 reconcile_last_error 含「金额」" || fail "68.8 reconcile_last_error 未含「金额」" "$RR68_ERR8"

@@ -19,6 +19,7 @@ interface UsePendingOrdersOptions {
 export function usePendingOrders(options?: UsePendingOrdersOptions) {
   const [count, setCount] = useState(0)
   const [afterSaleCount, setAfterSaleCount] = useState(0)
+  const [refundAttentionCount, setRefundAttentionCount] = useState(0)
   const [localPendingCount, setLocalPendingCount] = useState(0)
   const lastPaidAtRef = useRef<string | null>(null)
   const initializedRef = useRef(false)
@@ -54,9 +55,10 @@ export function usePendingOrders(options?: UsePendingOrdersOptions) {
       try {
         const res = await getPendingOrderCount()
         if (disposed) return
-        const { count: c, latestPaidAt, lowStockCount, lowStockThreshold, afterSaleCount: asc, localPendingCount: lpc } = res.data.data
+        const { count: c, latestPaidAt, lowStockCount, lowStockThreshold, afterSaleCount: asc, localPendingCount: lpc, refundAttentionCount: rac } = res.data.data
         setCount(c)
         setAfterSaleCount(asc ?? 0)
+        setRefundAttentionCount(rac ?? 0)
         setLocalPendingCount(lpc ?? 0)
         // 低库存预警：每次会话只提醒一次
         if (lowStockCount > 0 && !lowStockNotifiedRef.current) {
@@ -104,7 +106,7 @@ export function usePendingOrders(options?: UsePendingOrdersOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { count, afterSaleCount, localPendingCount }
+  return { count, afterSaleCount, localPendingCount, refundAttentionCount }
 }
 
 // 铃铛点击时调用：在用户手势内请求 Notification 权限

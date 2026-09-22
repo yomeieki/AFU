@@ -23,6 +23,8 @@ const orderSummarySelect = {
   pointsUsed: true,
   receiverName: true,
   receiverPhone: true,
+  // 「同意并退款」的显示规则要看订单有没有在途退款（与 orders 列表的 latestRefund 同口径）
+  refunds: { select: { status: true }, orderBy: { createdAt: 'desc' as const }, take: 1 },
   receiverFullAddress: true,
   completedAt: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true } },
@@ -48,10 +50,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     ])
     paginate(
       res,
-      list.map((a) => ({
+      list.map(({ order: { refunds, ...order }, ...a }) => ({
         ...a,
+        order: { ...order, latestRefund: refunds[0] ?? null },
         reasonLabel: AFTER_SALE_REASON_LABEL[a.reason as AfterSaleReason] ?? a.reason,
-        remainingRefundable: remainingRefundable(a.order),
+        remainingRefundable: remainingRefundable(order),
       })),
       total,
       page,

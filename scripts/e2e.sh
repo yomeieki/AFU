@@ -162,6 +162,7 @@ assert_eq "订单 → REFUNDED" "$(order_status $O3)" "REFUNDED"
 echo "== 10. pending-count 字段 =="
 R=$(req GET /api/admin/orders/pending-count "$AT")
 [[ "$(jq -r .data.refundingCount <<<"$R")" != "null" ]] && ok "refundingCount 存在" || fail "refundingCount 缺失"
+[[ "$(jq -r .data.refundAttentionCount <<<"$R")" =~ ^[0-9]+$ ]] && ok "refundAttentionCount 存在" || fail "refundAttentionCount 缺失"
 
 echo "== 12. 部分退款：订单状态不变、余额校验、退完转 REFUNDED =="
 O5=$(make_paid_order); [[ -n "$O5" ]] && ok "订单 #$O5 已支付" || { fail "下单/支付"; exit 1; }

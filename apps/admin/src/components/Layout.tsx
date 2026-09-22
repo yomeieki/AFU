@@ -40,7 +40,7 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { dirty, confirmLeave } = useUnsavedSettings()
-  const { count: pendingCount, afterSaleCount, localPendingCount } = usePendingOrders()
+  const { count: pendingCount, afterSaleCount, localPendingCount, refundAttentionCount } = usePendingOrders()
   const [panelOpen, setPanelOpen] = useState(false)
 
   /**
@@ -51,11 +51,11 @@ export default function Layout() {
   // 从同城改成邮寄，这里的徽标就会**静默消失**——比图标错还难发现。
   const navBadge: Record<string, number> = {
     '/workbench': localPendingCount,
-    '/orders': pendingCount + afterSaleCount,
+    '/orders': pendingCount + afterSaleCount + refundAttentionCount,
   }
   const badgeTitle: Record<string, string> = {
     '/workbench': `同城待接单 ${localPendingCount}`,
-    '/orders': `待处理 ${pendingCount} · 售后 ${afterSaleCount}`,
+    '/orders': `待处理 ${pendingCount} · 售后 ${afterSaleCount} · 退款待处理 ${refundAttentionCount}`,
   }
   const badgeOf = (prefix: string) => navBadge[prefix] ?? 0
 

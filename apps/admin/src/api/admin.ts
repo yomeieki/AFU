@@ -185,6 +185,8 @@ export const getPendingOrderCount = () =>
       count: number
       latestPaidAt: string | null
       refundingCount: number
+      /** 「退款待处理」角标，口径与 ?status=REFUND_ATTENTION 一致 */
+      refundAttentionCount: number
       lowStockCount: number
       lowStockThreshold: number
       afterSaleCount: number

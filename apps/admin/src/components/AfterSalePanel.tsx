@@ -11,6 +11,7 @@ import RefundDialog from './RefundDialog'
 import IssueCouponModal from './IssueCouponModal'
 import { AFTER_SALE_STATUS_LABEL, type AfterSale, type AfterSaleStatus } from '../types'
 import { fmtDateTimeSec } from '../utils/time'
+import { canApproveAfterSaleRefund, hasActiveRefund } from '../utils/order-actions'
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: 'PENDING', label: '待处理' },
@@ -157,7 +158,14 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
                 <div className="flex flex-wrap gap-2 pt-1">
                   {a.status === 'PENDING' && (
                     <>
-                      <Button size="sm" variant="danger" onClick={() => setApproveTarget(a)} disabled={a.remainingRefundable <= 0}>
+                      {/* 显示规则在 utils/order-actions.ts（2026-09-22 前只看余额，订单已在退款中/有在途退款时照样可点） */}
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => setApproveTarget(a)}
+                        disabled={!canApproveAfterSaleRefund({ status: a.order.status, remainingRefundable: a.remainingRefundable, latestRefund: a.order.latestRefund })}
+                        title={hasActiveRefund(a.order) ? '有退款处理中' : a.remainingRefundable <= 0 ? '已无可退金额' : ''}
+                      >
                         同意并退款
                       </Button>
                       <Button size="sm" variant="secondary" onClick={() => { setRejectTarget(a); setRejectReply('') }}>

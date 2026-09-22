@@ -7,7 +7,6 @@ import { AppError } from '../../middlewares/error'
 import { rollbackOrderStock } from '../../utils/order-stock'
 import { releaseOrderBenefits } from '../../services/member/checkout'
 import { initiateRefund, remainingRefundable } from '../../services/refund'
-import { deductPointsOnRefund } from '../../services/member/points'
 import { sendShipSubscribeMessage, sendPickupReadySubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
 import { enqueueOrderTicket } from '../../services/ticket'
@@ -104,10 +103,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     // 与 admin 端 utils/order-actions.ts 的 refundNeedsHuman 是同一条规则的服务端版本。
     const refundAttention = rawStatus === 'REFUND_ATTENTION'
     const statuses = rawStatus && !refundAttention ? rawStatus.split(',').filter(Boolean) : []
+    // 与 channel 的 F16 同口径：伪状态和真状态并列传（如 REFUNDING,REFUND_ATTENTION）直接 400，
+    // 不静默退化成「只筛 REFUNDING」——店员看到的列表跟预期对不上却没有任何报错，比报错更糟。
+    if (statuses.includes('REFUND_ATTENTION')) throw new AppError(40001, 'REFUND_ATTENTION 不能与其他状态并列')
     const status = statuses.length === 1 ? statuses[0] : undefined
-    const attentionWhere: Prisma.OrderWhereInput = refundAttention
-      ? { status: 'REFUNDING', refunds: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }
-      : {}
+    const attentionWhere: Prisma.OrderWhereInput = refundAttention ? REFUND_ATTENTION_WHERE : {}
     // keyword 新参数；orderNo 旧参数兼容
     const keyword = ((req.query.keyword as string | undefined) ?? (req.query.orderNo as string | undefined))?.trim()
     // 邮寄订单页默认只看 EXPRESS；同城看板传 LOCAL / PICKUP；channel=LOCAL 一次看外送 + 自取；ALL 不过滤
@@ -193,11 +193,21 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 })
 
+/**
+ * 「退款待处理」（伪状态 REFUND_ATTENTION）的唯一定义：订单在 REFUNDING，且没有一笔退款还在微信那边走
+ * （PENDING/PROCESSING）。命中四种：没有退款记录 / ABNORMAL（去商户平台处理）/ CLOSED / FAILED（后台重试）。
+ * 列表筛选与 pending-count 角标共用这一个常量——两处各写一遍就会漂移。
+ */
+const REFUND_ATTENTION_WHERE: Prisma.OrderWhereInput = {
+  status: 'REFUNDING',
+  refunds: { none: { status: { in: ['PENDING', 'PROCESSING'] } } },
+}
+
 // GET /api/admin/orders/pending-count — 待处理计数（供后台提醒轮询）
 // 注意：必须注册在 GET /:id 之前，否则会被 :id 匹配吞掉
 router.get('/pending-count', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const [count, latest, refundingCount, lowStockCount, afterSaleCount, localPendingCount] = await Promise.all([
+    const [count, latest, refundingCount, refundAttentionCount, lowStockCount, afterSaleCount, localPendingCount] = await Promise.all([
       // 待处理 = 待接单(PAID) + 备餐中(PREPARING)（邮寄铃铛只数邮寄）
       prisma.order.count({ where: { status: { in: ['PAID', 'PREPARING'] }, deliveryType: 'EXPRESS' } }),
       prisma.order.findFirst({
@@ -208,6 +218,8 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
         select: { paidAt: true, createdAt: true },
       }),
       prisma.order.count({ where: { status: 'REFUNDING' } }),
+      // 「退款待处理」角标：口径与列表 ?status=REFUND_ATTENTION 完全一致（同一个 where 常量）
+      prisma.order.count({ where: REFUND_ATTENTION_WHERE }),
       prisma.product.count({
         where: { deletedAt: null, status: 'ON_SHELF', stock: { lte: LOW_STOCK_THRESHOLD } },
       }),
@@ -227,6 +239,7 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       count,
       latestPaidAt: latest ? (latest.paidAt ?? latest.createdAt) : null,
       refundingCount,
+      refundAttentionCount,
       lowStockCount,
       lowStockThreshold: LOW_STOCK_THRESHOLD,
       afterSaleCount,

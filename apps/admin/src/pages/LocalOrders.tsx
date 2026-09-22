@@ -12,6 +12,7 @@ import type { DeliveryInfo, Order } from '../types'
 import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
 import { showWorkbenchLink } from '../utils/order-list'
+import { usePendingOrders } from '../hooks/usePendingOrders'
 import { canRefund, hasActiveRefund, refundLabel, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint } from '../utils/order-actions'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
@@ -71,6 +72,7 @@ export default function LocalOrders() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [deliveryCache, setDeliveryCache] = useState<Record<number, { delivery: DeliveryInfo | null; costFen: number }>>({})
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
+  const { refundAttentionCount } = usePendingOrders()
 
   const load = (p = page) => {
     if (dateErr) { setLoading(false); return }
@@ -199,6 +201,12 @@ export default function LocalOrders() {
               }`}
             >
               {t.label}
+              {/* 角标口径与 Tab 筛选同一个服务端 where；数的是全渠道，本页只列同城，所以角标可能比列表多 */}
+              {t.value === REFUND_ATTENTION_FILTER && refundAttentionCount > 0 && (
+                <span className="ml-1 inline-flex min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] items-center justify-center align-middle">
+                  {refundAttentionCount}
+                </span>
+              )}
             </button>
           ))}
           <button onClick={() => load()} className="ml-auto text-gray-400 hover:text-gray-600 shrink-0" title="刷新" aria-label="刷新">

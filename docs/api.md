@@ -995,10 +995,10 @@
 | `GET /api/admin/express/orders/:id/booking` | 2026-09-18：响应增 `track`（`{updatedAt, signed, items[≤30]}` \| `null`），管理端订单详情页展开物流轨迹用，与顾客端同口径；`booking`/`events` 不变 |
 | `POST /api/admin/orders/:id/refund` | `amount` 可为部分（≤ 可退余额）；响应增 `isFull` |
 | `POST /api/admin/orders/:id/complete` | SHIPPED → COMPLETED |
-| `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`） |
+| `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`；2026-09-22 起 `order.latestRefund`，后台据此禁点「同意并退款」） |
 | `POST /api/admin/after-sales/:id/approve` | `{ amount, reply? }` → 发起退款并置 APPROVED（回调成功 → DONE） |
 | `POST /api/admin/after-sales/:id/reject` | `{ reply }` → REJECTED |
-| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount` |
+| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount`；2026-09-22 增 `refundAttentionCount`（「退款待处理」角标，口径与 `?status=REFUND_ATTENTION` 同一个 where） |
 | `POST /api/admin/webview-code` | admin token → 一次性 code（2 分钟） |
 | `POST /api/admin/login/webview` | `{ code }` → token（小程序 web-view `/m?code=` 用） |
 | `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖；2026-09-21 起新增 5 个退款补查覆盖键（附录 L） |
@@ -2092,9 +2092,10 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | `ABNORMAL` | 任意在途态 | 走 `markRefundAbnormal`，保留 `activeOrderId` |
 | `PROCESSING` | — | 不改状态，只记录本次已查过 |
 | 查无此单 | `PENDING` | 标 `FAILED`（`errorCode='RECONCILE_NOT_FOUND'`），释放 `activeOrderId`（后台可重试） |
-| 查无此单 | `PROCESSING`/`ABNORMAL` | 不改状态，只告警（当初拿到过 `refund_id`，查无此单不正常） |
+| 查无此单 | `PROCESSING` | **2026-09-22 起**标 `ABNORMAL`（走 `markRefundAbnormal`，保留 `activeOrderId`），进「退款待处理」；此前只告警不改状态，会让这笔永远卡在 PROCESSING 且后台无入口 |
+| 查无此单 | `ABNORMAL` | 守卫不中，只更新 `reconcileLastError`，报 `SKIPPED` |
 | 查询抛错（超时/5xx） | — | 不改状态，`reconcileLastError` 记录错误，下轮再试 |
-| 微信侧金额与本地 `amount` 不符 | — | 不改状态，告警（口径同 `wechat-notify.ts` 的回调金额校验） |
+| 微信侧金额与本地 `amount` 不符 | 在途态 | **2026-09-22 起**标 `ABNORMAL` 并告警（口径同 `wechat-notify.ts` 的回调金额校验）；数据不一致必须人去商户平台核对，不自动落账 |
 
 **幂等与互斥依据**：`finalizeRefundSuccess` 用 `SELECT ... FOR UPDATE` 把回调与补查串行化，条件写 `status ≠ SUCCESS` 保证只有一方真正累加 `refundedAmount`，金额用 `LEAST(refunded_amount + amount, actual_amount)` 封顶。`markRefundAbnormal`/`markRefundClosed`/`markRefundFailed` 三个函数本批全部改成条件 `updateMany`（只有行仍在各自的「在途态」集合内才会真正转移状态并发通知），已被推进到别的终态的行调用这三个函数会 `count=0` 直接返回，不改状态、不重复通知。`reconcileRefund` 自己用 CAS 占坑（`reconcileCheckedAt` 从旧值改成 `now` 才算抢到）防并发 tick 重复查询。
 

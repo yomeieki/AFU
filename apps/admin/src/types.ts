@@ -313,6 +313,8 @@ export interface AfterSale {
     id: number
     orderNo: string
     status: OrderStatus
+    /** 最近一条退款记录（只有 status）；「同意并退款」按钮据此判有没有在途退款 */
+    latestRefund?: { status: string } | null
     /** 券前商品小计（分） */
     totalAmount: number
     shippingFee: number
