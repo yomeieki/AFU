@@ -87,8 +87,10 @@ Component({
       var mode = this.properties.mode
       var express = this.properties.channel === 'EXPRESS'
       var s = localCatalog.checkoutStateOf(this.properties.meta, this.data.count, this.data.amount, this.properties.blocking, mode)
-      // 可结算时把去向写在按钮上：两种模式共用一个车，顾客要知道按下去是外送还是自取
-      var text = (!s.disabled && !this.properties.blocking && s.gap === 0) ? ('去结算 · ' + (mode === 'PICKUP' ? '自取' : '外送')) : s.text
+      // 可结算时把去向写在按钮上：两种模式共用一个车，顾客要知道按下去是外送还是自取；
+      // 外送且此刻只能预约时（打烊、预约开着）额外提醒「预约」二字跟着走完全程（spec §5.4）
+      var deliveryLabel = (mode === 'PICKUP') ? '自取' : (localCatalog.deliveryScheduleOnly(this.properties.meta) ? '预约外送' : '外送')
+      var text = (!s.disabled && !this.properties.blocking && s.gap === 0) ? ('去结算 · ' + deliveryLabel) : s.text
       var discount = this.data.promoFen || 0
       this.setData({
         disabled: express ? this.data.count === 0 : s.disabled,
