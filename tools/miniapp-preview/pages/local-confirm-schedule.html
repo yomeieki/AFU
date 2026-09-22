@@ -9,15 +9,17 @@
 <body>
 <div class="mp-page">
   <div class="page">
+    <div class="head-notice head-notice-soft"><span class="head-notice-text">本单为预约配送，最早明天 09:35 送达</span></div>
     <div class="section card address-section"><div class="address-pin icon icon-pin"></div><div class="address-info"><div class="receiver-row"><span class="receiver-name">张三</span><span class="receiver-phone">138 0013 8000</span></div><span class="address-poi">丹桂小区</span><span class="address-full">四川省自贡市高新区丹桂大街 1 号 3 栋 2 单元</span></div><div class="arrow icon icon-arrow"></div></div>
-    <div class="section card delivery-section"><div class="section-title">配送信息</div><div class="delivery-info"><span>距门店 2.4 km</span><span>配送费 ¥6.00</span><span>约 25–30 分钟送达</span></div><span class="arrival-time">备餐从商家接单开始计时，具体送达时间以骑手取货后为准</span></div>
-    <!-- 送达时间卡（预约送达 2026-09-21 §5.2）：营业中默认「尽快送达」，「预约时段」可切但未选格。
-         打烊态见同目录 local-confirm-schedule.html 镜像。 -->
+    <div class="section card delivery-section"><div class="section-title">配送信息</div><div class="delivery-info"><span>距门店 2.4 km</span><span>配送费 ¥6.00</span><span>预计 明天 9月23日 12:00–12:30 送达</span></div></div>
+    <!-- 送达时间卡（预约送达 2026-09-21 §5.2）：打烊时「尽快送达」置灰（点不动），自动切到
+         「预约时段」并预选最早一格（S8）。营业中默认态见同目录 local-confirm.html 镜像。 -->
     <div class="section card schedule-section"><div class="section-title">送达时间</div>
       <div class="mode-row">
-        <div class="mode-opt active"><span class="mode-name">尽快送达</span><span class="mode-sub">约 25–30 分钟送达</span></div>
-        <div class="mode-opt"><span class="mode-name">预约时段</span><span class="mode-sub">选择送达时段</span></div>
+        <div class="mode-opt disabled"><span class="mode-name">尽快送达</span><span class="mode-sub">已打烊</span></div>
+        <div class="mode-opt active"><span class="mode-name">预约时段</span><span class="mode-sub">明天 9月23日 12:00–12:30</span></div>
       </div>
+      <div class="slot-row"><span class="slot-text">预计 明天 9月23日 12:00–12:30 送达</span></div>
     </div>
     <div class="section card"><div class="section-title">商品明细</div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">冷吃兔</span><span class="item-spec">中辣/去骨</span><span class="item-price">¥30.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">6</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div><div class="item-row"><div class="item-img-wrap"><div class="item-img img-placeholder"></div></div><div class="item-info"><span class="item-name">凉拌折耳根</span><span class="item-price">¥31.00</span></div><div class="item-actions"><div class="stepper"><div class="stepper-btn">−</div><span class="stepper-num">1</span><div class="stepper-btn">+</div></div><span class="item-delete">删除</span></div></div></div>
     <div class="section card remark-section"><div class="tableware-row"><span class="row-label">餐具</span><span class="tableware-value">需要餐具 · 2 份</span><span class="tableware-arrow">›</span></div><div class="remark-row"><span class="row-label">备注</span><span class="remark-placeholder">20 字以内，如放门口、不要辣</span></div></div>
@@ -64,7 +66,7 @@
 
     <div class="spacer"></div>
   </div>
-  <div class="bottom-bar"><div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div><div class="bottom-main"><div class="bottom-total-wrap"><div class="bottom-total-line"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">199</span><span class="price-dec">.00</span></div><span class="bottom-total-sub">已优惠 ¥25.00</span></div><div class="submit-btn btn-primary">提交订单</div></div></div>
+  <div class="bottom-bar"><div class="agree-row"><span>提交订单即表示同意</span><span class="agree-link">《用户协议》</span><span>和</span><span class="agree-link">《隐私政策》</span></div><div class="bottom-main"><div class="bottom-total-wrap"><div class="bottom-total-line"><span class="bottom-total-label">合计</span><span class="price-symbol">¥</span><span class="price-int bottom-total-int">199</span><span class="price-dec">.00</span></div><span class="bottom-total-sub">已优惠 ¥25.00</span></div><div class="submit-btn btn-primary">预约下单</div></div></div>
 </div>
 </body>
 </html>

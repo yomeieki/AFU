@@ -42,6 +42,8 @@ const PAGE_COMPONENTS = {
   'local-pickup-picker': ['checkout-benefits', 'slot-picker'],
   'order-confirm': ['checkout-benefits'],
   'local-confirm': ['checkout-benefits', 'tableware-sheet'],
+  // 打烊默认预约态（预约送达 2026-09-21 §5.2）：同一份页面 wxss，镜像内容不同
+  'local-confirm-schedule': ['checkout-benefits', 'tableware-sheet'],
   'local-tableware-sheet': ['checkout-benefits', 'tableware-sheet'],
 }
 
@@ -106,6 +108,7 @@ const PAGE_WXSS = {
   'legal-agreement': 'pages/legal/index.wxss',
   'local-index': 'pages/local/index.wxss',
   'local-confirm': 'pages/local/confirm.wxss',
+  'local-confirm-schedule': 'pages/local/confirm.wxss',
   // 同城主页两种模式都是 pages/index/index（LOCAL 渠道），共用主页 wxss
   'index-local': 'pages/index/index.wxss',
   'index-local-pickup': 'pages/index/index.wxss',
