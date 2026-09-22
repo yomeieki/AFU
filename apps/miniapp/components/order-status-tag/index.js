@@ -18,13 +18,17 @@ Component({
     status: { type: String, value: '' },
     // 'EXPRESS' | 'LOCAL' | 'PICKUP'，只有 PICKUP 会改文案
     deliveryType: { type: String, value: '' },
+    // 是否预约单（order.scheduledAt 非空）。预约送达 2026-09-21 §5.3：PAID 且预约 → 「已预约」
+    scheduled: { type: Boolean, value: false },
   },
   data: {
     label: '',
   },
   observers: {
-    'status, deliveryType': function(status, deliveryType) {
-      var label = deliveryType === 'PICKUP' && PICKUP_LABEL[status] ? PICKUP_LABEL[status] : (STATUS_LABEL[status] || status)
+    'status, deliveryType, scheduled': function(status, deliveryType, scheduled) {
+      var label = scheduled && status === 'PAID'
+        ? '已预约'
+        : (deliveryType === 'PICKUP' && PICKUP_LABEL[status] ? PICKUP_LABEL[status] : (STATUS_LABEL[status] || status))
       this.setData({ label: label })
     },
   },
