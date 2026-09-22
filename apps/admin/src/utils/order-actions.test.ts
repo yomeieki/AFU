@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { everPaid, canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon } from './order-actions.ts'
+import { everPaid, canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon, refundNeedsHuman, refundRetryLabel, refundingHint } from './order-actions.ts'
 
 test('canRefund：没付款就取消的单（还可退金额>0）→ false，这就是 2026-09-22 同城页的 bug', () => {
   assert.equal(canRefund({ status: 'CANCELLED', remainingRefundable: 6210 }), false)
@@ -55,4 +55,36 @@ test('canIssueCoupon：要有 userId 且付过钱', () => {
   assert.equal(canIssueCoupon({ status: 'COMPLETED' }), false)
   assert.equal(canIssueCoupon({ status: 'CANCELLED', userId: 7 }), false)
   assert.equal(canIssueCoupon({ status: 'PENDING_PAYMENT', userId: 7 }), false)
+})
+
+test('refundNeedsHuman：退款中且退款还在微信走（PENDING/PROCESSING）→ false，自动补查会管', () => {
+  assert.equal(refundNeedsHuman({ status: 'REFUNDING', latestRefund: { status: 'PENDING' } }), false)
+  assert.equal(refundNeedsHuman({ status: 'REFUNDING', latestRefund: { status: 'PROCESSING' } }), false)
+})
+
+test('refundNeedsHuman：退款中且 ABNORMAL/CLOSED/FAILED 或没有记录 → true', () => {
+  for (const status of ['ABNORMAL', 'CLOSED', 'FAILED']) {
+    assert.equal(refundNeedsHuman({ status: 'REFUNDING', latestRefund: { status } }), true, status)
+  }
+  assert.equal(refundNeedsHuman({ status: 'REFUNDING', latestRefund: null }), true)
+  assert.equal(refundNeedsHuman({ status: 'REFUNDING' }), true)
+})
+
+test('refundNeedsHuman：不是退款中的单 → false（含已退款、已取消）', () => {
+  assert.equal(refundNeedsHuman({ status: 'REFUNDED', latestRefund: { status: 'SUCCESS' } }), false)
+  assert.equal(refundNeedsHuman({ status: 'CANCELLED', latestRefund: null }), false)
+  assert.equal(refundNeedsHuman({ status: 'PAID', latestRefund: { status: 'FAILED' } }), false)
+})
+
+test('refundRetryLabel：有记录「重试退款」，没记录「发起退款」', () => {
+  assert.equal(refundRetryLabel({ latestRefund: { status: 'FAILED' } }), '重试退款')
+  assert.equal(refundRetryLabel({ latestRefund: null }), '发起退款')
+  assert.equal(refundRetryLabel({}), '发起退款')
+})
+
+test('refundingHint：处理中 / 异常 / 其余为空', () => {
+  assert.equal(refundingHint({ latestRefund: { status: 'PROCESSING' } }), '微信处理中')
+  assert.equal(refundingHint({ latestRefund: { status: 'ABNORMAL' } }), '退款异常')
+  assert.equal(refundingHint({ latestRefund: { status: 'CLOSED' } }), null)
+  assert.equal(refundingHint({ latestRefund: null }), null)
 })

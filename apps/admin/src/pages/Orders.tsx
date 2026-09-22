@@ -16,9 +16,10 @@ import OrderListTable from '../components/orders/OrderListTable'
 import OrderDateFilter from '../components/orders/OrderDateFilter'
 import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
-import { canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon } from '../utils/order-actions'
+import { canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint } from '../utils/order-actions'
 
-// 状态 Tab（含「全部」；REFUNDED 单量少，并入「退款」）
+// 状态 Tab（含「全部」）。「退款待处理」只列要人出手的退款中订单（伪状态，见 utils/order-actions.ts）；
+// 正常退款中的单由自动补查推到结局，不单独给 Tab，在「全部」里能看到状态标签。
 const STATUS_TABS: { value: string; label: string }[] = [
   { value: '', label: '全部' },
   { value: 'PENDING_PAYMENT', label: '待付款' },
@@ -27,7 +28,8 @@ const STATUS_TABS: { value: string; label: string }[] = [
   { value: 'SHIPPED', label: '已发货' },
   { value: 'COMPLETED', label: '已完成' },
   { value: 'CANCELLED', label: '已取消' },
-  { value: 'REFUNDING,REFUNDED', label: '退款' },
+  { value: REFUND_ATTENTION_FILTER, label: '退款待处理' },
+  { value: 'REFUNDED', label: '已退款' },
   { value: 'AFTER_SALE', label: '售后' },
 ]
 
@@ -232,7 +234,6 @@ export default function Orders() {
   // 退款相关按钮（卡片与表格共用同一套样式，见 renderActions 的说明）
   // 显示规则在 utils/order-actions.ts 一处判定，与 LocalOrders / DetailActions 共用
   const renderRefundActions = (order: Order, cls: { danger: string; muted: string }) => {
-    const r = order.latestRefund
     const active = hasActiveRefund(order)
     if (order.status !== 'REFUNDING') {
       if (!canRefund(order)) return null
@@ -242,18 +243,15 @@ export default function Orders() {
         </button>
       )
     }
+    const hint = refundingHint(order)
     return (
       <>
         {!active && (
           <button onClick={() => setRefundTarget(order)} className={cls.danger}>
-            {r ? '重试退款' : '发起退款'}
+            {refundRetryLabel(order)}
           </button>
         )}
-        {r?.status === 'PENDING' || r?.status === 'PROCESSING' ? (
-          <span className={cls.muted}>微信处理中</span>
-        ) : r?.status === 'ABNORMAL' ? (
-          <span className="text-red-500">退款异常</span>
-        ) : null}
+        {hint === '微信处理中' ? <span className={cls.muted}>{hint}</span> : hint === '退款异常' ? <span className="text-red-500">{hint}</span> : null}
         <button onClick={() => handleCompleteRefund(order)} className={cls.muted}>
           手动标记完成
         </button>

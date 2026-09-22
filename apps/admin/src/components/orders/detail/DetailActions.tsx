@@ -4,7 +4,7 @@ import Button from '../../ui/Button'
 import { toast } from '../../ui/Toast'
 import { reprintOrder } from '../../../api/admin'
 import type { OrderDetail } from '../../../types'
-import { canRefund, hasActiveRefund, refundLabel, canReprint } from '../../../utils/order-actions'
+import { canRefund, hasActiveRefund, refundLabel, canReprint, refundRetryLabel, refundingHint } from '../../../utils/order-actions'
 
 interface Props {
   order: OrderDetail
@@ -39,7 +39,6 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
     }
   }
 
-  const r = order.latestRefund
   const refundActive = hasActiveRefund(order)
 
   // 显示规则在 utils/order-actions.ts 一处判定，与 Orders / LocalOrders 共用
@@ -52,18 +51,17 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
         </Button>
       )
     }
+    const hint = refundingHint(order)
     return (
       <>
         {!refundActive && (
           <Button variant="danger" onClick={onRefund} className="flex-1 md:flex-none whitespace-nowrap">
-            {r ? '重试退款' : '发起退款'}
+            {refundRetryLabel(order)}
           </Button>
         )}
-        {r?.status === 'PENDING' || r?.status === 'PROCESSING' ? (
-          <span className="text-sm text-gray-500 self-center whitespace-nowrap">微信处理中</span>
-        ) : r?.status === 'ABNORMAL' ? (
-          <span className="text-sm text-red-500 self-center whitespace-nowrap">退款异常</span>
-        ) : null}
+        {hint && (
+          <span className={`text-sm self-center whitespace-nowrap ${hint === '退款异常' ? 'text-red-500' : 'text-gray-500'}`}>{hint}</span>
+        )}
       </>
     )
   })()

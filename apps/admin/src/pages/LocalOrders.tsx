@@ -12,7 +12,7 @@ import type { DeliveryInfo, Order } from '../types'
 import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
 import { showWorkbenchLink } from '../utils/order-list'
-import { canRefund, hasActiveRefund, refundLabel } from '../utils/order-actions'
+import { canRefund, hasActiveRefund, refundLabel, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint } from '../utils/order-actions'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -21,6 +21,8 @@ const STATUS_TABS: { value: string; label: string }[] = [
   { value: 'PREPARING', label: '备餐中' },
   { value: 'SHIPPED', label: '配送中/待取餐' },
   { value: 'COMPLETED', label: '已完成' },
+  // 只列要人出手的退款中订单（伪状态，见 utils/order-actions.ts）；正常退款中的单由自动补查推到结局
+  { value: REFUND_ATTENTION_FILTER, label: '退款待处理' },
   { value: 'REFUNDED', label: '已退款' },
 ]
 
@@ -246,6 +248,20 @@ export default function LocalOrders() {
                 <Button size="sm" variant="danger" onClick={() => openRefund(o)} disabled={hasActiveRefund(o)} title={hasActiveRefund(o) ? '有退款处理中' : ''}>
                   {refundLabel(o)}
                 </Button>
+              )}
+              {/* 退款中：与邮寄页 / 详情页同一套——微信还在走就只给提示，走到失败/异常/没记录才给按钮
+                  （2026-09-22 前这页对退款中的单什么都不显示，要点进详情页才有重试） */}
+              {o.status === 'REFUNDING' && (
+                <>
+                  {!hasActiveRefund(o) && (
+                    <Button size="sm" variant="danger" onClick={() => openRefund(o)}>
+                      {refundRetryLabel(o)}
+                    </Button>
+                  )}
+                  {refundingHint(o) && (
+                    <span className={`text-xs self-center whitespace-nowrap ${refundingHint(o) === '退款异常' ? 'text-red-500' : 'text-gray-500'}`}>{refundingHint(o)}</span>
+                  )}
+                </>
               )}
             </>
           )}

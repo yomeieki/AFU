@@ -774,7 +774,7 @@
 |------|------|
 | page | 页码，默认 1 |
 | pageSize | 每页数量，默认 20，上限 50 |
-| status | 订单状态筛选；逗号分隔可传多个（如 `REFUNDING,REFUNDED`） |
+| status | 订单状态筛选；逗号分隔可传多个（如 `REFUNDING,REFUNDED`）。伪状态 `REFUND_ATTENTION`（2026-09-22）= 退款待处理：`status=REFUNDING` 且没有 PENDING/PROCESSING 的退款记录（无记录 / ABNORMAL / CLOSED / FAILED，都要人出手）；与其他状态不能并列 |
 | keyword | 订单号 / 收货人 / 手机号模糊（`orderNo` 为旧参数名，仍兼容） |
 | deliveryType | `EXPRESS` \| `LOCAL` \| `PICKUP` \| `ALL`，默认 `EXPRESS` |
 | channel | `LOCAL`（一次看外送+自取）\| `EXPRESS`；与 `deliveryType` 同传时以 `channel` 为准 |

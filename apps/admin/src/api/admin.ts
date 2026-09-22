@@ -103,6 +103,7 @@ export const generateQrCode = (id: number) =>
 export const getOrders = (params?: {
   page?: number
   pageSize?: number
+  /** 订单状态，逗号分隔可多个；伪状态 REFUND_ATTENTION = 退款待处理（见 utils/order-actions.ts） */
   status?: string
   /** 订单号 / 收货人 / 手机号 模糊 */
   keyword?: string

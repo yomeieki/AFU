@@ -97,8 +97,17 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const page = Math.max(1, Number(req.query.page) || 1)
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 20))
     const rawStatus = req.query.status as string | undefined
-    const statuses = rawStatus ? rawStatus.split(',').filter(Boolean) : []
+    // REFUND_ATTENTION（2026-09-22）是伪状态：「退款待处理」Tab。含义 = 订单在 REFUNDING，且没有
+    // 一笔退款还在微信那边走（PENDING/PROCESSING）——剩下的都是要人出手的：没有退款记录（取消后
+    // 迟到付款、自动退款发起前就抛错）、ABNORMAL（去商户平台处理）、CLOSED/FAILED（后台重试）。
+    // 正常退款中的单不在这里：自动补查（services/refund-reconcile.ts）会把它们推到结局，店员不用盯。
+    // 与 admin 端 utils/order-actions.ts 的 refundNeedsHuman 是同一条规则的服务端版本。
+    const refundAttention = rawStatus === 'REFUND_ATTENTION'
+    const statuses = rawStatus && !refundAttention ? rawStatus.split(',').filter(Boolean) : []
     const status = statuses.length === 1 ? statuses[0] : undefined
+    const attentionWhere: Prisma.OrderWhereInput = refundAttention
+      ? { status: 'REFUNDING', refunds: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }
+      : {}
     // keyword 新参数；orderNo 旧参数兼容
     const keyword = ((req.query.keyword as string | undefined) ?? (req.query.orderNo as string | undefined))?.trim()
     // 邮寄订单页默认只看 EXPRESS；同城看板传 LOCAL / PICKUP；channel=LOCAL 一次看外送 + 自取；ALL 不过滤
@@ -136,6 +145,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 
     const where = {
       ...(status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}),
+      ...attentionWhere,
       ...dtWhere,
       ...createdAtWhere,
       ...scWhere,

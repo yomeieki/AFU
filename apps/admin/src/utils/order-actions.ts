@@ -53,3 +53,37 @@ export function canReprint(o: { status: string }): boolean {
 export function canIssueCoupon(o: { status: string; userId?: number }): boolean {
   return o.userId !== undefined && everPaid(o)
 }
+
+/**
+ * 「退款待处理」Tab 传给列表接口的伪状态（routes/admin/orders.ts 识别）。
+ * 只列要人出手的单，正常退款中的单不出现——自动补查会把它们推到结局。
+ */
+export const REFUND_ATTENTION_FILTER = 'REFUND_ATTENTION'
+
+/**
+ * 这张退款中的单需要人出手吗。与服务端 REFUND_ATTENTION 的 where 同一条规则：
+ * 订单在 REFUNDING，且没有一笔退款还在微信那边走（PENDING/PROCESSING）。
+ * 命中的四种：没有退款记录 / ABNORMAL（去商户平台处理）/ CLOSED / FAILED（后台重试）。
+ */
+export function refundNeedsHuman(o: { status: string; latestRefund?: { status: string } | null }): boolean {
+  if (o.status !== 'REFUNDING') return false
+  const r = o.latestRefund
+  return !(r && (r.status === 'PENDING' || r.status === 'PROCESSING'))
+}
+
+/** 退款中的单上那颗按钮的文案：有过记录叫「重试退款」，一条都没有叫「发起退款」 */
+export function refundRetryLabel(o: { latestRefund?: { status: string } | null }): '重试退款' | '发起退款' {
+  return o.latestRefund ? '重试退款' : '发起退款'
+}
+
+/**
+ * 退款中的单旁边的状态提示。ABNORMAL 虽然在 ACTIVE_REFUND_STATUSES 里（服务端不许再发起），
+ * 但对店员来说是「要去商户平台处理」，所以单独给文案。
+ */
+export function refundingHint(o: { latestRefund?: { status: string } | null }): '微信处理中' | '退款异常' | null {
+  const r = o.latestRefund
+  if (!r) return null
+  if (r.status === 'PENDING' || r.status === 'PROCESSING') return '微信处理中'
+  if (r.status === 'ABNORMAL') return '退款异常'
+  return null
+}
