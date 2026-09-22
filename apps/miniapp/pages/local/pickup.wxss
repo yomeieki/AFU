@@ -119,24 +119,6 @@
 .field-input { flex: 1; min-height: 64rpx; color: var(--text-1); font-size: 28rpx; }
 .field-placeholder { color: var(--text-disabled); }
 
-/* 时段弹层：最大高度约 70vh、含安全区（与券弹层同一套约定） */
-.sheet-mask { position: fixed; z-index: 100; inset: 0; background: rgba(0, 0, 0, 0.45); }
-.sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 70vh; display: flex; flex-direction: column; padding: 24rpx 24rpx calc(24rpx + env(safe-area-inset-bottom)); background: var(--card); border-radius: 24rpx 24rpx 0 0; box-sizing: border-box; }
-.sheet-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 16rpx; }
-.sheet-title { font-size: 30rpx; font-weight: 600; color: var(--text-1); }
-.sheet-close { font-size: 26rpx; color: var(--text-3); }
-.day-tabs { display: flex; gap: 16rpx; padding: 8rpx 0 16rpx; }
-.day-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4rpx; padding: 14rpx 0; border-radius: 10rpx; background: var(--bg); color: var(--text-2); font-size: 27rpx; }
-.day-tab.active { background: var(--brand-bg); color: var(--brand); font-weight: 600; }
-.day-date { font-size: 21rpx; color: var(--text-3); }
-.day-tab.active .day-date { color: var(--brand); opacity: 0.8; }
-.day-empty { font-size: 20rpx; color: var(--text-3); }
-.slot-grid-wrap { flex: 1; min-height: 200rpx; max-height: 48vh; }
-.slot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14rpx; padding-bottom: 8rpx; }
-.slot-cell { padding: 18rpx 0; border-radius: 10rpx; background: var(--bg); color: var(--text-1); font-size: 26rpx; text-align: center; }
-.slot-cell.active { background: var(--brand); color: #fff; font-weight: 600; }
-.slot-grid-empty { padding: 60rpx 0; color: var(--text-3); font-size: 26rpx; text-align: center; }
-
 .bottom-total-wrap { flex-direction: column; align-items: flex-start; }
 .bottom-total-line { display: flex; align-items: baseline; }
 .bottom-total-sub { display: block; font-size: 22rpx; color: var(--brand); }

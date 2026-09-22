@@ -36,6 +36,16 @@
   font-size: 24rpx;
   color: var(--text-3);
 }
+/* 预约单顶部横幅：与 local-store-header 的 status-pill-schedule 同一套蓝色调 */
+.schedule-banner {
+  margin: 16rpx 24rpx 0;
+  padding: 18rpx 30rpx;
+  border-radius: var(--radius-md);
+  background: var(--info-bg, #eff6ff);
+  color: var(--info, #3b82f6);
+  font-size: 26rpx;
+  font-weight: 600;
+}
 
 /* Card */
 .card {

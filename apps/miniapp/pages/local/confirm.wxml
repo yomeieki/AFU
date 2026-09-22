@@ -1,8 +1,8 @@
 <wxs src="../../utils/price.wxs" module="pricefmt" />
 <view class="page">
-  <view wx:if="{{headNotice}}" class="head-notice">
+  <view wx:if="{{headNotice}}" class="head-notice {{headBlocking ? '' : 'head-notice-soft'}}">
     <text class="head-notice-text">{{headNotice}}</text>
-    <view class="head-notice-action" bindtap="goExpress">改用全国邮寄</view>
+    <view wx:if="{{headBlocking}}" class="head-notice-action" bindtap="goExpress">改用全国邮寄</view>
   </view>
 
   <view class="section card address-section" bindtap="onSelectAddress">
@@ -31,13 +31,38 @@
       <text>{{quote.distanceLabel}}</text>
       <text wx:if="{{quote.fee > 0}}">配送费 ¥{{pricefmt.fen(quote.fee)}}</text>
       <text wx:else>免运费</text>
-      <text>{{quote.etaText}}</text>
+      <text wx:if="{{scheduleMode !== 'SCHEDULED'}}">{{quote.etaText}}</text>
+      <text wx:elif="{{slotSelected}}">预计 {{slotSelected.text}} 送达</text>
     </view>
     <text wx:elif="{{!address}}" class="delivery-empty">选择地址后计算配送费</text>
     <text wx:else class="delivery-empty">运费计算中…</text>
     <text wx:if="{{quote.peakHint}}" class="arrival-time">{{quote.peakHint}}</text>
-    <text wx:if="{{quote && !quoting && !quoteError}}" class="arrival-time">备餐从商家接单开始计时，具体送达时间以骑手取货后为准</text>
+    <text wx:if="{{quote && !quoting && !quoteError && scheduleMode !== 'SCHEDULED'}}" class="arrival-time">备餐从商家接单开始计时，具体送达时间以骑手取货后为准</text>
     <text wx:if="{{blockReason && quote && !quoting}}" class="delivery-block">{{blockReason}}</text>
+  </view>
+
+  <!-- 送达时间卡（预约送达 2026-09-21 §5.2）：营业中默认尽快、可切预约；打烊时尽快置灰，
+       预约会在 confirm.js 的 refreshQuote 成功分支里自动选中并预选最早格（S8）。
+       报价失败/阻塞/加载中都不显示——那些状态下连 quoteToken 都没有，没有「送达时间」可选。 -->
+  <view class="section card schedule-section" wx:if="{{quote && !quoting && !quoteError && !blockReason}}">
+    <view class="section-title">送达时间</view>
+    <view class="mode-row">
+      <view class="mode-opt {{scheduleMode === 'ASAP' ? 'active' : ''}} {{closedNow ? 'disabled' : ''}}" bindtap="pickMode" data-mode="ASAP">
+        <text class="mode-name">尽快送达</text>
+        <text class="mode-sub">{{closedNow ? '已打烊' : quote.etaText}}</text>
+      </view>
+      <view class="mode-opt {{scheduleMode === 'SCHEDULED' ? 'active' : ''}} {{!scheduleAvailable ? 'disabled' : ''}}" bindtap="pickMode" data-mode="SCHEDULED">
+        <text class="mode-name">预约时段</text>
+        <text class="mode-sub">{{!scheduleAvailable ? '暂未开通' : (slotSelected ? slotSelected.text : '选择送达时段')}}</text>
+      </view>
+    </view>
+    <view wx:if="{{scheduleMode === 'SCHEDULED'}}" class="slot-row" bindtap="openPicker">
+      <text wx:if="{{slotsLoading && !slotSelected}}" class="slot-muted">正在获取可选时段…</text>
+      <text wx:elif="{{slotsError}}" class="slot-error">{{slotsError}}</text>
+      <text wx:elif="{{slotSelected}}" class="slot-text {{slotStale ? 'slot-stale' : ''}}">预计 {{slotSelected.text}} 送达<text wx:if="{{slotStale}}" class="slot-stale-tip"> 该时段已过，请重选</text></text>
+      <text wx:elif="{{hasAnySlot}}" class="slot-muted">请选择送达时段 ›</text>
+      <text wx:else class="slot-muted">暂无可选时段</text>
+    </view>
   </view>
 
   <view class="section card">
@@ -179,3 +204,4 @@
 </view>
 
 <tableware-sheet show="{{tablewareOpen}}" value="{{tableware}}" bind:confirm="onTablewareConfirm" bind:close="closeTableware" />
+<slot-picker show="{{pickerOpen}}" title="选择送达时间" days="{{slotDays}}" active-day="{{slotActiveDay}}" selected-start-at="{{slotSelected ? slotSelected.startAt : ''}}" bind:daychange="onSlotDay" bind:select="onSlotPick" bind:close="closePicker" />

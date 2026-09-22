@@ -1,5 +1,6 @@
 const { getOrders } = require('../../api/order')
 const { formatPrice } = require('../../utils/format')
+const scheduleOrderUtil = require('../../utils/schedule-order')
 
 var TABS = [
   { label: '全部', status: '' },
@@ -75,13 +76,15 @@ function decorate(order) {
     extra = (extra ? extra + ' · ' : '') + AFTER_SALE_LABEL[order.afterSale.status]
   }
   return Object.assign({}, order, {
-    statusLabel: statusLabels[order.status] || order.status,
+    // 预约单 PAID 优先显示「已预约」，其余沿用原状态表（utils/schedule-order）
+    statusLabel: scheduleOrderUtil.scheduleStatusLabel(order) || statusLabels[order.status] || order.status,
     actualAmountText: formatPrice(order.actualAmount),
     firstItem: coverItem(order.items),
     moreCount: order.items && order.items.length > 1 ? order.items.length - 1 : 0,
     extraText: extra,
     countdown: countdownText(order.payExpireAt),
-    typeLabel: (TYPE_META[order.deliveryType] || TYPE_META.EXPRESS).label,
+    // 预约单卡片标签「同城 · 预约」，否则沿用原 TYPE_META（utils/schedule-order）
+    typeLabel: scheduleOrderUtil.scheduleTypeLabel(order) || (TYPE_META[order.deliveryType] || TYPE_META.EXPRESS).label,
     typeClass: (TYPE_META[order.deliveryType] || TYPE_META.EXPRESS).cls,
   })
 }

@@ -106,42 +106,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.order-status-tag {
+/* 状态标签改用 components/order-status-tag（预约送达 2026-09-21 §5.3：
+   PAID 且预约单显示「已预约」，组件内部按 tag/tag-{status} 上色，与下面这套色值一一对应）。
+   这条规则只补组件实例在 flex 行里的收缩行为，颜色/文案由组件自己决定。 */
+order-status-tag {
   flex-shrink: 0;
-  padding: 4rpx 16rpx;
-  border-radius: 999rpx;
-  font-size: 22rpx;
-  background: var(--gray-bg, #f3f4f6);
-  color: var(--gray, #9ca3af);
-}
-.order-status-PENDING_PAYMENT {
-  background: var(--warning-bg, #fff7e8);
-  color: var(--warning, #ff9500);
-}
-.order-status-PAID {
-  background: var(--info-bg, #eff6ff);
-  color: var(--info, #3b82f6);
-}
-.order-status-PREPARING {
-  background: var(--warning-bg);
-  color: var(--warning);
-}
-.order-status-SHIPPED {
-  background: var(--cyan-bg, #ecfeff);
-  color: var(--cyan, #0891b2);
-}
-.order-status-COMPLETED {
-  background: var(--success-bg, #f0fdf4);
-  color: var(--success, #16a34a);
-}
-.order-status-CANCELLED {
-  background: var(--gray-bg, #f3f4f6);
-  color: var(--gray, #9ca3af);
-}
-.order-status-REFUNDING,
-.order-status-REFUNDED {
-  background: var(--danger-bg, #fef2f2);
-  color: var(--danger, #ef4444);
 }
 .order-item-row {
   display: flex;

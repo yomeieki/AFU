@@ -61,7 +61,7 @@ test('结算态：空车、meta 未到都不放行', function () {
   assert.equal(checkoutStateOf(null, 2, 9900, false).disabled, true)
 })
 
-const { minOrderOf, pickupRulesText, resolveLocalMode, altModeOf, modeAvailable, holidayText } =
+const { minOrderOf, pickupRulesText, resolveLocalMode, altModeOf, modeAvailable, holidayText, deliveryModeHint, deliveryScheduleOnly } =
   require('../../apps/miniapp/utils/local-catalog')
 const PK = Object.assign({}, OPEN, {
   closedKind: 'OPEN',
@@ -132,4 +132,26 @@ test('pickupModeHint：店休且自取可预约才显示「可预约」，营业
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, holiday: { until: null, reason: '装修' } })), '')
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, pickup: Object.assign({}, PK.pickup, { paused: { reason: 'x', until: null } }) })), '')
   assert.equal(pickupModeHint(null), '')
+})
+
+
+const openMeta = { enabled: true, isOpen: true, paused: null, holiday: null, closedKind: 'OPEN', nextOpenText: '', fee: { minOrderAmount: 4000 }, delivery: { scheduleEnabled: true, earliestScheduleText: '' } }
+const closedSched = Object.assign({}, openMeta, { isOpen: false, closedKind: 'CLOSED', nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, earliestScheduleText: '最早明天 09:30–10:00送达' } })
+const closedNoSched = Object.assign({}, closedSched, { delivery: { scheduleEnabled: false, earliestScheduleText: '' } })
+
+test('打烊 + 预约开：胶囊「已打烊 · 可预约」、通知软提示带最早送达、外送副标「（可预约）」', () => {
+  assert.deepEqual(storeStatusOf(closedSched, 'DELIVERY'), { tone: 'schedule', label: '已打烊 · 可预约' })
+  assert.deepEqual(headNoticeOf(closedSched, 'DELIVERY'), { text: '现在下单为预约配送，最早明天 09:30–10:00送达', blocking: false })
+  assert.equal(deliveryModeHint(closedSched), '（可预约）')
+  assert.equal(deliveryScheduleOnly(closedSched), true)
+})
+test('打烊 + 预约关：与改前逐字节一致（阻塞）', () => {
+  assert.deepEqual(storeStatusOf(closedNoSched, 'DELIVERY'), { tone: 'closed', label: '已打烊' })
+  assert.deepEqual(headNoticeOf(closedNoSched, 'DELIVERY'), { text: '明天 09:00 营业', blocking: true })
+  assert.equal(deliveryModeHint(closedNoSched), '')
+})
+test('营业中 / 暂停 / 休业：预约开关不影响原判定', () => {
+  assert.deepEqual(storeStatusOf(openMeta, 'DELIVERY'), { tone: 'open', label: '营业中' })
+  assert.equal(deliveryScheduleOnly(Object.assign({}, closedSched, { paused: { reason: '忙' } })), false)
+  assert.equal(deliveryScheduleOnly(Object.assign({}, closedSched, { holiday: { until: null } })), false)
 })

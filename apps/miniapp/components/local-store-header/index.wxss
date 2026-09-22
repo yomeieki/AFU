@@ -44,6 +44,8 @@
 .status-pill-open { color: var(--success, #16a34a); background: var(--success-bg, #f0fdf4); }
 .status-pill-paused { color: var(--warning, #ff9500); background: var(--warning-bg, #fff7e8); }
 .status-pill-closed { color: var(--gray, #9ca3af); background: var(--gray-bg, #f3f4f6); }
+/* 打烊但预约开着（2026-09-21 预约送达 §5.1）：不是灰胶囊，是可预约的信息蓝 */
+.status-pill-schedule { color: var(--info, #2f6fed); background: var(--info-bg, #e8f0ff); }
 
 .delivery-rules {
   display: block;

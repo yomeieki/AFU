@@ -27,6 +27,24 @@
 .delivery-error { display: flex; align-items: center; justify-content: space-between; color: var(--brand); font-size: 26rpx; }
 .retry-inline { padding: 8rpx 16rpx; border: 1rpx solid var(--brand); border-radius: 999rpx; font-size: 23rpx; }
 .delivery-block { display: block; margin-top: 12rpx; color: var(--brand); font-size: 24rpx; line-height: 1.45; }
+
+/* ── 头条软提示（预约送达 2026-09-21 §5.2）：打烊但预约开着时不阻塞，颜色不用警示色 ── */
+.head-notice-soft { background: var(--gray-bg); color: var(--text-2); }
+
+/* ── 送达时间卡（尽快 / 预约） ─────────────────────────────── */
+.mode-row { display: flex; gap: 16rpx; }
+.mode-opt { flex: 1; border: 2rpx solid var(--border); border-radius: 12rpx; padding: 18rpx; text-align: center; }
+.mode-opt.active { border-color: var(--brand); background: var(--brand-bg); }
+.mode-opt.disabled { opacity: .45; }
+.mode-name { display: block; color: var(--text-1); font-weight: 600; }
+.mode-opt.active .mode-name { color: var(--brand); }
+.mode-sub { display: block; margin-top: 6rpx; color: var(--text-3); font-size: 22rpx; }
+.slot-row { margin-top: 16rpx; padding-top: 16rpx; border-top: 1rpx solid var(--divider); }
+.slot-text { color: var(--text-1); font-size: 28rpx; font-weight: 600; }
+.slot-stale { color: var(--text-3); text-decoration: line-through; }
+.slot-stale-tip { color: var(--brand); font-size: 23rpx; text-decoration: none; }
+.slot-muted { color: var(--text-3); font-size: 26rpx; line-height: 1.5; }
+.slot-error { color: var(--brand); font-size: 26rpx; }
 .fee-flash { animation: fee-flash 1.2s ease-in-out; }
 @keyframes fee-flash { 0%, 100% { color: var(--text-2); } 50% { color: var(--brand); font-weight: 600; } }
 .item-row { display: flex; align-items: center; gap: 16rpx; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }

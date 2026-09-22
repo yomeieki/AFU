@@ -9,6 +9,7 @@ var fmtDateTime = timeUtil.fmtDateTime
 var fmtHHmm = timeUtil.fmtHHmm
 var expressTrackUtil = require('../../utils/express-track')
 var tablewareUtil = require('../../utils/tableware')
+var scheduleOrderUtil = require('../../utils/schedule-order')
 
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
@@ -208,8 +209,16 @@ function buildLocalTimeline(order) {
     return steps
   }
 
-  steps.push({ label: '支付成功', time: t(order.paidAt), done: !!order.paidAt })
-  steps.push({ label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt })
+  // 预约单：接单前把「商家将在 HH:mm 前确认」挂在「支付成功」这步；
+  // 接单后把「商家已确认，HH:mm 开始备餐」挂在「商家接单」这步。非预约单两处都是 ''。
+  steps.push({
+    label: '支付成功', time: t(order.paidAt), done: !!order.paidAt,
+    extra: !order.acceptedAt ? scheduleOrderUtil.schedulePaidExtra(order, fmtHHmm) : '',
+  })
+  steps.push({
+    label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt,
+    extra: order.acceptedAt ? scheduleOrderUtil.schedulePaidExtra(order, fmtHHmm) : '',
+  })
   steps.push({ label: '骑手已接单', time: '', done: !!riderAccepted, extra: riderAccepted ? riderExtra : '' })
   steps.push({ label: '骑手已到店', time: '', done: !!riderAtStore })
   steps.push({ label: '配送中', time: t(delivery && delivery.pickedUpAt), done: order.status === 'SHIPPED', extra: order.status === 'SHIPPED' ? riderExtra : '' })
@@ -324,7 +333,9 @@ function decorateOrder(order) {
   var deliveryStatus = delivery && delivery.status
   var isDeliveryNeutral = !!deliveryStatus && DELIVERY_NEUTRAL.indexOf(deliveryStatus) !== -1
   return Object.assign({}, order, {
-    statusLabel: (isPickup ? PICKUP_STATUS_LABEL : STATUS_LABEL)[order.status] || order.status,
+    // 预约单 PAID 优先显示「已预约」（utils/schedule-order），其余沿用原表
+    statusLabel: scheduleOrderUtil.scheduleStatusLabel(order) || (isPickup ? PICKUP_STATUS_LABEL : STATUS_LABEL)[order.status] || order.status,
+    scheduleBanner: scheduleOrderUtil.scheduleBannerText(order),
     isLocal: isLocal,
     isExpress: isExpress,
     isPickup: isPickup,
@@ -347,11 +358,16 @@ function decorateOrder(order) {
     //  ② 已接单、骑手还没取货：给接单时算好的钟点，但标「预计」；
     //  ③ 骑手已取货：这才是真正的预计送达（剩下的只有路上那一段，最确定）。
     // estimatedDeliveryAt 现在是**接单时**才落库的，所以 ① 里它本来就是空的。
-    estimatedDeliveryText: isLocal && order.estimatedDeliveryAt ? deadlineText(order.estimatedDeliveryAt) : '',
-    estimatedDeliveryHint: !isLocal ? '' : (
+    // 预约单不走「三段越往后越确定」那套——顾客要看的是约定的送达时段，不是接单进度
+    estimatedDeliveryText: isLocal && order.scheduledAt && order.schedule && order.schedule.slotLabel
+      ? (order.schedule.slotLabel + ' 送达')
+      : (isLocal && order.estimatedDeliveryAt ? deadlineText(order.estimatedDeliveryAt) : ''),
+    estimatedDeliveryHint: (!isLocal || (order.scheduledAt && order.schedule && order.schedule.slotLabel)) ? '' : (
       !order.acceptedAt ? '商家接单后显示'
         : (delivery && delivery.pickedUpAt ? '' : '骑手取货后更准')
     ),
+    // 取消卡对预约单的三段文案（utils/schedule-order），非预约单为 ''
+    scheduleCancelCopy: scheduleOrderUtil.scheduleCancelCopy(order, fmtHHmm),
     cancelDeadlineText: deadlineText(order.cancelRequestDeadline),
     // 申请被驳回过（人工或超时自动）。顾客上一次看到的是「已提交，商家会尽快处理」，
     // 不给个结论他会一直等——而驳回把 cancelRequestedAt 清空了，只能靠这条痕迹。

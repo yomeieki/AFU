@@ -284,10 +284,11 @@ Page({
     this.loadSlots()
   },
   selectDay: function(e) {
-    this.setData({ activeDay: Number(e.currentTarget.dataset.idx) || 0 })
+    var idx = Number((e.detail && e.detail.idx != null) ? e.detail.idx : (e.currentTarget && e.currentTarget.dataset.idx))
+    this.setData({ activeDay: idx || 0 })
   },
   selectSlot: function(e) {
-    var idx = Number(e.currentTarget.dataset.idx)
+    var idx = Number((e.detail && e.detail.idx != null) ? e.detail.idx : (e.currentTarget && e.currentTarget.dataset.idx))
     var day = this.data.days[this.data.activeDay]
     var slot = day && day.slots[idx]
     if (!slot) return

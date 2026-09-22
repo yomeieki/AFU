@@ -1,0 +1,11 @@
+apps/server/**
+apps/admin/**
+apps/miniapp/utils/channel.js
+apps/miniapp/utils/pickup-checkout-state.js
+apps/miniapp/pages/local/index.js
+apps/miniapp/pages/order/confirm.*
+apps/miniapp/utils/checkout-pay.js
+apps/miniapp/utils/request.js
+apps/miniapp/config/**
+scripts/e2e.sh
+scripts/e2e.d/**

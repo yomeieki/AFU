@@ -38,6 +38,8 @@ function storeStatusOf(meta, mode) {
     return { tone: 'open', label: '可预约' }
   }
   if (meta.paused) return { tone: 'paused', label: '暂停接单' }
+  // 打烊但预约开着（2026-09-21 预约送达 §5.1）：不是灰胶囊，是「可预约」——顾客现在下单是预约配送
+  if (deliveryScheduleOnly(meta)) return { tone: 'schedule', label: '已打烊 · 可预约' }
   // 两段营业时间中间那段是「午间休息」，不是打烊（PO 2026-09-08）
   if (meta.enabled && !meta.isOpen && meta.closedKind === 'BREAK') return { tone: 'closed', label: '午间休息' }
   if (!meta.enabled || !meta.isOpen) return { tone: 'closed', label: '已打烊' }
@@ -67,6 +69,10 @@ function headNoticeOf(meta, mode) {
       text: '暂停接单' + (meta.paused.reason ? '：' + meta.paused.reason : ''),
       blocking: true,
     }
+  }
+  if (deliveryScheduleOnly(meta)) {
+    var earliest = meta.delivery && meta.delivery.earliestScheduleText
+    return { text: '现在下单为预约配送' + (earliest ? '，' + earliest : ''), blocking: false }
   }
   if (!meta.isOpen) return { text: meta.nextOpenText || '当前非营业时间', blocking: true }
   return { text: '', blocking: false }
@@ -157,6 +163,17 @@ function pickupModeHint(meta) {
   return d.tone === 'closed' && p.tone === 'open' ? '（可预约）' : ''
 }
 
+/** 外送此刻只能预约：开着、没暂停、没休业、不在营业时段、预约开着。营业中或预约关着都返回 false */
+function deliveryScheduleOnly(meta) {
+  if (!meta || meta.holiday || !meta.enabled || meta.paused) return false
+  var d = meta.delivery
+  return !!(d && d.scheduleEnabled && !meta.isOpen)
+}
+// 切换栏「外送」下的小字：只在打烊而预约可用时补「（可预约）」，与自取的 pickupModeHint 同一取向
+function deliveryModeHint(meta) {
+  return deliveryScheduleOnly(meta) ? '（可预约）' : ''
+}
+
 module.exports = {
   storeStatusOf: storeStatusOf,
   pickupModeHint: pickupModeHint,
@@ -169,4 +186,6 @@ module.exports = {
   altModeOf: altModeOf,
   resolveLocalMode: resolveLocalMode,
   holidayText: holidayText,
+  deliveryScheduleOnly: deliveryScheduleOnly,
+  deliveryModeHint: deliveryModeHint,
 }

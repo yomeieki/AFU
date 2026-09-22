@@ -8,6 +8,9 @@
     <text class="status-order-no">{{order.orderNo}}</text>
   </view>
 
+  <!-- 预约单：顶部横幅「预约配送 · 明天 12:00–12:30 送达」；非预约单为空不渲染 -->
+  <view class="schedule-banner" wx:if="{{order.scheduleBanner}}">{{order.scheduleBanner}}</view>
+
   <!-- 本单得分：仅已完成且真有得分时出现 -->
   <view class="points-earned" wx:if="{{order.pointsEarnedText}}">
     <text>{{order.pointsEarnedText}}</text>
@@ -101,18 +104,27 @@
     <text class="courier-route-distance" wx:if="{{courierDistanceText}}">骑手距您约 {{courierDistanceText}} km</text>
   </view>
 
-  <view class="card local-cancel-card" wx:if="{{(order.isLocal || order.isExpress || order.isPickup) && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelRejected || order.showLocalCancelUnavailable)}}">
+  <view class="card local-cancel-card" wx:if="{{(order.isLocal || order.isExpress || order.isPickup) && (order.canRequestCancel || order.cancelRequestedAt || order.showLocalCancelRejected || order.showLocalCancelUnavailable || order.scheduleCancelCopy)}}">
     <view class="local-cancel-submitted" wx:if="{{order.cancelRequestedAt}}">取消申请已提交，商家会尽快处理</view>
     <!-- 申请被驳回（店员点的或超时自动）。不写明是哪一种：对顾客而言结论一样，
          而「系统自动回绝」听起来比「商家考虑后未同意」更冷。 -->
     <view class="local-cancel-unavailable" wx:elif="{{order.showLocalCancelRejected}}">商家未同意取消，订单继续{{order.isExpress ? '备货' : '制作'}}中。如有问题请联系商家</view>
     <view wx:elif="{{order.canRequestCancel}}">
       <text class="local-cancel-title">可申请取消</text>
-      <text class="local-cancel-copy" wx:if="{{order.isPickup}}">可申请取消，商家确认后全额退款</text>
-      <text class="local-cancel-copy" wx:if="{{!order.isPickup && graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.cancelDeadlineText}}）</text>
+      <!-- 预约单优先显示 scheduleCancelCopy，优先于下面 graceMin 那两行 -->
+      <text class="local-cancel-copy" wx:if="{{order.scheduleCancelCopy}}">{{order.scheduleCancelCopy}}</text>
+      <text class="local-cancel-copy" wx:elif="{{order.isPickup}}">可申请取消，商家确认后全额退款</text>
+      <text class="local-cancel-copy" wx:elif="{{!order.isPickup && graceMin}}">接单后 {{graceMin}} 分钟内可申请取消（截止 {{order.cancelDeadlineText}}）</text>
       <text class="local-cancel-copy" wx:elif="{{!order.isPickup && order.cancelDeadlineText}}">可申请取消截止 {{order.cancelDeadlineText}}</text>
     </view>
-    <view class="local-cancel-unavailable" wx:else>{{order.isPickup ? '餐品已在准备，如有问题请联系商家' : ('订单已开始' + (order.isExpress ? '备货' : '制作') + '，如有问题请联系商家')}}</view>
+    <!-- 预约单「两小时外」窗口（canSelfCancel）：上面三个分支都不成立，单独接住，
+         否则会落进下面的 wx:else「已备好」兜底，显示错误的「制作中」文案（R2） -->
+    <view wx:elif="{{order.canSelfCancel && order.scheduleCancelCopy}}">
+      <text class="local-cancel-title">可直接取消</text>
+      <text class="local-cancel-copy">{{order.scheduleCancelCopy}}</text>
+    </view>
+    <!-- 预约单已备好时优先显示 scheduleCancelCopy（同城/邮寄默认文案照旧） -->
+    <view class="local-cancel-unavailable" wx:else>{{order.scheduleCancelCopy || (order.isPickup ? '餐品已在准备，如有问题请联系商家' : ('订单已开始' + (order.isExpress ? '备货' : '制作') + '，如有问题请联系商家'))}}</view>
   </view>
 
   <!-- Items -->
@@ -336,7 +348,7 @@
     <text>联系商家</text>
   </view>
   <view class="cancel-btn" wx:if="{{order.canSelfCancel}}" bindtap="onCancelOrder">
-    <text>{{order.status === 'PENDING_PAYMENT' || order.isPickup ? '取消订单' : '申请退款'}}</text>
+    <text>{{order.status === 'PENDING_PAYMENT' || order.isPickup || order.schedule ? '取消订单' : '申请退款'}}</text>
   </view>
   <view class="cancel-btn" wx:if="{{(order.isLocal || order.isExpress || order.isPickup) && order.canRequestCancel}}" bindtap="onRequestCancel">
     <text>申请取消</text>

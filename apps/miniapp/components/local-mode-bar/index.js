@@ -13,12 +13,14 @@ Component({
   data: {
     holiday: false,
     pickupHint: '',
+    deliveryHint: '',
   },
   observers: {
     meta: function(meta) {
       this.setData({
         holiday: !!(meta && meta.holiday),
         pickupHint: localCatalog.pickupModeHint(meta),
+        deliveryHint: localCatalog.deliveryModeHint(meta),
       })
     },
   },

@@ -29,6 +29,12 @@ function getPickupSlots() {
   return request({ url: '/local/pickup-slots', silent: true })
 }
 
+// 预约外送时段（公开）。distanceM 必传：时段的提前量取决于路上时间，结算页报价成功后才拉。
+// silent：结算页要按 blocked 自己分流。
+function getDeliverySlots(distanceM) {
+  return request({ url: '/local/delivery-slots?distanceM=' + (distanceM || 0), silent: true })
+}
+
 function getPromoPreview(deliveryType, subtotal) {
   return request({ url: '/local/promo-preview?deliveryType=' + deliveryType + '&subtotal=' + (subtotal || 0), silent: true })
 }
@@ -39,4 +45,5 @@ module.exports = {
   quoteLocal: quoteLocal,
   quoteLocalByLocation: quoteLocalByLocation,
   getPickupSlots: getPickupSlots,
+  getDeliverySlots: getDeliverySlots,
 }

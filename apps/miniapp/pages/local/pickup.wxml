@@ -138,30 +138,9 @@
   <view class="spacer"></view>
 </view>
 
-<!-- 时段选择弹层：今天/明天切换 + 时段格子 -->
-<view wx:if="{{pickerOpen}}" class="sheet-mask" bindtap="closePicker">
-  <view class="sheet" catchtap="noop">
-    <view class="sheet-head">
-      <text class="sheet-title">选择取餐时间</text>
-      <text class="sheet-close" bindtap="closePicker">关闭</text>
-    </view>
-    <view class="day-tabs">
-      <view wx:for="{{days}}" wx:key="date" class="day-tab {{activeDay === index ? 'active' : ''}}" bindtap="selectDay" data-idx="{{index}}">
-        <text>{{item.label}}</text>
-        <text class="day-date">{{item.dateText}}</text>
-        <text wx:if="{{item.empty}}" class="day-empty">无可取时段</text>
-      </view>
-    </view>
-    <scroll-view scroll-y class="slot-grid-wrap">
-      <view wx:if="{{days[activeDay] && days[activeDay].slots.length}}" class="slot-grid">
-        <view wx:for="{{days[activeDay].slots}}" wx:key="startAt"
-              class="slot-cell {{selected && selected.startAt === item.startAt ? 'active' : ''}}"
-              bindtap="selectSlot" data-idx="{{index}}">{{item.label}}</view>
-      </view>
-      <view wx:else class="slot-grid-empty">这一天已无可取时段</view>
-    </scroll-view>
-  </view>
-</view>
+<!-- 时段选择弹层：今天/明天切换 + 时段格子；无状态组件，选择状态仍在页面 -->
+<slot-picker show="{{pickerOpen}}" title="选择取餐时间" days="{{days}}" active-day="{{activeDay}}" selected-start-at="{{selected ? selected.startAt : ''}}"
+  bind:daychange="selectDay" bind:select="selectSlot" bind:close="closePicker" />
 
 <view class="bottom-bar">
   <view wx:if="{{blockReason && action.amountState === 'blocked'}}" class="block-strip">
