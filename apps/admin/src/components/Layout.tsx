@@ -5,7 +5,7 @@ import {
   Package, Store, Users, Wrench, type LucideIcon,
 } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
-import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
+import { usePendingOrders, requestNotifyPermission, PendingCountsContext } from '../hooks/usePendingOrders'
 import { useUnsavedSettings } from './UnsavedSettings'
 import { activeNavLabel, mainNavigation, topNavigation, workbenchNav } from '../navigation'
 import { isModifiedLinkClick } from '../utils/link-click'
@@ -40,7 +40,9 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { dirty, confirmLeave } = useUnsavedSettings()
-  const { count: pendingCount, afterSaleCount, localPendingCount, refundAttentionCount } = usePendingOrders()
+  // 全后台唯一一份轮询（Workbench 在 Layout 外另挂）；结果经 PendingCountsContext 下发给子页面
+  const pending = usePendingOrders()
+  const { count: pendingCount, afterSaleCount, localPendingCount, refundAttentionCount } = pending
   const [panelOpen, setPanelOpen] = useState(false)
 
   /**
@@ -262,7 +264,9 @@ export default function Layout() {
       </div>
 
       <main className="flex-1 overflow-auto p-4 md:p-6">
-        <Outlet />
+        <PendingCountsContext.Provider value={pending}>
+          <Outlet />
+        </PendingCountsContext.Provider>
       </main>
     </div>
   )

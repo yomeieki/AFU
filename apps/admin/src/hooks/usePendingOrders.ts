@@ -1,9 +1,33 @@
-import { useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getPendingOrderCount } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 
 const POLL_INTERVAL = 30_000
+
+/** usePendingOrders 的返回值：Layout 挂一份后经 context 下发，页面只读计数、不再各自轮询 */
+export interface PendingCounts {
+  count: number
+  afterSaleCount: number
+  localPendingCount: number
+  refundAttentionCount: number
+  refundAttentionByChannel: { EXPRESS: number; LOCAL: number }
+}
+
+const ZERO_COUNTS: PendingCounts = { count: 0, afterSaleCount: 0, localPendingCount: 0, refundAttentionCount: 0, refundAttentionByChannel: { EXPRESS: 0, LOCAL: 0 } }
+
+/**
+ * Layout 里那一份 usePendingOrders 的结果。Layout 下的页面（订单页、同城页）要用计数时**只能**从这里取，
+ * 不得再调 usePendingOrders：每多挂一份就多一条 30s 轮询，新单 toast / 系统通知 / 库存不足提示都会
+ * 各弹一次（复核 R13，邮寄页原本就有这个重复，同城页第二轮又被扩了一份）。
+ * Workbench 渲染在 Layout 外、自己挂一份，是唯一的例外。
+ */
+export const PendingCountsContext = createContext<PendingCounts | null>(null)
+
+/** 取 Layout 下发的计数；不在 Layout 内（理论上不该发生）时退化为全 0，不轮询 */
+export function usePendingCounts(): PendingCounts {
+  return useContext(PendingCountsContext) ?? ZERO_COUNTS
+}
 const ORIGINAL_TITLE = document.title
 
 interface UsePendingOrdersOptions {
@@ -16,7 +40,7 @@ interface UsePendingOrdersOptions {
 // 挂在 Layout 上全局生效；Workbench 也单独挂一份（它渲染在 Layout 外，见 App.tsx）——
 // 否则店员整天待着的那一页反而是唯一没有新单提醒的页面（I8）。
 // 轮询待发货订单数，发现新付款订单时三层提醒：① toast ② 系统 Notification（需授权，仅 localhost/HTTPS）③ 标签页失焦时标题闪烁
-export function usePendingOrders(options?: UsePendingOrdersOptions) {
+export function usePendingOrders(options?: UsePendingOrdersOptions): PendingCounts {
   const [count, setCount] = useState(0)
   const [afterSaleCount, setAfterSaleCount] = useState(0)
   const [refundAttentionCount, setRefundAttentionCount] = useState(0)

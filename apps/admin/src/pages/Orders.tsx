@@ -10,7 +10,7 @@ import Pagination from '../components/ui/Pagination'
 import RefundDialog from '../components/RefundDialog'
 import IssueCouponModal from '../components/IssueCouponModal'
 import AfterSalePanel from '../components/AfterSalePanel'
-import { usePendingOrders } from '../hooks/usePendingOrders'
+import { usePendingCounts } from '../hooks/usePendingOrders'
 import type { Order } from '../types'
 import OrderListTable from '../components/orders/OrderListTable'
 import OrderDateFilter from '../components/orders/OrderDateFilter'
@@ -68,7 +68,8 @@ export default function Orders() {
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
   const [couponTarget, setCouponTarget] = useState<Order | null>(null)
   const [reprintingId, setReprintingId] = useState<number | null>(null)
-  const { afterSaleCount, refundAttentionByChannel } = usePendingOrders()
+  // 从 Layout 那份轮询取计数，不自己再挂一份（复核 R13：此前这里的第二份会让新单提示弹两次）
+  const { afterSaleCount, refundAttentionByChannel } = usePendingCounts()
   const refundAttentionCount = refundAttentionByChannel.EXPRESS
   const modalOpenRef = useRef(false)
   modalOpenRef.current = !!(shipModal || refundTarget)
@@ -321,7 +322,8 @@ export default function Orders() {
                   {afterSaleCount}
                 </span>
               )}
-              {/* 角标口径与 Tab 筛选同一个服务端 where，且只数邮寄——本页只列邮寄，角标必须与列表同渠道（复核 R9） */}
+              {/* 角标口径与 Tab 筛选同一个服务端 where，且只数邮寄——本页只列邮寄，角标必须与列表同渠道（复核 R9）。
+                  角标不随页内日期/关键词筛选收窄，与「售后」角标同口径（复核 R14） */}
               {tab.value === REFUND_ATTENTION_FILTER && refundAttentionCount > 0 && (
                 <span className="ml-1 inline-flex min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] items-center justify-center align-middle">
                   {refundAttentionCount}

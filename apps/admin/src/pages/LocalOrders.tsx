@@ -12,7 +12,7 @@ import type { DeliveryInfo, Order } from '../types'
 import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
 import { showWorkbenchLink } from '../utils/order-list'
-import { usePendingOrders } from '../hooks/usePendingOrders'
+import { usePendingCounts } from '../hooks/usePendingOrders'
 import { canRefund, hasActiveRefund, refundLabel, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint } from '../utils/order-actions'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
@@ -72,7 +72,8 @@ export default function LocalOrders() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [deliveryCache, setDeliveryCache] = useState<Record<number, { delivery: DeliveryInfo | null; costFen: number }>>({})
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
-  const { refundAttentionByChannel } = usePendingOrders()
+  // 从 Layout 那份轮询取计数，不自己再挂一份（复核 R13）
+  const { refundAttentionByChannel } = usePendingCounts()
   const refundAttentionCount = refundAttentionByChannel.LOCAL
 
   const load = (p = page) => {
@@ -202,7 +203,8 @@ export default function LocalOrders() {
               }`}
             >
               {t.label}
-              {/* 角标口径与 Tab 筛选同一个服务端 where，且只数同城（含自取）——本页只列同城，角标必须与列表同渠道（复核 R9） */}
+              {/* 角标口径与 Tab 筛选同一个服务端 where，且只数同城（含自取）——本页只列同城，角标必须与列表同渠道（复核 R9）。
+                  角标不随页内二级筛选（外送/自取、日期、关键词）收窄，与「售后」角标同口径：它答的是「全局还有没有活」（复核 R14） */}
               {t.value === REFUND_ATTENTION_FILTER && refundAttentionCount > 0 && (
                 <span className="ml-1 inline-flex min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] items-center justify-center align-middle">
                   {refundAttentionCount}
