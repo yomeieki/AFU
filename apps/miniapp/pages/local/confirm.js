@@ -519,7 +519,13 @@ Page({
     var mode = e.currentTarget.dataset.mode
     if (mode === 'ASAP' && this.data.closedNow) return   // 打烊时「尽快送达」置灰，点不动
     if (mode === 'SCHEDULED' && !this.data.scheduleAvailable) return   // 预约未开通时置灰，点不动（R3）
-    if (mode === this.data.scheduleMode) return
+    if (mode === this.data.scheduleMode) {
+      // 已经是预约模式时再点一次「预约时段」卡片：唯一能打开时段选择器的入口原来只有
+      // 卡片下方那行「预计…送达」文字（且没有可点提示），顾客点卡片本身没有任何反应，
+      // 会以为无法自选时段。卡片本身也该能直接开弹层（fix-picker S 级）。
+      if (mode === 'SCHEDULED') this.openPicker()
+      return
+    }
     this.setData({ scheduleMode: mode })
     if (mode === 'SCHEDULED' && this.data.quote && this.data.quote.distanceM != null) this.loadSlots(this.data.quote.distanceM, false)
     if (mode === 'SCHEDULED') this.openPicker()

@@ -39,12 +39,13 @@
 .mode-name { display: block; color: var(--text-1); font-weight: 600; }
 .mode-opt.active .mode-name { color: var(--brand); }
 .mode-sub { display: block; margin-top: 6rpx; color: var(--text-3); font-size: 22rpx; }
-.slot-row { margin-top: 16rpx; padding-top: 16rpx; border-top: 1rpx solid var(--divider); }
+.slot-row { display: flex; align-items: center; margin-top: 16rpx; padding-top: 16rpx; border-top: 1rpx solid var(--divider); }
 .slot-text { color: var(--text-1); font-size: 28rpx; font-weight: 600; }
 .slot-stale { color: var(--text-3); text-decoration: line-through; }
 .slot-stale-tip { color: var(--brand); font-size: 23rpx; text-decoration: none; }
 .slot-muted { color: var(--text-3); font-size: 26rpx; line-height: 1.5; }
 .slot-error { color: var(--brand); font-size: 26rpx; }
+.slot-change { margin-left: auto; color: var(--brand); font-size: 24rpx; flex-shrink: 0; }
 .fee-flash { animation: fee-flash 1.2s ease-in-out; }
 @keyframes fee-flash { 0%, 100% { color: var(--text-2); } 50% { color: var(--brand); font-weight: 600; } }
 .item-row { display: flex; align-items: center; gap: 16rpx; padding: 16rpx 0; border-bottom: 1rpx solid var(--divider); }

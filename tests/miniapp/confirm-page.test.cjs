@@ -340,6 +340,19 @@ test('⑧营业中 + 预约未开通：点「预约时段」不切模式、不�
   assert.equal(page.data.action.text, '提交订单')
 })
 
+test('⑨打烊强制预约场景下，再点一次已选中的「预约时段」卡片应打开时段选择器（fix-picker）', async function () {
+  const { page } = loadConfirm({
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '最早明天 12:00–12:30 送达' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
+  })
+  await settleAll()
+  assert.equal(page.data.scheduleMode, 'SCHEDULED', '打烊应已自动切到预约')
+  assert.equal(page.data.pickerOpen, false, '弹层初始应关闭')
+  page.pickMode.call(page, { currentTarget: { dataset: { mode: 'SCHEDULED' } } })
+  assert.equal(page.data.pickerOpen, true, '已是预约模式时再点卡片应打开弹层')
+  assert.equal(page.data.scheduleMode, 'SCHEDULED', '模式不应被重复点击改变')
+})
+
 test('onSubmit 在 action:slot 时只打开选择器，不提交订单', async function () {
   const { ctx, page } = loadConfirm({
     meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
