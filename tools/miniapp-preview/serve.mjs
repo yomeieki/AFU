@@ -39,7 +39,7 @@ const PAGE_COMPONENTS = {
   'index-local': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar'],
   'index-local-pickup': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar'],
   'local-pickup': ['checkout-benefits', 'tableware-sheet'],
-  'local-pickup-picker': ['checkout-benefits'],
+  'local-pickup-picker': ['checkout-benefits', 'slot-picker'],
   'order-confirm': ['checkout-benefits'],
   'local-confirm': ['checkout-benefits', 'tableware-sheet'],
   'local-tableware-sheet': ['checkout-benefits', 'tableware-sheet'],
