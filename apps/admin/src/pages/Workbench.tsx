@@ -17,10 +17,13 @@ import type {
 import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor } from '../utils/pickup'
 import { tablewareLabel } from '../utils/tableware'
 import {
+  scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn,
+} from '../utils/schedule'
+import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
   callRider, cancelDelivery, cancelExpressBooking, getExpressBooking,
   getLocalSettings, getOrder, getOrderDelivery, getWorkbenchSnapshot, markOrderDelivered, modifyExpressBooking,
-  pickedUpOrder, pickupReadyOrder,
+  pickedUpOrder, pickupReadyOrder, readyLocalOrder,
   precancelDelivery, rejectCancelRequest, rejectExpressCancelRequest, rejectOrder, rejectPickupCancelRequest, reprintOrder,
   resetKd100Circuit, selfDeliverOrder, shipOrder, voidExpressBooking, voidUnknownDelivery,
   refreshOrderQuote, getCourierLive,
@@ -37,7 +40,8 @@ import { useIsPhone } from '../hooks/useIsPhone'
 import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn, todayKey } from '../utils/time'
 import { providerLabel, callStrategyLabel } from '../utils/providers'
 
-type ColKey = keyof WorkbenchSnapshot['columns']
+// scheduled 不是显示列：出票前的预约单渲染在待接单列的折叠组里（colKey='pending'），它只是快照里的一个桶
+type ColKey = Exclude<keyof WorkbenchSnapshot['columns'], 'scheduled'>
 
 const COLUMNS: { key: ColKey; title: string }[] = [
   { key: 'pending', title: '待接单' }, { key: 'preparing', title: '备餐中' },
@@ -67,6 +71,14 @@ function pickupOnBoard(snap: WorkbenchSnapshot | null): number {
   if (!snap) return 0
   const cols: ColKey[] = ['pending', 'preparing', 'waitingCourier', 'delivering']
   return cols.reduce((n, c) => n + snap.columns[c].filter((x) => x.channel === 'PICKUP').length, 0)
+}
+
+/** 看板上未完成的预约单张数——顶栏「预约 N」用：出票前的 columns.scheduled + 已出票、还带 schedule 字段的四列卡片 */
+function scheduleOnBoard(snap: WorkbenchSnapshot | null): number {
+  if (!snap) return 0
+  const cols: ColKey[] = ['pending', 'preparing', 'waitingCourier', 'delivering']
+  const ticketed = cols.reduce((n, c) => n + snap.columns[c].filter((x) => !!x.local?.schedule).length, 0)
+  return snap.columns.scheduled.length + ticketed
 }
 
 /** 顶栏营业状态：桌面顶栏与手机顶栏共用，措辞只此一处 */
@@ -219,6 +231,9 @@ function prepMinutesNow(s: LocalDeliverySettings | null, now: number): number {
 /** 「已完成」列永不参与：给已经做完的事上色只会稀释红色（I7）。 */
 function urgencyOf(card: WorkbenchCard, colKey: ColKey, now: number, prepMin: number): Urgency {
   if (colKey === 'done') return ''
+  // 预约单只看服务端阶段（spec §6.1）：它有硬期限，不用等待时长那把尺子，也不看 estimatedDeliveryAt（那就是约定时刻）
+  const sc = card.local?.schedule
+  if (sc) return scheduleUrgency(sc.phase)
   // 明天的自取单在哪一列都不点亮：它的所有时限都在明天
   if (card.channel === 'PICKUP' && isFutureDayPickup(card.pickup?.pickupAt, now)) return ''
   let u: Urgency = ''
@@ -1034,6 +1049,7 @@ function HintContent({ prepMin }: { prepMin: number }) {
       等待配送员 6/12 分钟；配送中不看等待时长，只看离预计送达还剩多久（≤15 分转琥珀、≤5 分或已过点转红）。
       邮寄单可以稍后处理，60/240 分钟才变色。红框最急 = 顾客申请退菜或配送异常，先处理它。
       自取单：备餐中看离取餐时间（≤15 分转琥珀、≤5 分转红），待取餐过了取餐时间转琥珀；明天的单收在「明日自取」里不计时。
+      预约单：出票前收在待接单列顶部的「预约单」组里不计时；到「应备好」未点转橙，超约定送达时间转红。
     </>
   )
 }
@@ -1086,7 +1102,7 @@ function ColumnTabs({ snap, active, onPick }: {
   return (
     <div className="wb__tabs" role="tablist" aria-label="订单列">
       {COLUMNS.map((col) => {
-        const n = snap ? snap.columns[col.key].length : 0
+        const n = snap ? snap.columns[col.key].length + (col.key === 'pending' ? snap.columns.scheduled.length : 0) : 0
         const on = col.key === active
         return (
           <button
@@ -1136,9 +1152,9 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
       ? `自送${d.courierName ? ` ${d.courierName}` : ''}`
       : `骑手 ${d.courierName ?? d.statusLabel}`
   // 自取胶囊的规则在 pickupCapsule 里；非自取单、或自取单落在已完成列时它返回 null，退回原逻辑
-  const w = pickupCapsule(card, colKey, now, urg) ?? (colKey === 'done'
-    ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' }
-    : waitLabel(card.waitSince, now, urg))
+  const w = (card.local?.schedule ? scheduleCapsule(card.local.schedule, colKey, now) : null)
+    ?? pickupCapsule(card, colKey, now, urg)
+    ?? (colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg))
   // 距离来自运力方的报价/接单回执（providerDistanceM）。没呼叫配送员时它必然是 null，
   // 印一行「距离 --」只是在卡片上占一格空话，所以整行不渲染（PO 2026-09-07）。
   const kmText = card.local?.distanceM != null ? `${(card.local.distanceM / 1000).toFixed(1)} km` : null
@@ -1186,9 +1202,12 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
           </>
         ) : (
           <>
+            {card.local?.schedule && <span className="wb__sched">{scheduleFieldsLine(card.local.schedule)}</span>}
             {kmText && <span>距离 {kmText}</span>}
             <span>骑手 {d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}</span>
-            <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>
+            {card.local?.schedule
+              ? (card.local.schedule.phase === 'CALL_DUE' || card.local.schedule.phase === 'PREPPING') && <span>{etaTextIfCallNow(card.local.schedule)}</span>
+              : <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>}
           </>
         )) : (
           <>
@@ -1283,6 +1302,7 @@ function TopBar({
             <span>营业额<b>¥{snap ? yuan(snap.stats.todayRevenueFen) : '--'}</b></span>
             <span>平均送达<b>{snap?.stats.avgDeliverMinutes != null ? `${snap.stats.avgDeliverMinutes} 分` : '--'}</b></span>
             <span>自取<b>{snap ? pickupOnBoard(snap) : '--'}</b></span>
+            <span>预约<b>{snap ? scheduleOnBoard(snap) : '--'}</b></span>
           </div>
           {/* 图标与文案统一描述「点击后会变成什么」，不描述当前状态——否则跟随系统时会出现图标指向和实际切换方向相反（§8） */}
           <button className="wb__iconbtn" onClick={onToggleTheme}>
@@ -1410,6 +1430,8 @@ export default function Workbench() {
   const [doneOpen, setDoneOpen] = useState(false)
   // 「明日自取」折叠组的展开状态，按列各记各的（spec §6.1）；不持久化，默认收起
   const [tomorrowOpen, setTomorrowOpen] = useState<Record<string, boolean>>({})
+  // 「预约单」折叠组（待接单列顶部）的展开状态；不持久化，默认收起
+  const [scheduledOpen, setScheduledOpen] = useState(false)
   // ── 手机模式（规格 §9.1）。isPhone 只在 ≤700px 为真，iPad 与电脑走原来那套。
   const isPhone = useIsPhone()
   /** 手机上当前显示哪一列。默认「待接单」——规格 §9 本来就是这么定的 */
@@ -1611,21 +1633,24 @@ export default function Workbench() {
   // 显示「刷新中…」占位而不是让按钮区空白或显示错列的按钮。
   useEffect(() => {
     if (!snap || !drawer) return
-    for (const col of COLUMNS) {
-      const found = snap.columns[col.key].find((c) => c.orderId === drawer.card.orderId)
-      if (found) {
-        const colChanged = col.key !== drawer.colKey
-        const statusChanged = found.status !== drawer.card.status
-          || found.local?.delivery?.status !== drawer.card.local?.delivery?.status
-        if (found !== drawer.card || colChanged) setDrawer({ card: found, colKey: col.key })
-        if (colChanged || statusChanged) {
-          setDetailRefreshing(true)
-          void loadDetail(found.orderId, found.channel)
-        }
-        return
+    // 六桶找卡（五列 + WAITING 预约单专用的 scheduled 桶）：抽出到 utils/schedule.ts 的
+    // findCardColumn 复用，scheduled 命中时 colKey 记为 'pending'（它就渲染在待接单列的
+    // 折叠组里）——否则 WAITING 阶段的预约单打开抽屉后下一拍轮询必被误判成「已离开看板」
+    // （R1）：出票前是工作台上停留最长的阶段，一撞上就要店员手动关闭重开才能恢复操作。
+    const hit = findCardColumn(snap.columns, drawer.card.orderId)
+    if (hit) {
+      const { card: found, colKey } = hit
+      const colChanged = colKey !== drawer.colKey
+      const statusChanged = found.status !== drawer.card.status
+        || found.local?.delivery?.status !== drawer.card.local?.delivery?.status
+      if (found !== drawer.card || colChanged) setDrawer({ card: found, colKey })
+      if (colChanged || statusChanged) {
+        setDetailRefreshing(true)
+        void loadDetail(found.orderId, found.channel)
       }
+      return
     }
-    // 五列都没找到：订单已经离开看板（顾客取消退款、或被别的渠道/店员处理掉）。
+    // 六桶都没找到：订单已经离开看板（顾客取消退款、或被别的渠道/店员处理掉）。
     // 抽屉还开着，但 detail 是最后一次成功加载时的旧快照——不置 gone 的话 renderActions
     // 会照旧渲染上一列的按钮，店员点下去大概率是对着一个已经不存在的状态操作。
     setGone(true)
@@ -1847,14 +1872,18 @@ export default function Workbench() {
     }
 
     if (colKey === 'pending') {
+      // 预约单接单文案倒推三个时刻（spec §4.5 表 S3）：ch 只可能是 LOCAL——预约只对同城开放
+      const scPending = card.local?.schedule
       btns.push(fill('accept', '接单', () => confirm({
         title: '接单', channel: ch, confirmText: '确认接单', okMsg: '已接单',
-        what: ch === 'LOCAL' ? '订单转入「备餐中」，开始做货；之后再呼叫骑手。' : '订单转入「备餐中」，开始打包；之后再填单号发货。',
+        what: scPending
+          ? `订单转入「备餐中」。到 ${hhmm(scPending.prepStartAt)} 开始备餐，做好后点「已备好」，系统会在 ${hhmm(scPending.callAt)} 自动呼叫骑手。`
+          : ch === 'LOCAL' ? '订单转入「备餐中」，开始做货；之后再呼叫骑手。' : '订单转入「备餐中」，开始打包；之后再填单号发货。',
         customer: '顾客小程序显示「商家已接单」。',
         cost: '不产生任何费用。',
         run: () => (ch === 'LOCAL' ? acceptLocalOrder(order.id) : acceptOrder(order.id)),
       })))
-      if (ch === 'LOCAL') {
+      if (ch === 'LOCAL' && !card.local?.schedule) {
         btns.push(ghost('accept-call', '接单并呼叫', () => confirm(callSpec(
           '接单并呼叫骑手', '确认接单并呼叫',
           '先接单，随即向快递100 发单呼叫骑手；骑手会来店里取货。',
@@ -1869,15 +1898,39 @@ export default function Workbench() {
         if (active?.status === 'UNKNOWN') {
           btns.push(fill('void-recall', '作废重呼', () => confirm(voidRecallSpec)))
         } else {
-          const failed = delivery?.status === 'FAILED'
-          btns.push(fill('call', failed ? '重新呼叫骑手' : '呼叫骑手', () => confirm(callSpec(
-            failed ? '重新呼叫骑手' : '呼叫骑手', failed ? '确认重呼' : '确认呼叫',
-            '向快递100 发单，等骑手接单并到店取货。',
-            // 手选了才传 providers：传了服务端就记 MANUAL、原样照办；
-            // 不传才走后台策略（并呼最便宜的 N 家），两条路在配送单上分得开，事后能对账
-            (pick) => callRider(order.id, pick?.manual ? pick.providers : undefined),
-          ))))
-          btns.push(ghost('self', '自己送', () => setModal({ kind: 'self' })))
+          const sc = card.local?.schedule
+          if (sc && active === null) {
+            // 预约单（spec §4.5 / §6.1）：主「已备好」→ 系统在 max(已备好, 该呼叫时刻) 发单；次「立即呼叫」跳过等待；「自己送」照常
+            if (!sc.readyAt) {
+              btns.push(fill('ready', '已备好', () => confirm({
+                title: '已备好', channel: ch, confirmText: '确认已备好', okMsg: '已记录，到点自动呼叫',
+                what: Date.parse(sc.callAt) <= now
+                  ? '餐已备好且已到该呼叫时刻：确认后立即向快递100 发单呼叫骑手。'
+                  : `餐已备好。系统会在 ${hhmm(sc.callAt)} 自动呼叫骑手，餐在店里等骑手。`,
+                customer: '顾客看到「商家已确认」；骑手接单后显示骑手信息。',
+                cost: Date.parse(sc.callAt) <= now ? '会预扣一次配送费。' : '到点呼叫时预扣一次配送费。',
+                run: () => readyLocalOrder(order.id),
+              })))
+            }
+            const early = isBeforeCallWindow(sc, now)
+            btns.push(ghost('call-now', '立即呼叫', () => confirm(callSpec(
+              '立即呼叫骑手', '确认立即呼叫',
+              `${early ? '早于该呼叫时刻（' + hhmm(sc.callAt) + '），' : ''}${etaTextIfCallNow(sc)}，早于顾客约定的 ${hhmm(sc.scheduledAt)}。向快递100 发单，骑手会来店里取货。`,
+              (pick) => callRider(order.id, pick?.manual ? pick.providers : undefined, true),
+            ))))
+            btns.push(ghost('self', '自己送', () => setModal({ kind: 'self' })))
+          } else {
+            /* 原有立即单的「呼叫骑手 / 重新呼叫骑手」+「自己送」两颗按钮原样 */
+            const failed = delivery?.status === 'FAILED'
+            btns.push(fill('call', failed ? '重新呼叫骑手' : '呼叫骑手', () => confirm(callSpec(
+              failed ? '重新呼叫骑手' : '呼叫骑手', failed ? '确认重呼' : '确认呼叫',
+              '向快递100 发单，等骑手接单并到店取货。',
+              // 手选了才传 providers：传了服务端就记 MANUAL、原样照办；
+              // 不传才走后台策略（并呼最便宜的 N 家），两条路在配送单上分得开，事后能对账
+              (pick) => callRider(order.id, pick?.manual ? pick.providers : undefined),
+            ))))
+            btns.push(ghost('self', '自己送', () => setModal({ kind: 'self' })))
+          }
         }
       } else {
         // 邮寄「备餐中」按钮矩阵：有活跃预约（BOOKED/ACCEPTED）时那张卡其实已经在
@@ -1959,9 +2012,9 @@ export default function Workbench() {
     // 否则抽屉里的胶囊会和它背后那张卡片显示不同的颜色——自取单与 Card 共用 pickupCapsule，
     // 不然抽屉和它背后那张卡片会显示不一致的等待文案/颜色（见 pickupCapsule 顶部注释）
     const urg = urgencyOf(card, colKey, now, prepMin)
-    const w = pickupCapsule(card, colKey, now, urg) ?? (colKey === 'done'
-      ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' }
-      : waitLabel(card.waitSince, now, urg))
+    const w = (card.local?.schedule ? scheduleCapsule(card.local.schedule, colKey, now) : null)
+      ?? pickupCapsule(card, colKey, now, urg)
+      ?? (colKey === 'done' ? { text: `完成于 ${hhmm(card.waitSince)}`, cls: '' } : waitLabel(card.waitSince, now, urg))
     const canReject = !!o && ['PENDING_PAYMENT', 'PAID', 'PREPARING'].includes(o.status)
     return (
       <>
@@ -2041,7 +2094,16 @@ export default function Workbench() {
                       {card.local?.distanceM != null && (
                         <div className="wb__line"><span>距离</span><span>{(card.local.distanceM / 1000).toFixed(1)} km</span></div>
                       )}
-                      <div className="wb__line"><span>预计送达</span><span>{hhmm(o?.estimatedDeliveryAt)}</span></div>
+                      {card.local?.schedule ? (
+                        <>
+                          <div className="wb__line"><span>约定送达</span><span>{card.local.schedule.slotLabel}</span></div>
+                          <div className="wb__line"><span>开始备餐</span><span>{hhmm(card.local.schedule.prepStartAt)}</span></div>
+                          <div className="wb__line"><span>该呼叫</span><span>{hhmm(card.local.schedule.callAt)}</span></div>
+                          {card.local.schedule.readyAt && <div className="wb__line"><span>已备好</span><span>{dateTime(card.local.schedule.readyAt)}</span></div>}
+                        </>
+                      ) : (
+                        <div className="wb__line"><span>预计送达</span><span>{hhmm(o?.estimatedDeliveryAt)}</span></div>
+                      )}
                     </>
                   ) : (
                     <>
@@ -2072,6 +2134,7 @@ export default function Workbench() {
                     只是从来没显示过。首单时店员完全不知道是闪送接的。 */}
                 <div className="wb__line"><span>运力</span><span>{providerLabel(d.courierCompany)}</span></div>
                 <div className="wb__line"><span>呼叫方式</span><span>{callStrategyLabel(d.callStrategy, d.calledProviders, d.courierCompany)}</span></div>
+                {d.callOrigin && <div className="wb__line"><span>呼叫来源</span><span>{d.callOrigin === 'SCHEDULED_AUTO' ? '到点自动' : '店员提前呼叫'}</span></div>}
                 <div className="wb__line"><span>姓名</span><span>{d.courierName ?? '未接单'}</span></div>
                 <div className="wb__line">
                   <span>电话</span>
@@ -2396,6 +2459,24 @@ export default function Workbench() {
           位置也要紧跟顶栏——排到图例下面会把这一屏最紧急的一条压到第三行去。 */}
       <TopAlerts snap={snap} staleMinutes={staleMinutes} onResetCircuit={() => void resetCircuit()} circuitBusy={circuitBusy} />
 
+      {snap?.scheduleBar && (
+        <div
+          className="wb__schedbar"
+          onClick={() => {
+            // 预约单折叠组只在待接单列的渲染分支里存在（R3）：手机模式下如果店员当时切在
+            // 「备餐中」等别的标签页，只展开折叠组、只滚桌面看板容器，DOM 里根本没有这个
+            // 折叠组，点击「点击查看」就没有任何可见效果——手机上先切回待接单标签页。
+            if (isPhone) setPhoneCol('pending')
+            setScheduledOpen(true)
+            boardRef.current?.scrollTo({ left: 0, behavior: 'smooth' })
+          }}
+          role="button" tabIndex={0}
+        >
+          <span>{scheduleBarText(snap.scheduleBar, now)}</span>
+          <span className="wb__muted">点击查看</span>
+        </div>
+      )}
+
       {isPhone ? (
         <ColumnTabs snap={snap} active={phoneCol} onPick={setPhoneCol} />
       ) : (
@@ -2415,6 +2496,9 @@ export default function Workbench() {
             c.channel === 'PICKUP' && isFutureDayPickup(c.pickup?.pickupAt, now) && !c.pickup?.cancelRequested
           const tomorrow = col.key === 'done' ? [] : list.filter(foldable)
           const todayList = col.key === 'done' ? list : list.filter((c) => !foldable(c))
+          // 预约单出票前不进五列（服务端 columns.scheduled），在待接单列顶部折成一组；有取消申请的留在正常列（同明日自取的道理）
+          const scheduledFold = col.key === 'pending' && snap ? snap.columns.scheduled.filter(scheduleFoldable) : []
+          const scheduledLoose = col.key === 'pending' && snap ? snap.columns.scheduled.filter((c) => !scheduleFoldable(c)) : []
           // 两处 <Card> 的 props 完全相同（正常列表与「明日自取」折叠组），抽成一份共用，别复制两份
           const renderCard = (c: WorkbenchCard) => (
             <Card
@@ -2449,7 +2533,7 @@ export default function Workbench() {
             <section className="wb__col" key={col.key}>
               <div className="wb__col-head">
                 <span>{col.title}</span>
-                <span className="wb__col-count">{list.length}</span>
+                <span className="wb__col-count">{list.length + (col.key === 'pending' ? scheduledFold.length + scheduledLoose.length : 0)}</span>
                 {col.key === 'done' && (
                   <button className="wb__iconbtn" onClick={() => setDoneOpen(false)}>收起</button>
                 )}
@@ -2458,7 +2542,17 @@ export default function Workbench() {
                   整页滚的话，滑到备餐中的第 12 张，待接单那一列就被推出屏幕了——
                   而「有没有新单等着接」恰恰是这一屏最不能丢的信息。 */}
               <div className="wb__col-body">
-                {todayList.length === 0 && tomorrow.length === 0
+                {scheduledFold.length > 0 && (
+                  <div className="wb__fold" style={{ marginTop: 0, borderTop: 'none', paddingTop: 0, marginBottom: 8 }}>
+                    <button type="button" className="wb__fold-t" onClick={() => setScheduledOpen((v) => !v)}>
+                      <span>预约单 <b style={{ color: 'var(--local)' }}>{scheduledFold.length}</b>{snap?.scheduleBar ? ` · 最近 ${hhmm(snap.scheduleBar.prepStartAt)} 开始备餐` : ''}</span>
+                      <span>{scheduledOpen ? '收起' : '展开'}</span>
+                    </button>
+                    {scheduledOpen && scheduledFold.map(renderCard)}
+                  </div>
+                )}
+                {scheduledLoose.map(renderCard)}
+                {todayList.length === 0 && tomorrow.length === 0 && scheduledFold.length === 0 && scheduledLoose.length === 0
                   ? <div className="wb__empty">{snap ? '暂无订单' : '加载中…'}</div>
                   : todayList.map(renderCard)}
                 {tomorrow.length > 0 && (
@@ -2502,6 +2596,7 @@ export default function Workbench() {
             <b>{snap?.stats.avgDeliverMinutes != null ? `${snap.stats.avgDeliverMinutes} 分` : '--'}</b>
           </div>
           <div className="wb__sheet-row"><span>自取</span><b>{snap ? pickupOnBoard(snap) : '--'}</b></div>
+          <div className="wb__sheet-row"><span>预约</span><b>{snap ? scheduleOnBoard(snap) : '--'}</b></div>
           <div className="wb__actions" style={{ paddingTop: 12 }}>
             {/* 文案说的是「点了会变成什么」，与桌面顶栏同一套口径（§8） */}
             <button className="wb__btn wb__btn--ghost" onClick={toggleTheme}>

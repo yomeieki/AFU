@@ -18,11 +18,12 @@ type StageKey = (typeof STAGES)[number]['key']
 
 async function localBlock(r: Range) {
   const where = paidOrdersWhere(r, 'LOCAL')
-  const [agg, freeShipCount, requested, dLe2, d2to5, dGt5, dNull, deliveries, completed] = await Promise.all([
+  const [agg, freeShipCount, scheduledCount, requested, dLe2, d2to5, dGt5, dNull, deliveries, completed] = await Promise.all([
     // KPI 与顾客付运费走聚合：复核时抓到过 take 封顶把「同城单量」截成正好 2000 的事，
     // 看着像真数，总览 tab 上同一区间却是另一个数。凡是给店主看的总数都不许经过抽样。
     prisma.order.aggregate({ where, _count: { _all: true }, _sum: { actualAmount: true, shippingFee: true }, _avg: { distanceM: true } }),
     prisma.order.count({ where: { ...where, shippingFee: 0 } }),
+    prisma.order.count({ where: { ...where, scheduledAt: { not: null } } }),
     prisma.order.count({ where: { ...where, cancelRequestedAt: { not: null } } }),
     prisma.order.count({ where: { ...where, distanceM: { lte: 2000 } } }),
     prisma.order.count({ where: { ...where, distanceM: { gt: 2000, lte: 5000 } } }),
@@ -52,6 +53,7 @@ async function localBlock(r: Range) {
     avgDistanceM: agg._avg.distanceM == null ? null : Math.round(Number(agg._avg.distanceM)),
     freeShipCount,
     freeShipRate: orderCount ? freeShipCount / orderCount : null,
+    scheduledCount,
   }
 
   // 运费账。fee() 为 null = 这张送达单既没实扣也没报价（回调没认领 / 自送）：

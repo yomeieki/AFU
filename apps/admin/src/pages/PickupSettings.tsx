@@ -34,12 +34,14 @@ export default function PickupSettings() {
   const { setDirty } = useUnsavedSettings()
   const [p, setP] = useState<Pickup | null>(null)
   const [money, setMoney] = useState({ minOrder: '', fixed: '' })
+  const [selfCancelLeadMin, setSelfCancelLeadMin] = useState(0)
   const [loadFailed, setLoadFailed] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const hydrate = (v: LocalDeliverySettings) => {
     setP(v.pickup)
     setMoney({ minOrder: toYuan(v.pickup.minOrderAmountFen), fixed: v.pickup.discount.type === 'FIXED' ? toYuan(v.pickup.discount.value) : '0.00' })
+    setSelfCancelLeadMin(v.selfCancelLeadMin)
     setDirty(false)
   }
   useEffect(() => {
@@ -85,6 +87,7 @@ export default function PickupSettings() {
         </div>
       )}
       {!p.enabled && <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm text-gray-600">到店自取未开通，顾客端不显示「自取」。开通前请先在「同城配送设置」填好门店电话、地址，在「营业时间」页填好时段。</div>}
+      <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm text-gray-600">自助取消截止：约定时刻前 {selfCancelLeadMin} 分钟内顾客不能自助取消（与预约送达共用，在「预约送达」页修改）。</div>
 
       <section className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
         <h3 className="font-medium text-gray-800 flex items-center gap-1"><Store className="w-4 h-4" />到店自取</h3>

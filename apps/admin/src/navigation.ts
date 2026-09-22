@@ -62,6 +62,7 @@ export const centerTabs: Record<
     { to: '/settings/express', label: '全国邮寄' },
     { to: '/settings/local', label: '同城配送' },
     { to: '/settings/pickup', label: '到店自取' },
+    { to: '/settings/schedule', label: '预约送达' },
     { to: '/settings/hours', label: '营业时间' },
   ],
   // 2026-09-17 归拢：原「会员营销」整个并进来，满减活动从「店铺设置」挪进来。

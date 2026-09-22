@@ -28,6 +28,11 @@ const TYPE_TABS: { value: '' | 'LOCAL' | 'PICKUP'; label: string }[] = [
   { value: '', label: '全部' }, { value: 'LOCAL', label: '外送' }, { value: 'PICKUP', label: '自取' },
 ]
 
+// 预约/尽快筛选：只对外送（含全部）有意义，自取单没有预约送达这个维度
+const SCHED_TABS: { value: '' | 'SCHEDULED' | 'ASAP'; label: string }[] = [
+  { value: '', label: '全部' }, { value: 'SCHEDULED', label: '预约' }, { value: 'ASAP', label: '尽快' },
+]
+
 /**
  * 该单配送成本（分）。**优先用服务端算好的 costFen**：它按这一单的**全部**配送单聚合，
  * 而这里能拿到的 `delivery` 只是最近那一张——「3 分钟无人接自动升级并呼」会留下一张已取消的
@@ -50,6 +55,7 @@ export default function LocalOrders() {
   const [searchParams, setSearchParams] = useSearchParams()
   const status = searchParams.get('status') ?? ''
   const type = (searchParams.get('type') === 'LOCAL' || searchParams.get('type') === 'PICKUP') ? searchParams.get('type') as 'LOCAL' | 'PICKUP' : ''
+  const sched = (searchParams.get('sched') === 'SCHEDULED' || searchParams.get('sched') === 'ASAP') ? searchParams.get('sched') as 'SCHEDULED' | 'ASAP' : ''
   const dateState = readOrderDate(searchParams)
   const now = new Date()
   const dateErr = orderDateError(dateState)
@@ -73,6 +79,7 @@ export default function LocalOrders() {
       status: status || undefined,
       keyword: keyword.trim() || undefined,
       ...(type ? { deliveryType: type } : { channel: 'LOCAL' }),
+      ...(sched && type !== 'PICKUP' ? { schedule: sched } : {}),
       ...orderDateQuery(dateState, new Date()),
     })
       .then((res) => {
@@ -84,7 +91,7 @@ export default function LocalOrders() {
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load() }, [page, status, type, searchParams.get('range'), searchParams.get('startDate'), searchParams.get('endDate')])
+  useEffect(() => { load() }, [page, status, type, sched, searchParams.get('range'), searchParams.get('startDate'), searchParams.get('endDate')])
 
   const handleSearch = () => {
     setPage(1)
@@ -105,6 +112,16 @@ export default function LocalOrders() {
     setSearchParams((prev) => {
       const p = new URLSearchParams(prev)
       if (value) p.set('type', value); else p.delete('type')
+      if (value === 'PICKUP') p.delete('sched') // 自取没有预约/尽快这个维度
+      return p
+    }, { replace: true })
+  }
+
+  const handleSchedChange = (value: '' | 'SCHEDULED' | 'ASAP') => {
+    setPage(1)
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev)
+      if (value) p.set('sched', value); else p.delete('sched')
       return p
     }, { replace: true })
   }
@@ -152,6 +169,22 @@ export default function LocalOrders() {
               {t.label}
             </button>
           ))}
+          {type !== 'PICKUP' && (
+            <>
+              <span className="text-gray-200">|</span>
+              {SCHED_TABS.map((t) => (
+                <button
+                  key={t.value}
+                  onClick={() => handleSchedChange(t.value)}
+                  className={`px-3 py-1.5 rounded-full text-sm whitespace-nowrap ${
+                    sched === t.value ? 'bg-brand-50 text-brand-600 font-medium' : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2 overflow-x-auto">
           {STATUS_TABS.map((t) => (

@@ -112,6 +112,7 @@ export const getOrders = (params?: {
   /** 下单日期筛选（上海自然日，按 createdAt），各自可选；不传 = 不限日期 */
   startDate?: string
   endDate?: string
+  schedule?: 'SCHEDULED' | 'ASAP'
 }) => client.get<ApiResponse<PaginatedData<Order>>>('/admin/orders', { params })
 
 export const getOrder = (id: number) =>
@@ -308,9 +309,9 @@ export const acceptAndCallLocalOrder = (id: number) =>
   client.post<ApiResponse<{ accepted: boolean; deliveryNo: string; status: string }>>(`/admin/local/orders/${id}/accept-and-call`)
 // providers 是「店员在弹窗里指定运力」的口子（规格 §10）。不传 = 按设置里的呼叫策略决定
 // （默认只呼报价最低那一家），传了 = 原样照办并记为 MANUAL。
-export const callRider = (id: number, providers?: string[]) =>
+export const callRider = (id: number, providers?: string[], force = false) =>
   client.post<ApiResponse<{ deliveryNo: string; status: string; quotedFeeFen: number | null }>>(
-    `/admin/local/orders/${id}/call`, providers?.length ? { providers } : undefined)
+    `/admin/local/orders/${id}/call`, { ...(providers?.length ? { providers } : {}), ...(force ? { force: true } : {}) })
 export const getOrderDelivery = (id: number) =>
   client.get<ApiResponse<{
     delivery: DeliveryInfo | null
@@ -351,6 +352,9 @@ export const rejectPickupCancelRequest = (id: number) =>
 
 export const addDeliveryTip = (id: number, amount: number) =>
   client.post<ApiResponse<{ tipFeeFen: number }>>(`/admin/local/orders/${id}/delivery/tip`, { amount })
+/** 预约单「已备好」：写 readyAt；已到该呼叫时刻则服务端立即发单（called=true） */
+export const readyLocalOrder = (id: number) =>
+  client.post<ApiResponse<{ readyAt: string; called: boolean; callAt: string | null; deliveryNo?: string; status?: string }>>(`/admin/local/orders/${id}/ready`)
 export const selfDeliverOrder = (id: number, data: { name: string; phone: string }) =>
   client.post<ApiResponse<{ deliveryNo: string }>>(`/admin/local/orders/${id}/self-deliver`, data)
 export const markOrderDelivered = (id: number) => client.post<ApiResponse<null>>(`/admin/local/orders/${id}/delivered`)

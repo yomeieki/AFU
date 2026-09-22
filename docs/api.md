@@ -2149,6 +2149,7 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | `GET /admin/orders` | 加 `schedule=SCHEDULED|ASAP` |
 | `GET /admin/orders/:id` | 加 `schedule` 节 |
 | `GET /admin/workbench/snapshot` | 加 `columns.scheduled`、卡片 `local.schedule`、顶层 `scheduleEnabled / scheduleBar` |
+| `GET /api/admin/stats/local` | `kpi.scheduledCount` / `kpi.prev.scheduledCount`（预约单计数） |
 
 ### 定时任务（`scheduler.ts`，无 override 键）
 

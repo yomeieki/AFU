@@ -21,11 +21,12 @@ function Body({ d }: { d: LocalStats }) {
   const netGood = f.netFen >= 0
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiCard label="同城单量" value={String(k.orderCount)} cur={k.orderCount} prev={k.prev.orderCount} />
         <KpiCard label="实收" value={fen(k.revenueFen)} cur={k.revenueFen} prev={k.prev.revenueFen} />
         <KpiCard label="平均距离" value={km(k.avgDistanceM)} cur={k.avgDistanceM} prev={k.prev.avgDistanceM} deltaTone="up-bad" />
         <KpiCard label="免运费单" value={String(k.freeShipCount)} sub={`占比 ${pct(k.freeShipRate)}`} cur={k.freeShipCount} prev={k.prev.freeShipCount} deltaTone="up-bad" />
+        <KpiCard label="预约单" value={String(k.scheduledCount)} sub={`占比 ${pct(k.orderCount ? k.scheduledCount / k.orderCount : null)}`} cur={k.scheduledCount} prev={k.prev.scheduledCount} />
       </div>
 
       <Card title="运费账">

@@ -202,6 +202,10 @@ export interface Order {
   pickupAt?: string | null
   pickupReadyAt?: string | null
   pickupDiscountAmount?: number
+  /** 预约送达（2026-09-21）：送达时段起点 / 已备好时刻 / 详情接口算好的倒推时刻。立即单为 null */
+  scheduledAt?: string | null
+  readyAt?: string | null
+  schedule?: ScheduleInfo | null
   /** 满减（分），下单时快照（2026-09-17 全店满减设计）。非参加单为 0 */
   promoDiscountAmount?: number
   createdAt: string
@@ -420,6 +424,19 @@ export interface PickupSettings {
   unpickedRemindAfterMin: number
 }
 
+/** 预约送达设置（与服务端 services/local-settings.ts ScheduleSettings 同构） */
+export interface ScheduleSettings {
+  enabled: boolean
+  slotMinutes: number
+  daysAhead: number
+  acceptBufferMin: number
+  prepMinutes: number
+  prepTicketLeadMin: number
+  readyRemindEveryMin: number
+  readyRemindMaxTimes: number
+  callToleranceMin: number
+}
+
 /**
  * 全店自动满减（与服务端 services/local-settings.ts 同构；2026-09-17 设计）。
  * `channels` 的键直接用 `DeliveryType`（`LOCAL`/`PICKUP`/`EXPRESS`），不是设计稿草案的
@@ -444,6 +461,9 @@ export interface LocalDeliverySettings {
   enabled: boolean
   paused: { until: string | null; reason: string } | null
   pickup: PickupSettings
+  schedule: ScheduleSettings
+  /** 自取与预约外送共用的自助取消截止，约定前 N 分钟 */
+  selfCancelLeadMin: number
   holiday: { until: string | null; reason: string } | null
   store: { name: string; phone: string; province: string; city: string; district: string; address: string; latE6: number | null; lngE6: number | null }
   radiusKm: number
@@ -541,6 +561,7 @@ export interface DeliveryInfo {
   calledProviders: string[] | null
   /** SOLO | CHEAPEST | ALL | MANUAL | SOLO_HELD | CHEAPEST_HELD；null = 策略上线前的历史单 */
   callStrategy: string | null
+  callOrigin?: 'SCHEDULED_AUTO' | 'MANUAL_EARLY' | null
   /** 下单那一刻**各家各自的预扣**（batchOrder 的 fee[]），比呼叫前的报价快照更权威 */
   orderFees: ProviderQuote[] | null
   providerOrderId: string | null
@@ -626,6 +647,24 @@ export interface ExpressBookingQuotes {
   defaultRemark: string
 }
 
+/** 预约送达（spec 2026-09-21 §6.1）。与服务端 services/delivery/schedule.ts 的 scheduleView 同构；phase 由服务端算，前端不倒推 */
+export type SchedulePhase = 'WAITING' | 'TICKETED' | 'PREPPING' | 'CALL_DUE' | 'READY_WAITING' | 'CALLED' | 'LATE'
+export interface ScheduleInfo {
+  scheduledAt: string
+  /** 「今天 12:00–12:30」，服务端按快照时刻算好 */
+  slotLabel: string
+  ticketAt: string
+  prepStartAt: string
+  callAt: string
+  acceptDueAt: string
+  selfCancelUntil: string
+  readyAt: string | null
+  phase: SchedulePhase
+  /** 现在呼叫预计几点送到（ISO） */
+  etaIfCallNow: string
+  callToleranceMin: number
+}
+
 /** 工作台看板卡片。与服务端 GET /admin/workbench/snapshot 的 toCard() 同构 */
 export interface WorkbenchCard {
   orderId: number
@@ -671,6 +710,8 @@ export interface WorkbenchCard {
       /** 最近一次呼叫骑手失败（运力方拒单/下单报错），订单还停在备餐中等店员重呼或改自送。服务端可选下发 */
       callFailed?: boolean
     } | null
+    /** 预约单才有；立即单为 null */
+    schedule?: ScheduleInfo | null
   } | null
   /** 自取单（deliveryType=PICKUP）。与服务端 workbench.ts toCard 的 pickup 同构 */
   pickup: {
@@ -694,6 +735,8 @@ export interface WorkbenchSnapshot {
     waitingCourier: WorkbenchCard[]
     delivering: WorkbenchCard[]
     done: WorkbenchCard[]
+    /** 出票前的预约单（phase=WAITING）；不进五列，工作台渲染成待接单列顶部的折叠组 */
+    scheduled: WorkbenchCard[]
   }
   stats: { todayOrders: number; todayRevenueFen: number; avgDeliverMinutes: number | null }
   circuit: { tripped: boolean }
@@ -715,6 +758,9 @@ export interface WorkbenchSnapshot {
   }
   /** 未处理取消申请 + ABNORMAL/UNKNOWN 在途配送单 + 熔断(1) */
   pendingAlerts: number
+  scheduleEnabled: boolean
+  /** 常驻倒计时条：WAITING/TICKETED 里最近的一张 + 总数；无预约单为 null */
+  scheduleBar: { orderId: number; prepStartAt: string; slotLabel: string; count: number } | null
   now: string
 }
 
@@ -983,7 +1029,7 @@ export interface OverviewStats {
   customers: { users: number; newUsers: number; returningUsers: number; repeatRate: number | null }
   hotProducts: { productId: number; name: string; qty: number; revenueFen: number }[]
 }
-export interface LocalStatsKpi { orderCount: number; revenueFen: number; avgDistanceM: number | null; freeShipCount: number; freeShipRate: number | null }
+export interface LocalStatsKpi { orderCount: number; revenueFen: number; avgDistanceM: number | null; freeShipCount: number; freeShipRate: number | null; scheduledCount: number }
 export interface LocalStats {
   range: StatsRangeOut
   kpi: LocalStatsKpi & { prev: LocalStatsKpi }
