@@ -20,7 +20,8 @@
 var pickupCheckoutState = require('./pickup-checkout-state')
 var packingFeeOf = pickupCheckoutState.packingFeeOf
 
-// 按钮宽度是按这八种文案定的；多一种就可能在 320 宽的机器上把金额挤没。
+// 按钮宽度是按这十一种文案定的；多一种就可能在 320 宽的机器上把金额挤没。
+// 后三种（NO_SLOT / SLOT_STALE / SUBMIT_SCHEDULED）是预约送达（2026-09-21 §5.2）新增的。
 var TEXT = {
   NO_ADDRESS: '请选择地址',
   NO_LOCATION: '请补充定位',
@@ -30,6 +31,9 @@ var TEXT = {
   NO_TABLEWARE: '请选择餐具',
   SUBMIT: '提交订单',
   SUBMITTING: '提交中',
+  NO_SLOT: '请选择送达时段',
+  SLOT_STALE: '时段已过，请重选',
+  SUBMIT_SCHEDULED: '预约下单',
 }
 
 function result(disabled, text, amountState, action) {
@@ -62,6 +66,11 @@ function checkoutAction(s) {
   if (st.hasLocation === false) return result(true, TEXT.NO_LOCATION, 'pending', 'none')
   if (st.quoting) return result(true, TEXT.QUOTING, 'pending', 'none')
   if (st.quoteError) return result(false, TEXT.RETRY, 'error', 'retry')
+  // ── 预约送达（2026-09-21 §5.2）。closedNow = 报价说此刻非营业时间：
+  //    预约关着 → 交给 blockReason 走老路（页面已把 nextOpenText 写进 blockReason）；
+  //    预约开着 → 不阻塞，但只能预约：尽快模式下按钮就是「请选择送达时段」
+  var sched = st.scheduleMode === 'SCHEDULED'
+  if (st.closedNow && st.scheduleAvailable && !sched) return result(true, TEXT.NO_SLOT, 'pending', 'slot')
   if (st.blockReason) return result(true, TEXT.BLOCKED, 'blocked', 'none')
   // 报价还没回来（或应付金额算不出来）时不放行。这一格也兜住了「地址刚换、
   // 旧 token 已作废、新报价还在路上」那一瞬间——页面调 invalidateCheckout 把
@@ -73,16 +82,21 @@ function checkoutAction(s) {
   if (st.quoteExpiresAt && (st.now || Date.now()) > st.quoteExpiresAt) {
     return result(true, TEXT.QUOTING, 'pending', 'none')
   }
+  // 预约模式：报价有效之后立刻判时段，早于餐具——没选/选过期的时段比餐具更该先拦。
+  if (sched) {
+    if (st.slotStale) return result(false, TEXT.SLOT_STALE, 'ready', 'slot')
+    if (!st.hasSlot) return result(true, TEXT.NO_SLOT, 'ready', 'slot')
+  }
   // 餐具必选（餐具设计 T2）。放在报价有效之后：先让顾客看到运费和应付，再提醒选餐具；
   // 按钮可点，动作是打开餐具弹层——页面必须按 action 分派
   if (!st.hasTableware) return result(false, TEXT.NO_TABLEWARE, 'ready', 'tableware')
   // 优惠重算中：合计此刻是不确定的，放行会让顾客按着旧的应付金额提交，
   // 而服务端按新的券状态算出另一个数。金额继续显示（不闪成「待计算」）——
   // 券的抵扣额通常只差几块，把整个合计抹掉反而像是出了故障。
-  if (st.benefitsLoading) return result(true, TEXT.SUBMIT, 'ready', 'submit')
+  if (st.benefitsLoading) return result(true, sched ? TEXT.SUBMIT_SCHEDULED : TEXT.SUBMIT, 'ready', 'submit')
   // 提交中：按钮锁死，但金额继续显示——顾客要看得见自己正在付多少钱。
   if (st.submitting) return result(true, TEXT.SUBMITTING, 'ready', 'submit')
-  return result(false, TEXT.SUBMIT, 'ready', 'submit')
+  return result(false, sched ? TEXT.SUBMIT_SCHEDULED : TEXT.SUBMIT, 'ready', 'submit')
 }
 
 /**

@@ -71,8 +71,9 @@ test('优先级固定：地址 → 报价 → 业务阻塞 → 提交中', funct
   assert.equal(checkoutAction(on({ blockReason: '已打烊', submitting: true })).text, '暂不可配送')
 })
 
-// 按钮宽度是按这八种文案定的，多一种就可能在 320 宽的机器上溢出。
-test('文案只允许这八种', function () {
+// 按钮宽度是按文案定的，多一种就可能在 320 宽的机器上溢出。这批用例不传 scheduleMode，
+// 覆盖的仍是预约上线前的八种；预约相关三种（NO_SLOT/SLOT_STALE/SUBMIT_SCHEDULED）见上面的预约用例。
+test('非预约场景：文案只允许这八种', function () {
   var allowed = ['请选择地址', '请补充定位', '正在计算运费', '重新获取运费', '暂不可配送', '请选择餐具', '提交订单', '提交中']
   var cases = [
     {}, { hasAddress: true }, { hasAddress: true, hasLocation: false },
@@ -124,6 +125,21 @@ test('优惠重算中：锁住提交，但金额继续显示（不闪成「待�
     checkoutAction(on({ benefitsLoading: true })),
     { disabled: true, text: '提交订单', amountState: 'ready', action: 'submit' }
   )
+})
+
+// 预约送达（2026-09-21 §5.2）：结算按钮的预约分支。
+test('预约：未选格禁用「请选择送达时段」/ 格失效可点「时段已过，请重选」/ 选好格「预约下单」', () => {
+  assert.deepEqual(checkoutAction(on({ scheduleMode: 'SCHEDULED', hasSlot: false })), { disabled: true, text: '请选择送达时段', amountState: 'ready', action: 'slot' })
+  assert.deepEqual(checkoutAction(on({ scheduleMode: 'SCHEDULED', hasSlot: true, slotStale: true })), { disabled: false, text: '时段已过，请重选', amountState: 'ready', action: 'slot' })
+  assert.deepEqual(checkoutAction(on({ scheduleMode: 'SCHEDULED', hasSlot: true })), { disabled: false, text: '预约下单', amountState: 'ready', action: 'submit' })
+})
+test('打烊：预约关 → 走 blockReason 阻塞；预约开且尽快模式 → 「请选择送达时段」', () => {
+  assert.deepEqual(checkoutAction(on({ closedNow: true, scheduleAvailable: false, blockReason: '明天 09:00 营业' })), { disabled: true, text: '暂不可配送', amountState: 'blocked', action: 'none' })
+  assert.deepEqual(checkoutAction(on({ closedNow: true, scheduleAvailable: true, scheduleMode: 'ASAP' })), { disabled: true, text: '请选择送达时段', amountState: 'pending', action: 'slot' })
+})
+test('不传新字段：八种旧结果逐字节一致', () => {
+  assert.deepEqual(checkoutAction(on({})), { disabled: false, text: '提交订单', amountState: 'ready', action: 'submit' })
+  assert.deepEqual(checkoutAction(on({ hasTableware: false })), { disabled: false, text: '请选择餐具', amountState: 'ready', action: 'tableware' })
 })
 
 test('传 undefined / 空对象不抛，按「没选地址」处理', function () {
