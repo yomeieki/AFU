@@ -2145,7 +2145,7 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | `POST /admin/local/orders/:id/accept` | 预约单不重算 `estimatedDeliveryAt` |
 | `POST /admin/local/orders/:id/accept-and-call` | 预约单 42292 |
 | `POST /admin/local/orders/:id/call` | 加 `force`；预约单早于 `callAt − callToleranceMin` 无 force → 42292 |
-| `POST /admin/local/orders/:id/ready` | 新增；`{ readyAt, called, callAt }` |
+| `POST /admin/local/orders/:id/ready` | 新增；`{ readyAt, called, callAt }`；`distanceM` 缺失（数据异常）→ 42292，不写 `readyAt`，店员改用「立即呼叫」或「自己送」 |
 | `GET /admin/orders` | 加 `schedule=SCHEDULED|ASAP` |
 | `GET /admin/orders/:id` | 加 `schedule` 节 |
 | `GET /admin/workbench/snapshot` | 加 `columns.scheduled`、卡片 `local.schedule`、顶层 `scheduleEnabled / scheduleBar` |
@@ -2172,4 +2172,4 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 |---|---|
 | 42290 | 预约配送未开通 |
 | 42291 | 送达时段不可选 |
-| 42292 | 操作与预约单状态不符（接单并呼叫 / 过早呼叫 / 对立即单点已备好） |
+| 42292 | 操作与预约单状态不符（接单并呼叫 / 过早呼叫 / 对立即单点已备好 / 标记已备好但 `distanceM` 缺失） |

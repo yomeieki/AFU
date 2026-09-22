@@ -222,7 +222,10 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number, schedule: Sch
     pickupDayStamp: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).stamp : null,
     pickupDiscountAmount: order.pickupDiscountAmount,
     promoDiscountAmount: order.promoDiscountAmount,
-    scheduledAt: order.scheduledAt,
+    // 复核 R10：distanceM 为 null（数据异常）时 enqueueOrderTicket 算不出 schedule（见下方调用处），
+    // 但这里若仍无条件透传 scheduledAt，content.ts 的 isScheduled 会为真、走预约分支印出空字段。
+    // schedule 为 null 时把 scheduledAt 也回落为 null，让票面走立即单口径（印「预计送达：…」）。
+    scheduledAt: schedule ? order.scheduledAt : null,
     scheduleSlotLabel: schedule?.slotLabel ?? null,
     scheduleDayStamp: schedule?.stamp ?? null,
     schedulePrepStart: schedule?.prepStart ?? null,

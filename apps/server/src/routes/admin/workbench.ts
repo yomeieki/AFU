@@ -135,13 +135,19 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
  * 预约送达（spec §6.1）：同渠道内预约单按 prepStartAt 升序排在立即单之前。
  */
 const CHANNEL_RANK: Record<string, number> = { LOCAL: 0, PICKUP: 1, EXPRESS: 2 }
-type SortableCard = { channel: string; waitSince: string; local?: { schedule?: { prepStartAt: string } | null } | null }
-function sortColumn(cards: SortableCard[], newestFirst = false) {
+export type SortableCard = { channel: string; waitSince: string; local?: { schedule?: { prepStartAt: string } | null } | null }
+export function sortColumn(cards: SortableCard[], newestFirst = false) {
   cards.sort((a, b) => {
     if (a.channel !== b.channel) return (CHANNEL_RANK[a.channel] ?? 9) - (CHANNEL_RANK[b.channel] ?? 9)
-    const sa = a.local?.schedule?.prepStartAt ?? null, sb = b.local?.schedule?.prepStartAt ?? null
-    if (sa && sb) return sa.localeCompare(sb)
-    if (sa !== sb) return sa ? -1 : 1
+    // 复核 R8：spec §6.1「同渠道内预约单按 prepStartAt 升序排在立即单之前」本意只给待接单/备餐中等待
+    // 处理的列，done 列的口径是「新在上」（newestFirst）。这两行只在 !newestFirst 时比较，done 列
+    // 直接落到下面的 waitSince 比较，预约单不再恒排在同渠道立即单之前。非预约卡片两侧 prepStartAt
+    // 均为 null，这个改动对现有自取/邮寄/立即单排序零影响。
+    if (!newestFirst) {
+      const sa = a.local?.schedule?.prepStartAt ?? null, sb = b.local?.schedule?.prepStartAt ?? null
+      if (sa && sb) return sa.localeCompare(sb)
+      if (sa !== sb) return sa ? -1 : 1
+    }
     return newestFirst ? b.waitSince.localeCompare(a.waitSince) : a.waitSince.localeCompare(b.waitSince)
   })
 }

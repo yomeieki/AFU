@@ -8,6 +8,7 @@ import {
   scheduleTimeline, schedulePrepMinutes, buildDeliverySlots, isValidDeliverySlot, earliestScheduleText, schedulePhase, scheduleView,
 } from '../src/services/delivery/schedule'
 import { buildPickupSlots } from '../src/services/pickup'
+import { sortColumn, SortableCard } from '../src/routes/admin/workbench'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -116,6 +117,41 @@ t('自取经公共模块后行为不变：09:00 看自取首格 10:00（10:00−
   const s = sanitizeLocalSettings({ ...base, pickup: { ...base.pickup, enabled: true, slotMinutes: 30, acceptBufferMin: 5, daysAhead: 1 } })
   const v = buildPickupSlots(s, sh('2026-09-22T09:00:00'))
   assert.strictEqual(v.days[0].slots[0].label, '10:00–10:30'); assert.strictEqual(v.days.length, 2)
+})
+
+// 复核 R8：done 列（newestFirst=true）不再被预约单的 prepStartAt 打乱；其余列（newestFirst=false，
+// 待接单/备餐中等等）仍按 spec §6.1「同渠道内预约单按 prepStartAt 升序排在立即单之前」的原口径。
+t('R8：done 列 newestFirst 生效——waitSince 较新的立即单排在 waitSince 较旧的预约单之前', () => {
+  const cards: SortableCard[] = [
+    { channel: 'LOCAL', waitSince: '2026-09-22T08:00:00.000Z', local: { schedule: { prepStartAt: '2026-09-22T07:00:00.000Z' } } }, // 预约单，waitSince 更旧
+    { channel: 'LOCAL', waitSince: '2026-09-22T09:00:00.000Z' }, // 立即单，waitSince 更新
+  ]
+  sortColumn(cards, true)
+  assert.strictEqual(cards[0].waitSince, '2026-09-22T09:00:00.000Z', '立即单（新）应排在预约单（旧）之前')
+  assert.strictEqual(cards[1].waitSince, '2026-09-22T08:00:00.000Z')
+})
+t('R8：非 done 列（newestFirst=false）预约单仍按 prepStartAt 升序排在同渠道立即单之前，原口径不回归', () => {
+  const cards: SortableCard[] = [
+    { channel: 'LOCAL', waitSince: '2026-09-22T09:00:00.000Z' }, // 立即单
+    { channel: 'LOCAL', waitSince: '2026-09-22T08:00:00.000Z', local: { schedule: { prepStartAt: '2026-09-22T07:00:00.000Z' } } }, // 预约单
+  ]
+  sortColumn(cards, false)
+  assert.ok(cards[0].local?.schedule?.prepStartAt, '预约单应排在立即单之前')
+  assert.strictEqual(cards[1].waitSince, '2026-09-22T09:00:00.000Z')
+})
+t('R8：非预约卡片两侧 prepStartAt 均为 null 时，排序不受影响（自取/邮寄/立即单原有口径零回归）', () => {
+  const asc: SortableCard[] = [
+    { channel: 'LOCAL', waitSince: '2026-09-22T09:00:00.000Z' },
+    { channel: 'LOCAL', waitSince: '2026-09-22T08:00:00.000Z' },
+  ]
+  sortColumn(asc, false)
+  assert.strictEqual(asc[0].waitSince, '2026-09-22T08:00:00.000Z', '非 newestFirst 时仍按 waitSince 升序')
+  const desc: SortableCard[] = [
+    { channel: 'LOCAL', waitSince: '2026-09-22T08:00:00.000Z' },
+    { channel: 'LOCAL', waitSince: '2026-09-22T09:00:00.000Z' },
+  ]
+  sortColumn(desc, true)
+  assert.strictEqual(desc[0].waitSince, '2026-09-22T09:00:00.000Z', 'newestFirst 时仍按 waitSince 降序')
 })
 
 console.log(process.exitCode ? `有失败（通过 ${pass}）` : `全部通过 ${pass}`)

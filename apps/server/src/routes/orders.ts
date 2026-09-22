@@ -922,6 +922,13 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     const win = await cancelWindowOf(order)
     if (!win.canRequestCancel) {
       const timed = order.deliveryType === 'PICKUP' || (order.deliveryType === 'LOCAL' && !!order.scheduledAt)
+      // 复核 R3：与 PUT /:id/cancel 的 timed 分支同一根因——pickupAt 缺失 / 预约单 distanceM 缺失是数据
+      // 异常（正常下单路径不产生），cancelWindowOf 同样因缺字段返回 closed，会落进「当前可直接取消订单，
+      // 无需申请」这条文案，而顾客刚从那边被「已临近约定时间，请改为『申请取消』」指过来——两条文案互相
+      // 矛盾，顾客没有出路。这里先判出这两种缺字段情形，给同一条专门文案。
+      if ((order.deliveryType === 'PICKUP' && !order.pickupAt) || (order.deliveryType === 'LOCAL' && !!order.scheduledAt && order.distanceM === null)) {
+        throw new AppError(42229, '订单数据异常，请联系商家协商退款')
+      }
       throw new AppError(42229, timed
         ? (order.readyAt || order.pickupReadyAt ? '餐品已备好，如有问题请联系商家或申请售后' : '当前可直接取消订单，无需申请')
         : order.status === 'PAID' ? '商家尚未接单，请直接申请退款' : '已超过可取消时间，如有问题请联系商家')
@@ -1042,6 +1049,14 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
     const timed = order.deliveryType === 'PICKUP' || (order.deliveryType === 'LOCAL' && !!order.scheduledAt)
     let selfCancelled = false
     if (timed && (order.status === 'PAID' || order.status === 'PREPARING')) {
+      // 复核 R3：pickupAt 缺失 / 预约单 distanceM 缺失都是数据异常（正常下单路径不产生），
+      // canSelfCancelOf 对这两种情况同样返回 false，会掉进下面「已临近约定时间，请改为『申请取消』
+      // 由商家确认」这条文案；但顾客照做去 POST /cancel-request 时，cancelWindowOf 同样因缺字段
+      // 拒绝、抛「当前可直接取消订单，无需申请」——两条文案互相指向对方，顾客没有出路。这里先判出
+      // 这两种缺字段情形，给专门文案，不再进入互相矛盾的那条分支。安全性不变：仍然不会掉进秒退分支。
+      if ((order.deliveryType === 'PICKUP' && !order.pickupAt) || (order.deliveryType === 'LOCAL' && !!order.scheduledAt && order.distanceM === null)) {
+        throw new AppError(42229, '订单数据异常，请联系商家协商退款')
+      }
       if (!(await canSelfCancelOf(order))) throw new AppError(42229, '已临近约定时间，请改为「申请取消」由商家确认')
       await prisma.$transaction(async (tx) => {
         // 条件写：与「已备好」「呼叫骑手」并发时以先落库者为准（readyAt/pickupReadyAt 一旦非空本次取消失败）。

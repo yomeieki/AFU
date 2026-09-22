@@ -97,8 +97,14 @@ export async function remindScheduledNotReady(): Promise<number> {
     const marked = await prisma.order.updateMany({ where: { id: o.id, readyAt: null, scheduleRemindedAt: o.scheduleRemindedAt }, data: { scheduleRemindedAt: new Date() } })
     if (marked.count === 0) continue
     n++
-    // 第几次提醒 = 该单已有的 READY_DUE 作业数 + 1（只做票面文案与去重 seq；打印机关着时恒为 1，无副作用）
-    const seq = (await prisma.printJob.count({ where: { orderId: o.id, kind: 'READY_DUE' } })) + 1
+    // 第几次提醒 = 该单已发生的提醒轮次 + 1（只做票面文案与去重 seq）。复核 R7：enqueueOrderTicket 对
+    // 每台打印机各建一行 PrintJob（ticket/index.ts 的 for (const printer of printers)），配 2 台及以上
+    // LOCAL 打印机时直接数总行数会成倍跳号（第 2 次算成第 3 次）。按 printerSn 分组各取计数，同一轮里
+    // 每台机各落一行，所以任一分组的行数就是已发生的轮次数；取 max 是为了容忍中途增减打印机。未配置
+    // 打印机时落的 SKIPPED 行 printerSn 为空串，自成一组，计数同样正确（原注释「打印机关着时恒为 1，
+    // 无副作用」与实现不符，一并更正）。
+    const seqGroups = await prisma.printJob.groupBy({ by: ['printerSn'], where: { orderId: o.id, kind: 'READY_DUE' }, _count: { _all: true } })
+    const seq = Math.max(0, ...seqGroups.map((g) => g._count._all)) + 1
     enqueueOrderTicket(o.id, 'READY_DUE', { seq }).catch((e) => console.error('[schedule-tasks] 催备好小条入队失败:', (e as Error).message))
     if (last === null) notifyLocalDeliveryAlert('预约单应已备好未确认', [tail(o), `应于 ${hhmmOf(tl.callAt)} 前备好 · ${slotLabel(tl.scheduledAt, s.schedule.slotMinutes)} 送达`, '请到工作台点「已备好」或「立即呼叫」'])
   }

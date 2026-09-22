@@ -230,6 +230,56 @@ sched '{"cancelAutoRejectMin":1}' >/dev/null
 assert_eq "预约单的取消申请不被自动驳回" "$(sql "SELECT cancel_requested_at IS NOT NULL FROM orders WHERE id=$S69_O7;")" "1"
 req POST "/api/admin/local/orders/$S69_O7/cancel-request/reject" "$AT" >/dev/null
 
+echo "-- ⑭ R4：distanceM 缺失（数据异常）的预约单点已备好 → 42292，不静默 called:false、不写 readyAt、不发单 --"
+# 复核 R4 根因：distanceM 缺失是数据异常（正常下单路径不产生），scheduleTimeline 算不出 callAt；
+# 改前静默返回 { called:false }，Task 6 的 autoCallScheduled 同样按 distanceM 判定永远不会补呼，
+# 这单会一直挂着。改后必须在写 readyAt 之前报错，不留「readyAt 已写但接口报错」的半状态。
+S69_O9=$(s69_new 3); S69_IDS="$S69_IDS,$S69_O9"
+req POST "/api/admin/local/orders/$S69_O9/accept" "$AT" >/dev/null
+sql "UPDATE orders SET distance_m=NULL WHERE id=$S69_O9;"
+R=$(req POST "/api/admin/local/orders/$S69_O9/ready" "$AT")
+assert_eq "R4：distanceM 缺失时点已备好 42292（不再静默成功）" "$(code "$R")" "42292"
+[[ "$(jq -r .message <<<"$R")" == *"呼叫"* ]] && ok "R4：文案给出出路（立即呼叫/自己送）" || fail "R4：文案没给出路" "$R"
+assert_eq "R4：ready_at 仍为 null（半状态未落库）" "$(sql "SELECT ready_at IS NULL FROM orders WHERE id=$S69_O9;")" "1"
+assert_eq "R4：未发起任何配送单（既不静默成功也不发单）" "$(sql "SELECT COUNT(*) FROM deliveries WHERE order_id=$S69_O9;")" "0"
+
+echo "-- ⑮ R10：同一根因（distanceM 缺失）的预约单出票，票面不再印空值送达行 --"
+# 复用上面 R4 造的 S69_O9（distanceM 已为 null、scheduledAt 非空）。用「重打」触发一次出票——
+# 走 renderOrderTicket 而不是被 tlOf 拦掉的定时任务（printPrepTickets 等在 distanceM 为 null 时
+# tl 为 null 直接 continue，永远不会走到出票这一步），能真实反映 toTicketInput 的透传逻辑是否自洽。
+R=$(req POST "/api/admin/orders/$S69_O9/reprint" "$AT")
+assert_eq "R10：重打 code 0" "$(code "$R")" "0"
+sleep 0.5
+S69_R10=$(PJOBS "$S69_O9" | jq -r '[.data.list[] | select(.kind=="REPRINT")] | first | .content')
+[[ "$S69_R10" != *"<B>送达 </B>"* ]] && ok "R10：不再印空值「<B>送达 </B>」行" || fail "R10：仍有空值送达行" "$S69_R10"
+[[ "$S69_R10" != *"开始备餐  ·"* ]] && ok "R10：不再印尾随空格的「开始备餐  · 呼叫骑手 」行" || fail "R10：仍有空白倒推时刻行" "$S69_R10"
+
+echo "-- ⑯ R7：READY_DUE 序号不受打印机台数影响（2 台 LOCAL 打印机时不再成倍跳号）--"
+# 复核 R7 根因：enqueueOrderTicket 对每台打印机各建一行 PrintJob，配 2 台及以上 LOCAL 打印机时，
+# 改前按「总行数 + 1」算第几次提醒会成倍跳号（第 2 次算成第 3 次）。第二台用假 SN，发送会失败
+# 但 PrintJob 行仍会落（enqueueOrderTicket 先建行、再尝试发送）。本段自行保存并恢复打印机设置。
+S69_R7_PRINTER_BEFORE=$(req GET /api/admin/settings/printer "$AT" | jq -c .data)
+req PUT /api/admin/settings/printer "$AT" '{"enabled":true,"printers":[{"sn":"S69-P","channels":["LOCAL","EXPRESS"],"copies":1},{"sn":"S69-P2-FAKE","channels":["LOCAL"],"copies":1}],"printCancel":true}' >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+S69_O10=$(s69_new 3); S69_IDS="$S69_IDS,$S69_O10"
+req POST "/api/admin/local/orders/$S69_O10/accept" "$AT" >/dev/null
+s69_pin "$S69_O10" callAt -1
+R=$(sched '{}'); [[ "$(jq -r '.data.schedNotReady // -1' <<<"$R")" -ge 1 ]] && ok "R7：首轮催备好 schedNotReady≥1" || fail "R7：首轮没催备好" "$R"
+sleep 0.5
+assert_eq "R7：两台打印机各落一行，首轮共 2 条 READY_DUE" "$(PJOBS "$S69_O10" | jq -r '[.data.list[] | select(.kind=="READY_DUE")] | length')" "2"
+# PJOBS 按 createdAt desc 排（见 e2e.sh 的 PJOBS 定义与 print-jobs 接口 orderBy），取 first 才是最新一条。
+S69_R7_C1=$(PJOBS "$S69_O10" | jq -r '[.data.list[] | select(.kind=="READY_DUE" and .printerSn=="S69-P")] | first | .content')
+[[ "$S69_R7_C1" == *"第 1 次提醒"* ]] && ok "R7：首轮票面「第 1 次提醒」" || fail "R7：首轮票面不对" "$S69_R7_C1"
+sql "UPDATE orders SET schedule_reminded_at=DATE_SUB(NOW(3), INTERVAL 4 MINUTE) WHERE id=$S69_O10;"
+R=$(sched '{}'); [[ "$(jq -r '.data.schedNotReady // -1' <<<"$R")" -ge 1 ]] && ok "R7：第二轮催备好 schedNotReady≥1" || fail "R7：第二轮没催备好" "$R"
+sleep 0.5
+assert_eq "R7：两台打印机再各落一行，累计 4 条 READY_DUE" "$(PJOBS "$S69_O10" | jq -r '[.data.list[] | select(.kind=="READY_DUE")] | length')" "4"
+S69_R7_C2=$(PJOBS "$S69_O10" | jq -r '[.data.list[] | select(.kind=="READY_DUE" and .printerSn=="S69-P")] | first | .content')
+[[ "$S69_R7_C2" == *"第 2 次提醒"* ]] && ok "R7：第二轮票面「第 2 次提醒」（未受 2 台打印机影响跳号）" || fail "R7：第二轮票面跳号" "$S69_R7_C2"
+[[ "$S69_R7_C2" != *"第 3 次提醒"* ]] && ok "R7：确认没有跳成「第 3 次」（改前的 bug 表现）" || fail "R7：跳号回归——票面印成第 3 次"
+req PUT /api/admin/settings/printer "$AT" "$S69_R7_PRINTER_BEFORE" >/dev/null
+req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
+
 echo "-- 收尾：恢复设置、清作业、取消未完成单 --"
 req PUT /api/admin/settings/local-delivery "$AT" "$S69_ORIG" >/dev/null
 req POST /api/admin/system/printer-mock/reset "$AT" >/dev/null
