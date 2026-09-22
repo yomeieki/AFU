@@ -1,0 +1,160 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=375">
+<link rel="stylesheet" href="/index-local.generated.css">
+<style>html{--rpx:.5px}body{margin:0;width:375px;background:#f5f6f7}</style>
+</head>
+<body>
+<div class="mp-page">
+  <div class="page page-local">
+
+    <!-- 自绘导航栏。真机上 statusBarHeight/navContent/navTotal 由 index.js:computeNavBar
+         按胶囊按钮实测值算出；预览台不跑 JS，这里硬编码 iPhone 15 Pro 的一组（54 / 42 / 96）。 -->
+    <div class="navbar" style="height:96px;padding-top:54px">
+      <div class="navbar-inner" style="height:42px">
+        <div class="navbar-back"><div class="navbar-back-icon"></div></div>
+      </div>
+    </div>
+    <div style="height:96px"></div>
+
+    <!-- 同城·外送打烊但预约开着（2026-09-21 预约送达 §5.1/§5.4）：胶囊蓝色调「已打烊 · 可预约」、
+         页头软提示不阻塞、切换栏「外送」下补「（可预约）」、购物车条「去结算 · 预约外送」。 -->
+    <div class="store-head">
+      <div class="store-title-row"><div class="store-name-wrap"><div class="store-icon icon icon-shop"></div><span class="store-name">丹桂阿福凉菜</span><span class="status-pill status-pill-schedule">已打烊 · 可预约</span></div></div>
+      <div class="delivery-rules-row"><span class="delivery-rules">配送范围 5 km · 满 ¥20 起送 · 基础运费 ¥3 起</span><span class="delivery-rules-arrow">›</span></div>
+      <div class="head-notice head-notice-soft"><span class="head-notice-text">现在下单为预约配送，最早明天 09:35 送达</span></div>
+    </div>
+    <div class="promo-bar" onclick="openPromoSheet('promo')"><span class="promo-badge">减</span><span class="promo-summary">全店满减　满 200 减 20 · 满 300 减 35</span><span class="promo-detail">详情 ›</span></div>
+    <div class="promo-bar" onclick="openPromoSheet('freeship')"><span class="promo-badge">免</span><span class="promo-summary">免运费　满 ¥58 免运费（2 km 内）· 多买免更远</span><span class="promo-detail">详情 ›</span></div>
+    <div class="mode-bar">
+      <div class="mode-tab active"><span class="mode-name">外送</span><span class="mode-sub mode-sub-open">（可预约）</span></div>
+      <div class="mode-tab"><span class="mode-name">自取</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">同城分类</span>
+        <span class="section-more">全部 <span class="section-more-arrow icon icon-arrow"></span></span>
+      </div>
+      <div class="category-scroll">
+        <div class="category-list">
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">熟</span></div><span class="category-name">熟食</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">卤</span></div><span class="category-name">卤味</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">凉</span></div><span class="category-name">凉菜</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">礼</span></div><span class="category-name">礼盒</span></div>
+          <div class="category-item"><div class="category-icon-wrap"><span class="category-icon-text">特</span></div><span class="category-name">特惠</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><span class="section-title">今日现拌</span></div>
+      <div class="product-grid">
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">夫妻肺片</span>
+            <span class="product-subtitle">每日现拌，麻辣鲜香</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">29</span><span class="price-dec">.90</span><span class="price-from">起</span></div>
+              <span class="product-sales">已售262</span>
+            </div>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">冷吃兔</span>
+            <span class="product-subtitle">传统工艺，入口即化</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">49</span><span class="price-dec">.80</span></div>
+              <span class="product-sales">已售128</span>
+            </div>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">凉拌折耳根</span>
+            <span class="product-subtitle">精选8款熟食，送礼佳品</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">298</span><span class="price-dec">.00</span></div>
+              <span class="product-sales">已售45</span>
+            </div>
+          </div>
+        </div>
+        <div class="product-card">
+          <div class="product-img-wrap"><div class="product-img-placeholder img-placeholder"></div></div>
+          <div class="product-info">
+            <span class="product-name">蒜泥白肉</span>
+            <span class="product-subtitle">甜咸交融，香而不腻</span>
+            <div class="product-bottom">
+              <div class="product-price-wrap"><span class="price-symbol">¥</span><span class="price-int product-price-int">35</span><span class="price-dec">.80</span></div>
+              <span class="product-sales">已售89</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cart-spacer" style="height:72px"></div>
+  </div>
+<div class="cart-dock"><div class="cart-tip cart-tip-done"><span class="cart-tip-em">已减 ¥20 · 已免运费</span></div><div class="local-cart-bar"><div class="cart-summary"><div class="cart-icon"><div class="cart-drawing"></div><div class="cart-badge">7</div></div><div class="cart-summary-text"><div class="cart-summary-main"><span class="cart-summary-amount">¥191.00</span><span class="cart-summary-orig">¥211.00</span></div><span class="cart-summary-sub">共 7 件 · 已减 ¥20</span></div></div><div class="checkout-btn btn-primary">去结算 · 预约外送</div></div></div>
+
+<!-- 活动详情弹层镜像（T3）：结构/类名同 components/promo-bar/index.wxml §4.2，样式来自该组件真实
+     wxss（serve.mjs 已把 promo-bar 登记进 index-local 的组合 CSS）。点满减/免运费「详情」展开，
+     点遮罩/✕/「知道了」都关闭。行数据是本页固定样例，不读真实接口。
+     必须放在 .mp-page 内部——CSS 变量（--card/--divider/--brand…）挂在 .mp-page 上，
+     挪到它外面 var() 会解析不到，面板背景会变透明（T3 联调时发现过一次）。 -->
+<div class="promo-sheet-mask" id="promo-sheet-mask" style="display:none" onclick="closePromoSheet()">
+  <div class="promo-sheet" onclick="event.stopPropagation()">
+    <div class="promo-sheet-head"><span class="promo-sheet-title" id="promo-sheet-title"></span><div class="promo-sheet-close" onclick="closePromoSheet()">✕</div></div>
+    <div id="promo-sheet-rows"></div>
+    <span class="promo-sheet-note" id="promo-sheet-note"></span>
+    <div class="promo-sheet-ok btn-primary" onclick="closePromoSheet()">知道了</div>
+  </div>
+</div>
+</div>
+<script>
+  var PROMO_SHEETS = {
+    promo: {
+      title: '全店满减',
+      rows: [
+        { left: '满 ¥200', right: '减 ', em: '¥20', tail: '' },
+        { left: '满 ¥300', right: '减 ', em: '¥35', tail: '' }
+      ],
+      note: '与优惠券可叠加 · 运费、打包费不参与'
+    },
+    freeship: {
+      title: '免运费',
+      rows: [
+        { left: '满 ¥58', right: '免运费 ', em: '2 km', tail: ' 内' },
+        { left: '满 ¥88', right: '免运费 ', em: '3 km', tail: ' 内' },
+        { left: '满 ¥128', right: '免运费 ', em: '4 km', tail: ' 内' },
+        { left: '满 ¥168', right: '免运费 ', em: '5 km', tail: ' 内' },
+        { left: '满 ¥198', right: '免运费 ', em: '7 km', tail: ' 内' }
+      ],
+      note: '按下单地址到门店的距离判断 · 配送范围 8 km'
+    }
+  }
+  function promoSheetEsc(value) {
+    return String(value).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] })
+  }
+  function openPromoSheet(kind) {
+    var data = PROMO_SHEETS[kind]
+    if (!data) return
+    document.getElementById('promo-sheet-title').textContent = data.title
+    document.getElementById('promo-sheet-rows').innerHTML = data.rows.map(function (row) {
+      return '<div class="promo-sheet-row"><span class="promo-sheet-k">' + promoSheetEsc(row.left) + '</span><span class="promo-sheet-v">' + promoSheetEsc(row.right) + (row.em ? '<span class="promo-sheet-em">' + promoSheetEsc(row.em) + '</span>' : '') + promoSheetEsc(row.tail) + '</span></div>'
+    }).join('')
+    document.getElementById('promo-sheet-note').textContent = data.note
+    document.getElementById('promo-sheet-mask').style.display = 'block'
+  }
+  function closePromoSheet() {
+    document.getElementById('promo-sheet-mask').style.display = 'none'
+  }
+</script>
+</body>
+</html>
