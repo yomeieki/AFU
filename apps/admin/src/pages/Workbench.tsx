@@ -1027,20 +1027,20 @@ function LegendContent() {
     <>
       <span className="wb__legend-g">
         <span className="wb__badge wb__badge--local"><Bike className="w-3.5 h-3.5" />同城配送</span>
-        <span>骑手送，恒排在邮寄单上面</span>
+        <span>骑手送，排最前</span>
         <span className="wb__badge wb__badge--sched"><Clock className="w-3.5 h-3.5" />同城预约</span>
-        <span>顾客约了送达时段，出票前收在「预约单」组里，出票后进正常列</span>
+        <span>约了时段，出票后进列</span>
         <span className="wb__badge wb__badge--express"><Package className="w-3.5 h-3.5" />全国邮寄</span>
-        <span>可以稍后处理</span>
+        <span>可稍后处理</span>
         <span className="wb__badge wb__badge--pickup"><Store className="w-3.5 h-3.5" />到店自取</span>
-        <span>顾客来店取，排在同城之下、邮寄之上</span>
+        <span>顾客来取，排同城后</span>
       </span>
       <span className="wb__legend-sep" />
       <span className="wb__legend-g">
         <span className="wb__chip">正常</span>
         <span className="wb__chip wb__chip--warn">该催了</span>
         <span className="wb__chip wb__chip--late">要延误</span>
-        <span>整圈发光 = 急，左边那条竖色条只说渠道、不会变色</span>
+        <span>整圈发光 = 急，竖色条只标渠道</span>
       </span>
     </>
   )
