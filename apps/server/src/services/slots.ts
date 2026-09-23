@@ -86,18 +86,29 @@ export function cnDate(dateStr: string): string {
  * 小票专用文案：纸票是付款那一刻打的，印「明天」到了第二天就成了假话，所以票面一律印绝对日期 + 星期；
  * 相对关系只放在票头的戳里（今天不盖戳，明天「明日单」，更远印日期）。
  *
- * S7（2026-09-23 修）：`text`（日期 + 时段拼一整串，如「10月22日（周四）12:00–12:30」）会被票面
- * 塞进 `<B>` 放大行，33 列远超真机实测的 16 列可用宽度（BIG_LINE_WIDTH，见 content.ts），必然
- * 折成三行且末行只剩一两个字符。新增 `date`（「10月22日（周四）」，12 列）与 `time`
- * （「12:00–12:30」，多为 11 列）两个字段，供调用方拆成「日期普通字号 + 时段放大」两行；
- * `text`/`stamp` 保留不变，其它既有调用方（如未拆分的旧路径）不受影响。
+ * ⚠️ 复核裁决 R9（2026-09-23）：这里**不得**改动返回值形状——`scripts/selftest-pickup.ts:101-103`
+ * 对本函数用 `assert.deepStrictEqual(..., { text, stamp })` 逐字节比较，多一个 key 就会判失败；
+ * 该文件不在本批授权范围（allow.txt 未列），不许改。日期/时段拆开的字段改由 `ticketLabelParts`
+ * 单独提供（见下），两个函数各司其职，互不影响对方的既有契约。
  */
-export function ticketLabel(at: Date, slotMinutes: number, now: Date = new Date()): { text: string; stamp: string; date: string; time: string } {
+export function ticketLabel(at: Date, slotMinutes: number, now: Date = new Date()): { text: string; stamp: string } {
   const date = shanghaiDateStr(at)
   const today = shanghaiDateStr(now)
   const m = shanghaiMinutesOf(at)
   const stamp = date === today ? '' : date === addDays(today, 1) ? '明日单' : `${cnDate(date).replace(/（.*）/, '')}单`
-  const dateText = cnDate(date)
-  const timeText = `${hhmm(m)}–${hhmm(m + slotMinutes)}`
-  return { text: `${dateText}${timeText}`, stamp, date: dateText, time: timeText }
+  return { text: `${cnDate(date)}${hhmm(m)}–${hhmm(m + slotMinutes)}`, stamp }
+}
+
+/**
+ * S7（2026-09-23 修，复核裁决 R9 拆出）：`ticketLabel().text`（日期 + 时段拼一整串，如
+ * 「10月22日（周四）12:00–12:30」）会被票面塞进 `<B>` 放大行，33 列远超真机实测的 16 列可用
+ * 宽度（BIG_LINE_WIDTH，见 content.ts），必然折成三行且末行只剩一两个字符。这个函数单独给出
+ * `date`（「10月22日（周四）」）与 `time`（「12:00–12:30」）两段，供调用方拼成「日期普通字号 +
+ * 时段放大」两行；与 `cnDate`/`hhmm` 内部实现和 `ticketLabel` 共用，不重复算时区。
+ */
+// `now` 参数仅为与 ticketLabel 签名一致而保留（不使用）：date/time 段本身不依赖 now
+// （stamp 才依赖 now 判断今天/明天/更远，而这里根本不返回 stamp）。
+export function ticketLabelParts(at: Date, slotMinutes: number, _now: Date = new Date()): { date: string; time: string } {
+  const date = shanghaiDateStr(at)
+  return { date: cnDate(date), time: `${hhmm(shanghaiMinutesOf(at))}–${hhmm(shanghaiMinutesOf(at) + slotMinutes)}` }
 }

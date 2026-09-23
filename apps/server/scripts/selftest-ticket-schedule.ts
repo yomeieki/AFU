@@ -30,6 +30,18 @@ function assertScheduleBigSegmentsWithin(ticket: string, expected: string[], lim
     assert.ok(strWidth(text) <= limit, `<B>${text}</B> 显示宽度 ${strWidth(text)} 超过 ${limit} 列`)
   }
 }
+/**
+ * R6（复核裁决）：负向断言，证伪拆行没有回归成四种老形态——`<B>送达 `/`<B>取餐 `/`<B>应于 `
+ * （带空格）三种「标签+空格+值」整段塞一条 `<B>` 的写法，以及备餐票时刻行合成一行时用 `·`
+ * 拼接（`HH:mm 开始备餐 · HH:mm 前备好`）。只用于 date/time 都给了、走新拆行路径的场景；
+ * R9 的回落场景（只传 *Label）里这些老形态是**预期**会出现的，不适用本函数。
+ */
+function assertNoOldForms(ticket: string) {
+  assert.ok(!ticket.includes('<B>送达 '), `不应再出现老写法 <B>送达 …</B>：${ticket}`)
+  assert.ok(!ticket.includes('<B>取餐 '), `不应再出现老写法 <B>取餐 …</B>：${ticket}`)
+  assert.ok(!ticket.includes('<B>应于 '), `不应再出现带空格的老写法 <B>应于 …</B>：${ticket}`)
+  assert.ok(!ticket.includes(' 开始备餐 · '), `不应再出现合成的备餐票时刻行（用 · 拼接）：${ticket}`)
+}
 
 const base: TicketOrderInput = {
   orderNo: 'ORD1', channel: 'LOCAL',
@@ -49,7 +61,7 @@ const base: TicketOrderInput = {
   scheduleCall: '11:36',
 }
 
-t('预约来单票：配送联/厨房联的放大时段行 ≤16 列；含普通日期行 + 放大时段行；仍含开始备餐/呼叫骑手时刻', () => {
+t('预约来单票：配送联/厨房联的放大时段行 ≤16 列；含普通日期行 + 放大时段行；仍含开始备餐/呼叫骑手时刻；不回归四种老形态', () => {
   const ticket = renderOrderTicket(base)
   const [delivery, kitchen] = ticket.split('<CUT>')
   assert.ok(delivery.includes('送达 10月22日（周四）'), delivery)
@@ -57,17 +69,21 @@ t('预约来单票：配送联/厨房联的放大时段行 ≤16 列；含普通
   assert.ok(delivery.includes('开始备餐 11:16 · 呼叫骑手 11:36'), delivery)
   assert.ok(kitchen.includes('送达 10月22日（周四）'), kitchen)
   assertScheduleBigSegmentsWithin(kitchen, ['12:00–12:30'])
+  assertNoOldForms(delivery)
+  assertNoOldForms(kitchen)
 })
 
-t('预约备餐票（prep.unaccepted=true）：<B>HH:mm 开始备餐</B>、<B>HH:mm 前备好</B> 两条独立行，含 [未接单]，全部 ≤16 列', () => {
+t('预约备餐票（prep.unaccepted=true）：<B>HH:mm 开始备餐</B>、<B>HH:mm 前备好</B> 两条独立行，含 [未接单]，全部 ≤16 列；不回归四种老形态', () => {
   const ticket = renderOrderTicket({ ...base, prep: { unaccepted: true } })
   assertScheduleBigSegmentsWithin(ticket, ['11:16 开始备餐', '11:36 前备好'])
   assert.ok(ticket.includes('<CB>[未接单]</CB>'), ticket)
+  assertNoOldForms(ticket)
 })
 
-t('renderReadyDueTicket：<B>应于HH:mm前备好</B> ≤16 列', () => {
+t('renderReadyDueTicket：<B>应于HH:mm前备好</B> ≤16 列；不回归四种老形态', () => {
   const ticket = renderReadyDueTicket({ receiverPhone: '13800001234', slotLabel: '今天 12:00–12:30', call: '11:36', seq: 1 })
   assertScheduleBigSegmentsWithin(ticket, ['应于11:36前备好'])
+  assertNoOldForms(ticket)
 })
 
 t('反例：把老写法「送达 + 完整 scheduleSlotLabel」拼成一整段喂给宽度函数，应得 33（证明宽度函数本身能证伪，不是恒真断言）', () => {
@@ -88,11 +104,37 @@ t('自取票（PICKUP）：取餐票同样拆成普通日期行 + 放大时段�
   const [receiptSide] = ticket.split('<CUT>')
   assert.ok(receiptSide.includes('取餐 9月12日（周六）'), receiptSide)
   assertScheduleBigSegmentsWithin(receiptSide, ['12:00–12:30'])
+  assertNoOldForms(receiptSide)
 })
 
 t('反例：自取票老写法「取餐 + 完整 pickupSlotLabel」拼成一整段喂给宽度函数，应得超 16 列（证明宽度函数本身能证伪）', () => {
   const old = '取餐 9月12日（周六）12:00–12:30'
   assert.ok(strWidth(old) > BIG_LINE_WIDTH, `期望 > ${BIG_LINE_WIDTH}，实际 ${strWidth(old)}`)
+})
+
+// 复核裁决 R9：date/time 缺失时必须回落老写法（不能拆出一段空 <B></B>）——
+// scripts/selftest-pickup.ts / selftest-member.ts 两份既有自测的调用方就是这样只传 *Label，
+// 不在本批授权范围、不许改；content.ts 的 slotBigLines 必须兼容它们。
+t('R9：预约票只传 scheduleSlotLabel（无 date/time）→ 回落老写法 <B>送达 …</B>，不产生空 <B></B>', () => {
+  const { scheduleSlotDate: _d, scheduleSlotTime: _t, ...fallback } = base
+  const ticket = renderOrderTicket(fallback)
+  const [delivery, kitchen] = ticket.split('<CUT>')
+  assert.ok(delivery.includes('<B>送达 10月22日（周四）12:00–12:30</B>'), delivery)
+  assert.ok(!delivery.includes('<B></B>'), delivery)
+  assert.ok(kitchen.includes('<B>送达 10月22日（周四）12:00–12:30</B>'), kitchen)
+  assert.ok(!kitchen.includes('<B></B>'), kitchen)
+})
+
+t('R9：自取票只传 pickupSlotLabel（无 date/time）→ 回落老写法 <B>取餐 …</B>，不产生空 <B></B>（与 selftest-member.ts 既有调用方同形）', () => {
+  const pickup: TicketOrderInput = {
+    ...base, channel: 'PICKUP', scheduledAt: null, distanceM: null,
+    pickupAt: new Date('2026-09-12T04:00:00Z'),
+    pickupSlotLabel: '9月12日（周六）12:00–12:30',
+  }
+  const ticket = renderOrderTicket(pickup)
+  const [receiptSide] = ticket.split('<CUT>')
+  assert.ok(receiptSide.includes('<B>取餐 9月12日（周六）12:00–12:30</B>'), receiptSide)
+  assert.ok(!receiptSide.includes('<B></B>'), receiptSide)
 })
 
 console.log(process.exitCode ? `有失败（通过 ${pass}）` : `全部通过 ${pass}`)

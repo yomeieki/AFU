@@ -167,6 +167,21 @@ function padRightWidth(s: string, width: number): string {
 const esc = (s: string) => s.replace(/[<>]/g, '')
 
 /**
+ * S7 / 复核裁决 R9：取餐/送达时刻的「标签 + 放大值」两行——只有 date 与 time **都**给了才拆成
+ * 「普通字号日期行 + 放大时段行」；缺任一个就回落成老写法（整段塞进一条 `<B>` 里，可能印出
+ * 「送达 」/「取餐 」后面跟一个空 `<B></B>`）。
+ *
+ * 为什么要回落而不是强制拆行：`scripts/selftest-pickup.ts`/`scripts/selftest-member.ts` 两份
+ * 既有自测的调用方只传 `pickupSlotLabel`/`scheduleSlotLabel`，不传 date/time——这两个文件不在
+ * 本批授权范围（allow.txt 未列），不许改。回落老写法能让它们原样通过，也是唯一不把「老调用方
+ * 拿到空 `<B></B>`」这个新缺陷焊死的做法。
+ */
+function slotBigLines(label: string, fullLabel: string | null | undefined, date: string | null | undefined, time: string | null | undefined): string[] {
+  if (date && time) return [`${label} ${esc(date)}`, `<B>${esc(time)}</B>`]
+  return [`<B>${label} ${esc(fullLabel ?? '')}</B>`]
+}
+
+/**
  * 票面手机号脱敏（PO 2026-09-06 定）：小票会被贴在袋子上、看完随手扔进垃圾桶，
  * 顾客手机号不该以明文躺在上面。保留前 3 后 4，中间一律 `****`。
  *
@@ -356,9 +371,8 @@ export function renderOrderTicket(o: TicketOrderInput): string {
         // 取餐联：时间放大（顾客几点来是店员要看的第一眼），姓名与脱敏电话普通字号；不印地址——地址是店自己
         // S7（店主决定 D3，2026-09-23 一起修，编排者已把 e2e.d/62-pickup.sh 补入授权）：原
         // 「<B>取餐 9月12日（周六）12:00–12:30</B>」整段进 <B> 超真机 16 列可用宽度——
-        // 日期普通字号单独一行，时段单独放大一行，同法见 scheduleSlotDate/scheduleSlotTime。
-        `取餐 ${esc(o.pickupSlotDate ?? '')}`,
-        `<B>${esc(o.pickupSlotTime ?? '')}</B>`,
+        // 日期普通字号单独一行，时段单独放大一行；date/time 缺失时回落老写法（见 slotBigLines）。
+        ...slotBigLines('取餐', o.pickupSlotLabel, o.pickupSlotDate, o.pickupSlotTime),
         `取餐人 ${esc(o.receiverName)}`,
         `电话 ${maskPhone(esc(o.receiverPhone))}`,
       ]
@@ -375,9 +389,9 @@ export function renderOrderTicket(o: TicketOrderInput): string {
           `电话 ${maskPhone(esc(o.receiverPhone))}`,
           ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
           // S7（2026-09-23 修）：原「<B>送达 10月22日（周四）12:00–12:30</B>」33 列，
-          // 拆成「送达 日期」普通行 + 「<B>时段</B>」放大行（≤16 列）。
+          // 拆成「送达 日期」普通行 + 「<B>时段</B>」放大行（≤16 列）；date/time 缺失时回落老写法。
           ...(isScheduled
-            ? [`送达 ${esc(o.scheduleSlotDate ?? '')}`, `<B>${esc(o.scheduleSlotTime ?? '')}</B>`, `开始备餐 ${esc(o.schedulePrepStart ?? '')} · 呼叫骑手 ${esc(o.scheduleCall ?? '')}`]
+            ? [...slotBigLines('送达', o.scheduleSlotLabel, o.scheduleSlotDate, o.scheduleSlotTime), `开始备餐 ${esc(o.schedulePrepStart ?? '')} · 呼叫骑手 ${esc(o.scheduleCall ?? '')}`]
             : o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
         ]
       : [
@@ -433,8 +447,8 @@ export function renderOrderTicket(o: TicketOrderInput): string {
       // 厨房联也用尾号（PO 2026-09-08 定）：两联靠同一个数联系，后厨出菜装袋时对得上配送联。
       // 尾号 4 位不是完整手机号，不算泄漏联系方式。
       `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
-      // S7（2026-09-23 修）：同配送联，拆成普通日期行 + 放大时段行
-      ...(isScheduled ? [`送达 ${esc(o.scheduleSlotDate ?? '')}`, `<B>${esc(o.scheduleSlotTime ?? '')}</B>`] : []),
+      // S7（2026-09-23 修）：同配送联，拆成普通日期行 + 放大时段行；date/time 缺失时回落老写法
+      ...(isScheduled ? slotBigLines('送达', o.scheduleSlotLabel, o.scheduleSlotDate, o.scheduleSlotTime) : []),
       ...tablewareBlock,
       HR,
       ...items.flatMap((it) => kitchenItemLines(it, level)),

@@ -29,7 +29,7 @@ import {
 import { getLocalSettings, isShopOpenNow, LocalDeliverySettings } from '../local-settings'
 import { pickupTicketLabel, prepStartAt } from '../pickup'
 import { scheduleTimeline } from '../delivery/schedule'
-import { ticketLabel, hhmmOf } from '../slots'
+import { ticketLabel, ticketLabelParts, hhmmOf } from '../slots'
 
 const BATCH = 100
 /**
@@ -219,9 +219,11 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number, schedule: Sch
     pickupAt: order.pickupAt,
     // 票面印绝对日期（方案一）：付款时打的票第二天还在夹子上，「明天」会变成假话
     pickupSlotLabel: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).text : null,
-    // S7（店主决定 D3）：日期段 / 时段段拆开传，票面把日期普通字号、时段单独放大（content.ts）
-    pickupSlotDate: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).date : null,
-    pickupSlotTime: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).time : null,
+    // S7（店主决定 D3，复核裁决 R9）：日期段 / 时段段拆开传，票面把日期普通字号、时段单独放大
+    // （content.ts）。pickupTicketLabel 是 ticketLabel 的别名（services/pickup.ts 是 deny，不改），
+    // 已恢复成 { text, stamp } 契约，date/time 改用 slots.ticketLabelParts 单独算。
+    pickupSlotDate: order.pickupAt ? ticketLabelParts(order.pickupAt, slotMinutes).date : null,
+    pickupSlotTime: order.pickupAt ? ticketLabelParts(order.pickupAt, slotMinutes).time : null,
     pickupDayStamp: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).stamp : null,
     pickupDiscountAmount: order.pickupDiscountAmount,
     promoDiscountAmount: order.promoDiscountAmount,
@@ -337,8 +339,9 @@ export async function enqueueOrderTicket(
     ? (() => {
         const tl = scheduleTimeline(localS, order.scheduledAt, order.distanceM)
         const lb = ticketLabel(order.scheduledAt, localS.schedule.slotMinutes)
+        const parts = ticketLabelParts(order.scheduledAt, localS.schedule.slotMinutes)
         return {
-          slotLabel: lb.text, slotDate: lb.date, slotTime: lb.time, stamp: lb.stamp,
+          slotLabel: lb.text, slotDate: parts.date, slotTime: parts.time, stamp: lb.stamp,
           prepStart: hhmmOf(tl.prepStartAt), call: hhmmOf(tl.callAt), unaccepted: order.status === 'PAID',
         }
       })()
