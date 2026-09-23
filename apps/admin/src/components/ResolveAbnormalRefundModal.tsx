@@ -7,7 +7,7 @@ import { resolveAbnormalRefund } from '../api/admin'
 import type { Order } from '../types'
 
 interface Props {
-  order: Pick<Order, 'id' | 'orderNo' | 'remainingRefundable' | 'latestRefund'>
+  order: Pick<Order, 'id' | 'orderNo' | 'status' | 'remainingRefundable' | 'latestRefund'>
   onClose: () => void
   onDone: () => void
 }
@@ -40,8 +40,16 @@ export default function ResolveAbnormalRefundModal({ order, onClose, onDone }: P
   if (!refund) return null
 
   const amountFen = parseYuan(amountInput)
+  // R4（裁决 plan.md §8）：订单不在 REFUNDING 时，不允许把余额一次退空——与服务端
+  // finalizeRefundSuccess/resolve-abnormal 路由的同一条规则保持一致（部分退款行按全部余额
+  // 落账会让 refundedAmount=actualAmount、payment 翻 REFUNDED，但订单仍停在 PAID/SHIPPED）。
+  const wouldEmptyBalanceOnNonRefunding =
+    order.status !== 'REFUNDING' && amountFen !== null && amountFen >= order.remainingRefundable
   // CLOSED（核实为未退款）不改金额：这里只是让店员再对一遍单号金额，输入框只读、锁定为记录金额。
-  const amountValid = result === 'CLOSED' ? amountFen === refund.amount : amountFen !== null && amountFen > 0 && amountFen <= order.remainingRefundable
+  const amountValid =
+    result === 'CLOSED'
+      ? amountFen === refund.amount
+      : amountFen !== null && amountFen > 0 && amountFen <= order.remainingRefundable && !wouldEmptyBalanceOnNonRefunding
   const noteValid = note.trim().length >= 4
   const amountChanged = result === 'SUCCESS' && amountFen !== null && amountFen !== refund.amount
   const canNext = amountValid && noteValid
@@ -127,7 +135,15 @@ export default function ResolveAbnormalRefundModal({ order, onClose, onDone }: P
             )}
             {amountInput && !amountValid && (
               <p className="text-xs text-red-500 mt-1">
-                {result === 'CLOSED' ? '核实为未退款时金额须与记录一致' : amountFen === null ? '请输入正确的金额' : amountFen <= 0 ? '金额必须大于 0' : `不能超过可退余额 ¥${yuan(order.remainingRefundable)}`}
+                {result === 'CLOSED'
+                  ? '核实为未退款时金额须与记录一致'
+                  : amountFen === null
+                    ? '请输入正确的金额'
+                    : amountFen <= 0
+                      ? '金额必须大于 0'
+                      : amountFen > order.remainingRefundable
+                        ? `不能超过可退余额 ¥${yuan(order.remainingRefundable)}`
+                        : '非退款中订单不能把余额一次退空'}
               </p>
             )}
           </div>

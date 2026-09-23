@@ -98,11 +98,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const page = Math.max(1, Number(req.query.page) || 1)
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 20))
     const rawStatus = req.query.status as string | undefined
-    // REFUND_ATTENTION（2026-09-22）是伪状态：「退款待处理」Tab。含义 = 订单在 REFUNDING，且没有
-    // 一笔退款还在微信那边走（PENDING/PROCESSING）——剩下的都是要人出手的：没有退款记录（取消后
-    // 迟到付款、自动退款发起前就抛错）、ABNORMAL（去商户平台处理）、CLOSED/FAILED（后台重试）。
-    // 正常退款中的单不在这里：自动补查（services/refund-reconcile.ts）会把它们推到结局，店员不用盯。
-    // 规则只在此处定义一处（REFUND_ATTENTION_WHERE），前端不复刻，等价性由 e2e.d/68 锁住。
+    // REFUND_ATTENTION（2026-09-22 起；**2026-09-23 收口新口径**）是伪状态：「退款待处理」Tab。
+    // 命中三种（详见 REFUND_ATTENTION_WHERE 定义处的完整注释）：①REFUNDING 且无在途退款
+    // ②任何订单状态下有 ABNORMAL 退款（去商户平台核实，见 resolve-abnormal 路由）③售后已同意
+    // （APPROVED）但退款没在路上。正常退款中的单不在这里：自动补查（services/refund-reconcile.ts）
+    // 会把它们推到结局，店员不用盯。规则只在此处定义一处（REFUND_ATTENTION_WHERE），前端不复刻，
+    // 等价性由 e2e.d/68、e2e.d/71 锁住。
     const refundAttention = rawStatus === 'REFUND_ATTENTION'
     const statuses = rawStatus && !refundAttention ? rawStatus.split(',').filter(Boolean) : []
     // 与 channel 的 F16 同口径：伪状态和真状态并列传（如 REFUNDING,REFUND_ATTENTION）直接 400，
@@ -569,6 +570,15 @@ router.post('/:id/refunds/:refundId/resolve-abnormal', async (req: Request, res:
       const remaining = remainingRefundable(order)
       if (verifiedAmount > remaining) {
         throw new AppError(42206, `实退金额超过可退余额 ¥${(remaining / 100).toFixed(2)}`)
+      }
+      // R4（裁决 plan.md §8）：事务外预检（友好报错，快速失败）；最终以 finalizeRefundSuccess
+      // 锁内用最新快照做的同一条规则为准——这里读到的 order 只是请求发起那一刻的快照，
+      // 事务外校验通过后行可能已被别的路径推进。
+      if (order.status !== 'REFUNDING' && verifiedAmount >= remaining) {
+        throw new AppError(
+          42206,
+          `实退金额等于全部可退余额，但订单不在退款中（当前 ${order.status}）；部分退款行不能把余额一次退空`
+        )
       }
       // D2（2026-09-23 A）：实退金额与记录不同时允许按实退落账，说明自动前缀「原记录 → 实退」，
       // 便于日后翻记录能一眼看出这行为什么跟当初的 refund.amount 对不上。

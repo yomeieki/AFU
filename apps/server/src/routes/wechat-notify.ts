@@ -368,7 +368,9 @@ export async function wechatRefundNotifyHandler(req: Request, res: Response): Pr
     return
   }
 
-  // 幂等：已成功的不再处理
+  // 已 SUCCESS 直接 ack（真正的幂等重推）；CLOSED/FAILED 交下面的 finalizeRefundSuccess 记录
+  // 「疑似重复退款」并告警后再 ack（R6，2026-09-23 裁决：finalize 默认守卫已收紧为「仍在途」，
+  // 这两个终态不会被这条回调悄悄翻回 SUCCESS，但也不能对这个信号完全沉默）。
   if (refund.status === 'SUCCESS') {
     replyOk(res)
     return

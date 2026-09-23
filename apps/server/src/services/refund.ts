@@ -38,6 +38,9 @@ export function isDefiniteRefundRejection(e: unknown): e is WechatRefundError {
   return e instanceof WechatRefundError && e.httpStatus >= 400 && e.httpStatus < 500
 }
 
+/** R6：终态后又收到 SUCCESS 信号（疑似重复退款）的告警限频窗口，与补查告警同一个 6 小时口径 */
+const LATE_SUCCESS_ALERT_WINDOW_MS = 6 * 60 * 60 * 1000
+
 /** 不带幂等键：随机派生，行为与改动前完全一致 */
 export function buildOutRefundNo(orderId: number): string {
   return `refund_${orderId}_${Date.now()}`
@@ -89,7 +92,9 @@ export interface InitiateRefundResult {
 }
 
 /**
- * 发起退款。抛 AppError（校验失败）或在微信发起失败时抛 AppError(50201)（退款单已标 FAILED，可重试）。
+ * 发起退款。抛 AppError（校验失败）或在微信发起失败时抛 AppError(50201)（明确拒绝，退款单已标
+ * FAILED，可重试）/ AppError(50202)（结果未知，退款单保留 PENDING 占位，交自动补查核对，不可
+ * 立即重试——见 isDefiniteRefundRejection）。
  */
 export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
   const { orderId, amount, reason, operator, afterSaleId, idempotencyKey } = input
@@ -421,6 +426,20 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<{ app
       if (effectiveAmount <= 0 || effectiveAmount > remaining) {
         throw new AppError(42206, `实退金额超过可退余额 ¥${(remaining / 100).toFixed(2)}`)
       }
+      // R4（裁决 plan.md §8，2026-09-23）：订单不在 REFUNDING 时，实退金额必须严格小于可退余额，
+      // 不能把余额一次退空——initiateRefund:96 把「amount === remaining」定义为「全额」并先把订单
+      // 翻成 REFUNDING，部分退款行的 amount 恒 < remaining；D2 的人工 override 是第一个能让「部分
+      // 退款行」累加到 actual_amount 上限的写者。一次退空会让 refundedAmount=actualAmount、
+      // payment 翻 REFUNDED，但订单仍停在 PAID/SHIPPED（finalize 只把 REFUNDING 翻成
+      // REFUNDED）——可接单发货、库存不回滚、无 CANCEL 票、不进「退款待处理」，是一个隐蔽的
+      // 状态不一致。真要把这类单的余额退空，需要走完整的「转 REFUNDED + 未出库回滚库存」流程
+      // （超出本批，见 plan.md §7「D2 补充」）。
+      if (orderBefore.status !== 'REFUNDING' && effectiveAmount >= remaining) {
+        throw new AppError(
+          42206,
+          `实退金额等于全部可退余额，但订单不在退款中（当前 ${orderBefore.status}）；部分退款行不能把余额一次退空`
+        )
+      }
     }
 
     const successTime = input.successTime ?? new Date()
@@ -441,11 +460,30 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<{ app
     }
     // 上面那次 findUnique 在 MySQL RR 下是快照读、不加锁，不能拿它做幂等依据：
     // 微信回调重推 / 回调与人工标记撞车时两边都会读到「未成功」，各自 increment 一次 refundedAmount。
-    // 改成条件写：同一行只有一个调用能把 status 从非 SUCCESS 翻成 SUCCESS，输掉的那个 count=0 直接退出。
-    // 人工出口（input.expectStatus='ABNORMAL'）收窄守卫：只允许从 ABNORMAL 翻，回调/补查的默认
-    // 守卫仍是「非 SUCCESS 皆可」——两者共用同一条 updateMany 语句形态，互斥关系见文件头状态表。
-    const moved = await tx.refund.updateMany({ where: { id: refund.id, status: input.expectStatus ?? { not: 'SUCCESS' } }, data })
-    if (moved.count === 0) return { refund, alreadyDone: true }
+    // 改成条件写：同一行只有一个调用能把 status 翻成 SUCCESS，输掉的那个 count=0 直接退出。
+    // 人工出口（input.expectStatus='ABNORMAL'）收窄守卫：只允许从 ABNORMAL 翻；回调/补查的默认
+    // 守卫是「仍在途」（R6，2026-09-23 裁决收紧：原先是「非 SUCCESS 皆可」，会把 CLOSED/FAILED
+    // 两个终态也当成可翻转——见下方 count=0 分支的「疑似重复退款」处理）。
+    const moved = await tx.refund.updateMany({
+      where: { id: refund.id, status: input.expectStatus ?? { in: [...ACTIVE_REFUND_STATUSES] } },
+      data,
+    })
+    if (moved.count === 0) {
+      // R6：CLOSED/FAILED 都是终态，同一 out_refund_no 不会再变 SUCCESS——本地终态后又收到微信
+      // SUCCESS 信号（回调晚到、或人工 D1 转 CLOSED 后重新发起了新一笔，原笔的回调才追上来），
+      // 是「疑似重复退款」的信号，不能像「已是 SUCCESS」（真正的幂等重推）那样完全静默：留痕 +
+      // 告警，但仍不触碰 refundedAmount / 积分 / 出票（那些只属于「真正翻转成功」的这一次）。
+      // 只在「非人工路径」（expectStatus 未传）时判断——人工路径的 count=0 就是「行已不是
+      // ABNORMAL」，那是 P1 一开始就要覆盖的正常「输了」场景，不是这里说的重复退款信号。
+      let lateSuccess = false
+      if (!input.expectStatus && (refund.status === 'CLOSED' || refund.status === 'FAILED')) {
+        const lateData: Prisma.RefundUpdateManyMutationInput = { reconcileLastError: '终态后收到微信 SUCCESS 信号，疑似重复退款' }
+        if (input.rawData) lateData[input.rawField ?? 'wxNotifyData'] = input.rawData
+        await tx.refund.updateMany({ where: { id: refund.id, status: { in: ['CLOSED', 'FAILED'] } }, data: lateData })
+        lateSuccess = true
+      }
+      return { refund, alreadyDone: true, lateSuccess }
+    }
     const updated = await tx.refund.findUniqueOrThrow({ where: { id: refund.id } })
 
     // increment 但以 actualAmount 封顶：事前校验（initiateRefund）本应保证不会超，但这里不依赖它单独兜底——
@@ -498,7 +536,16 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<{ app
     return { refund: updated, alreadyDone: false, flippedToRefunded }
   })
 
-  if (!result || result.alreadyDone) return { applied: false }
+  if (!result || result.alreadyDone) {
+    if (result?.lateSuccess) {
+      notifySystemAlert(
+        '退款终态后收到成功信号（疑似重复退款）',
+        [`订单 ${result.refund.orderNo}`, `退款单 ${result.refund.outRefundNo}`, `本地状态 ${result.refund.status}`, '请到微信商户平台核对该单是否被退了两次'],
+        { key: `refund-late-success:${result.refund.id}`, windowMs: LATE_SUCCESS_ALERT_WINDOW_MS }
+      )
+    }
+    return { applied: false }
+  }
   prisma.order
     .findUnique({
       where: { id: result.refund.orderId },
