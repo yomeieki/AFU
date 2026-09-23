@@ -774,7 +774,7 @@
 |------|------|
 | page | 页码，默认 1 |
 | pageSize | 每页数量，默认 20，上限 50 |
-| status | 订单状态筛选；逗号分隔可传多个（如 `REFUNDING,REFUNDED`）。伪状态 `REFUND_ATTENTION`（2026-09-22）= 退款待处理：`status=REFUNDING` 且没有 PENDING/PROCESSING 的退款记录（无记录 / ABNORMAL / CLOSED / FAILED，都要人出手）；与其他状态不能并列 |
+| status | 订单状态筛选；逗号分隔可传多个（如 `REFUNDING,REFUNDED`）。伪状态 `REFUND_ATTENTION`（2026-09-22 起；**2026-09-23 收口新口径**）= 退款待处理，命中三种：①`status=REFUNDING` 且没有一笔退款还在微信那边走（`PENDING`/`PROCESSING`）——无记录 / `CLOSED` / `FAILED`；②**任何订单状态**下有一笔 `ABNORMAL` 退款（含部分退款，之前只看 `status=REFUNDING` 会漏掉）；③售后已同意（`APPROVED`）但退款没有一笔在途。不进：店员自己发起的部分退款异步 `CLOSED` 且没有售后单（订单页「再退款」可直接点）。与其他状态不能并列 |
 | keyword | 订单号 / 收货人 / 手机号模糊（`orderNo` 为旧参数名，仍兼容） |
 | deliveryType | `EXPRESS` \| `LOCAL` \| `PICKUP` \| `ALL`，默认 `EXPRESS` |
 | channel | `LOCAL`（一次看外送+自取）\| `EXPRESS`；与 `deliveryType` 同传时以 `channel` 为准 |
@@ -837,7 +837,9 @@
 - 同一订单已有进行中的退款 → `42205`；订单状态并发变化 → `42204`；无成功支付记录 / 模拟支付订单 → `42207`
 - 待接单/备餐中退款回滚库存，已发货不回滚
 - `WECHAT_PAY_MOCK=true` 时直接置 `REFUNDED`（`mode: "mock"`）
-- 微信 API 返回失败 → 退款记录 `FAILED`、订单保持 `REFUNDING`、企微告警，响应 `50201`（HTTP 502）
+- 微信 API **明确拒绝**（业务错误码，HTTP 4xx）→ 退款记录 `FAILED`、订单保持 `REFUNDING`、企微告警，响应 `50201`（HTTP 502），可重试
+- 微信 API **结果未知**（请求超时/网络错误/5xx/HTTP 2xx 但响应无 `refund_id`）→ **2026-09-23 起**退款记录保留 `PENDING`（占位不释放），响应改为 `50202`（HTTP 502），提示「结果未知，请勿重复发起」；自动补查 5 分钟后开始核对，查无此单会自动转 `FAILED` 释放可重试，查到结果按结果落定。此前统一标 `FAILED` 会让店员重试生成新退款单号，若微信其实已经受理就是实打实的二次退款（第一批「退款资金一致性修复」P3）
+- 微信同步返回 `SUCCESS`/`ABNORMAL`/`CLOSED` 时，本地条件写落库前若微信异步回调已抢先落定，本地写会被跳过（`count=0` 只补写响应快照，不重复触发落账/通知）——不会因为「先落 PROCESSING、回调又追上来」而把已经落定的结果覆盖或重复记账（P2）
 
 响应：
 ```json
@@ -847,6 +849,26 @@
 #### ~~POST /api/admin/orders/:id/refund-complete~~（2026-09-22 已删除）
 
 原「人工标记退款完成」兜底：不问微信、不核金额就把 `REFUNDING` 订单标成 `REFUNDED`，误点即一笔假退款。自动补查（附录 L）上线后回调丢失的场景由系统自己查微信落账，此接口与后台按钮一并去掉。店主在商户平台手动打款而不经系统的情况，现无接口可记，需要时按运维流程改库。
+
+#### POST /api/admin/orders/:id/refunds/:refundId/resolve-abnormal（2026-09-23，第一批「退款资金一致性修复」P1）
+
+「已在商户平台核实」人工出口：**只对当前状态为 `ABNORMAL` 的退款行开放**（不恢复旧 `refund-complete` 那种「任何 `REFUNDING` 订单都能点」的宽口径），店员已在微信商户平台核实过这笔退款的真实结果后回来记录。落账一律走 `finalizeRefundSuccess`/`markRefundClosed` 与回调/自动补查完全同一条路径（互斥、积分扣回、出票、通知全部复用），本接口不另写任何金额/状态/积分/出票逻辑。
+
+请求：
+```json
+{ "result": "SUCCESS", "verifiedAmount": 3800, "note": "商户平台退款单号 500xxxx 已核对，金额一致" }
+```
+- `result`：`SUCCESS`（微信已退款成功，记为已退款）或 `CLOSED`（微信其实未退款，释放占位可重新发起）
+- `verifiedAmount`（分，正整数）：`SUCCESS` 时须 `0 < verifiedAmount ≤ 可退余额`；与本地记录金额不同时**按实退金额落账**，`manualResolveNote` 自动前缀「原记录 ¥X → 实退 ¥Y；」。`CLOSED` 时须与记录金额一致（这里只是让店员再核对一遍单号金额，不改金额）
+- `note`（4–100 字，必填）：核实说明，写入 `manual_resolve_note`
+- 退款单不存在或不属于该订单 → `40401`；当前状态不是 `ABNORMAL` → `42204`；`verifiedAmount` 超过可退余额 → `42206`；提交时状态已被别的路径推进（如微信回调后到）→ `42204`
+- 成功后写入 `manual_resolved_by`（操作人）/`manual_resolved_at`/`manual_resolve_note` 三列留痕，`GET /admin/orders/:id` 的 `refunds[]` 随之带上
+
+响应：`{ "code": 0, "data": { "refund": {...}, "order": {...} } }`
+
+#### POST /api/admin/after-sales/:id/approve（2026-09-23 起放宽）
+
+原仅接受 `status=PENDING`；**现允许 `status=APPROVED` 且订单当前无在途退款**（`PENDING`/`PROCESSING`/`ABNORMAL`）时视为「重新退款」——同意时同步失败或之后异步变 `CLOSED`/`FAILED` 的售后单，2026-09-22 前永久卡在 `APPROVED`（面板只对 `PENDING` 画按钮），2026-09-23 起可在售后面板点「重新退款」收口，售后单最终转 `DONE` 且 `refundId` 指向新那笔退款。
 
 `GET /api/admin/orders` 列表每项附带 `latestRefund`（最近一条退款记录：`status` / `outRefundNo` / `amount` / `mode` / `errorMessage`）。
 
@@ -993,16 +1015,17 @@
 | `GET /api/admin/orders?keyword=` | 订单号 / 收货人 / 手机号模糊；列表增 `remark`、`refundedAmount`、`remainingRefundable`、`afterSale` |
 | `GET /api/admin/orders?startDate=&endDate=` | 2026-09-18：按上海自然日筛选下单日期（各自可选）；列表增 `latestDelivery`，详见 3.5 节 |
 | `GET /api/admin/express/orders/:id/booking` | 2026-09-18：响应增 `track`（`{updatedAt, signed, items[≤30]}` \| `null`），管理端订单详情页展开物流轨迹用，与顾客端同口径；`booking`/`events` 不变 |
-| `POST /api/admin/orders/:id/refund` | `amount` 可为部分（≤ 可退余额）；响应增 `isFull` |
+| `POST /api/admin/orders/:id/refund` | `amount` 可为部分（≤ 可退余额）；响应增 `isFull`；**2026-09-23 起**：结果未知（超时/网络/5xx）不再标 `FAILED`，响应 `50202`，见上文详情 |
+| `POST /api/admin/orders/:id/refunds/:refundId/resolve-abnormal`（2026-09-23 新增） | `{ result, verifiedAmount, note }`，仅对 `ABNORMAL` 退款行开放的人工核实出口，见上文详情 |
 | `POST /api/admin/orders/:id/complete` | SHIPPED → COMPLETED |
-| `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`；2026-09-22 起 `order.latestRefund`，后台据此禁点「同意并退款」） |
-| `POST /api/admin/after-sales/:id/approve` | `{ amount, reply? }` → 发起退款并置 APPROVED（回调成功 → DONE） |
+| `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`；2026-09-22 起 `order.latestRefund`，后台据此禁点「同意并退款」；**2026-09-23 起** `order.latestRefund` 与 `orders` 列表同一套 `RefundSummary` 字段，含 `reconcileLastError`） |
+| `POST /api/admin/after-sales/:id/approve` | `{ amount, reply? }` → 发起退款并置 APPROVED（回调成功 → DONE）；**2026-09-23 起**：`status=APPROVED` 且无在途退款时也允许（「重新退款」，见上文详情） |
 | `POST /api/admin/after-sales/:id/reject` | `{ reply }` → REJECTED |
-| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount`；2026-09-22 增 `refundAttentionCount`（「退款待处理」全渠道数，侧栏角标）与 `refundAttentionByChannel {EXPRESS, LOCAL}`（两个订单页各自的页签角标，LOCAL 含自取），口径与 `?status=REFUND_ATTENTION` 同一个 where |
+| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount`；2026-09-22 增 `refundAttentionCount`（「退款待处理」全渠道数，侧栏角标）与 `refundAttentionByChannel {EXPRESS, LOCAL}`（两个订单页各自的页签角标，LOCAL 含自取），口径与 `?status=REFUND_ATTENTION` 同一个 where（**2026-09-23 收口新口径**，见上文 status 参数说明） |
 | `POST /api/admin/webview-code` | admin token → 一次性 code（2 分钟） |
 | `POST /api/admin/login/webview` | `{ code }` → token（小程序 web-view `/m?code=` 用） |
 | `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖；2026-09-21 起新增 5 个退款补查覆盖键（附录 L） |
-| `POST /api/admin/system/pay-mock/{reset,refund-query,calls}` | 仅 `WECHAT_PAY_MOCK=true` 时挂载，退款查询 mock 控制面（附录 L） |
+| `POST /api/admin/system/pay-mock/{reset,refund-query,refund-create,refund-notify,calls}` | 仅 `WECHAT_PAY_MOCK=true` 时挂载，退款 mock 控制面（附录 L，2026-09-23 增 `refund-create`/`refund-notify`） |
 
 ### 错误码新增
 | code | 含义 |
@@ -2088,14 +2111,15 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | 微信查询结果 | 本地状态 | 动作 |
 |---|---|---|
 | `SUCCESS` | 任意在途态 | 走 `finalizeRefundSuccess`（与回调同一函数，天然幂等） |
-| `CLOSED` | 任意在途态 | 走 `markRefundClosed`，释放 `activeOrderId` |
+| `CLOSED` | 任意在途态 | 走 `markRefundClosed`，释放 `activeOrderId`；**2026-09-23 起**：金额与本地记录不符也直接按 `CLOSED` 释放（见下） |
 | `ABNORMAL` | 任意在途态 | 走 `markRefundAbnormal`，保留 `activeOrderId` |
 | `PROCESSING` | — | 不改状态，只记录本次已查过 |
 | 查无此单 | `PENDING` | 标 `FAILED`（`errorCode='RECONCILE_NOT_FOUND'`），释放 `activeOrderId`（后台可重试） |
 | 查无此单 | `PROCESSING` | **2026-09-22 起**标 `ABNORMAL`（走 `markRefundAbnormal`，保留 `activeOrderId`），进「退款待处理」；此前只告警不改状态，会让这笔永远卡在 PROCESSING 且后台无入口 |
 | 查无此单 | `ABNORMAL` | 守卫不中，只更新 `reconcileLastError`，报 `SKIPPED` |
 | 查询抛错（超时/5xx） | — | 不改状态，`reconcileLastError` 记录错误，下轮再试 |
-| 微信侧金额与本地 `amount` 不符 | 在途态 | **2026-09-22 起**标 `ABNORMAL` 并告警（口径同 `wechat-notify.ts` 的回调金额校验）；数据不一致必须人去商户平台核对，不自动落账 |
+| 微信侧返回 `CLOSED` 但金额与本地 `amount` 不符 | 在途态 | **2026-09-23 起**：`CLOSED` = 微信未退款、无资金变动，金额差异只是请求记录不一致，仍记 `reconcileLastError` 并告警，但**直接按 `CLOSED` 释放**，不再卡人（此前统一标 `ABNORMAL`） |
+| 微信侧返回 `SUCCESS`/`ABNORMAL`/`PROCESSING` 但金额与本地 `amount` 不符 | 在途态 | 标 `ABNORMAL` 并告警（口径同 `wechat-notify.ts` 的回调金额校验）；数据不一致必须人去商户平台核对，不自动落账。可在后台「已在商户平台核实」出口人工收口（见上） |
 
 **幂等与互斥依据**：`finalizeRefundSuccess` 用 `SELECT ... FOR UPDATE` 把回调与补查串行化，条件写 `status ≠ SUCCESS` 保证只有一方真正累加 `refundedAmount`，金额用 `LEAST(refunded_amount + amount, actual_amount)` 封顶。`markRefundAbnormal`/`markRefundClosed`/`markRefundFailed` 三个函数本批全部改成条件 `updateMany`（只有行仍在各自的「在途态」集合内才会真正转移状态并发通知），已被推进到别的终态的行调用这三个函数会 `count=0` 直接返回，不改状态、不重复通知。`reconcileRefund` 自己用 CAS 占坑（`reconcileCheckedAt` 从旧值改成 `now` 才算抢到）防并发 tick 重复查询。
 
@@ -2111,9 +2135,11 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 
 | 接口 | 说明 |
 |---|---|
-| `POST /reset` | 清空指令队列与调用记录 |
+| `POST /reset` | 清空指令队列与调用记录（`queryRefund` 与 `createRefund` 两条队列一并清） |
 | `POST /refund-query` | `{ outRefundNo?, directive }`，`outRefundNo` 缺省或传 `'*'` 表示对任意单号通配。`directive` 四种：`{kind:'ok', status:'SUCCESS'\|'CLOSED'\|'PROCESSING'\|'ABNORMAL', amount?, refundId?, successTime?}` / `{kind:'not_found'}` / `{kind:'error', code, message?, httpStatus?}` / `{kind:'timeout'}`。无指令时默认 `{kind:'ok', status:'PROCESSING'}`（安全默认，不改任何状态）。`ok` 不带 `amount` 时响应也不带 `amount`（补查只在 `amount` 存在时比对金额，与真实微信一致） |
-| `GET /calls?op=queryRefund` | 已记录的调用列表，供 e2e/联调断言查了几次 |
+| `POST /refund-create`（2026-09-23 新增） | `{ orderId?, directive }`，`orderId` 缺省或传 `'*'` 表示通配（按 orderId 键排队，而非 outRefundNo——e2e 在 `POST /refund` 之前就知道 orderId）。`directive` 三种：`{kind:'ok', status, amount?, refundId?, successTime?, preemptNotify?: {status:'SUCCESS'\|'CLOSED'\|'ABNORMAL'}}` / `{kind:'error', code, message?, httpStatus?}` / `{kind:'timeout'}`。`preemptNotify`：在 mock 的 createRefund **同步返回之前**，先模拟一次「微信回调已抢先到达」（用于覆盖 P2 的回调抢先场景）。排了指令的订单，`initiateRefund` 才会走这条模拟微信路径；无指令时逐字节走原 MOCK 秒成功分支 |
+| `POST /refund-notify`（2026-09-23 新增） | `{ outRefundNo, status }`，`status` 三值（`SUCCESS`/`CLOSED`/`ABNORMAL`），直接触发一次「模拟回调」（与 `preemptNotify` 同一实现，供需要在两次请求之间插回调的用例单独调用） |
+| `GET /calls?op=queryRefund\|createRefund` | 已记录的调用列表，供 e2e/联调断言查了几次 |
 
 **`GET /api/admin/system/status` 新增**：`order.refundReconcile.{afterMin,alertAfter,batch}`（当前生效的 env 配置）、`timezone`（见下）。
 
