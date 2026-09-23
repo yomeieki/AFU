@@ -160,6 +160,27 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   // REFUNDING（fromRefunding，如「已 ABNORMAL/CLOSED 后重试」）都不重复出票。
   let cancelTicketDue = false
   const { refund, isIdempotentHit } = await prisma.$transaction(async (tx) => {
+    // R9（裁决 plan.md §8，2026-09-23，第二轮复核）：事务的第一句必须是 FOR UPDATE 锁住 orders
+    // 行，随后锁内重验「有无在途退款」「可退余额是否变化」——:85-133 那些检查全部来自事务外快照，
+    // 与 finalizeRefundSuccess（回调/补查落账）之间存在毫秒级窗口：X 笔退款刚 SUCCESS 释放
+    // activeOrderId 的瞬间，Y 笔请求可能已经越过事务外的余额/在途检查，随后在事务内创建出一笔
+    // 真实会外呼微信的退款——这不仅是「终态后收到 SUCCESS 信号」这类场景的根因，也是
+    // initiateRefund 自身既有的 TOCTOU（两笔部分退款并发时只靠 activeOrderId 唯一索引挡运气）。
+    // 加锁顺序 orders → products（rollbackOrderStock）→ refunds（insert）：不锁任何已存在的
+    // refunds 行，与 finalizeRefundSuccess 的 refunds(X 行) → orders 顺序不构成反向环，
+    // 也与 settlePoints 的 orders → points_ledgers → users 同向，不会死锁。
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`
+    const lockedOrder = await tx.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { refunds: { select: { status: true } } },
+    })
+    if (lockedOrder.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))) {
+      throw new AppError(42205, '该订单已有退款处理中')
+    }
+    if (remainingRefundable(lockedOrder) !== remaining) {
+      throw new AppError(42204, '订单退款额已变化，请刷新后重试')
+    }
+
     if (isFull && !fromRefunding) {
       // where 里加 deliveries:{none:{activeOrderId:{not:null}}}：这是 callRider 那侧原子复核的另一半。
       // :82-87 的 42221 检查只是这段事务之外的快照，几毫秒内可能被 callRider 的 delivery.create 抢先——
@@ -450,7 +471,6 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<{ app
     }
     if (input.wxRefundId) data.wxRefundId = input.wxRefundId
     if (input.channel) data.channel = input.channel
-    if (input.rawData) data[input.rawField ?? 'wxNotifyData'] = input.rawData
     if (input.operator) data.operator = input.operator
     if (input.amountOverride !== undefined) data.amount = input.amountOverride
     if (input.manual) {
@@ -458,32 +478,50 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<{ app
       data.manualResolvedAt = input.manual.at
       data.manualResolveNote = input.manual.note.slice(0, 120)
     }
+
+    // R9（裁决 plan.md §8，2026-09-23，第二轮复核）：终态（CLOSED/FAILED）后又收到微信 SUCCESS
+    // 信号（D1 人工转 CLOSED 后微信回调才追上来、或 PENDING 查无标 FAILED 后微信其实受理了）时，
+    // 微信的 SUCCESS 是事实，本地终态只是「人/补查的推断」——一律按微信结果落账（LEAST 封顶、
+    // 积分扣回、出票、顾客通知全套不变），但按「是否已有后续在途/成功的退款行」「是否人工核实过」
+    // 留痕 + 告警，把「疑似重复退款」这个信号显式暴露出来，而不是像 count=0 那样悄悄吞掉。
+    // 只在「非人工路径」（expectStatus 未传）时判断——人工路径本身就是要把 ABNORMAL 转 SUCCESS，
+    // 不是这里说的「终态后又收到信号」。
+    const isLateSuccess = !input.expectStatus && (refund.status === 'CLOSED' || refund.status === 'FAILED')
+    let later: { id: number; outRefundNo: string; status: string; amount: number } | null = null
+    if (isLateSuccess) {
+      later = await tx.refund.findFirst({
+        where: { orderId: refund.orderId, id: { gt: refund.id }, status: { in: [...ACTIVE_REFUND_STATUSES, 'SUCCESS'] } },
+        select: { id: true, outRefundNo: true, status: true, amount: true },
+      })
+      data.reconcileLastError = later
+        ? '终态后微信推成功，且已有后续退款（疑似重复退款）'
+        : refund.manualResolvedBy
+          ? '人工核实为未退款后微信推成功，已按微信结果落账'
+          : '终态后微信推成功，已按微信结果落账'
+    }
+    if (input.rawData) {
+      const field = input.rawField ?? 'wxNotifyData'
+      // R10（纳入，2026-09-23）：人工核实过（manualResolvedBy 非空）且原 wxNotifyData 是
+      // manual-verified 那条记录时，微信事后又推来的信号追加而不是覆盖——manual-verified 那段
+      // 记录着店员当时核实的依据，覆盖掉会让「人工核实了什么」这条审计线索凭空消失。
+      if (field === 'wxNotifyData' && refund.manualResolvedBy && refund.wxNotifyData?.startsWith('{"source":"manual-verified"')) {
+        data.wxNotifyData = `${refund.wxNotifyData}\n---late-wechat-success---\n${input.rawData}`
+      } else {
+        data[field] = input.rawData
+      }
+    }
     // 上面那次 findUnique 在 MySQL RR 下是快照读、不加锁，不能拿它做幂等依据：
     // 微信回调重推 / 回调与人工标记撞车时两边都会读到「未成功」，各自 increment 一次 refundedAmount。
     // 改成条件写：同一行只有一个调用能把 status 翻成 SUCCESS，输掉的那个 count=0 直接退出。
-    // 人工出口（input.expectStatus='ABNORMAL'）收窄守卫：只允许从 ABNORMAL 翻；回调/补查的默认
-    // 守卫是「仍在途」（R6，2026-09-23 裁决收紧：原先是「非 SUCCESS 皆可」，会把 CLOSED/FAILED
-    // 两个终态也当成可翻转——见下方 count=0 分支的「疑似重复退款」处理）。
+    // 人工出口（input.expectStatus='ABNORMAL'）收窄守卫：只允许从 ABNORMAL 翻；回调/补查/mock
+    // 的默认守卫恢复为「非 SUCCESS 皆可」（R9，2026-09-23 第二轮复核撤销了 R6 的收紧——CLOSED/
+    // FAILED 收到微信 SUCCESS 时应按微信结果落账，见上面 isLateSuccess 的告警/留痕处理，
+    // 「悄悄不落账」反而会让账面少记一笔真实退出去的钱）。
     const moved = await tx.refund.updateMany({
-      where: { id: refund.id, status: input.expectStatus ?? { in: [...ACTIVE_REFUND_STATUSES] } },
+      where: { id: refund.id, status: input.expectStatus ?? { not: 'SUCCESS' } },
       data,
     })
-    if (moved.count === 0) {
-      // R6：CLOSED/FAILED 都是终态，同一 out_refund_no 不会再变 SUCCESS——本地终态后又收到微信
-      // SUCCESS 信号（回调晚到、或人工 D1 转 CLOSED 后重新发起了新一笔，原笔的回调才追上来），
-      // 是「疑似重复退款」的信号，不能像「已是 SUCCESS」（真正的幂等重推）那样完全静默：留痕 +
-      // 告警，但仍不触碰 refundedAmount / 积分 / 出票（那些只属于「真正翻转成功」的这一次）。
-      // 只在「非人工路径」（expectStatus 未传）时判断——人工路径的 count=0 就是「行已不是
-      // ABNORMAL」，那是 P1 一开始就要覆盖的正常「输了」场景，不是这里说的重复退款信号。
-      let lateSuccess = false
-      if (!input.expectStatus && (refund.status === 'CLOSED' || refund.status === 'FAILED')) {
-        const lateData: Prisma.RefundUpdateManyMutationInput = { reconcileLastError: '终态后收到微信 SUCCESS 信号，疑似重复退款' }
-        if (input.rawData) lateData[input.rawField ?? 'wxNotifyData'] = input.rawData
-        await tx.refund.updateMany({ where: { id: refund.id, status: { in: ['CLOSED', 'FAILED'] } }, data: lateData })
-        lateSuccess = true
-      }
-      return { refund, alreadyDone: true, lateSuccess }
-    }
+    if (moved.count === 0) return { refund, alreadyDone: true }
     const updated = await tx.refund.findUniqueOrThrow({ where: { id: refund.id } })
 
     // increment 但以 actualAmount 封顶：事前校验（initiateRefund）本应保证不会超，但这里不依赖它单独兜底——
@@ -533,19 +571,33 @@ export async function finalizeRefundSuccess(input: FinalizeInput): Promise<{ app
       },
       { id: refund.id, amount: effectiveAmount }
     )
-    return { refund: updated, alreadyDone: false, flippedToRefunded }
+    return {
+      refund: updated,
+      alreadyDone: false,
+      flippedToRefunded,
+      lateSuccess: isLateSuccess ? { priorStatus: refund.status, later, manual: refund.manualResolvedBy ? { by: refund.manualResolvedBy, note: refund.manualResolveNote } : null } : null,
+    }
   })
 
-  if (!result || result.alreadyDone) {
-    if (result?.lateSuccess) {
-      notifySystemAlert(
-        '退款终态后收到成功信号（疑似重复退款）',
-        [`订单 ${result.refund.orderNo}`, `退款单 ${result.refund.outRefundNo}`, `本地状态 ${result.refund.status}`, '请到微信商户平台核对该单是否被退了两次'],
-        { key: `refund-late-success:${result.refund.id}`, windowMs: LATE_SUCCESS_ALERT_WINDOW_MS }
-      )
-    }
-    return { applied: false }
+  if (!result || result.alreadyDone) return { applied: false }
+
+  // R9：终态后收到微信 SUCCESS 信号，按「是否已有后续退款行」「是否人工核实过」分文案告警。
+  // 与下面的顾客通知/出票并列触发（不互斥）——这一笔确实按微信结果落账了，顾客理应收到
+  // 「退款已到账」，同时店员也要收到「这单不对劲，去核对」的信号。
+  if (result.lateSuccess) {
+    const { priorStatus, later, manual } = result.lateSuccess
+    const title = later ? '疑似重复退款：终态退款单收到微信成功' : '终态退款单收到微信成功，已自动落账'
+    const lines = [
+      `订单 ${result.refund.orderNo}`,
+      `原退款单 ${result.refund.outRefundNo} ¥${(result.refund.amount / 100).toFixed(2)} 本地原状态 ${priorStatus}`,
+      later
+        ? `后续退款单 ${later.outRefundNo}（${later.status}）¥${(later.amount / 100).toFixed(2)}，请到商户平台核对是否退了两笔，如是需与顾客协商追回`
+        : '无需操作',
+      manual ? `曾由 ${manual.by} 人工核实为未退款：${manual.note ?? ''}` : '',
+    ].filter((l) => l !== '')
+    notifySystemAlert(title, lines, { key: `refund-late-success:${result.refund.id}`, windowMs: LATE_SUCCESS_ALERT_WINDOW_MS })
   }
+
   prisma.order
     .findUnique({
       where: { id: result.refund.orderId },

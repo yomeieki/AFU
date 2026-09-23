@@ -2123,6 +2123,8 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 
 **幂等与互斥依据**：`finalizeRefundSuccess` 用 `SELECT ... FOR UPDATE` 把回调与补查串行化，条件写 `status ≠ SUCCESS` 保证只有一方真正累加 `refundedAmount`，金额用 `LEAST(refunded_amount + amount, actual_amount)` 封顶。`markRefundAbnormal`/`markRefundClosed`/`markRefundFailed` 三个函数本批全部改成条件 `updateMany`（只有行仍在各自的「在途态」集合内才会真正转移状态并发通知），已被推进到别的终态的行调用这三个函数会 `count=0` 直接返回，不改状态、不重复通知。`reconcileRefund` 自己用 CAS 占坑（`reconcileCheckedAt` 从旧值改成 `now` 才算抢到）防并发 tick 重复查询。
 
+**2026-09-23 第一批「退款资金一致性修复」第二轮复核（R9）收口**：`initiateRefund` 事务的第一句改成 `SELECT id FROM orders WHERE id=? FOR UPDATE`，随后**锁内重验**「有无在途退款」「可退余额是否与事务外快照一致」，命中偏差分别报 `42205`/`42204`——这闭合了「`finalizeRefundSuccess` 落账」与「本次发起」之间原本只靠事务外快照判断的并发窗口，也修掉了两笔部分退款并发只靠 `activeOrderId` 唯一索引兜底的 TOCTOU。`finalizeRefundSuccess` 的默认条件写守卫就是上面这条 `status ≠ SUCCESS`（覆盖 CLOSED/FAILED 两个终态）：终态后又收到微信 `SUCCESS`（D1 人工转 CLOSED 后回调才追上来、或 `PENDING` 查无标 `FAILED` 后微信其实受理了）时，微信的结果是事实，一律按微信结果落账，但按「是否已有后续在途/成功的退款行」「是否人工核实过」分文案告警 `refund-late-success:<id>`（6 小时窗口），把疑似重复退款的信号显式暴露给店员而不是悄悄吞掉；`manualResolvedBy` 非空且原 `wxNotifyData` 是人工核实记录时，微信事后的信号追加而非覆盖，保留审计线索。
+
 **Refund 新增三列**（`refunds` 表）：`reconcile_checked_at`（上次补查时间，`DATETIME(3)` 可空）、`reconcile_count`（累计补查次数，默认 0）、`reconcile_last_error`（最近一次查询失败或金额不符的原因，`VARCHAR(255)` 可空）。`GET /admin/orders/:id` 响应的 `refunds[]` 每项随之带上这三个字段（只读，供人工核对补查进度）。
 
 **告警**：`PENDING`/`PROCESSING` 行连续 `alertAfter`（默认 6 次，约 30 分钟）补查后仍未到终态 → 「退款长时间未到账」（`key: refund-reconcile-stuck:<id>`，6 小时窗口内只发一次）。`ABNORMAL` 行不发这条告警（`markRefundAbnormal` 已经告警过，且本就要人工处理）。另外两个新告警：「退款补查：微信查无此单」（`key: refund-reconcile-notfound:<id>`）、「退款补查金额不一致」（`key: refund-reconcile-mismatch:<id>`），6 小时窗口内只发一次（与「退款长时间未到账」同）。三条都走既有 `notifySystemAlert` 通道（企微系统告警 webhook → 回退订单群；PushPlus 只给老板），不新开通道。
