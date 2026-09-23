@@ -236,3 +236,23 @@ test('computeNavBar：与页面里实跑一致（通过 onLoad 触发真实 comp
   assert.ok(page.data.navTotal >= 48 + 32, 'navTotal=' + page.data.navTotal)
   assert.equal(page.data.navTotal, page.data.statusBarHeight + page.data.navContent)
 })
+
+// 修订 2（2026-09-24，复核 R5）：验收 1-h——「今日已约满」只应在 storeStatusOf 的 PICKUP 分支
+// 出现一次，不该被误粘到 DELIVERY 分支（否则外送侧也会被约满文案带偏）。
+test('源码级：字符串「今日已约满」在 local-catalog.js 里恰好出现一次，且只在 storeStatusOf 的 PICKUP 分支内', function () {
+  const src = read('utils/local-catalog.js')
+  const all = src.match(/今日已约满/g) || []
+  assert.equal(all.length, 1, '「今日已约满」应恰好出现一次，实际 ' + all.length + ' 处：' + JSON.stringify(all))
+  const fnStart = src.indexOf('function storeStatusOf')
+  assert.ok(fnStart !== -1, 'storeStatusOf 未找到')
+  const pickupStart = src.indexOf("normMode(mode) === 'PICKUP'", fnStart)
+  assert.ok(pickupStart !== -1, 'PICKUP 分支起点未找到')
+  // storeStatusOf 里 PICKUP 分支结束、DELIVERY 分支开始的唯一标志行
+  const deliveryGuard = "\n  if (meta.paused) return { tone: 'paused', label: '暂停接单' }"
+  const deliveryStart = src.indexOf(deliveryGuard, pickupStart)
+  assert.ok(deliveryStart !== -1 && deliveryStart > pickupStart, 'DELIVERY 分支起点未找到')
+  const pickupBranch = src.slice(pickupStart, deliveryStart)
+  const deliveryBranch = src.slice(deliveryStart, src.indexOf('\n}', deliveryStart))
+  assert.match(pickupBranch, /今日已约满/)
+  assert.doesNotMatch(deliveryBranch, /今日已约满/)
+})

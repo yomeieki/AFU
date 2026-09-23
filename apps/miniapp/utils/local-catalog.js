@@ -38,11 +38,14 @@ function holidayText(meta) {
 /**
  * 店头那颗状态胶囊。
  * 休业压过一切；自取只看自己的营业时段与服务端给的 earliestPickupWhen（不受外送暂停/关闭影响，
- * 自取有自己的暂停开关，2026-09-23）：一格都约不到（NONE）是灰「已打烊」；约得到（CURRENT/LATER，
- * 含"现在就在营业段内、稍后再约"与"本段已约不到，最早是下一段/明天"两种）都是绿「营业中」，除非
- * 此刻确实不在营业时段——那种情形（LATER 且当下不在营业时段）沿用 HEAD 的「打烊/午休 · 可预约」。
- * 老服务端没给 earliestPickupWhen 时按 HEAD 行为（outOfHours 判）兜底。外送沿用原判定（暂停优先于
- * 打烊，两段之间是午间休息）。
+ * 自取有自己的暂停开关，2026-09-23）：一格都约不到（NONE）时分两支——营业时段内（例如后台把
+ * 「可预订」收窄成仅今天，今天已约满）单独给一个灰色文案（见下方分支的字面量，不是「已打烊」，
+ * 2026-09-24 修订 2，复核 R5：笼统都写「已打烊」会跟外送侧的绿「营业中」自相矛盾），营业时间外
+ * 才是灰「已打烊」；约得到（CURRENT/LATER，含"现在就在营业段内、稍后再约"与"本段已约不到，
+ * 最早是下一段/明天"两种）都是绿「营业中」，除非此刻确实不在营业时段——那种情形（LATER 且
+ * 当下不在营业时段）沿用 HEAD 的「打烊/午休 · 可预约」。老服务端没给 earliestPickupWhen 时按
+ * HEAD 行为（outOfHours 判）兜底。
+ * 外送沿用原判定（暂停优先于打烊，两段之间是午间休息）。
  * meta 还没回来时给「暂未营业」而不是空字符串——空胶囊是个视觉噪点，且会让人以为在营业。
  */
 function storeStatusOf(meta, mode) {
@@ -53,7 +56,10 @@ function storeStatusOf(meta, mode) {
     if (!pk || !pk.enabled) return { tone: 'closed', label: '暂未开通' }
     if (pk.paused) return { tone: 'paused', label: '暂停接单' }
     var when = pk.earliestPickupWhen
-    if (when === 'NONE') return { tone: 'closed', label: '已打烊' }
+    // 一格都约不到（NONE）：店还开着（closedKind:'OPEN'，今天已约满）要单独给下面这个灰色文案，
+    // 不能写「已打烊」——那会跟同一门店头外送侧的绿「营业中」自相矛盾（店主 2026-09-24，复核 R5）；
+    // 营业时间外仍是「已打烊」，不分 BREAK/CLOSED（同修订 1）。
+    if (when === 'NONE') return { tone: 'closed', label: outOfHours(meta) ? '已打烊' : '今日已约满' }
     // LATER 且此刻不在营业时段：与 HEAD 一致画「打烊/午休 · 可预约」；LATER 但此刻仍在营业时段
     // （尾段——本段已约不到，最早是下一段/明天）与 CURRENT 都画「营业中」（店主 2026-09-23 拍板）。
     // when 缺失（老服务端）按 outOfHours 兜底，与 HEAD 逐字节一致。
