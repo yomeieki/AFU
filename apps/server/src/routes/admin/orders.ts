@@ -6,7 +6,7 @@ import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { rollbackOrderStock } from '../../utils/order-stock'
 import { releaseOrderBenefits } from '../../services/member/checkout'
-import { initiateRefund, remainingRefundable } from '../../services/refund'
+import { initiateRefund, remainingRefundable, finalizeRefundSuccess, markRefundClosed } from '../../services/refund'
 import { sendShipSubscribeMessage, sendPickupReadySubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
 import { enqueueOrderTicket } from '../../services/ticket'
@@ -71,7 +71,9 @@ const orderListSelect = {
   refunds: {
     orderBy: { createdAt: 'desc' as const },
     take: 1,
-    select: { id: true, status: true, outRefundNo: true, amount: true, mode: true, errorMessage: true, createdAt: true },
+    // reconcileLastError（P1/P4，2026-09-23）：ABNORMAL 行的异常原因，供「已在商户平台核实」弹窗
+    // 与「退款待处理」页签展示；不加这个字段前端就只能看到「退款异常」四个字，看不出异常在哪。
+    select: { id: true, status: true, outRefundNo: true, amount: true, mode: true, errorMessage: true, reconcileLastError: true, createdAt: true },
   },
   afterSales: {
     orderBy: { createdAt: 'desc' as const },
@@ -143,22 +145,21 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const sc = req.query.schedule ? z.enum(['SCHEDULED', 'ASAP']).parse(req.query.schedule) : undefined
     const scWhere: Prisma.OrderWhereInput = sc === 'SCHEDULED' ? { scheduledAt: { not: null } } : sc === 'ASAP' ? { scheduledAt: null } : {}
 
-    const where = {
-      ...(status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}),
-      ...attentionWhere,
-      ...dtWhere,
-      ...createdAtWhere,
-      ...scWhere,
-      ...(keyword
-        ? {
-            OR: [
-              { orderNo: { contains: keyword } },
-              { receiverName: { contains: keyword } },
-              { receiverPhone: { contains: keyword } },
-            ],
-          }
-        : {}),
-    }
+    // 显式 AND 数组而非顶层展开：attentionWhere（REFUND_ATTENTION_WHERE）自身带 OR 键，
+    // 与 keyword 分支的 OR 键顶层展开会互相覆盖（后者赢，前者的过滤条件整个失效）——
+    // 见 plan.md「列表 where 拼接隐患」，2026-09-23 P4 修复一并锁住。
+    const statusWhere: Prisma.OrderWhereInput = status ? { status } : statuses.length > 1 ? { status: { in: statuses } } : {}
+    const keywordWhere: Prisma.OrderWhereInput = keyword
+      ? {
+          OR: [
+            { orderNo: { contains: keyword } },
+            { receiverName: { contains: keyword } },
+            { receiverPhone: { contains: keyword } },
+          ],
+        }
+      : {}
+    const conditions = [statusWhere, attentionWhere, dtWhere, createdAtWhere, scWhere, keywordWhere].filter((w) => Object.keys(w).length > 0)
+    const where: Prisma.OrderWhereInput = conditions.length > 0 ? { AND: conditions } : {}
 
     const [list, total] = await prisma.$transaction([
       prisma.order.findMany({
@@ -193,14 +194,27 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 })
 
+/** 在途态：还在微信那边走，不算「要人出手」（自动补查会把它们推到结局） */
+const IN_FLIGHT_REFUND_STATUSES = ['PENDING', 'PROCESSING'] as const
+
 /**
- * 「退款待处理」（伪状态 REFUND_ATTENTION）的唯一定义：订单在 REFUNDING，且没有一笔退款还在微信那边走
- * （PENDING/PROCESSING）。命中四种：没有退款记录 / ABNORMAL（去商户平台处理）/ CLOSED / FAILED（后台重试）。
- * 列表筛选与 pending-count 角标共用这一个常量——两处各写一遍就会漂移。
+ * 「退款待处理」（伪状态 REFUND_ATTENTION）的定义（P4，2026-09-23 收口）：命中三种——
+ *  ① 订单在 REFUNDING，且没有一笔退款还在微信那边走（没有退款记录 / CLOSED / FAILED，后台可重试）；
+ *  ② 任何订单状态下有一笔 ABNORMAL 退款（含部分退款——之前只看 status='REFUNDING' 会漏掉这类，
+ *     店员点「已在商户平台核实」的入口才是这里的唯一出口，见 resolve-abnormal 路由）；
+ *  ③ 售后已同意（APPROVED）但退款没有一笔在途（CLOSED/FAILED 或没退款记录——同意时同步失败/
+ *     之后异步关闭，售后面板只对 PENDING 画按钮，不进这里店员根本看不到）。
+ * 不进：店员自己从订单页发起的部分退款异步 CLOSED、且没有售后单——已有告警推送，订单页
+ * 「再退款」按钮可直接点，店主 2026-09-23 D5 确认这类不需要占页签（Prisma where 表达
+ * 「最近一笔是 CLOSED」需要 raw SQL 两步查询，本批不做）。
+ * 列表筛选与 pending-count 三个角标共用这一个常量——两处各写一遍就会漂移。
  */
 const REFUND_ATTENTION_WHERE: Prisma.OrderWhereInput = {
-  status: 'REFUNDING',
-  refunds: { none: { status: { in: ['PENDING', 'PROCESSING'] } } },
+  OR: [
+    { status: 'REFUNDING', refunds: { none: { status: { in: [...IN_FLIGHT_REFUND_STATUSES] } } } },
+    { refunds: { some: { status: 'ABNORMAL' } } },
+    { afterSales: { some: { status: 'APPROVED' } }, refunds: { none: { status: { in: [...IN_FLIGHT_REFUND_STATUSES] } } } },
+  ],
 }
 
 // GET /api/admin/orders/pending-count — 待处理计数（供后台提醒轮询）
@@ -520,6 +534,76 @@ router.post('/:id/refund', async (req: Request, res: Response, next: NextFunctio
     const id = Number(req.params.id)
     const { amount, reason, idempotencyKey } = refundSchema.parse(req.body ?? {})
     success(res, await initiateRefund({ orderId: id, amount, reason, operator: req.adminUsername ?? undefined, idempotencyKey }))
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/orders/:id/refunds/:refundId/resolve-abnormal — P1 窄口径人工出口（2026-09-23）
+// 只对当前状态为 ABNORMAL 的退款行开放：店员已在微信商户平台核实过，回来在这里记录结果。
+// 落账一律走 finalizeRefundSuccess/markRefundClosed 同一条路径（互斥/积分/出票/通知全部复用），
+// 这里不另写任何金额、状态、积分或出票逻辑。权限与 /:id/refund 同级——全仓没有角色门控（见 §0）。
+const resolveAbnormalSchema = z.object({
+  result: z.enum(['SUCCESS', 'CLOSED']),
+  verifiedAmount: z.number().int().positive(),
+  note: z.string().trim().min(4, '说明至少 4 个字').max(100),
+})
+
+router.post('/:id/refunds/:refundId/resolve-abnormal', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const refundId = Number(req.params.refundId)
+    const { result, verifiedAmount, note } = resolveAbnormalSchema.parse(req.body ?? {})
+
+    const refund = await prisma.refund.findUnique({ where: { id: refundId } })
+    if (!refund || refund.orderId !== id) throw new AppError(40401, '退款单不存在', 404)
+    if (refund.status !== 'ABNORMAL') {
+      throw new AppError(42204, `退款单当前状态为 ${refund.status}，仅「退款异常」可人工核实`)
+    }
+
+    const operator = req.adminUsername ?? 'admin'
+    const at = new Date()
+
+    if (result === 'SUCCESS') {
+      const order = await prisma.order.findUniqueOrThrow({ where: { id } })
+      const remaining = remainingRefundable(order)
+      if (verifiedAmount > remaining) {
+        throw new AppError(42206, `实退金额超过可退余额 ¥${(remaining / 100).toFixed(2)}`)
+      }
+      // D2（2026-09-23 A）：实退金额与记录不同时允许按实退落账，说明自动前缀「原记录 → 实退」，
+      // 便于日后翻记录能一眼看出这行为什么跟当初的 refund.amount 对不上。
+      const amountOverride = verifiedAmount !== refund.amount ? verifiedAmount : undefined
+      const finalNote = amountOverride !== undefined
+        ? `原记录 ¥${(refund.amount / 100).toFixed(2)} → 实退 ¥${(verifiedAmount / 100).toFixed(2)}；${note}`.slice(0, 120)
+        : note
+      const { applied } = await finalizeRefundSuccess({
+        refundId,
+        expectStatus: 'ABNORMAL',
+        amountOverride,
+        rawData: JSON.stringify({ source: 'manual-verified', result, operator, note, verifiedAmount, at }),
+        rawField: 'wxNotifyData',
+        manual: { by: operator, note: finalNote, at },
+      })
+      if (!applied) throw new AppError(42204, '退款状态已变化，请刷新后重试')
+    } else {
+      // D1（2026-09-23 A）：CLOSED = 核实后确认微信其实没退，释放占位可重新发起。这里只要求
+      // verifiedAmount 与记录一致——目的是让店员再对一遍单号金额，不改金额（金额只在 SUCCESS 分支可能变）。
+      if (verifiedAmount !== refund.amount) {
+        throw new AppError(42206, `核实为「未退款」时金额须与记录一致（记录 ¥${(refund.amount / 100).toFixed(2)}）`)
+      }
+      const { applied } = await markRefundClosed(
+        refundId,
+        JSON.stringify({ source: 'manual-verified', result, operator, note, verifiedAmount, at }),
+        { expectStatus: 'ABNORMAL', manual: { by: operator, note, at } }
+      )
+      if (!applied) throw new AppError(42204, '退款状态已变化，请刷新后重试')
+    }
+
+    const [freshRefund, freshOrder] = await Promise.all([
+      prisma.refund.findUniqueOrThrow({ where: { id: refundId } }),
+      prisma.order.findUniqueOrThrow({ where: { id } }),
+    ])
+    success(res, { refund: freshRefund, order: freshOrder })
   } catch (e) {
     next(e)
   }

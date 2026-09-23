@@ -462,6 +462,10 @@ model Refund {
   reconcileCheckedAt DateTime? @map("reconcile_checked_at")
   reconcileCount     Int       @default(0) @map("reconcile_count")
   reconcileLastError String?   @map("reconcile_last_error") @db.VarChar(255)
+  // 人工核实出口（P1，2026-09-23）：仅 ABNORMAL 行可用，见 services/refund.ts finalizeRefundSuccess/markRefundClosed 的 expectStatus 分支
+  manualResolvedBy   String?   @map("manual_resolved_by") @db.VarChar(64)
+  manualResolvedAt   DateTime? @map("manual_resolved_at")
+  manualResolveNote  String?   @map("manual_resolve_note") @db.VarChar(120)
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
