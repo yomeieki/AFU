@@ -153,7 +153,11 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   const outRefundNo = idempotencyKey ? buildIdempotentOutRefundNo(orderId, amount, idempotencyKey) : buildOutRefundNo(orderId)
 
   // 事务 A：（全额）状态流转 + 库存回滚 + 创建退款记录（不含外呼）
-  // 返回 isIdempotentHit=true 表示这不是新建的记录，而是命中了 outRefundNo 唯一索引复用回来的已有退款——
+  // R13（升级轮裁决，2026-09-23）：同键请求在事务 A 被 FOR UPDATE 串行化——后到者在锁内看到
+  // 先到者刚插入的在途行即报 42205，到不了下面的 create，因此 isIdempotentHit=true 现在只在
+  // 「同键行已是终态（SUCCESS/CLOSED/FAILED，activeOrderId 为 NULL）」时才会撞 outRefundNo
+  // 唯一索引、复用该行返回（R9 之前的旧注释把它归因于「两个事务同时提交前」的并发窗口，
+  // 与当前串行化后的代码不符，已改正）。
   // 调用方（下面）据此跳过「再发起一次微信退款/再跑一次 finalize」，直接把现状返回给上层。
   // R10：只在这次事务内真正把订单从「未在退款中」翻转成 REFUNDING 时才需要出 CANCEL 票——
   // 见下面 :127 分支末尾赋值为 true；命中幂等重放（isIdempotentHit）或订单本来就已经在
@@ -253,6 +257,9 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
         // 带幂等键时 outRefundNo 是确定性派生的：撞索引大概率是同一 (订单, 金额, 幂等键) 的重试，
         // 命中的是 outRefundNo 唯一索引而非 activeOrderId 唯一索引——查一下就能分清，不必去猜
         // Prisma P2002 的 meta.target 长什么样（不同数据库/驱动版本格式并不稳定）。
+        // R13（升级轮裁决，2026-09-23）：事务 A 首句 FOR UPDATE 已经把同单的两个事务串行化，
+        // 后到者在锁内看到先到者刚插入的在途行就报 42205，走不到这里；只有同键行已是终态
+        // （SUCCESS/CLOSED/FAILED，activeOrderId 为 NULL）时才会撞 outRefundNo 唯一索引。
         // 查到了：直接复用已有那笔的现状，调用方拿到「已经在处理/已完成」的语义，不再二次发起微信退款。
         // 查不到：说明真正撞的是 activeOrderId（同一订单另一笔不同幂等键/不带幂等键的退款并发在途），
         // 维持原有报错语义。
