@@ -98,6 +98,88 @@ test('自取模式的店头状态与通知：未开通 / 暂停 / 营业中 / �
   assert.deepEqual(headNoticeOf(paused, 'PICKUP'), { text: '自取暂停接单：后厨忙', blocking: true })
 })
 
+// 修订 1（2026-09-23，复核 R2）：服务端给 pickup.earliestPickupWhen 后，营业段尾段（此刻仍在
+// 营业时段内、但本段已约不到）与营业时间外都要区分对待；一格都约不到（NONE）是真的挡住下单。
+test('自取 earliestPickupWhen：尾段/当前段/一格都约不到，三件套（胶囊·提示·切换栏小字）', function () {
+  // 尾段（LATER 但此刻仍在营业时段内）：胶囊「营业中」（店主 2026-09-23 拍板），提示带最早可取，
+  // 切换栏仍给「（可预约）」
+  const later = Object.assign({}, PK, {
+    closedKind: 'OPEN',
+    pickup: Object.assign({}, PK.pickup, { earliestPickupWhen: 'LATER', earliestPickupText: '最早今天 17:00–17:30 可取' }),
+  })
+  assert.deepEqual(storeStatusOf(later, 'PICKUP'), { tone: 'open', label: '营业中' })
+  assert.deepEqual(headNoticeOf(later, 'PICKUP'), { text: '现在下单为预约自取，最早今天 17:00–17:30 可取', blocking: false })
+  assert.equal(pickupModeHint(later), '（可预约）')
+
+  // 当前段（CURRENT）：与营业中无区别，无提示、无切换栏小字
+  const current = Object.assign({}, PK, {
+    closedKind: 'OPEN',
+    pickup: Object.assign({}, PK.pickup, { earliestPickupWhen: 'CURRENT' }),
+  })
+  assert.deepEqual(storeStatusOf(current, 'PICKUP'), { tone: 'open', label: '营业中' })
+  assert.deepEqual(headNoticeOf(current, 'PICKUP'), { text: '', blocking: false })
+  assert.equal(pickupModeHint(current), '')
+
+  // 一格都约不到（NONE）：灰「已打烊」（不分 BREAK/CLOSED）、阻塞提示「暂无可取时段」、
+  // 切换栏不给「可预约」、modeAvailable 判不可用、altModeOf 走不到自取
+  const noneClosed = Object.assign({}, PK, {
+    closedKind: 'CLOSED',
+    pickup: Object.assign({}, PK.pickup, { earliestPickupWhen: 'NONE', earliestPickupText: '' }),
+  })
+  assert.deepEqual(storeStatusOf(noneClosed, 'PICKUP'), { tone: 'closed', label: '已打烊' })
+  assert.deepEqual(headNoticeOf(noneClosed, 'PICKUP'), { text: '暂无可取时段', blocking: true })
+  assert.equal(pickupModeHint(noneClosed), '')
+  assert.equal(modeAvailable(noneClosed, 'PICKUP'), false)
+  assert.equal(altModeOf(Object.assign({}, noneClosed, { paused: { reason: '骑手不够' } }), 'DELIVERY'), null)
+  // BREAK 叠 NONE：胶囊仍是「已打烊」，不写「午间休息」
+  const noneBreak = Object.assign({}, PK, {
+    closedKind: 'BREAK',
+    pickup: Object.assign({}, PK.pickup, { earliestPickupWhen: 'NONE', earliestPickupText: '' }),
+  })
+  assert.deepEqual(storeStatusOf(noneBreak, 'PICKUP'), { tone: 'closed', label: '已打烊' })
+
+  // LATER 且此刻不在营业时段（营业时间外）：与 HEAD 的「已打烊/午间休息 · 可预约」三件套逐字节一致
+  const closedLater = Object.assign({}, PK, {
+    closedKind: 'CLOSED',
+    pickup: Object.assign({}, PK.pickup, { earliestPickupWhen: 'LATER', earliestPickupText: '最早明天 10:30–11:00 可取' }),
+  })
+  assert.deepEqual(storeStatusOf(closedLater, 'PICKUP'), { tone: 'schedule', label: '已打烊 · 可预约' })
+  assert.deepEqual(headNoticeOf(closedLater, 'PICKUP'), { text: '现在下单为预约自取，最早明天 10:30–11:00 可取', blocking: false })
+  assert.equal(pickupModeHint(closedLater), '（可预约）')
+  const breakLater = Object.assign({}, closedLater, { closedKind: 'BREAK' })
+  assert.deepEqual(storeStatusOf(breakLater, 'PICKUP'), { tone: 'schedule', label: '午间休息 · 可预约' })
+
+  // 老服务端（无 earliestPickupWhen 字段）：维持 HEAD 行为，逐字节不变
+  assert.deepEqual(storeStatusOf(Object.assign({}, PK, { closedKind: 'CLOSED' }), 'PICKUP'),
+    { tone: 'schedule', label: '已打烊 · 可预约' })
+  assert.deepEqual(headNoticeOf(Object.assign({}, PK, { closedKind: 'CLOSED' }), 'PICKUP'),
+    { text: '现在下单为预约自取', blocking: false })
+  assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, closedKind: 'CLOSED' })), '（可预约）')
+  assert.deepEqual(storeStatusOf(PK, 'PICKUP'), { tone: 'open', label: '营业中' })
+  assert.deepEqual(headNoticeOf(PK, 'PICKUP'), { text: '', blocking: false })
+  assert.equal(pickupModeHint(PK), '')
+
+  // 暂停/未开通/休业叠 when:'NONE' → 优先级不变，仍是各自原结果
+  const pausedNone = Object.assign({}, PK, {
+    closedKind: 'CLOSED',
+    pickup: Object.assign({}, PK.pickup, { paused: { reason: '后厨忙' }, earliestPickupWhen: 'NONE' }),
+  })
+  assert.deepEqual(storeStatusOf(pausedNone, 'PICKUP'), { tone: 'paused', label: '暂停接单' })
+  assert.deepEqual(headNoticeOf(pausedNone, 'PICKUP'), { text: '自取暂停接单：后厨忙', blocking: true })
+  const offNone = Object.assign({}, PK, {
+    closedKind: 'CLOSED',
+    pickup: Object.assign({}, PK.pickup, { enabled: false, earliestPickupWhen: 'NONE' }),
+  })
+  assert.deepEqual(storeStatusOf(offNone, 'PICKUP'), { tone: 'closed', label: '暂未开通' })
+  assert.deepEqual(headNoticeOf(offNone, 'PICKUP'), { text: '到店自取暂未开通', blocking: true })
+  const holidayNone = Object.assign({}, PK, {
+    holiday: { until: null, reason: '装修' },
+    pickup: Object.assign({}, PK.pickup, { earliestPickupWhen: 'NONE' }),
+  })
+  assert.deepEqual(storeStatusOf(holidayNone, 'PICKUP'), { tone: 'closed', label: '休息中' })
+  assert.deepEqual(headNoticeOf(holidayNone, 'PICKUP'), { text: '休息中', blocking: true })
+})
+
 test('休业：两种模式都灰、都阻塞、文案带恢复日期', function () {
   const h = Object.assign({}, PK, { holiday: { until: '2026-10-08', reason: '国庆' } })
   assert.equal(holidayText(h), '休息中，10月08日后恢复')

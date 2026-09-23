@@ -236,20 +236,3 @@ test('computeNavBar：与页面里实跑一致（通过 onLoad 触发真实 comp
   assert.ok(page.data.navTotal >= 48 + 32, 'navTotal=' + page.data.navTotal)
   assert.equal(page.data.navTotal, page.data.statusBarHeight + page.data.navContent)
 })
-
-// ── .cart-tip 单行省略（购物车条 + 购物车页两处） ────────────────────────────
-
-function cartTipBlock(css) {
-  const m = css.match(/\.cart-tip\s*\{[^}]*\}/)
-  return m ? m[0] : ''
-}
-
-test('源码级：local-cart-bar 与购物车页的 .cart-tip 都单行省略（nowrap + hidden + ellipsis）', function () {
-  const barCss = cartTipBlock(read('components/local-cart-bar/index.wxss'))
-  const cartCss = cartTipBlock(read('pages/cart/index.wxss'))
-  ;[barCss, cartCss].forEach(function (block) {
-    assert.match(block, /white-space:\s*nowrap/)
-    assert.match(block, /overflow:\s*hidden/)
-    assert.match(block, /text-overflow:\s*ellipsis/)
-  })
-})

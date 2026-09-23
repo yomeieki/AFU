@@ -179,5 +179,5 @@
 }
 
 .bottom-spacer-promo { height: 186rpx; }
-.cart-tip { font-size: 24rpx; padding: 10rpx 20rpx; text-align: center; background: #fff7e6; color: #9a3412; border-top: 1rpx solid #fde7c7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cart-tip { font-size: 24rpx; padding: 10rpx 20rpx; text-align: center; background: #fff7e6; color: #9a3412; border-top: 1rpx solid #fde7c7; }
 .cart-tip-done { background: var(--success-bg); color: #166534; border-top-color: #dcfce7; }
