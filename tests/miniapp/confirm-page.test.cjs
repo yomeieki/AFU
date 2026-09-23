@@ -582,6 +582,42 @@ test('T7b M7 回归：预约未开通时 42222 仍是老的阻塞行为', async 
   assert.equal(page.data.action.amountState, 'blocked')
 })
 
+// M8（复审建议，纳入本批）：营业中第一次点「预约时段」，loadSlots 是异步的，
+// pickMode 紧接着调用的 openPicker 读到的是 hasAnySlot 的初值 false，弹层不开，
+// 顾客要点两次才能打开。
+test('T8 M8：营业中第一次点预约时段，只点一次也能在拉完后自动打开弹层', async function () {
+  const { page } = loadConfirm({
+    meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: true }),
+  })
+  await settleAll()
+  page.pickMode.call(page, { currentTarget: { dataset: { mode: 'SCHEDULED' } } })
+  await settleAll()
+  assert.equal(page.data.pickerOpen, true, '拉完时段后应自动打开弹层，不需要再点一次')
+})
+
+// M9（复审建议，纳入本批）：时段拉取失败（slotsError）或已选格失效且一格不剩时，
+// 点时段行/按钮没有任何反应，也没有重试入口——按钮明明写着「时段已过，请重选」。
+test('T9 M9：时段拉取失败后，再次打开选择器应重试并在成功后开弹层', async function () {
+  const { ctx, page } = loadConfirm({
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
+    slotsSeq: [{ fail: { code: 50001, message: '时段获取失败' } }, slotsWithOneSlot()],
+  })
+  await settleAll()
+  assert.ok(page.data.slotsError, '首次拉取应已失败')
+  assert.equal(page.data.hasAnySlot, false)
+  assert.equal(page.data.slotSelected, null)
+  assert.equal(page.data.action.action, 'slot')
+  const before = ctx.urls.filter((u) => /\/local\/delivery-slots/.test(u)).length
+  page.openPicker.call(page)
+  await settleAll()
+  assert.equal(ctx.urls.filter((u) => /\/local\/delivery-slots/.test(u)).length, before + 1, '应已重新拉取时段')
+  assert.equal(page.data.slotsError, '')
+  assert.equal(page.data.hasAnySlot, true)
+  assert.equal(page.data.pickerOpen, true)
+})
+
 test('onSubmit 在 action:slot 时只打开选择器，不提交订单', async function () {
   const { ctx, page } = loadConfirm({
     meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),

@@ -462,6 +462,7 @@ Page({
     // autoPick 分支（无选择时才自动预选）把顾客已经改选的较晚一格悄悄换回最早一格。
     // 该格是否仍可选，交给下一次 loadSlots（:498 附近「已有选择只判 stale、不覆盖」
     // 那个分支）去判——不在新列表里才标 stale，服务端 42291 仍是最后一道闸。
+    this._openPickerAfterLoad = false
     this.setData({
       quoting: true, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null,
     })
@@ -525,10 +526,17 @@ Page({
         var f = st.firstSlot(view)
         patch.slotActiveDay = f ? f.dayIndex : 0
       }
+      // M8/M9（复审建议，纳入本批）：openPicker 在时段还没拉回来时会先记一个
+      // 「拉完就开」的标记（见 openPicker），这里拉完之后兑现它——不论这一轮是
+      // pickMode 触发的首次拉取，还是 openPicker 自己发起的失败重试。
+      var openAfterLoad = self._openPickerAfterLoad
+      self._openPickerAfterLoad = false
+      if (openAfterLoad && hasAny && !view.blocked) patch.pickerOpen = true
       self.setData(patch)
       self.syncAction()
     }).catch(function(err) {
       if (seq !== self._slotSeq) return
+      self._openPickerAfterLoad = false
       self.setData({ slotsLoading: false, slotsError: (err && err.message) || '时段获取失败', hasAnySlot: false })
       self.syncAction()
     })
@@ -538,6 +546,7 @@ Page({
   pickMode: function(e) {
     var mode = e.currentTarget.dataset.mode
     if (mode === 'ASAP' && this.data.closedNow) return   // 打烊时「尽快送达」置灰，点不动
+    if (mode === 'ASAP') this._openPickerAfterLoad = false
     if (mode === 'SCHEDULED' && !this.data.scheduleAvailable) return   // 预约未开通时置灰，点不动（R3）
     if (mode === this.data.scheduleMode) {
       // 已经是预约模式时再点一次「预约时段」卡片：唯一能打开时段选择器的入口原来只有
@@ -551,8 +560,26 @@ Page({
     if (mode === 'SCHEDULED') this.openPicker()
     this.syncAction()
   },
+  // M8/M9（复审建议，纳入本批）：原来只在 hasAnySlot 已经是 true 时才开弹层——
+  // 营业中第一次点「预约时段」，loadSlots 还没回来，这里读到的是初值 false，弹层
+  // 不开，顾客得再点一次；时段拉取失败（slotsError）或已选格失效且一格不剩
+  // （hasAnySlot 也是 false）时同样没有重试入口。改为按当前状态分派：
+  //   已有列表 → 直接开；
+  //   正在拉取中 → 记个标记，拉完后 loadSlots 的回调负责开（避免重复发请求）；
+  //   都不是（还没拉过 / 失败过 / 空过）且有距离可拉 → 重新拉一次，拉完再开。
   openPicker: function() {
-    if (this.data.hasAnySlot) this.setData({ pickerOpen: true })
+    if (this.data.hasAnySlot) {
+      this.setData({ pickerOpen: true })
+      return
+    }
+    if (this.data.slotsLoading) {
+      this._openPickerAfterLoad = true
+      return
+    }
+    if (this.data.quote && this.data.quote.distanceM != null) {
+      this._openPickerAfterLoad = true
+      this.loadSlots(this.data.quote.distanceM, false)
+    }
   },
   closePicker: function() {
     this.setData({ pickerOpen: false })
