@@ -2,8 +2,10 @@ const { request } = require('../../utils/request')
 const { formatPrice, formatStock } = require('../../utils/format')
 const { addToCart } = require('../../api/cart')
 const { recordScanLog } = require('../../api/scan')
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     product: null,
     loading: true,
@@ -19,15 +21,6 @@ Page({
     skuPopupShow: false,
     skuPopupMode: 'cart',
     selectedSkuText: '', // 「已选」行展示
-  },
-
-  onShareAppMessage() {
-    var p = this.data.product || {}
-    return {
-      title: p.name ? p.name + ' · 阿福凉菜' : '阿福凉菜',
-      path: '/pages/product/detail?id=' + (p.id || '') + '&source=share',
-      imageUrl: p.coverImage || '',
-    }
   },
 
   onLoad(options) {

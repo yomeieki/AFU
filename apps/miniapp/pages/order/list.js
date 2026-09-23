@@ -69,8 +69,10 @@ function decorate(order) {
     typeClass: (TYPE_META[order.deliveryType] || TYPE_META.EXPRESS).cls,
   })
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     tabs: TABS,
     activeTab: 0,

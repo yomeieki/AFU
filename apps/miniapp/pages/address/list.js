@@ -31,8 +31,10 @@ function decorateLocalAddresses(list, meta) {
     })
   })
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     addresses: [],
     loading: true,

@@ -1,7 +1,10 @@
 const { adminUrl } = require('../../config/index')
 
 // 内嵌网页后台：/m?code=<一次性码>[&to=<页面>]，网页端换 token 后自动进入
+var share = require('../../utils/share')
+
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: { src: '' },
 
   onLoad(options) {

@@ -66,8 +66,10 @@ function decorate(coupon, status) {
     dim: used || expired,
   }
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     tabs: TABS,
     activeTab: 0,

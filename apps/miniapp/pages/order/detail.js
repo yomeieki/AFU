@@ -423,8 +423,10 @@ function decorateOrder(order) {
     }),
   })
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     order: null,
     loading: true,

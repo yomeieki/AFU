@@ -14,9 +14,11 @@ const catalogApi = require('../../api/catalog')
 const { getLocalMeta } = require('../../api/local')
 const { headNoticeOf, resolveLocalMode } = require('../../utils/local-catalog')
 var promoTypeOf = require('../../utils/promo').promoTypeOf
+var share = require('../../utils/share')
 const app = getApp()
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     cartSpacerPx: 0,
     promotion: null,
@@ -46,9 +48,85 @@ Page({
     }
   },
 
-  onLoad() {
+  // options 里可能带着分享落地的渠道参数（见 utils/share.js 的 homeShare/homeTimeline）。
+  //   null    ：普通进入（tabBar 切换/冷启动），按现有渠道加载，不碰渠道；
+  //   EXPRESS ：分享带的是邮寄——邮寄不需要位置许可，直接定渠道后照常加载；
+  //   LOCAL   ：分享带的是同城——同城要先过位置许可这道门（gateLocalChannel），
+  //             但门是异步的、还会弹隐私授权弹层，而隐私授权弹层是 app.js 的
+  //             onNeedPrivacyAuthorization 通过 getCurrentPages() 取末页
+  //             selectComponent('#privacy-popup') 找到的（app.js:56-61）——
+  //             onLoad 这一刻本页刚开始渲染，取不到自己的弹层组件，找不到会静默
+  //             disagree。所以这里只记一个「待开门」标记，等 onReady（首屏已渲染完）
+  //             再开门；这段时间内既不 loadData，也不改 channel 数据以外的东西，
+  //             避免顾客在门开着的时候看到一屏错渠道的骨架。
+  //
+  // rememberEntry 必须在判断 target 之前调用、且不管 target 是不是 null 都要调——
+  // 它登记的是「这次 onLoad 见过的入口」，热启动时 wx.onAppShow 可能会把同一个
+  // 入口（比如这次冷启动本身）又送一遍，要靠它去重（见 utils/share.js 头注释 R1）。
+  onLoad(options) {
     this.computeNavBar()
+    share.rememberEntry('pages/index/index', options)
+    var self = this
+    if (wx.onAppShow) {
+      // 主页是 tabBar 页，热启动大概率不会重新执行 onLoad——分享/扫码带来的入口
+      // 参数只保证经 App.onShow / wx.onAppShow 送达，所以在这里另外接一路监听，
+      // 收到的参数只记下来（_pendingEntryChannel），真正的动作留给 onShow 做，
+      // 理由与「隐私弹层要等首屏渲染完」一致：onAppShow 触发的时机不保证在
+      // onShow 之前的哪一步，本页当前状态未必已经稳定到能立刻动手。
+      this._onAppShow = function(opts) {
+        var ch = share.noteEntry(opts && opts.path, opts && opts.query)
+        if (ch) self._pendingEntryChannel = ch
+      }
+      wx.onAppShow(this._onAppShow)
+    }
+    var target = share.channelFromQuery(options)
+    if (target === 'LOCAL') {
+      this._shareGate = true
+      this.setData({ channel: 'LOCAL', channelLabel: '同城配送' })
+      return
+    }
+    if (target === 'EXPRESS') {
+      app.setShoppingChannel('EXPRESS')
+    }
     this.loadData()
+  },
+
+  // 页面卸载前解绑 App 级监听——tabBar 页正常不会被销毁，但测试环境、
+  // 分包/异常重建等场景下 onUnload 仍可能触发；不解绑会让旧实例的监听器一直
+  // 挂在 App 上，收到事件时操作的是一个已经不在页面栈里的 this。
+  onUnload() {
+    if (this._onAppShow && wx.offAppShow) wx.offAppShow(this._onAppShow)
+    this._onAppShow = null
+  },
+
+  // 只有 onLoad 里立了「待开门」标记（分享链接带来的 LOCAL）才会做事；
+  // 普通进入、以及分享带 EXPRESS/无参数的情形，onLoad 已经在处理 loadData，这里直接跳过。
+  onReady() {
+    if (this._shareGate) this.gateThenLoad()
+  },
+
+  // 同城之门 + 加载，合并成一步：冷启动分享落地（onReady 调）与热启动分享落地
+  // （onShow 里 applyEntryChannel 调）共用这同一段逻辑，避免两处各写一遍「过门
+  // 失败/拒绝都要落回邮寄」的收尾。
+  gateThenLoad() {
+    var self = this
+    this._shareGate = true
+    function settle(ok) {
+      self._shareGate = false
+      // 门未决期间（_shareGate 为 true）到达的入口由这里统一收口，不留给 onShow
+      // 处理——onShow 的 _shareGate 短路会让 _pendingEntryChannel 一直没被消费，
+      // 直到某次跟这次入口完全无关的 onShow 才被拿出来执行，那时候渠道会被
+      // 静默切走，顾客完全对不上因果（复核 R4：门开着时又来一次 EXPRESS 入口，
+      // 门开完之后一次无关的 onShow 才把渠道切成 EXPRESS）。
+      var ch = self._pendingEntryChannel
+      self._pendingEntryChannel = null
+      // 以「拒绝/失败」与「门未决期间的最后一次入口是 EXPRESS」两种情形为准落到邮寄：
+      // 前者是原有语义；后者是「门开着时顾客又点了一张邮寄卡片」，以最后一次入口
+      // 为准。ch === 'LOCAL' 时忽略——门刚问过同一个问题，不再弹一次授权。
+      if (ok !== true || ch === 'EXPRESS') app.setShoppingChannel('EXPRESS')
+      self.loadData()
+    }
+    app.gateLocalChannel().then(settle, settle)
   },
 
   // 让自绘导航栏与原生完全对齐：胶囊按钮的位置就是微信自己的排版基准，按它反推——
@@ -94,6 +172,19 @@ Page({
   //      顾客从结算页返回时也要看到最新的车。
   onShow() {
     app.applyCartBadge()
+    // 分享落地的门还没开（onLoad 设了 _shareGate，onReady/gateThenLoad 还没
+    // settle）：渠道此刻是临时摆着的 LOCAL，跟真实的 app.getShoppingChannel()
+    // 未必一致，下面「渠道变了就整页重来」会误判成要重新加载，把在途的那次
+    // 加载也带出一次多余的闪烁。
+    if (this._shareGate) return
+    // 热启动带来的入口渠道（wx.onAppShow 记的，见 onLoad）：消费一次就清掉，
+    // 避免下一次单纯切 tab 触发的 onShow 又把它当一次新的分享落地重放。
+    var ch = this._pendingEntryChannel
+    if (ch) {
+      this._pendingEntryChannel = null
+      this.applyEntryChannel(ch)
+      return
+    }
     if (app.getShoppingChannel() !== this.data.channel) {
       this.loadData()
       return
@@ -105,19 +196,25 @@ Page({
     this.refreshCartBar()
   },
 
+  // 热启动分享落地的动作（冷启动那一支在 onLoad/onReady 里，见上）。
+  // 不预先清空内容、不预设 channel: 'LOCAL'——本页此刻已经在正常展示中，
+  // 直接按目标渠道走一次完整的 loadData/gateThenLoad 收尾即可。
+  applyEntryChannel(ch) {
+    if (ch === 'LOCAL') {
+      this.gateThenLoad()
+      return
+    }
+    app.setShoppingChannel('EXPRESS')
+    this.loadData()
+  },
+
   onPullDownRefresh() {
     this.loadData()
   },
 
-  onShareAppMessage() {
-    return {
-      title: '阿福凉菜 · 家的味道，三十年老店',
-      path: '/pages/index/index',
-    }
-  },
-
+  // 朋友圈只在主页保留（其余 24 页不挂 onShareTimeline，见 utils/share.js 头注释）。
   onShareTimeline() {
-    return { title: '阿福凉菜 · 家的味道，三十年老店' }
+    return share.homeTimeline(app.getShoppingChannel())
   },
 
   loadData() {

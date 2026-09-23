@@ -29,8 +29,10 @@ function decorateSlot(slot, day) {
   var dateText = day.monthDay ? ' ' + day.monthDay : ''
   return { startAt: slot.startAt, endAt: slot.endAt, label: slot.label, dayLabel: day.label, text: day.label + dateText + ' ' + slot.label }
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     otherDiscount: 0,
     promoFen: 0,

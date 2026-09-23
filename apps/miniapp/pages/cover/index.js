@@ -33,8 +33,10 @@ function bottomInsetPx(info) {
   if (sa && info.screenHeight && sa.bottom) return Math.max(0, info.screenHeight - sa.bottom)
   return 0
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     entries: ENTRIES,
     tabs: coverNav.TABS,

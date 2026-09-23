@@ -15,8 +15,10 @@ const { headNoticeOf, checkoutStateOf } = require('../../utils/local-catalog')
 
 var promo = require('../../utils/promo')
 var getPromoPreview = require('../../api/local').getPromoPreview
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     promotion: null,
     promoTip: { show: false, text: '', tone: 'hint' },

@@ -18,8 +18,10 @@
 // Task 5 把它搬进 pages/index 与 pages/product/list 时以那份为准。
 
 var app = getApp()
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     // 只有 switchTab 失败时才显示——正常情况下这一屏一闪而过。
     failed: false,
