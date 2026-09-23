@@ -1,9 +1,14 @@
-// 转发行为锁：utils/share.js 的三个纯函数 + 25 页统一挂载 + 朋友圈只留主页。
+// 转发行为锁：utils/share.js 的纯函数 + 25 页统一挂载 + 朋友圈只留主页。
 //
-// 背景（PO 2026-09-23）：微信右上角「…」菜单显示「无法转发此页面」，因为大多数页面
-// 没实现 onShareAppMessage。修法是全部转发到主页（tabBar[0]），并把当前购物渠道
-// 编进链接，让对方点开主页自动切到同一套菜单——而不是给每页各写一份「转发到本页」
-// （那样转过去的页面往往没有底部导航，等于死胡同）。
+// 背景：微信右上角「…」菜单显示「无法转发此页面」，因为大多数页面没实现
+// onShareAppMessage。修法是给 25 个页面统一挂同一个 onShareAppMessage——而不是
+// 给每页各写一份「转发到本页」（那样转过去的页面往往没有底部导航，等于死胡同）。
+//
+// 「转发给好友」卡片落到哪：PO 2026-09-23 最终决定改成落封面页 pages/cover/index
+// （pages[0]），不带渠道参数，由对方在封面自己选同城/邮寄（此前落主页 + 带
+// channel 参数的旧形态，本文件的断言已跟着改成新形态——这是需求本身导致的断言
+// 变更，不是放宽）。卡片的标题、图片显示不变。朋友圈（onShareTimeline）不受
+// 这次调整影响，仍只在主页、仍带 channel 参数。
 //
 // 25 页覆盖测试故意从 apps/miniapp/app.json 读 pages 数组，不写死清单：
 // 页面清单本身会变，写死清单的测试会在清单变了之后继续对着旧清单断言，看不出漏挂。
@@ -43,23 +48,22 @@ function readPngSize(file) {
   })
 })
 
-// ── homeShare / homeTimeline / channelFromQuery：纯函数，不用桩 ──────────────
+// ── shareCard / homeTimeline / channelFromQuery：纯函数，不用桩 ──────────────
 
-test('homeShare(LOCAL)：标题、主页路径带 channel=LOCAL、卡片图', function () {
-  assert.deepEqual(share.homeShare('LOCAL'), {
+// shareCard() 不再接受/看渠道参数：进封面页，标题与卡片图跟改动前一致，
+// path 精确等于封面页路径、不带任何 query。
+test('shareCard()：标题、path 精确等于封面页、卡片图，且不带 query', function () {
+  assert.deepEqual(share.shareCard(), {
     title: '阿福凉菜 · 家的味道，三十年老店',
-    path: '/pages/index/index?channel=LOCAL',
+    path: '/pages/cover/index',
     imageUrl: '/assets/share/card.png',
   })
 })
 
-test('homeShare(EXPRESS)：path 带 channel=EXPRESS', function () {
-  assert.equal(share.homeShare('EXPRESS').path, '/pages/index/index?channel=EXPRESS')
-})
-
-test('homeShare：脏值与 undefined 落到 EXPRESS（与全站默认一致）', function () {
-  assert.equal(share.homeShare('垃圾值').path, '/pages/index/index?channel=EXPRESS')
-  assert.equal(share.homeShare(undefined).path, '/pages/index/index?channel=EXPRESS')
+test('shareCard()：无论传不传参数结果都一样（新落地页不带渠道）', function () {
+  assert.deepEqual(share.shareCard('LOCAL'), share.shareCard())
+  assert.deepEqual(share.shareCard('EXPRESS'), share.shareCard())
+  assert.deepEqual(share.shareCard(undefined), share.shareCard())
 })
 
 test('homeTimeline(LOCAL)：标题、query=channel=LOCAL、朋友圈图', function () {
@@ -149,13 +153,20 @@ test('25 页全覆盖：每页都能加载，且都挂了统一的 onShareAppMes
   assert.equal(pages.length, 25, 'app.json 的页面数变了——本用例数目断言需要跟着核实，不是巧合写死的 25')
 })
 
-test('25 页的 onShareAppMessage 都落到 homeShare(当前渠道)——LOCAL 与 EXPRESS 各验一遍', function () {
+// 卡片进封面、不带渠道参数，所以 LOCAL/EXPRESS 两种渠道下 25 页应该拿到
+// 完全相同的一份 payload（跟当前购物渠道无关）——这正是本次需求要的行为。
+test('25 页的 onShareAppMessage 都落到 shareCard()（进封面），LOCAL 与 EXPRESS 渠道下结果相同', function () {
   var pages = APP_JSON.pages
   ;['LOCAL', 'EXPRESS'].forEach(function (channel) {
     pages.forEach(function (pagePath) {
       var page = loadPage(pagePath, channel)
       var result = page.onShareAppMessage.call(page, { from: 'menu' })
-      assert.deepEqual(result, share.homeShare(channel), pagePath + ' @ ' + channel)
+      assert.deepEqual(result, share.shareCard(), pagePath + ' @ ' + channel)
+      assert.deepEqual(
+        result,
+        { title: '阿福凉菜 · 家的味道，三十年老店', path: '/pages/cover/index', imageUrl: '/assets/share/card.png' },
+        pagePath + ' @ ' + channel + '：显示与落地页锁定'
+      )
     })
   })
 })

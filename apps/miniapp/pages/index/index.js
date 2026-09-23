@@ -48,7 +48,10 @@ Page({
     }
   },
 
-  // options 里可能带着分享落地的渠道参数（见 utils/share.js 的 homeShare/homeTimeline）。
+  // options 里可能带着分享落地的渠道参数——旧版分享卡片（调整前发出去的）指向
+  // /pages/index/index?channel=X，这段解析逻辑仍要保留给这些旧链接用；新版
+  // 「转发给好友」卡片已经改落封面（不带 channel），朋友圈（utils/share.js 的
+  // homeTimeline）仍然落主页并带 channel，二者都可能带着这个参数走到这里。
   //   null    ：普通进入（tabBar 切换/冷启动），按现有渠道加载，不碰渠道；
   //   EXPRESS ：分享带的是邮寄——邮寄不需要位置许可，直接定渠道后照常加载；
   //   LOCAL   ：分享带的是同城——同城要先过位置许可这道门（gateLocalChannel），

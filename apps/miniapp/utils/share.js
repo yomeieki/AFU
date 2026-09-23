@@ -1,12 +1,26 @@
 // 全店转发统一策略。
 //
-// 「无法转发此页面」是因为大多数页面没挂 onShareAppMessage——微信默认认为
-// 没实现分享回调的页面不可转发。PO 2026-09-23 定：与其给 25 个页面各写一份
-// 「转发到本页」（一堆页面转发过去后没有底部导航、没法再往下逛，等于死胡同），
-// 统一改成全部转发到主页（tabBar[0]），并把当前购物渠道编进链接——
-// 对方点开主页自动切到同一套菜单，不用重新选一次。
+// 背景：「无法转发此页面」是因为大多数页面没挂 onShareAppMessage——微信默认
+// 认为没实现分享回调的页面不可转发。修法是给 25 个页面统一挂同一个
+// onShareAppMessage，而不是各写一份「转发到本页」（一堆页面转发过去后没有底部
+// 导航、没法再往下逛，等于死胡同）。
 //
-// 朋友圈只在主页保留（onShareTimeline 只挂在 pages/index/index），其余 24 页
+// 「转发给好友」卡片点开后落到**封面页 pages/cover/index**（app.json 的
+// pages[0]），不落到主页——由对方在封面自己选同城/邮寄，卡片不再带 channel
+// 参数（PO 2026-09-23 拍板接受的退化：不会像以前一样自动切到分享人那套菜单）。
+// 卡片本身的显示**完全不动**：标题、卡片图（30 周年图）与此前一致，只有落地
+// 路径变了。
+//
+// 主页 pages/index/index.js 里「按 ?channel= 落地」的那段逻辑（onLoad 解析、
+// onReady 过门、wx.onAppShow 去重、settle 收口）**必须保留，不能删**：这次调整
+// 之前已审核上线的版本发出去的旧卡片仍指向 /pages/index/index?channel=X，聊天
+// 记录里的旧链接被点开时还是要落到主页并按 channel 切渠道，不能因为新卡片改道
+// 就让旧链接失效。HOME_PATH 常量因此保留（不再被本文件用来拼新卡片的 path，
+// 但仍是文档，标注旧链接的落地目标）。
+//
+// 朋友圈只在主页保留（onShareTimeline 只挂在 pages/index/index）：朋友圈是
+// 单页分享模式，只能分享「当前页」，做不到像好友卡片那样指定跳到封面，所以
+// 朋友圈继续用主页 + channel query 的旧形态，不受这次调整影响。其余 24 页
 // 不出现在微信客户端的「分享到朋友圈」入口里，本模块也不导出给它们用。
 //
 // 本文件是**新增文件**，纯 ES5（node scripts/check-miniapp-es5.mjs 强制），
@@ -15,17 +29,17 @@
 var channelUtil = require('./channel')
 
 var SHARE_TITLE = '阿福凉菜 · 家的味道，三十年老店'
-var HOME_PATH = '/pages/index/index'
+var HOME_PATH = '/pages/index/index' // 旧版分享卡片的落地页，仍是朋友圈与旧链接的落地目标（见上方头注释）
+var SHARE_LANDING_PATH = '/pages/cover/index' // 「转发给好友」卡片的新落地页：封面，pages[0]
 var CARD_IMAGE = '/assets/share/card.png'
 var TIMELINE_IMAGE = '/assets/share/timeline.png'
 
-// 「转发给好友」卡片：带渠道参数的主页链接。
-// channel 用 normalizeChannel 归一化——脏值/undefined 一律落到 EXPRESS，
-// 与全站「拿不准就当邮寄」的默认一致，不会把顾客莫名带进同城。
-function homeShare(channel) {
+// 「转发给好友」卡片：固定落到封面页，不带渠道参数——对方点开后在封面自己选
+// 同城/邮寄（见文件头注释）。标题与卡片图跟调整前完全一样，没有变化。
+function shareCard() {
   return {
     title: SHARE_TITLE,
-    path: HOME_PATH + '?channel=' + channelUtil.normalizeChannel(channel),
+    path: SHARE_LANDING_PATH,
     imageUrl: CARD_IMAGE,
   }
 }
@@ -53,11 +67,10 @@ function channelFromQuery(options) {
   return null
 }
 
-// 25 页统一挂的 onShareAppMessage。getApp() 故意放在函数体内惰性调用——
-// 模块加载时（页面 require 这个文件的那一刻）全局 App 实例可能还没注册好，
-// 尤其是在测试桩里，Page 模块和 App 模块的加载顺序不保证。
+// 25 页统一挂的 onShareAppMessage。卡片固定落到封面、不带渠道参数（见文件头
+// 注释），不需要再看当前购物渠道，所以不用 getApp()。
 function onShareAppMessage() {
-  return homeShare(getApp().getShoppingChannel())
+  return shareCard()
 }
 
 // ── 主页热启动入口去重（R1，2026-09-23 规划裁决）───────────────────────────
@@ -103,9 +116,10 @@ function noteEntry(pagePath, query) {
 module.exports = {
   SHARE_TITLE: SHARE_TITLE,
   HOME_PATH: HOME_PATH,
+  SHARE_LANDING_PATH: SHARE_LANDING_PATH,
   CARD_IMAGE: CARD_IMAGE,
   TIMELINE_IMAGE: TIMELINE_IMAGE,
-  homeShare: homeShare,
+  shareCard: shareCard,
   homeTimeline: homeTimeline,
   channelFromQuery: channelFromQuery,
   onShareAppMessage: onShareAppMessage,
