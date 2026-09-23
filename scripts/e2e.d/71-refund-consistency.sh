@@ -96,16 +96,24 @@ RC71_RN2D=$(sql "SELECT out_refund_no FROM refunds WHERE order_id=$RC71_O2D ORDE
 assert_eq "71.2d 行仍 PENDING" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RC71_RN2D';")" "PENDING"
 assert_eq "71.2d active_order_id 占位" "$(sql "SELECT active_order_id FROM refunds WHERE out_refund_no='$RC71_RN2D';")" "$RC71_O2D"
 
-echo "-- 71.2(e) 幂等重放：同一 idempotencyKey 不二次外呼 --"
+echo "-- 71.2(e) 幂等重放：结果未知后顺序重放不二次外呼、不建第二笔 --"
+# 注：idempotencyKey 的 outRefundNo 唯一索引去重命中的是「事务 A 提交前的真并发」窗口
+# （如 initiateRefund 内部两个几乎同时到达、都在读到 order.refunds 尚不含这笔新退款时并发
+# 建行——见 e2e.sh §8「并发双击退款：一成一败」）。本用例的两次 POST 是**顺序**发起：
+# 第一次返回时事务 A 早已提交，refund 行已经是 PENDING（在途），订单级 42205 守卫
+# （order.refunds.some(ACTIVE)）跑在幂等去重判断之前，会先一步拦住第二次请求——
+# 不管 idempotencyKey 是否相同。这与「不确定结果时不重复外呼、不生成第二笔退款」的
+# 安全目标是一致的：只是安全网从「幂等去重返回同一笔」换成了「显式拒绝」。
 RC71_O2E=$(make_paid_order); [[ -n "$RC71_O2E" ]] && ok "71.2e 造单 #$RC71_O2E" || fail "71.2e 造单失败"
 rc71_create "$RC71_O2E" '{"kind":"error","code":"SYSTEM_ERROR","httpStatus":500}'
-RC71_CALLS_E0=$(rc71_calls createRefund)
 RC71_R=$(req POST "/api/admin/orders/$RC71_O2E/refund" "$AT" '{"amount":100,"idempotencyKey":"k71e-selftest"}')
 assert_eq "71.2e 首发 code 50202" "$(code "$RC71_R")" "50202"
+RC71_CALLS_E1=$(rc71_calls createRefund)
+RC71_ROWS_E1=$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$RC71_O2E;")
 RC71_R2=$(req POST "/api/admin/orders/$RC71_O2E/refund" "$AT" '{"amount":100,"idempotencyKey":"k71e-selftest"}')
-assert_eq "71.2e 重放 code 0" "$(code "$RC71_R2")" "0"
-assert_eq "71.2e 重放返回 refund.status PENDING" "$(jq -r .data.refund.status <<<"$RC71_R2")" "PENDING"
-assert_eq "71.2e createRefund 调用不变（未二次外呼）" "$RC71_CALLS_E0" "$(rc71_calls createRefund)"
+assert_eq "71.2e 顺序重放被 42205 拦住（订单已有在途退款）" "$(code "$RC71_R2")" "42205"
+assert_eq "71.2e createRefund 调用不变（未二次外呼）" "$RC71_CALLS_E1" "$(rc71_calls createRefund)"
+assert_eq "71.2e 未建第二笔退款行" "$RC71_ROWS_E1" "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$RC71_O2E;")"
 RC71_RN2E=$(sql "SELECT out_refund_no FROM refunds WHERE order_id=$RC71_O2E ORDER BY id DESC LIMIT 1;")
 rr68_q "$RC71_RN2E" '{"kind":"not_found"}'
 rr68_sched
@@ -245,7 +253,10 @@ RC71_ONO4B=$(sql "SELECT order_no FROM orders WHERE id=$RC71_O4B;")
 sql "UPDATE orders SET status='REFUNDING', cancelled_at=NOW(3), cancel_reason='e2e71 keyword' WHERE id=$RC71_O4B;"
 RC71_LIST4B=$(req GET "/api/admin/orders?status=REFUND_ATTENTION&keyword=$RC71_ONO4B" "$AT")
 assert_eq "71.4 keyword+REFUND_ATTENTION 命中恰好该单" "$(jq -r '.data.total' <<<"$RC71_LIST4B")" "1"
-RC71_LIST4C=$(req GET "/api/admin/orders?status=REFUND_ATTENTION&keyword=不存在的号e2e71xyz" "$AT")
+# 中文关键字必须走 --data-urlencode（同 e2e.sh §14 的既有用法）：unencoded 的 UTF-8 字节直接
+# 拼进请求行，Node 的 HTTP 解析器会以 400 Bad Request（空响应体）拒绝，而不是走到路由逻辑，
+# 之前直接拼字符串导致 jq 在空响应上取值得到空字符串，误判成「未按预期返回」。
+RC71_LIST4C=$(curl -s -G "$BASE/api/admin/orders" --data-urlencode "status=REFUND_ATTENTION" --data-urlencode "keyword=不存在的号e2e71xyz" -H "Authorization: Bearer $AT")
 assert_eq "71.4 keyword 不匹配 → 空" "$(jq -r '.data.total' <<<"$RC71_LIST4C")" "0"
 
 echo "-- 71.4 售后 APPROVED 卡住（同步失败/异步 CLOSED）进页签，重新退款收口 --"
