@@ -51,6 +51,13 @@ assert_eq "①O1 自己送后订单 SHIPPED" "$(sql "SELECT status FROM orders W
 assert_eq "①O1 自己送后 ready_at 非空" "$(sql "SELECT ready_at IS NOT NULL FROM orders WHERE id=$O1;")" "1"
 assert_eq "①O1 count=3" "$(sql "SELECT COUNT(*) FROM deliveries WHERE order_id=$O1;")" "3"
 assert_eq "①O1 最后一张 provider=SELF" "$(sql "SELECT provider FROM deliveries WHERE order_id=$O1 ORDER BY id DESC LIMIT 1;")" "SELF"
+# 复核裁决 R7：骑手已取货/已送达后即使 activeOrderId 被释放（hasActiveDelivery=false）也要恒 CALLED，
+# 不能因为「无在途单」回落 CALL_DUE——给顾客详情与管理端详情各一个真实覆盖（管理端此前完全没查
+# pickedUpAt，这里是它在本批的唯一送达后覆盖）。
+R=$(req POST "/api/admin/local/orders/$O1/delivered" "$AT")
+assert_eq "①O1 标记已送达 code 0" "$(code "$R")" "0"
+assert_eq "①O1 送达后顾客详情 phase=CALLED" "$(s69_sc "$O1" | jq -r .phase)" "CALLED"
+assert_eq "①O1 送达后管理端详情 phase=CALLED" "$(s69_ord "$O1" | jq -r .data.schedule.phase)" "CALLED"
 
 echo "-- ② 对照：骑手方撤单（720 回调）不清 readyAt，系统到点自动重呼 --"
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
@@ -84,6 +91,12 @@ s69_pin "$O3" callAt -1
 req POST "/api/admin/local/orders/$O3/ready" "$AT" >/dev/null
 assert_eq "③O3 D-1 CALLING" "$(sql "SELECT status FROM deliveries WHERE order_id=$O3 ORDER BY id DESC LIMIT 1;")" "CALLING"
 assert_eq "③O3 D-1 策略 SOLO" "$(sql "SELECT call_strategy FROM deliveries WHERE order_id=$O3 ORDER BY id DESC LIMIT 1;")" "SOLO"
+# 复核裁决 R2：只断言「升级后 ready_at 非空」没有证伪力——升级时 D-2 的 callRider 走的是
+# source:'SCHEDULER' 但不带 origin:'SCHEDULED_AUTO'（escalateSoloCalls 没传），所以
+# schedulerAuto 恒为 false，readyAt 预写分支只看 !order.readyAt：哪怕 S1 的撤回逻辑真的有
+# 问题、readyAt 曾被清空，这次 D-2 呼叫也会把它重新写回非空，「非空」这个结论会被无声掩盖。
+# 改成记录升级前的精确时间戳，升级后断言原样未变——这才是「没被任何一次呼叫重写过」的证据。
+S72_O3_READY0=$(sql "SELECT ready_at FROM orders WHERE id=$O3;")
 # escalateAfterMin 覆盖是全局阈值，会扫到整库所有 CALLING 的配送单，不只 O3 这一张——
 # 实测踩到 scripts/e2e.d/50-call-strategy.sh 反复用同一个覆盖键，跑完后库里仍留着别的
 # CALLING/SOLO 配送单，抢先消费掉下面为 O3 排的 precancelOrder/cancelOrder mock 指令，
@@ -98,7 +111,7 @@ R=$(sched '{"escalateAfterMin":0.01}')
 [[ "$(jq -r '.data.localEscalate // -1' <<<"$R")" -ge 1 ]] && ok "③O3 自动升级 localEscalate≥1" || fail "③O3 没有自动升级" "$R"
 assert_eq "③O3 最新一张是 D${O3}-2" "$(sql "SELECT delivery_no FROM deliveries WHERE order_id=$O3 ORDER BY id DESC LIMIT 1;")" "D${O3}-2"
 assert_eq "③O3 D-2 CALLING" "$(sql "SELECT status FROM deliveries WHERE order_id=$O3 ORDER BY id DESC LIMIT 1;")" "CALLING"
-assert_eq "③O3 自动升级（撤 D-1 建 D-2）不清 ready_at" "$(sql "SELECT ready_at IS NOT NULL FROM orders WHERE id=$O3;")" "1"
+assert_eq "③O3 自动升级（撤 D-1 建 D-2）ready_at 保持不变（=升级前时间戳，未被任何一次呼叫重写）" "$(sql "SELECT ready_at FROM orders WHERE id=$O3;")" "$S72_O3_READY0"
 assert_eq "③O3 D-1 已 CANCELLED" "$(sql "SELECT status FROM deliveries WHERE order_id=$O3 AND delivery_no='D${O3}-1';")" "CANCELLED"
 
 echo "-- ④ S2：呼叫前保鲜排除预约单；立即单不受影响（对照证明任务本身在跑） --"
@@ -137,6 +150,12 @@ R=$(sched '{}')
 assert_eq "⑤O5 恢复总开关后 count=1" "$(sql "SELECT COUNT(*) FROM deliveries WHERE order_id=$O5;")" "1"
 assert_eq "⑤O5 恢复后 call_origin=SCHEDULED_AUTO" "$(sql "SELECT call_origin FROM deliveries WHERE order_id=$O5 ORDER BY id DESC LIMIT 1;")" "SCHEDULED_AUTO"
 assert_eq "⑤O5 恢复后 phase=CALLED" "$(s69_sc "$O5" | jq -r .phase)" "CALLED"
+# 复核裁决 R3：工作台快照（routes/admin/workbench.ts:197 的 !!d）与管理端详情的 phase=CALLED
+# 分支此前没有 e2e 覆盖——呼出之后各补一条。
+R=$(snap)
+S72_CARD5B=$(jq -c ".data.columns.waitingCourier[] | select(.orderId==$O5)" <<<"$R")
+assert_eq "⑤O5 恢复呼出后工作台卡片 phase=CALLED" "$(jq -r '.local.schedule.phase' <<<"$S72_CARD5B")" "CALLED"
+assert_eq "⑤O5 恢复呼出后管理端详情 phase=CALLED" "$(s69_ord "$O5" | jq -r .data.schedule.phase)" "CALLED"
 
 echo "-- ⑥ S4：熔断期间到点仍有告警，不再静默；解除熔断后自动补呼 --"
 req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
@@ -197,12 +216,21 @@ echo "-- ⑨ S7：预约票新增的放大行（时段/开始备餐/前备好/�
 # 会把无关的既有宽行也判成新断言的失败，没有区分度——单测 selftest-ticket-schedule.ts 已经
 # 用同样的收窄方式验证过，这里对真实来单票/备餐票内容做同法核对。
 s72_extract_big() { grep -oE "$2" <<<"$1" | head -1; }   # $1=票面内容 $2=grep -E 正则（含 <B>…</B> 整段）
+# R6（复核裁决）：负向断言——证伪没有回归到四种老形态（带空格整段塞一条 <B>，或用 · 合成行）
+s72_assert_no_old_forms() {
+  local ticket="$1" label="$2"
+  [[ "$ticket" != *'<B>送达 '* ]] && ok "$label 不含老写法 <B>送达 …</B>" || fail "$label 回归了老写法 <B>送达 …</B>" "$ticket"
+  [[ "$ticket" != *'<B>取餐 '* ]] && ok "$label 不含老写法 <B>取餐 …</B>" || fail "$label 回归了老写法 <B>取餐 …</B>" "$ticket"
+  [[ "$ticket" != *'<B>应于 '* ]] && ok "$label 不含带空格的老写法 <B>应于 …</B>" || fail "$label 回归了带空格的老写法 <B>应于 …</B>" "$ticket"
+  [[ "$ticket" != *' 开始备餐 · '* ]] && ok "$label 不含合成的备餐票时刻行（· 拼接）" || fail "$label 回归了合成的备餐票时刻行" "$ticket"
+}
 
 S72_O8_NEW=$(PJOBS "$O8" | jq -r '[.data.list[] | select(.kind=="NEW_ORDER")] | last | .content')
 [[ "$S72_O8_NEW" == *"送达 "* ]] && ok "⑨O8 含普通字号的送达日期行" || fail "⑨O8 缺送达行" "$S72_O8_NEW"
 S72_O8_TIME=$(s72_extract_big "$S72_O8_NEW" '<B>[0-9]{2}:[0-9]{2}–[0-9]{2}:[0-9]{2}</B>')
 [[ -n "$S72_O8_TIME" ]] && ok "⑨O8 含放大的时段行" || fail "⑨O8 缺放大时段行" "$S72_O8_NEW"
 [[ "$(s72_bigwidth "$S72_O8_TIME")" -le 16 ]] && ok "⑨O8 放大时段行 ≤16 列" || fail "⑨O8 放大时段行超宽" "$S72_O8_TIME"
+s72_assert_no_old_forms "$S72_O8_NEW" "⑨O8 来单票"
 
 O9=$(s69_new 3); S72_IDS="$S72_IDS,$O9"
 s69_pin "$O9" ticketAt -1
@@ -215,6 +243,7 @@ S72_O9_CALLLINE=$(s72_extract_big "$S72_O9_PREP" '<B>[0-9]{2}:[0-9]{2} 前备好
 [[ -n "$S72_O9_PREPLINE" ]] && ok "⑨O9 含独立的「开始备餐」放大行" || fail "⑨O9 缺开始备餐放大行" "$S72_O9_PREP"
 [[ -n "$S72_O9_CALLLINE" ]] && ok "⑨O9 含独立的「前备好」放大行" || fail "⑨O9 缺前备好放大行" "$S72_O9_PREP"
 [[ "$(s72_bigwidth "$S72_O9_PREPLINE")" -le 16 && "$(s72_bigwidth "$S72_O9_CALLLINE")" -le 16 ]] && ok "⑨O9 「开始备餐」「前备好」放大行均 ≤16 列" || fail "⑨O9 放大行超宽" "$S72_O9_PREPLINE / $S72_O9_CALLLINE"
+s72_assert_no_old_forms "$S72_O9_PREP" "⑨O9 备餐票"
 req POST "/api/admin/local/orders/$O9/accept" "$AT" >/dev/null
 s69_pin "$O9" callAt -1
 sched '{}' >/dev/null
@@ -223,6 +252,7 @@ S72_O9_RD=$(PJOBS "$O9" | jq -r '[.data.list[] | select(.kind=="READY_DUE")] | l
 S72_O9_RDLINE=$(s72_extract_big "$S72_O9_RD" '<B>应于[0-9]{2}:[0-9]{2}前备好</B>')
 [[ -n "$S72_O9_RDLINE" ]] && ok "⑨O9 含「应于」放大行" || fail "⑨O9 缺应于放大行" "$S72_O9_RD"
 [[ "$(s72_bigwidth "$S72_O9_RDLINE")" -le 16 ]] && ok "⑨O9 「应于」放大行 ≤16 列" || fail "⑨O9 「应于」放大行超宽" "$S72_O9_RDLINE"
+s72_assert_no_old_forms "$S72_O9_RD" "⑨O9 催备好小条"
 
 echo "-- ⑩ S8：GET /admin/orders?schedule=ASAP 不再把自取单（PICKUP）算作尽快 --"
 S72_PICKUP_TOTAL=$(sql "SELECT COUNT(*) FROM orders WHERE delivery_type='PICKUP';")
