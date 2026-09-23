@@ -52,8 +52,10 @@ function validDaysText(days) {
   if (!n || n <= 0) return ''
   return n === 365 ? '1 年' : n + ' 天'
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     needLogin: false,
     loading: true,

@@ -56,8 +56,10 @@ function decorate(t) {
     claiming: false,
   }
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     list: [],
     needLogin: false,

@@ -16,8 +16,10 @@ var catalogGroups = require('../../utils/catalog-groups')
 var categoryScroll = require('../../utils/category-scroll')
 var promoTypeOf = require('../../utils/promo').promoTypeOf
 const app = getApp()
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     cartSpacerPx: 0,
     pinnedHeight: 0,

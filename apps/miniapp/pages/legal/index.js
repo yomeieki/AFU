@@ -1,6 +1,8 @@
 const legal = require('../../config/legal')
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     doc: null,
   },

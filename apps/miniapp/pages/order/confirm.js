@@ -7,8 +7,10 @@ const { requestSubscribe } = require('../../utils/subscribe')
 const { request } = require('../../utils/request')
 const { formatPrice } = require('../../utils/format')
 const app = getApp()
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     otherDiscount: 0,
     promoFen: 0,

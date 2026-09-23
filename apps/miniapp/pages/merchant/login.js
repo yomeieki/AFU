@@ -1,6 +1,8 @@
 const { baseURL } = require('../../config/index')
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     username: '',
     password: '',

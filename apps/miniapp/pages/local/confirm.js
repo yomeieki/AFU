@@ -81,8 +81,10 @@ function selectedItems(cart, cartItemIds) {
     return Object.assign({}, item, { priceText: formatPrice(item.price) })
   })
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     otherDiscount: 0,
     promoFen: 0,

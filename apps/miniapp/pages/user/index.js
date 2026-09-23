@@ -1,8 +1,10 @@
 const { wechatLogin } = require('../../api/auth')
 const { callShop } = require('../../utils/contact')
 var memberApi = require('../../api/member')
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     isLoggedIn: false,
     nickname: '',

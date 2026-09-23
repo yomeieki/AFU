@@ -110,8 +110,10 @@ function formatDay(iso) {
   if (isNaN(d.getTime())) return ''
   return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日'
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     // 四态：needLogin / loading / loadError / 正常（正常里再分空数据）
     needLogin: false,

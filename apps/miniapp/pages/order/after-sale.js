@@ -11,8 +11,10 @@ var MAX_IMAGES = 3
 var MAX_DESC = 200
 
 var imageSeq = 0
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     orderId: null,
     order: null,          // 摘要：orderNo / firstItemName / firstItemQty / itemCount / actualAmountText

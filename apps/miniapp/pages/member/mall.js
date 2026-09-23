@@ -53,8 +53,10 @@ function decorateGift(good) {
     isLocal: good.channel === 'LOCAL',
   }
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     needLogin: false,
     loading: true,

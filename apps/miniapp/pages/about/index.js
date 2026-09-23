@@ -1,8 +1,10 @@
 const shop = require('../../config/shop')
 const { callShop } = require('../../utils/contact')
 const { getLocalMeta } = require('../../api/local')
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     shop: shop,
     // 营业时间只有后台那一份（local_delivery.businessHours）。config/shop.js 的字符串只作接口失败兜底

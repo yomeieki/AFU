@@ -39,8 +39,10 @@ function splitRegion(address) {
 function coordTextKey(region, detail) {
   return (region || []).join('/') + '|' + ((detail || '').trim())
 }
+var share = require('../../utils/share')
 
 Page({
+  onShareAppMessage: share.onShareAppMessage,
   data: {
     id: null,
     // EXPRESS=全国邮寄（默认，行为与既有一致）；LOCAL=同城配送，必须地图选点
