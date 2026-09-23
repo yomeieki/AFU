@@ -132,6 +132,26 @@ test('same category can be tapped twice and home intent waits for measured ancho
   g.page._clearTimers()
 })
 
+// M15（复审建议，纳入本批）：先滚动（触发 onPageScroll 记下 _pendingScrollTop），
+// 再点左侧分类定位（locateGroup 应清掉这个残留的滚动位置，见 list.js:252）——
+// 不清的话，500ms 的「点击后锁定」到期时，_syncActiveFromScroll 会拿着滚动那一刻
+// 留下的旧 _pendingScrollTop 把高亮重新算回滚动经过的那一段，覆盖掉顾客刚点的分类。
+// A2 例外：本用例锁的是既有正确行为（list.js:252 那一行），不是待修的 bug，
+// 所以先红的证据用「临时把这一行注释掉跑一次」代替，跑完必须还原（git diff 为空）。
+test('T15 M15：点分类定位会清掉滚动残留，500ms 锁到期后高亮不被滚动位置抢回去', async () => {
+  const f = fixture()
+  f.page.measureOffsets()
+  f.flush()
+  f.page.onPageScroll({ scrollTop: 560 })
+  await new Promise((r) => setTimeout(r, 150))
+  assert.equal(f.page.data.activeGroupId, 2, '滚动应先把高亮带到经过的那一段')
+  f.page.onSelectCategory({ currentTarget: { dataset: { id: 3 } } })
+  assert.equal(f.page.data.activeGroupId, 3, '点击应立刻定位到第 3 组')
+  await new Promise((r) => setTimeout(r, 600))
+  assert.equal(f.page.data.activeGroupId, 3, '锁到期后高亮不该被滚动经过的旧位置抢回去')
+  f.page._clearTimers()
+})
+
 test('choosing a category while search is shown waits for grouped layout', () => {
   const f = fixture()
   f.page.measureOffsets(); f.flush()
