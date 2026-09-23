@@ -122,6 +122,14 @@ t('S4：CALL_DUE 两分钟宽限——已备好到点但无在途单，过 2 分
   // readyAt 为空时原口径不变：到点即 CALL_DUE，与 hasActiveDelivery 无关
   assert.strictEqual(schedulePhase(tl, { readyAt: null, pickedUp: false, hasActiveDelivery: false }, sh('2026-09-22T11:10:00')), 'CALL_DUE')
 })
+t('R7（复核裁决）：骑手已取货（pickedUp）后即使无在途配送单也恒 CALLED，不会回落 CALL_DUE/LATE', () => {
+  const tl = scheduleTimeline(base, sh('2026-09-22T11:30:00'), D3)
+  const readyAt = sh('2026-09-22T10:50:00')
+  // 已送达：activeOrderId 已释放（hasActiveDelivery:false），但 pickedUp:true——过了两分钟宽限（callAt+4min）仍应 CALLED，不回落 CALL_DUE
+  assert.strictEqual(schedulePhase(tl, { readyAt, pickedUp: true, hasActiveDelivery: false }, sh('2026-09-22T11:10:00')), 'CALLED')
+  // 已送达：即使过了约定送达时刻（scheduledAt+1min）也不应判 LATE，骑手已经把货送到了
+  assert.strictEqual(schedulePhase(tl, { readyAt, pickedUp: true, hasActiveDelivery: false }, sh('2026-09-22T11:31:00')), 'CALLED')
+})
 t('scheduleView 第 5 参（hasActiveDelivery）缺省 false 时原有断言不变', () => {
   const v = scheduleView(base, { deliveryType: 'LOCAL', scheduledAt: sh('2026-09-22T11:30:00'), distanceM: D3, readyAt: null }, sh('2026-09-22T09:00:00'))!
   assert.strictEqual(v.phase, 'WAITING')

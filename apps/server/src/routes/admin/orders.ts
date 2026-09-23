@@ -310,9 +310,12 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       : null
     // S4 复核：这里原来完全没传 pickedUp/hasActiveDelivery（缺省 false）——LATE 判定会把骑手
     // 已取货但过了约定时刻的单也误判成 LATE，CALL_DUE 判定也会把已呼出去的单误判成「未呼出」。
-    // 只在预约单上多查一次是否有在途配送单（activeOrderId 命中）。
+    // 复核裁决 R7：改成与顾客详情（routes/orders.ts）同一取法——查「最后一张」而不是只查
+    // activeOrderId 命中的那张，否则送达后 activeOrderId 被释放，这里会查不到 pickedUpAt，
+    // 把已送达的单误判回 CALL_DUE/LATE（schedulePhase 现在已改成 hasActiveDelivery||pickedUp
+    // 才 CALLED，这里必须能拿到「送达后仍非空」的 pickedUpAt 才配合得上）。
     const scDelivery = order.deliveryType === 'LOCAL' && order.scheduledAt
-      ? await prisma.delivery.findFirst({ where: { activeOrderId: id }, select: { pickedUpAt: true } })
+      ? await prisma.delivery.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' }, select: { pickedUpAt: true, activeOrderId: true } })
       : null
     success(res, {
       ...order,
@@ -321,7 +324,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       remainingRefundable: remainingRefundable(order),
       // 预约送达（2026-09-21）：非预约单或计算不出（缺距离）为 null，见 scheduleView
       schedule: order.deliveryType === 'LOCAL' && order.scheduledAt
-        ? scheduleView(await getLocalSettings(), order, new Date(), !!scDelivery?.pickedUpAt, !!scDelivery)
+        ? scheduleView(await getLocalSettings(), order, new Date(), !!scDelivery?.pickedUpAt, !!scDelivery && scDelivery.activeOrderId === id)
         : null,
     })
   } catch (e) {

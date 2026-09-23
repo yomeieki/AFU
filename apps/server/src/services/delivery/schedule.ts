@@ -119,9 +119,13 @@ export function schedulePhase(
   const t = now.getTime()
   if (!o.pickedUp && t > tl.scheduledAt.getTime()) return 'LATE'
   if (o.readyAt) {
-    if (o.hasActiveDelivery) return 'CALLED'
-    // 已备好、到点、但无在途配送单：过了两跳心跳的宽限仍没呼出去 → CALL_DUE（该呼叫却没呼出去），
-    // 复用「橙 + 该呼叫」这套既有视觉语言，不新增枚举值（小程序读 phase，本批禁改小程序）。
+    // 复核裁决 R7：骑手已取货（pickedUp）之后 activeOrderId 会被释放（markDelivered/回调终态化），
+    // hasActiveDelivery 单独判会让「已送达」的单在到点 2 分钟后回落成 CALL_DUE——骑手都已经把货
+    // 取走了，不可能是「该呼叫却没呼出去」。已取货 = 呼叫这件事必然发生过，恒 CALLED。
+    if (o.hasActiveDelivery || o.pickedUp) return 'CALLED'
+    // 已备好、到点、但无在途配送单且骑手未取货：过了两跳心跳的宽限仍没呼出去 → CALL_DUE
+    // （该呼叫却没呼出去），复用「橙 + 该呼叫」这套既有视觉语言，不新增枚举值（小程序读 phase，
+    // 本批禁改小程序）。
     return t < tl.callAt.getTime() + CALL_GRACE_MS ? 'READY_WAITING' : 'CALL_DUE'
   }
   if (t >= tl.callAt.getTime()) return 'CALL_DUE'
