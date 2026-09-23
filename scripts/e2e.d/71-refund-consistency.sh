@@ -118,13 +118,13 @@ rr68_sched
 assert_eq "71.2d 收尾：补查查无 → FAILED" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RC71_RN2D';")" "FAILED"
 
 echo "-- 71.2(e) 幂等重放：结果未知后顺序重放不二次外呼、不建第二笔 --"
-# 注：idempotencyKey 的 outRefundNo 唯一索引去重命中的是「事务 A 提交前的真并发」窗口
-# （如 initiateRefund 内部两个几乎同时到达、都在读到 order.refunds 尚不含这笔新退款时并发
-# 建行——见 e2e.sh §8「并发双击退款：一成一败」）。本用例的两次 POST 是**顺序**发起：
-# 第一次返回时事务 A 早已提交，refund 行已经是 PENDING（在途），订单级 42205 守卫
-# （order.refunds.some(ACTIVE)）跑在幂等去重判断之前，会先一步拦住第二次请求——
-# 不管 idempotencyKey 是否相同。这与「不确定结果时不重复外呼、不生成第二笔退款」的
-# 安全目标是一致的：只是安全网从「幂等去重返回同一笔」换成了「显式拒绝」。
+# 注（R13，升级轮裁决更新）：事务 A 首句 FOR UPDATE 把同单的两个事务 A 串行化——后到者在
+# 锁内看到先到者刚插入的在途行就报 42205，走不到 outRefundNo 唯一索引那一步；只有同键行已是
+# 终态（SUCCESS/CLOSED/FAILED，activeOrderId 为 NULL）时才会撞索引、复用返回。本用例的两次
+# POST 是**顺序**发起：第一次返回时事务 A 早已提交，refund 行已经是 PENDING（在途），
+# 订单级 42205 守卫（order.refunds.some(ACTIVE)）会先一步拦住第二次请求——不管
+# idempotencyKey 是否相同。这与「不确定结果时不重复外呼、不生成第二笔退款」的安全目标是
+# 一致的：只是安全网从「幂等去重返回同一笔」换成了「显式拒绝」。
 RC71_O2E=$(rc71_mk); [[ -n "$RC71_O2E" ]] && ok "71.2e 造单 #$RC71_O2E" || fail "71.2e 造单失败"
 rc71_create "$RC71_O2E" '{"kind":"error","code":"SYSTEM_ERROR","httpStatus":500}'
 RC71_R=$(req POST "/api/admin/orders/$RC71_O2E/refund" "$AT" '{"amount":100,"idempotencyKey":"k71e-selftest"}')
@@ -493,7 +493,7 @@ assert_eq "71.4e 部分退款 code 0" "$(code "$RC71_R")" "0"
 assert_eq "71.4e 退款行经真实流程终结为 CLOSED（非 SQL）" "$(jq -r .data.refund.status <<<"$RC71_R")" "CLOSED"
 assert_eq "71.4e 无售后单的部分退款 CLOSED 不进页签" "$(rc71_attn $RC71_O4E)" "0"
 
-echo "-- 71.5 R9：事务 A 锁内重验——余额被前一步收口消耗之后，同金额再退必须被拦住 --"
+echo "-- 71.5 余额收口后的顺序再退（事务外检查）--"
 echo "-- 71.5(a) 部分 ABNORMAL 核实成功后，余额已减，原「全额」金额再退 → 42206 --"
 RC71_O5A=$(rc71_mk); [[ -n "$RC71_O5A" ]] && ok "71.5a 造单 #$RC71_O5A" || fail "71.5a 造单失败"
 RC71_AMT5A=$(req GET "/api/admin/orders/$RC71_O5A" "$AT" | jq -r .data.actualAmount)
@@ -508,11 +508,12 @@ assert_eq "71.5a 造出部分 ABNORMAL（记录 100，订单 PAID）" "$(sql "SE
 RC71_R=$(rc71_resolve "$RC71_O5A" "$RC71_RID5A" '{"result":"SUCCESS","verifiedAmount":100,"note":"部分核实成功"}')
 assert_eq "71.5a 核实 code 0" "$(code "$RC71_R")" "0"
 assert_eq "71.5a 订单仍 PAID" "$(order_status $RC71_O5A)" "PAID"
-# 锁内重验命中点：这里仍拿「核实前」算出的全额 A 去发起，而不是核实后的剩余 A-100——
-# 事务 A 头句锁 orders + 锁内重读 remainingRefundable，与事务外传入的 amount 校验会发现
-# 「amount(A) 超过锁内剩余(A-100)」，拒绝，不建新行。
+# 事务外检查命中点：这里仍拿「核实前」算出的全额 A 去发起，而不是核实后的剩余 A-100——
+# initiateRefund 顶部的事务外快照读会看到已经核实成功之后的 remaining=A-100，与传入的
+# amount(A) 比对发现超额，拒绝，不建新行（不涉及事务 A 首句的锁内重验，那部分由 selftest
+# 「用例 R9-1」用真锁等待单独验证）。
 RC71_R=$(req POST "/api/admin/orders/$RC71_O5A/refund" "$AT" "{\"amount\":$RC71_AMT5A}")
-assert_eq "71.5a 用核实前的全额再退 → 42206（锁内 remaining 已减）" "$(code "$RC71_R")" "42206"
+assert_eq "71.5a 用核实前的全额再退 → 42206（事务外检查）" "$(code "$RC71_R")" "42206"
 RC71_ROWS5A=$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$RC71_O5A;")
 assert_eq "71.5a 未建出第二笔退款行" "$RC71_ROWS5A" "1"
 RC71_R=$(req POST "/api/admin/orders/$RC71_O5A/refund" "$AT" "{\"amount\":$((RC71_AMT5A-100))}")
@@ -538,6 +539,56 @@ assert_eq "71.5b 回调晚到落账 ack code 0" "$(code "$RC71_R")" "0"
 assert_eq "71.5b 原行翻 SUCCESS，订单 REFUNDED" "$(order_status $RC71_O5B)" "REFUNDED"
 RC71_R=$(req POST "/api/admin/orders/$RC71_O5B/refund" "$AT" "{\"amount\":$RC71_AMT5B}")
 assert_eq "71.5b 已全额落账后再退同样金额 → 42206" "$(code "$RC71_R")" "42206"
+
+echo "-- 71.5(c) R9：另一连接持锁期间发起 → 锁内重验 42204（真锁等待，不是猜时序）--"
+RC71_O5C=$(rc71_mk); [[ -n "$RC71_O5C" ]] && ok "71.5c 造单 #$RC71_O5C" || fail "71.5c 造单失败"
+RC71_AMT5C=$(req GET "/api/admin/orders/$RC71_O5C" "$AT" | jq -r .data.actualAmount)
+# 后台持锁事务 T：START TRANSACTION + SELECT...FOR UPDATE 拿排他锁，SLEEP(2.5) 持锁
+# （< Prisma 交互事务默认 timeout 5s），随后把 refunded_amount 改满再提交。
+# 不能用 e2e.sh 的 sql()：那是每次调用独立开一个会话，锁不会跨调用持有。
+docker exec food-shop-mysql mysql -ufoodshop_user -pfoodshop_password "$DB_NAME" -N \
+  -e "START TRANSACTION; SELECT id FROM orders WHERE id=$RC71_O5C FOR UPDATE; \
+      SELECT SLEEP(2.5); UPDATE orders SET refunded_amount=$RC71_AMT5C WHERE id=$RC71_O5C; COMMIT;" \
+  >/dev/null 2>&1 &
+RC71_TPID5C=$!
+
+# 轮询确认 T 已经真的持有排他锁（不是假设，是查 performance_schema）
+RC71_LOCKED5C=0
+for _i in $(seq 1 15); do
+  RC71_N=$(sql "SELECT COUNT(*) FROM performance_schema.data_locks WHERE OBJECT_NAME='orders' AND LOCK_TYPE='RECORD' AND LOCK_MODE LIKE 'X%' AND LOCK_DATA='$RC71_O5C';")
+  if [[ "$RC71_N" -ge 1 ]]; then RC71_LOCKED5C=1; break; fi
+  sleep 0.1
+done
+if [[ "$RC71_LOCKED5C" != "1" ]]; then
+  fail "71.5c 前置：T 未在 1.5s 内持锁（时序未成立，非被测逻辑）"
+  wait "$RC71_TPID5C" 2>/dev/null
+else
+  ok "71.5c T 已持排他锁"
+  RC71_TMP5C=$(mktemp)
+  ( req POST "/api/admin/orders/$RC71_O5C/refund" "$AT" '{"amount":100,"reason":"71.5c"}' > "$RC71_TMP5C" ) &
+  RC71_RPID5C=$!
+
+  RC71_WAITING5C=0
+  for _i in $(seq 1 15); do
+    RC71_N=$(sql "SELECT COUNT(*) FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks r ON r.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE r.OBJECT_NAME='orders' AND r.LOCK_DATA='$RC71_O5C';")
+    if [[ "$RC71_N" -ge 1 ]]; then RC71_WAITING5C=1; break; fi
+    sleep 0.1
+  done
+  if [[ "$RC71_WAITING5C" != "1" ]]; then
+    fail "71.5c 前置：1.5s 内未观察到锁等待（时序未成立，非被测逻辑）"
+  else
+    ok "71.5c 观察到锁等待（事务外检查已通过、事务 A 阻塞在 orders 行）"
+  fi
+
+  wait "$RC71_RPID5C" 2>/dev/null
+  wait "$RC71_TPID5C" 2>/dev/null
+  RC71_R=$(cat "$RC71_TMP5C")
+  assert_eq "71.5c 锁内重验命中 → 42204" "$(code "$RC71_R")" "42204"
+  assert_eq "71.5c 未建出退款行" "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$RC71_O5C;")" "0"
+  assert_eq "71.5c 订单仍 PAID" "$(order_status $RC71_O5C)" "PAID"
+  assert_eq "71.5c refunded_amount 为 T 写入值" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O5C;")" "$RC71_AMT5C"
+  rm -f "$RC71_TMP5C"
+fi
 
 echo "-- 71 分片收尾：本分片名下订单不留任何在途退款行，全部经真实流程收口（R3：不许 SQL 兜底改状态）--"
 RC71_ORDER_LIST=$(tr '\n' ',' < "$RC71_ORDERS_FILE" | sed 's/,$//')
