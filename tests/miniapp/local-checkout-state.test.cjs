@@ -137,6 +137,20 @@ test('打烊：预约关 → 走 blockReason 阻塞；预约开且尽快模式 �
   assert.deepEqual(checkoutAction(on({ closedNow: true, scheduleAvailable: false, blockReason: '明天 09:00 营业' })), { disabled: true, text: '暂不可配送', amountState: 'blocked', action: 'none' })
   assert.deepEqual(checkoutAction(on({ closedNow: true, scheduleAvailable: true, scheduleMode: 'ASAP' })), { disabled: true, text: '请选择送达时段', amountState: 'pending', action: 'slot' })
 })
+
+// M4（复审阻塞）：打烊 + 预约开 + 尽快模式时，超范围/未达起送没有「送达时间」可选，
+// 业务阻塞必须优先于「只能预约」判定，否则顾客会卡在一个不提示原因、点了也没反应的按钮上。
+test('T4a M4：打烊+预约开+尽快模式，blockReason 存在时优先阻塞，不落进 NO_SLOT', () => {
+  assert.deepEqual(
+    checkoutAction(on({ closedNow: true, scheduleAvailable: true, scheduleMode: 'ASAP', blockReason: '还差 ¥52.50 起送' })),
+    { disabled: true, text: '暂不可配送', amountState: 'blocked', action: 'none' }
+  )
+  // 没有 blockReason 时仍是老行为：NO_SLOT
+  assert.deepEqual(
+    checkoutAction(on({ closedNow: true, scheduleAvailable: true, scheduleMode: 'ASAP' })),
+    { disabled: true, text: '请选择送达时段', amountState: 'pending', action: 'slot' }
+  )
+})
 test('不传新字段：八种旧结果逐字节一致', () => {
   assert.deepEqual(checkoutAction(on({})), { disabled: false, text: '提交订单', amountState: 'ready', action: 'submit' })
   assert.deepEqual(checkoutAction(on({ hasTableware: false })), { disabled: false, text: '请选择餐具', amountState: 'ready', action: 'tableware' })

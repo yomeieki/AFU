@@ -69,9 +69,15 @@ function checkoutAction(s) {
   // ── 预约送达（2026-09-21 §5.2）。closedNow = 报价说此刻非营业时间：
   //    预约关着 → 交给 blockReason 走老路（页面已把 nextOpenText 写进 blockReason）；
   //    预约开着 → 不阻塞，但只能预约：尽快模式下按钮就是「请选择送达时段」
+  //
+  // 业务阻塞优先于「只能预约」（M4，2026-09-23 复审阻塞）：超范围/未达起送时没有
+  // 「送达时间」可选——那两种情形下 confirm.wxml 的送达时间卡本就不渲染（wx:if 要求
+  // !blockReason），先判 NO_SLOT 会把顾客晾在一个「请选择送达时段」却根本点不出弹层
+  // （没有距离可拉时段列表）的死按钮上，看不出真正原因也没有出口。blockReason 非空
+  // 时统一走「暂不可配送」，原因和出口（换地址/改邮寄）由 confirm.wxml 的阻塞条给。
   var sched = st.scheduleMode === 'SCHEDULED'
-  if (st.closedNow && st.scheduleAvailable && !sched) return result(true, TEXT.NO_SLOT, 'pending', 'slot')
   if (st.blockReason) return result(true, TEXT.BLOCKED, 'blocked', 'none')
+  if (st.closedNow && st.scheduleAvailable && !sched) return result(true, TEXT.NO_SLOT, 'pending', 'slot')
   // 报价还没回来（或应付金额算不出来）时不放行。这一格也兜住了「地址刚换、
   // 旧 token 已作废、新报价还在路上」那一瞬间——页面调 invalidateCheckout 把
   // quoteToken 置空之后，这里立刻变成不可提交，不依赖网络返回的时序。
