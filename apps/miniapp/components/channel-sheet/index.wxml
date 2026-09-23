@@ -1,0 +1,14 @@
+<!-- 渠道切换弹层：主页与分类页共用。遮罩 catchtouchmove 防止底下 scroll-view 跟着滚（与 sku-popup 同一套写法）。 -->
+<view wx:if="{{open}}" class="channel-mask" bindtap="onClose" catchtouchmove="noop">
+  <view class="channel-sheet" catchtap="noop">
+    <view class="channel-sheet-title">购物方式</view>
+    <view class="channel-option {{channel === 'LOCAL' ? 'active' : ''}}" hover-class="channel-option-hover" bindtap="onPick" data-channel="LOCAL">
+      <text class="channel-option-name">同城配送</text>
+      <text wx:if="{{channel === 'LOCAL'}}" class="channel-option-check">✓</text>
+    </view>
+    <view class="channel-option {{channel === 'EXPRESS' ? 'active' : ''}}" hover-class="channel-option-hover" bindtap="onPick" data-channel="EXPRESS">
+      <text class="channel-option-name">全国邮寄</text>
+      <text wx:if="{{channel === 'EXPRESS'}}" class="channel-option-check">✓</text>
+    </view>
+  </view>
+</view>

@@ -3,7 +3,7 @@
 //
 // 两边的骨架相同（顶栏 → 一块头部 → 分类 → 商品网格），差别只在：
 //   EXPRESS：轮播 Banner + 推荐商品，点进商品详情
-//   LOCAL  ：门店头（营业状态/配送规则/阻塞通知）+ 今日现拌 + 底部购物车条
+//   LOCAL  ：门店头（营业状态/配送规则/阻塞通知）+ 今日推荐 + 底部购物车条
 //
 // 同城下商品卡带「+」快速加购，整条流程（拉详情 → 弹规格 → 加购 → 提示）
 // 在 components/local-sku-picker 里，与分类页共用同一份。
@@ -30,6 +30,7 @@ Page({
     channel: 'EXPRESS',
     channelLabel: '全国邮寄',
     channelRight: 0,
+    channelSheetOpen: false,
     // LOCAL 专用
     meta: null,
     mode: 'DELIVERY',
@@ -351,6 +352,25 @@ Page({
   onGoExpress() {
     app.setShoppingChannel('EXPRESS')
     this.loadData()
+  },
+
+  // ── 渠道标识与切换弹层（门店头右端，与分类页共用同一个 channel-sheet 组件）────────
+  // 选中即切渠道并重新拉本页数据（不跳页）。去同城走 app.gateLocalChannel()（位置许可 → 定渠道），
+  // 本页不自己问许可；去邮寄与 onGoExpress 同一条路。
+  openChannelSheet() {
+    this.setData({ channelSheetOpen: true })
+  },
+  closeChannelSheet() {
+    this.setData({ channelSheetOpen: false })
+  },
+  noop() {},
+  onPickChannel(e) {
+    var target = e.detail && e.detail.channel
+    this.closeChannelSheet()
+    if (!target || target === this.data.channel) return
+    if (target === 'EXPRESS') { this.onGoExpress(); return }
+    var self = this
+    app.gateLocalChannel().then(function(ok) { if (ok) self.loadData() })
   },
 
   // Navigate to product list filtered by categoryId.

@@ -51,6 +51,13 @@ export function isValidPickupSlot(s: LocalDeliverySettings, pickupAt: Date, now:
   return buildPickupSlots(s, now).days.some((d) => d.slots.some((x) => x.startAt === iso))
 }
 
+/** 页头没有下单时刻只有「此刻」的保守最早可取文案：与 earliestScheduleText 同构。不可约时返回空串 */
+export function earliestPickupText(s: LocalDeliverySettings, now: Date = new Date()): string {
+  const v = buildPickupSlots(s, now)
+  if (v.blocked || !v.earliestAt) return ''
+  return `最早${slotLabel(new Date(v.earliestAt), v.slotMinutes, now)} 可取`
+}
+
 /** 自取优惠（分）。PERCENT: 小计 − round(小计 × value/100)；FIXED: min(value, 小计) */
 export function pickupDiscountOf(s: LocalDeliverySettings, subtotalFen: number): number {
   const d = s.pickup.discount

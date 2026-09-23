@@ -16,6 +16,16 @@ function pickupMeta(meta) {
   return meta && meta.pickup ? meta.pickup : null
 }
 
+/** 不在营业时段（打烊或午间休息），不看 isOpen——isOpen 会被外送暂停/关闭带偏，closedKind 只看时段与休业 */
+function outOfHours(meta) {
+  return !!(meta.closedKind && meta.closedKind !== 'OPEN')
+}
+
+/** 「已打烊」还是「午间休息」，两段营业时间中间那段是午休（PO 2026-09-08），不是打烊 */
+function closedLabel(meta) {
+  return meta.closedKind === 'BREAK' ? '午间休息' : '已打烊'
+}
+
 /** 「休息中，10月08日后恢复」；until 为空只说「休息中」；无休业返回 '' */
 function holidayText(meta) {
   var h = meta && meta.holiday
@@ -25,7 +35,8 @@ function holidayText(meta) {
 
 /**
  * 店头那颗状态胶囊。
- * 休业压过一切；自取看 pickup 节；外送沿用原判定（暂停优先于打烊，两段之间是午间休息）。
+ * 休业压过一切；自取与外送同一套口径：暂停优先，营业时间外都是「可预约」（打烊/午休 · 可预约）。
+ * 自取只看自己的营业时段（closedKind），不受外送暂停/关闭影响——自取有自己的暂停开关（2026-09-23）。
  * meta 还没回来时给「暂未营业」而不是空字符串——空胶囊是个视觉噪点，且会让人以为在营业。
  */
 function storeStatusOf(meta, mode) {
@@ -35,11 +46,12 @@ function storeStatusOf(meta, mode) {
     var pk = pickupMeta(meta)
     if (!pk || !pk.enabled) return { tone: 'closed', label: '暂未开通' }
     if (pk.paused) return { tone: 'paused', label: '暂停接单' }
-    return { tone: 'open', label: '可预约' }
+    if (outOfHours(meta)) return { tone: 'schedule', label: closedLabel(meta) + ' · 可预约' }
+    return { tone: 'open', label: '营业中' }
   }
   if (meta.paused) return { tone: 'paused', label: '暂停接单' }
   // 打烊但预约开着（2026-09-21 预约送达 §5.1）：不是灰胶囊，是「可预约」——顾客现在下单是预约配送
-  if (deliveryScheduleOnly(meta)) return { tone: 'schedule', label: '已打烊 · 可预约' }
+  if (deliveryScheduleOnly(meta)) return { tone: 'schedule', label: closedLabel(meta) + ' · 可预约' }
   // 两段营业时间中间那段是「午间休息」，不是打烊（PO 2026-09-08）
   if (meta.enabled && !meta.isOpen && meta.closedKind === 'BREAK') return { tone: 'closed', label: '午间休息' }
   if (!meta.enabled || !meta.isOpen) return { tone: 'closed', label: '已打烊' }
@@ -60,7 +72,10 @@ function headNoticeOf(meta, mode) {
     if (pk.paused) {
       return { text: '自取暂停接单' + (pk.paused.reason ? '：' + pk.paused.reason : ''), blocking: true }
     }
-    if (meta.closedKind && meta.closedKind !== 'OPEN') return { text: '当前非营业时间，可预约后续时段', blocking: false }
+    if (outOfHours(meta)) {
+      var earliestPickup = pk.earliestPickupText
+      return { text: '现在下单为预约自取' + (earliestPickup ? '，' + earliestPickup : ''), blocking: false }
+    }
     return { text: '', blocking: false }
   }
   if (!meta.enabled) return { text: '同城配送即将开通', blocking: true }
@@ -154,13 +169,13 @@ function resolveLocalMode(meta, current) {
   return mode
 }
 
-// 切换栏「自取」下的小字（PO 2026-09-11）：顶部胶囊已经说了营业状态，切换栏不再常驻状态字；
-// 只在店铺休息（打烊/午间休息，非休业）而自取仍可预约时补一句「可预约」，其它情况为空。
+// 切换栏「自取」下的小字（PO 2026-09-11，2026-09-23 改为只看自取自己的营业时段）：
+// 顶部胶囊已经说了营业状态，切换栏不再常驻状态字；只在自取不在营业时段（打烊/午间休息，非休业、非暂停、
+// 已开通）时补一句「可预约」——不再依赖外送那一侧的状态，自取有自己的暂停/开通开关。
 function pickupModeHint(meta) {
   if (!meta || meta.holiday) return ''
-  var d = storeStatusOf(meta, 'DELIVERY')
-  var p = storeStatusOf(meta, 'PICKUP')
-  return d.tone === 'closed' && p.tone === 'open' ? '（可预约）' : ''
+  if (!modeAvailable(meta, 'PICKUP')) return ''
+  return outOfHours(meta) ? '（可预约）' : ''
 }
 
 /** 外送此刻只能预约：开着、没暂停、没休业、不在营业时段、预约开着。营业中或预约关着都返回 false */
@@ -169,7 +184,8 @@ function deliveryScheduleOnly(meta) {
   var d = meta.delivery
   return !!(d && d.scheduleEnabled && !meta.isOpen)
 }
-// 切换栏「外送」下的小字：只在打烊而预约可用时补「（可预约）」，与自取的 pickupModeHint 同一取向
+// 切换栏「外送」下的小字：只在打烊而预约可用时补「（可预约）」——与自取的 pickupModeHint 各自只看
+// 自己这一侧的营业时段，两侧互不依赖（2026-09-23 起 pickupModeHint 不再读外送状态）
 function deliveryModeHint(meta) {
   return deliveryScheduleOnly(meta) ? '（可预约）' : ''
 }

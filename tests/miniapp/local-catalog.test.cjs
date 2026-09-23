@@ -75,15 +75,25 @@ test('不传 mode 时三段判断与改前逐字节一致', function () {
   assert.deepEqual(checkoutStateOf(OPEN, 1, 3000, false), { gap: 1000, disabled: true, text: '还差 ¥10.00 起送' })
 })
 
-test('自取模式的店头状态与通知：未开通 / 暂停 / 可预约；营业时间外不阻塞', function () {
-  assert.deepEqual(storeStatusOf(PK, 'PICKUP'), { tone: 'open', label: '可预约' })
+test('自取模式的店头状态与通知：未开通 / 暂停 / 营业中 / 打烊或午休 · 可预约', function () {
+  assert.deepEqual(storeStatusOf(PK, 'PICKUP'), { tone: 'open', label: '营业中' })
   assert.deepEqual(headNoticeOf(PK, 'PICKUP'), { text: '', blocking: false })
+  // 营业时间外：胶囊「已打烊 · 可预约」/「午间休息 · 可预约」，提示带最早可取时段（新服务端）或不带（老服务端）
+  assert.deepEqual(storeStatusOf(Object.assign({}, PK, { closedKind: 'CLOSED' }), 'PICKUP'),
+    { tone: 'schedule', label: '已打烊 · 可预约' })
+  assert.deepEqual(storeStatusOf(Object.assign({}, PK, { closedKind: 'BREAK' }), 'PICKUP'),
+    { tone: 'schedule', label: '午间休息 · 可预约' })
+  assert.deepEqual(headNoticeOf(Object.assign({}, PK, {
+    closedKind: 'CLOSED',
+    pickup: Object.assign({}, PK.pickup, { earliestPickupText: '最早明天 10:30–11:00 可取' }),
+  }), 'PICKUP'), { text: '现在下单为预约自取，最早明天 10:30–11:00 可取', blocking: false })
   assert.deepEqual(headNoticeOf(Object.assign({}, PK, { closedKind: 'CLOSED' }), 'PICKUP'),
-    { text: '当前非营业时间，可预约后续时段', blocking: false })
+    { text: '现在下单为预约自取', blocking: false })
   const off = Object.assign({}, PK, { pickup: Object.assign({}, PK.pickup, { enabled: false }) })
   assert.deepEqual(storeStatusOf(off, 'PICKUP'), { tone: 'closed', label: '暂未开通' })
   assert.deepEqual(headNoticeOf(off, 'PICKUP'), { text: '到店自取暂未开通', blocking: true })
-  const paused = Object.assign({}, PK, { pickup: Object.assign({}, PK.pickup, { paused: { reason: '后厨忙' } }) })
+  // 暂停优先于打烊——即使 closedKind 非 OPEN，暂停胶囊/文案不能被打烊/午休盖过
+  const paused = Object.assign({}, PK, { closedKind: 'CLOSED', pickup: Object.assign({}, PK.pickup, { paused: { reason: '后厨忙' } }) })
   assert.deepEqual(storeStatusOf(paused, 'PICKUP'), { tone: 'paused', label: '暂停接单' })
   assert.deepEqual(headNoticeOf(paused, 'PICKUP'), { text: '自取暂停接单：后厨忙', blocking: true })
 })
@@ -124,14 +134,26 @@ test('替代出路：本侧阻塞时给另一侧，另一侧也不可用时给 n
   assert.equal(altModeOf(Object.assign({}, PK, { pickup: Object.assign({}, PK.pickup, { enabled: false }) }), 'PICKUP'), 'DELIVERY')
 })
 
-// 切换栏小字（PO 2026-09-11）：顶部胶囊已有状态，只在店休而自取可预约时提示「可预约」
-test('pickupModeHint：店休且自取可预约才显示「可预约」，营业中/休业/自取暂停都为空', function () {
+// 切换栏小字（PO 2026-09-11，2026-09-23 改为只看自取自己的营业时段）：顶部胶囊已有状态，
+// 只在自取不在营业时段时提示「可预约」——不再依赖外送那一侧的状态
+test('pickupModeHint：自取不在营业时段才显示「可预约」，营业中/休业/自取暂停/未开通都为空', function () {
   assert.equal(pickupModeHint(PK), '')
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, closedKind: 'CLOSED' })), '（可预约）')
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, closedKind: 'BREAK' })), '（可预约）')
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, holiday: { until: null, reason: '装修' } })), '')
   assert.equal(pickupModeHint(Object.assign({}, PK, { isOpen: false, pickup: Object.assign({}, PK.pickup, { paused: { reason: 'x', until: null } }) })), '')
   assert.equal(pickupModeHint(null), '')
+  // 回归场景：预约送达上线后外送打烊时 tone 是 'schedule'（不是 'closed'）——旧实现靠比较两侧 tone
+  // 会在这里漏判，新实现只看自取自己的 closedKind，不受影响
+  assert.equal(pickupModeHint(Object.assign({}, PK, {
+    isOpen: false, closedKind: 'CLOSED', delivery: { scheduleEnabled: true, earliestScheduleText: '' },
+  })), '（可预约）')
+  // 外送暂停时（旧实现靠外送 tone==='closed' 才会漏判成 'paused'，同样与自取无关）
+  assert.equal(pickupModeHint(Object.assign({}, PK, { closedKind: 'BREAK', paused: { reason: 'x' } })), '（可预约）')
+  // 自取本身未开通：即使打烊也不该提示「可预约」
+  assert.equal(pickupModeHint(Object.assign({}, PK, {
+    closedKind: 'CLOSED', pickup: Object.assign({}, PK.pickup, { enabled: false }),
+  })), '')
 })
 
 
@@ -145,10 +167,17 @@ test('打烊 + 预约开：胶囊「已打烊 · 可预约」、通知软提示�
   assert.equal(deliveryModeHint(closedSched), '（可预约）')
   assert.equal(deliveryScheduleOnly(closedSched), true)
 })
+test('午休 + 预约开：胶囊「午间休息 · 可预约」（不是「已打烊」）', () => {
+  const breakSched = Object.assign({}, closedSched, { closedKind: 'BREAK' })
+  assert.deepEqual(storeStatusOf(breakSched, 'DELIVERY'), { tone: 'schedule', label: '午间休息 · 可预约' })
+})
 test('打烊 + 预约关：与改前逐字节一致（阻塞）', () => {
   assert.deepEqual(storeStatusOf(closedNoSched, 'DELIVERY'), { tone: 'closed', label: '已打烊' })
   assert.deepEqual(headNoticeOf(closedNoSched, 'DELIVERY'), { text: '明天 09:00 营业', blocking: true })
   assert.equal(deliveryModeHint(closedNoSched), '')
+  // 午休 + 预约关：仍是灰胶囊「午间休息」，不因预约关着而变成「已打烊」
+  assert.deepEqual(storeStatusOf(Object.assign({}, closedNoSched, { closedKind: 'BREAK' }), 'DELIVERY'),
+    { tone: 'closed', label: '午间休息' })
 })
 test('营业中 / 暂停 / 休业：预约开关不影响原判定', () => {
   assert.deepEqual(storeStatusOf(openMeta, 'DELIVERY'), { tone: 'open', label: '营业中' })

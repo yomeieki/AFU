@@ -650,7 +650,8 @@ Page({
   },
   noop() {},
   onPickChannel(e) {
-    var target = e.currentTarget.dataset.channel
+    // channel-sheet 组件发的事件带 e.detail.channel；测试与旧调用可能直接传 currentTarget.dataset。
+    var target = (e.detail && e.detail.channel) || (e.currentTarget && e.currentTarget.dataset.channel)
     this.closeChannelSheet()
     if (target === this.data.channel) return
     if (target === 'EXPRESS') { this.onGoExpress(); return }

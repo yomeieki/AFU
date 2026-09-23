@@ -18,7 +18,8 @@ Component({
     meta: { type: null, value: null },
     // 同城子模式 'DELIVERY' | 'PICKUP'
     mode: { type: String, value: 'DELIVERY' },
-    // 渠道标识：空 = 不画（主页用顶栏那枚，不重复画）；分类页传当前渠道 'LOCAL' | 'EXPRESS'
+    // 渠道标识：空 = 不画；主页与分类页现在都传当前渠道 'LOCAL' | 'EXPRESS'（2026-09-23 起
+    // 主页也在门店头第一行右端画这枚标识，与分类页共用同一个 channel-sheet 切换弹层）
     channel: { type: String, value: '' },
   },
   data: {

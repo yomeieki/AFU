@@ -93,7 +93,7 @@ export function isValidDeliverySlot(s: LocalDeliverySettings, scheduledAt: Date,
 export function earliestScheduleText(s: LocalDeliverySettings, now: Date = new Date()): string {
   const v = buildDeliverySlots(s, Math.round(s.radiusKm * 1000), now)
   if (v.blocked || !v.earliestAt) return ''
-  return `最早${slotLabel(new Date(v.earliestAt), v.slotMinutes, now)}送达`
+  return `最早${slotLabel(new Date(v.earliestAt), v.slotMinutes, now)} 送达`
 }
 
 /** 现在呼叫预计几点送到 = now + 呼叫到取走 + 路上 */

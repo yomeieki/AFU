@@ -92,8 +92,8 @@ t('未开通 blocked=DISABLED；isValidDeliverySlot 精确命中格起点', () =
   assert.strictEqual(isValidDeliverySlot(base, sh('2026-09-22T11:07:00'), D3, sh('2026-09-22T09:00:00')), false)
   assert.strictEqual(isValidDeliverySlot(base, sh('2026-09-22T10:00:00'), D3, sh('2026-09-22T09:00:00')), false)
 })
-t('earliestScheduleText 按半径 5 km 算最坏路上 20 分：09:00 看首格 11:00 → 「最早今天 11:00–11:30送达」', () => {
-  assert.strictEqual(earliestScheduleText(base, sh('2026-09-22T09:00:00')), '最早今天 11:00–11:30送达')
+t('earliestScheduleText 按半径 5 km 算最坏路上 20 分：09:00 看首格 11:00 → 「最早今天 11:00–11:30 送达」（送达前带空格）', () => {
+  assert.strictEqual(earliestScheduleText(base, sh('2026-09-22T09:00:00')), '最早今天 11:00–11:30 送达')
 })
 t('phase 七态按时刻切换', () => {
   const tl = scheduleTimeline(base, sh('2026-09-22T11:30:00'), D3)

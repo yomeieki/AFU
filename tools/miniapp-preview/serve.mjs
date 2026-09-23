@@ -35,9 +35,10 @@ const PAGE_COMPONENTS = {
   'order-list': ['empty-state', 'order-status-tag'],
   'address-list': ['empty-state'],
   'local-index': ['sku-popup', 'empty-state'],
-  // 同城主页（pages/index 在 LOCAL 渠道）：门店头 + 外送/自取切换栏
-  'index-local': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar'],
-  'index-local-pickup': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar'],
+  // 同城主页（pages/index 在 LOCAL 渠道）：门店头 + 外送/自取切换栏 + 渠道标识
+  // （closed/schedule 两个镜像共用 index-local.generated.css，见 PAGE_WXSS 下方注释）
+  'index-local': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar', 'channel-badge'],
+  'index-local-pickup': ['empty-state', 'local-store-header', 'local-mode-bar', 'local-cart-bar', 'promo-bar', 'channel-badge'],
   'local-pickup': ['checkout-benefits', 'tableware-sheet'],
   'local-pickup-picker': ['checkout-benefits', 'slot-picker'],
   'order-confirm': ['checkout-benefits'],

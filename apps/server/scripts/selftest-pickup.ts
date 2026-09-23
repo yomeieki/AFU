@@ -4,7 +4,7 @@
  */
 import assert from 'assert'
 import { DEFAULT_LOCAL_SETTINGS, sanitizeLocalSettings } from '../src/services/local-settings'
-import { buildPickupSlots, prepStartAt, pickupPrepMinutes, isValidPickupSlot, pickupDiscountOf, pickupSlotLabel, pickupTicketLabel } from '../src/services/pickup'
+import { buildPickupSlots, prepStartAt, pickupPrepMinutes, isValidPickupSlot, pickupDiscountOf, pickupSlotLabel, pickupTicketLabel, earliestPickupText } from '../src/services/pickup'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -101,6 +101,25 @@ t('小票取餐文案：绝对日期 + 星期；今天不盖戳、明天「明�
   assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-11T12:00:00'), 30, now), { text: '9月11日（周五）12:00–12:30', stamp: '' })
   assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-12T12:00:00'), 30, now), { text: '9月12日（周六）12:00–12:30', stamp: '明日单' })
   assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-13T18:00:00'), 20, now), { text: '9月13日（周日）18:00–18:20', stamp: '9月13日单' })
+})
+
+t('earliestPickupText：15:10 下单看晚市首格 → 「最早今天 17:00–17:30 可取」', () => {
+  assert.strictEqual(earliestPickupText(base, sh('2026-09-11T15:10:00')), '最早今天 17:00–17:30 可取')
+})
+t('earliestPickupText：22:39 下单今天已收工 → 「最早明天 10:00–10:30 可取」', () => {
+  assert.strictEqual(earliestPickupText(base, sh('2026-09-11T22:39:00')), '最早明天 10:00–10:30 可取')
+})
+t('earliestPickupText：09:00 下单今天首格 → 「最早今天 10:00–10:30 可取」', () => {
+  assert.strictEqual(earliestPickupText(base, sh('2026-09-11T09:00:00')), '最早今天 10:00–10:30 可取')
+})
+t('earliestPickupText：自取未开通 → 空串', () => {
+  assert.strictEqual(earliestPickupText({ ...base, pickup: { ...base.pickup, enabled: false } }, sh('2026-09-11T09:00:00')), '')
+})
+t('earliestPickupText：自取暂停（until:null）→ 空串', () => {
+  assert.strictEqual(earliestPickupText({ ...base, pickup: { ...base.pickup, paused: { until: null, reason: '忙' } } }, sh('2026-09-11T09:00:00')), '')
+})
+t('earliestPickupText：休业覆盖两天 → 空串', () => {
+  assert.strictEqual(earliestPickupText({ ...base, holiday: { until: '2026-09-20', reason: '装修' } }, sh('2026-09-11T09:00:00')), '')
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

@@ -153,20 +153,8 @@
   <local-sku-picker wx:if="{{channel === 'LOCAL'}}" id="local-sku-picker" bind:added="onAdded" />
 </view>
 
-<!-- 渠道切换弹层：两侧标识共用。遮罩 catchtouchmove 防止底下 scroll-view 跟着滚（与 sku-popup 同一套写法）。 -->
-<view wx:if="{{channelSheetOpen}}" class="channel-mask" bindtap="closeChannelSheet" catchtouchmove="noop">
-  <view class="channel-sheet" catchtap="noop">
-    <view class="channel-sheet-title">购物方式</view>
-    <view class="channel-option {{channel === 'LOCAL' ? 'active' : ''}}" hover-class="channel-option-hover" bindtap="onPickChannel" data-channel="LOCAL">
-      <text class="channel-option-name">同城配送</text>
-      <text wx:if="{{channel === 'LOCAL'}}" class="channel-option-check">✓</text>
-    </view>
-    <view class="channel-option {{channel === 'EXPRESS' ? 'active' : ''}}" hover-class="channel-option-hover" bindtap="onPickChannel" data-channel="EXPRESS">
-      <text class="channel-option-name">全国邮寄</text>
-      <text wx:if="{{channel === 'EXPRESS'}}" class="channel-option-check">✓</text>
-    </view>
-  </view>
-</view>
+<!-- 渠道切换弹层：两侧标识共用，主页与分类页共用同一个组件。 -->
+<channel-sheet open="{{channelSheetOpen}}" channel="{{channel}}" bind:pick="onPickChannel" bind:close="closeChannelSheet" />
 
 <!-- 同城购物车条。fixed 在原生 tabBar 之上，车空时组件自己不渲染、不占位。 -->
 <local-cart-bar
