@@ -908,6 +908,18 @@ Page({
       })
       return
     }
+    // M7（复审建议，纳入本批）：营业中尽快模式提交时恰好跨过打烊时刻，服务端拒 42222。
+    // 预约开着时其实还有路可走——原来一律写死 blockReason、隐藏送达时间卡，逼顾客
+    // 只能点「改用全国邮寄」，明明预约可用却没有入口。预约关着才走老的阻塞文案。
+    if (code === 42222 && this.data.scheduleAvailable) {
+      wx.showToast({ title: '已到打烊时间，已为您改为预约送达，请确认送达时段', icon: 'none', duration: 2500 })
+      // 先刷 meta（同 onRetryQuote）：万一店铺状态又变了，头条通知不该停在旧结论上。
+      // 重新报价会让 refreshQuote 的成功分支判出 isOpen=false，自动切 SCHEDULED 并
+      // 按 :392-393 预选最早格（S8），不需要在这里另写一套判断。
+      this.loadMeta()
+      this.refreshQuote('retry')
+      return
+    }
     if (code === 42220 || code === 42222 || code === 42226) {
       this.setData({ blockReason: err.message, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null, headNotice: err.message, headBlocking: true })
       this.syncAction()

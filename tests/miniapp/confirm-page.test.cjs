@@ -536,6 +536,52 @@ test('T4d M4b 出路：加够金额后重新报价成功，自动切预约并预
   assert.equal(page.data.action.text, '预约下单')
 })
 
+// M7（复审建议，纳入本批）：营业中尽快模式跨过打烊时刻再提交，服务端会拒 42222
+// 「当前非营业时间」。预约开着时其实还有路可走（切预约），原来直接写死 blockReason、
+// 隐藏送达时间卡，逼顾客只能去「改用全国邮寄」——明明预约可用却没有入口。
+// 店主决定 D2：toast 文案「已到打烊时间，已为您改为预约送达，请确认送达时段」。
+test('T7a M7：营业中提交撞上 42222 且预约开着，自动改判打烊并重新报价切预约', async function () {
+  const { ctx, page } = loadConfirm({
+    meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quoteSeq: [
+      defaultQuote({ isOpen: true }),
+      defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
+    ],
+    createOrderFail: { code: 42222, message: '当前非营业时间，明天 09:00 营业' },
+  })
+  await settleAll()
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  assert.equal(page.data.action.action, 'submit')
+  page.onSubmit.call(page)
+  await settleAll(20)
+  assert.equal(page.data.blockReason, '')
+  assert.equal(page.data.headBlocking, false)
+  assert.equal(page.data.scheduleMode, 'SCHEDULED')
+  assert.equal(page.data.closedNow, true)
+  assert.ok(page.data.slotSelected, '应已自动选中最早格')
+  assert.equal(page.data.action.text, '预约下单')
+  assert.ok(ctx.urls.filter((u) => /\/local\/quote/.test(u)).length >= 2, ctx.urls.join(' '))
+})
+
+// T7b 回归：预约没开着时，42222 仍走老路——直接阻塞、引导去邮寄，不做任何自动切换。
+test('T7b M7 回归：预约未开通时 42222 仍是老的阻塞行为', async function () {
+  const { page } = loadConfirm({
+    meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: false, slotMinutes: 30, earliestScheduleText: '' } }),
+    quoteSeq: [
+      defaultQuote({ isOpen: true }),
+      defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
+    ],
+    createOrderFail: { code: 42222, message: '当前非营业时间，明天 09:00 营业' },
+  })
+  await settleAll()
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  page.onSubmit.call(page)
+  await settleAll()
+  assert.equal(page.data.blockReason, '当前非营业时间，明天 09:00 营业')
+  assert.equal(page.data.headBlocking, true)
+  assert.equal(page.data.action.amountState, 'blocked')
+})
+
 test('onSubmit 在 action:slot 时只打开选择器，不提交订单', async function () {
   const { ctx, page } = loadConfirm({
     meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
