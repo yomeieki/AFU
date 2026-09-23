@@ -69,8 +69,13 @@ export interface TicketOrderInput {
    *  所以现在这里不会再有混淆对象——但字段名仍然刻意叫 announceNo，别改回 seq。 */
   // ── 自取专属（channel==='PICKUP'）──
   pickupAt?: Date | null
-  /** 「9月12日（周六）12:00–12:30」，由调用方用 services/pickup 的 pickupTicketLabel 算好传进来（本文件不算时区） */
+  /** 「9月12日（周六）12:00–12:30」，由调用方用 services/pickup 的 pickupTicketLabel 算好传进来（本文件不算时区）。
+   *  仍保留给非票面场景引用；票面本身改用下面 pickupSlotDate/pickupSlotTime 拆行（S7，店主决定 D3） */
   pickupSlotLabel?: string | null
+  /** S7（店主决定 D3，2026-09-23 一起修）：拆开的日期段与时段段，理由同 scheduleSlotDate/scheduleSlotTime——
+   *  整串塞进 <B> 放大行会超真机 16 列可用宽度（BIG_LINE_WIDTH），票面改成日期普通字号、时段单独放大 */
+  pickupSlotDate?: string | null
+  pickupSlotTime?: string | null
   /** 票头戳：'' = 今天取（不盖），'明日单' / '9月13日单' = 不是今天取，提醒别今天做 */
   pickupDayStamp?: string | null
   /** 自取优惠（分）。>0 时取餐联在合计与券之间打一行；厨房联不打 */
@@ -349,9 +354,11 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   const receiverBlock: string[] = isPickup
     ? [
         // 取餐联：时间放大（顾客几点来是店员要看的第一眼），姓名与脱敏电话普通字号；不印地址——地址是店自己
-        // S7（店主决定 D3「一起修」的实现受阻，见下方上报）：本批暂不改自取票排版，
-        // 保持原样——e2e.d/62-pickup.sh 不在本批授权范围内，无法同步更新其断言。
-        `<B>取餐 ${esc(o.pickupSlotLabel ?? '')}</B>`,
+        // S7（店主决定 D3，2026-09-23 一起修，编排者已把 e2e.d/62-pickup.sh 补入授权）：原
+        // 「<B>取餐 9月12日（周六）12:00–12:30</B>」整段进 <B> 超真机 16 列可用宽度——
+        // 日期普通字号单独一行，时段单独放大一行，同法见 scheduleSlotDate/scheduleSlotTime。
+        `取餐 ${esc(o.pickupSlotDate ?? '')}`,
+        `<B>${esc(o.pickupSlotTime ?? '')}</B>`,
         `取餐人 ${esc(o.receiverName)}`,
         `电话 ${maskPhone(esc(o.receiverPhone))}`,
       ]

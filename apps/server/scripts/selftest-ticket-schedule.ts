@@ -74,8 +74,25 @@ t('反例：把老写法「送达 + 完整 scheduleSlotLabel」拼成一整段�
   assert.strictEqual(strWidth(`送达 ${base.scheduleSlotLabel}`), 33)
 })
 
-// 店主决定 D3（一起修自取票）本批未落地：e2e.d/62-pickup.sh 断言字面匹配 `<B>取餐 `，
-// 该文件不在本批授权范围（allow.txt 只列了 69-scheduled-delivery.sh），改了会破坏一个
-// 无权修改的既有测试。已在交付报告「上报」栏说明，自取票排版维持原样，不在此处补测试。
+// 店主决定 D3：自取票「取餐」同批一起拆行（编排者已把 e2e.d/62-pickup.sh 补入授权，
+// 仅限该文件第 204 行附近「印取餐时间」断言按新格式微调）。
+t('自取票（PICKUP）：取餐票同样拆成普通日期行 + 放大时段行，放大段 ≤16 列', () => {
+  const pickup: TicketOrderInput = {
+    ...base, channel: 'PICKUP', scheduledAt: null, distanceM: null,
+    pickupAt: new Date('2026-09-12T04:00:00Z'),
+    pickupSlotLabel: '9月12日（周六）12:00–12:30',
+    pickupSlotDate: '9月12日（周六）',
+    pickupSlotTime: '12:00–12:30',
+  }
+  const ticket = renderOrderTicket(pickup)
+  const [receiptSide] = ticket.split('<CUT>')
+  assert.ok(receiptSide.includes('取餐 9月12日（周六）'), receiptSide)
+  assertScheduleBigSegmentsWithin(receiptSide, ['12:00–12:30'])
+})
+
+t('反例：自取票老写法「取餐 + 完整 pickupSlotLabel」拼成一整段喂给宽度函数，应得超 16 列（证明宽度函数本身能证伪）', () => {
+  const old = '取餐 9月12日（周六）12:00–12:30'
+  assert.ok(strWidth(old) > BIG_LINE_WIDTH, `期望 > ${BIG_LINE_WIDTH}，实际 ${strWidth(old)}`)
+})
 
 console.log(process.exitCode ? `有失败（通过 ${pass}）` : `全部通过 ${pass}`)
