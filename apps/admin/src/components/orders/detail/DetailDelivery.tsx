@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Phone } from 'lucide-react'
 import StatusBadge from '../../ui/StatusBadge'
 import Spinner from '../../ui/Spinner'
 import { providerLabel } from '../../../utils/providers'
-import { fmtDateTimeSec, fmtHHmm, fmtMonthDayTime } from '../../../utils/time'
+import { fmtDateTimeSec, fmtHHmmOrDate, fmtMonthDayTime } from '../../../utils/time'
 import type { DeliveryEventInfo, DeliveryInfo, OrderDetail as OrderDetailData } from '../../../types'
 
 function yuan(fen: number) {
@@ -33,9 +33,9 @@ export default function DetailDelivery({ order, data, loading, loadFailed, onRet
       <h3 className="text-sm font-semibold text-gray-800">配送</h3>
       {sc && (
         <div className="text-sm text-gray-700 space-y-1">
-          <p>出备餐票 {fmtHHmm(sc.ticketAt)}</p>
-          <p>开始备餐 {fmtHHmm(sc.prepStartAt)}</p>
-          <p>该呼叫 {fmtHHmm(sc.callAt)}</p>
+          <p>出备餐票 {fmtHHmmOrDate(sc.ticketAt)}</p>
+          <p>开始备餐 {fmtHHmmOrDate(sc.prepStartAt)}</p>
+          <p>该呼叫 {fmtHHmmOrDate(sc.callAt)}</p>
           <p>已备好 {fmtMonthDayTime(sc.readyAt, '未点')}</p>
         </div>
       )}

@@ -17,8 +17,8 @@ import type {
 import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor } from '../utils/pickup'
 import { tablewareLabel } from '../utils/tableware'
 import {
-  scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn,
-  actionColKey, pendingActionCount,
+  scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, scheduleFieldsLine, findCardColumn,
+  actionColKey, pendingActionCount, callNowConfirmText,
 } from '../utils/schedule'
 import {
   acceptAndCallLocalOrder, acceptLocalOrder, acceptOrder, addDeliveryTip,
@@ -38,7 +38,7 @@ import VersionBanner from '../components/VersionBanner'
 import ExpressBookingModal, { DAYS, HOURS, slotError } from '../components/ExpressBookingModal'
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useIsPhone } from '../hooks/useIsPhone'
-import { fmtHHmm, fmtMonthDayTime, fmtMonthDayCn, todayKey } from '../utils/time'
+import { fmtHHmm, fmtHHmmOrDate, fmtMonthDayTime, fmtMonthDayCn, todayKey } from '../utils/time'
 import { providerLabel, callStrategyLabel } from '../utils/providers'
 
 // scheduled 不是显示列：出票前的预约单渲染在待接单列的折叠组里（colKey='pending'），它只是快照里的一个桶
@@ -1920,10 +1920,9 @@ export default function Workbench() {
                 run: () => readyLocalOrder(order.id),
               })))
             }
-            const early = isBeforeCallWindow(sc, now)
             btns.push(ghost('call-now', '立即呼叫', () => confirm(callSpec(
               '立即呼叫骑手', '确认立即呼叫',
-              `${early ? '早于该呼叫时刻（' + hhmm(sc.callAt) + '），' : ''}${etaTextIfCallNow(sc)}，早于顾客约定的 ${hhmm(sc.scheduledAt)}。向快递100 发单，骑手会来店里取货。`,
+              `${callNowConfirmText(sc, now)}向快递100 发单，骑手会来店里取货。`,
               (pick) => callRider(order.id, pick?.manual ? pick.providers : undefined, true),
             ))))
             btns.push(ghost('self', '自己送', () => setModal({ kind: 'self' })))
@@ -2555,7 +2554,7 @@ export default function Workbench() {
                 {scheduledFold.length > 0 && (
                   <div className="wb__fold" style={{ marginTop: 0, borderTop: 'none', paddingTop: 0, marginBottom: 8 }}>
                     <button type="button" className="wb__fold-t" onClick={() => setScheduledOpen((v) => !v)}>
-                      <span>预约单 <b style={{ color: 'var(--local)' }}>{scheduledFold.length}</b>{scheduledFoldPending > 0 ? <> · <b style={{ color: 'var(--local)' }}>{scheduledFoldPending}</b> 待接单</> : ''}{snap?.scheduleBar ? ` · 最近 ${hhmm(snap.scheduleBar.prepStartAt)} 开始备餐` : ''}</span>
+                      <span>预约单 <b style={{ color: 'var(--local)' }}>{scheduledFold.length}</b>{scheduledFoldPending > 0 ? <> · <b style={{ color: 'var(--local)' }}>{scheduledFoldPending}</b> 待接单</> : ''}{snap?.scheduleBar ? ` · 最近 ${fmtHHmmOrDate(snap.scheduleBar.prepStartAt, now)} 开始备餐` : ''}</span>
                       <span>{scheduledOpen ? '收起' : '展开'}</span>
                     </button>
                     {scheduledOpen && scheduledFold.map(renderCard)}

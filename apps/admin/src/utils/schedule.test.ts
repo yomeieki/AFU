@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn, actionColKey, pendingActionCount } from './schedule.ts'
+import { scheduleUrgency, scheduleCapsule, scheduleFoldable, scheduleBarText, etaTextIfCallNow, isBeforeCallWindow, scheduleFieldsLine, findCardColumn, actionColKey, pendingActionCount, callNowConfirmText } from './schedule.ts'
 import type { ScheduleInfo, WorkbenchCard, WorkbenchSnapshot } from '../types'
 
 // 2026-09-22 12:00 Asia/Shanghai = 04:00Z
@@ -29,10 +29,20 @@ test('胶囊文案七态；done 列返回 null', () => {
   assert.ok(!scheduleCapsule(base('TICKETED'), 'pending', now, 'PAID')!.text.includes('待接单'))
   assert.deepEqual(scheduleCapsule(base('PREPPING'), 'preparing', NOON - min(30)), { text: '距应备好 6 分', cls: '' })
   assert.deepEqual(scheduleCapsule(base('CALL_DUE'), 'preparing', NOON - min(20)), { text: '应已备好 · 晚 4 分', cls: 'wb__wait--warn' })
+  // S4：readyAt 非空（店员已点过「已备好」但没能真的呼出去）文案要分开——更紧急，该做的是重呼不是先备好
+  assert.deepEqual(scheduleCapsule(base('CALL_DUE', iso(NOON - min(30))), 'preparing', NOON - min(20)), { text: '该呼叫未呼出 · 晚 4 分', cls: 'wb__wait--warn' })
   assert.deepEqual(scheduleCapsule(base('READY_WAITING', iso(NOON - min(40))), 'preparing', NOON - min(30)), { text: '已备好 · 11:36 自动呼叫', cls: '' })
   assert.deepEqual(scheduleCapsule(base('CALLED', iso(NOON - min(40))), 'waitingCourier', NOON - min(10)), { text: '12:00 送达', cls: '' })
   assert.deepEqual(scheduleCapsule(base('LATE'), 'delivering', NOON + min(11)), { text: '已超约定时间 11 分', cls: 'wb__wait--danger' })
   assert.equal(scheduleCapsule(base('CALLED'), 'done', NOON), null)
+})
+test('S9：WAITING/TICKETED 胶囊跨日加 M-DD 前缀，当天仍是 HH:mm', () => {
+  // prepStartAt 在 base() 里固定是 NOON − 44 分（当天 11:16）；这里另起一个跨天的 prepStartAt
+  const tomorrow = { ...base('WAITING'), prepStartAt: iso(NOON + min(24 * 60 - 44)) } // 次日 11:16
+  assert.deepEqual(scheduleCapsule(tomorrow, 'pending', NOON - min(50)), { text: '9-23 11:16 开始备餐', cls: '' })
+  assert.deepEqual(scheduleCapsule({ ...tomorrow, phase: 'TICKETED' }, 'pending', NOON - min(50)), { text: '9-23 11:16 开始备餐', cls: '' })
+  // 当天不受影响
+  assert.deepEqual(scheduleCapsule(base('WAITING'), 'pending', NOON - min(50)), { text: '11:16 开始备餐', cls: '' })
 })
 test('胶囊前缀（R2）：WAITING + status 只在 colKey 为 pending 时加「待接单/已接单」前缀，折叠组已接单卡出票前落到 waitingCourier 等展示列不该再带前缀', () => {
   const now = NOON - min(50)
@@ -50,6 +60,28 @@ test('倒计时条文案：还有/已到点、另有 N 张', () => {
   const bar = { prepStartAt: iso(NOON - min(44)), slotLabel: '今天 12:00–12:30', count: 3 }
   assert.equal(scheduleBarText(bar, NOON - min(64)), '下一张预约单 11:16 开始备餐，还有 20 分钟（今天 12:00–12:30 送达） · 另有 2 张')
   assert.equal(scheduleBarText({ ...bar, count: 1 }, NOON - min(40)), '下一张预约单 11:16 开始备餐，已到点 4 分钟（今天 12:00–12:30 送达）')
+})
+test('S9：倒计时条跨日 prepStartAt 加 M-DD 前缀', () => {
+  const bar = { prepStartAt: iso(NOON + min(24 * 60 - 44)), slotLabel: '明天 12:00–12:30', count: 1 }
+  assert.equal(scheduleBarText(bar, NOON - min(64)), '下一张预约单 9-23 11:16 开始备餐，还有 1460 分钟（明天 12:00–12:30 送达）')
+})
+test('S3：callNowConfirmText 三态', () => {
+  // callAt=11:36（tolerance 5 分），scheduledAt=12:00
+  // (a) now(11:10) < callAt−tolerance(11:31) 且 eta(11:50)≤sched(12:00) → 早于该呼叫时刻 + 早于顾客约定
+  const early = { ...base('PREPPING'), etaIfCallNow: iso(NOON - min(10)) }
+  const textA = callNowConfirmText(early, NOON - min(50))
+  assert.ok(textA.startsWith('早于该呼叫时刻（11:36），'), textA)
+  assert.ok(textA.includes('早于顾客约定的 12:00'), textA)
+  // (b) now(11:40) ≥ callAt(11:36) 且 eta(12:10)>sched(12:00) → 已晚于顾客约定 约 10 分钟，不含「早于」
+  const late = { ...base('CALL_DUE'), etaIfCallNow: iso(NOON + min(10)) }
+  const textB = callNowConfirmText(late, NOON - min(20))
+  assert.ok(textB.includes('已晚于顾客约定的 12:00 约 10 分钟'), textB)
+  assert.ok(!textB.includes('早于'), textB)
+  // (c) now(11:31) ≥ callAt−tolerance(11:31) 且 eta(11:55)≤sched(12:00) → 早于顾客约定的，不含「早于该呼叫时刻」
+  const onTime = { ...base('CALL_DUE'), etaIfCallNow: iso(NOON - min(5)) }
+  const textC = callNowConfirmText(onTime, NOON - min(29))
+  assert.ok(textC.includes('早于顾客约定的 12:00'), textC)
+  assert.ok(!textC.includes('早于该呼叫时刻'), textC)
 })
 test('findCardColumn：五列 + scheduled 桶一起找；WAITING 预约单只在 scheduled 里，colKey 记为 pending（R1）', () => {
   const card = (orderId: number) => ({ orderId } as unknown as WorkbenchCard)

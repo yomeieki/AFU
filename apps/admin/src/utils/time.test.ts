@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fmtListTime, sameDayKey } from './time.ts'
+import { fmtListTime, sameDayKey, fmtHHmmOrDate } from './time.ts'
 
 // 2026-09-18 12:00 Asia/Shanghai = 2026-09-18T04:00:00Z
 const NOW = new Date('2026-09-18T04:00:00Z')
@@ -38,4 +38,24 @@ test('sameDayKey：任一端为空/非法 → false', () => {
   assert.equal(sameDayKey(null, '2026-09-18T01:00:00Z'), false)
   assert.equal(sameDayKey('2026-09-18T01:00:00Z', undefined), false)
   assert.equal(sameDayKey('not-a-date', '2026-09-18T01:00:00Z'), false)
+})
+
+test('fmtHHmmOrDate：上海同日 → HH:mm', () => {
+  // NOW = 上海 2026-09-18 12:00
+  assert.equal(fmtHHmmOrDate('2026-09-18T02:42:00Z', NOW), '10:42')
+})
+
+test('fmtHHmmOrDate：跨日 → M-DD HH:mm', () => {
+  assert.equal(fmtHHmmOrDate('2026-09-19T02:42:00Z', NOW), '9-19 10:42')
+})
+
+test('fmtHHmmOrDate：无效输入 → --', () => {
+  assert.equal(fmtHHmmOrDate('not-a-date', NOW), '--')
+  assert.equal(fmtHHmmOrDate(null, NOW), '--')
+  assert.equal(fmtHHmmOrDate(undefined, NOW), '--')
+})
+
+test('fmtHHmmOrDate：跨零点用例（北京 23:30 vs 次日 00:30）必须判为不同日', () => {
+  // v=北京 2026-09-17 23:30（UTC 2026-09-17T15:30），now=北京 2026-09-18 00:30（UTC 2026-09-17T16:30）
+  assert.equal(fmtHHmmOrDate('2026-09-17T15:30:00Z', '2026-09-17T16:30:00Z'), '9-17 23:30')
 })

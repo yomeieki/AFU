@@ -2,7 +2,7 @@
  * 预约单在工作台上的时间语义（spec 2026-09-21 §6.1）。全部纯函数、只做减法与文案；
  * 阶段（phase）由服务端算好，这里不倒推。时刻格式化走 utils/time（Asia/Shanghai）。
  */
-import { fmtHHmm } from './time.ts'
+import { fmtHHmm, fmtHHmmOrDate } from './time.ts'
 import type { ScheduleInfo, SchedulePhase, WorkbenchCard, WorkbenchSnapshot } from '../types'
 
 export type ScheduleUrgency = '' | 'warn' | 'late'
@@ -44,13 +44,15 @@ export function scheduleCapsule(sc: ScheduleInfo, colKey: ScheduleColKey, now: n
   const cls = scheduleUrgency(sc.phase) === 'late' ? 'wb__wait--danger' : scheduleUrgency(sc.phase) === 'warn' ? 'wb__wait--warn' : ''
   switch (sc.phase) {
     case 'WAITING':
-      return { text: `${status && colKey === 'pending' ? (status === 'PAID' ? '待接单' : '已接单') + ' · ' : ''}${fmtHHmm(sc.prepStartAt)} 开始备餐`, cls }
+      return { text: `${status && colKey === 'pending' ? (status === 'PAID' ? '待接单' : '已接单') + ' · ' : ''}${fmtHHmmOrDate(sc.prepStartAt, now)} 开始备餐`, cls }
     case 'TICKETED':
-      return { text: `${fmtHHmm(sc.prepStartAt)} 开始备餐`, cls }
+      return { text: `${fmtHHmmOrDate(sc.prepStartAt, now)} 开始备餐`, cls }
     case 'PREPPING':
       return { text: `距应备好 ${minLeft(sc.callAt, now)} 分`, cls }
     case 'CALL_DUE':
-      return { text: `应已备好 · 晚 ${minOver(sc.callAt, now)} 分`, cls }
+      // S4：readyAt 非空 = 店员已点过「已备好」但到点没能真的呼出去（熔断/总开关关/接口报错），
+      // 与「压根没点已备好」是两件事，文案要分开——前者更紧急，店员该做的是重呼而不是先备好。
+      return { text: sc.readyAt ? `该呼叫未呼出 · 晚 ${minOver(sc.callAt, now)} 分` : `应已备好 · 晚 ${minOver(sc.callAt, now)} 分`, cls }
     case 'READY_WAITING':
       return { text: `已备好 · ${fmtHHmm(sc.callAt)} 自动呼叫`, cls }
     case 'CALLED':
@@ -88,7 +90,7 @@ export function scheduleBarText(bar: { prepStartAt: string; slotLabel: string; c
   const left = minLeft(bar.prepStartAt, now)
   const when = left > 0 ? `还有 ${left} 分钟` : `已到点 ${-left} 分钟`
   const more = bar.count > 1 ? ` · 另有 ${bar.count - 1} 张` : ''
-  return `下一张预约单 ${fmtHHmm(bar.prepStartAt)} 开始备餐，${when}（${bar.slotLabel} 送达）${more}`
+  return `下一张预约单 ${fmtHHmmOrDate(bar.prepStartAt, now)} 开始备餐，${when}（${bar.slotLabel} 送达）${more}`
 }
 
 /** 「现在呼叫预计 12:05 送达」 */
@@ -99,6 +101,20 @@ export function etaTextIfCallNow(sc: ScheduleInfo): string {
 /** 早于「该呼叫 − 容忍」：点「呼叫」要走 force 并二次确认 */
 export function isBeforeCallWindow(sc: ScheduleInfo, now: number): boolean {
   return now < Date.parse(sc.callAt) - sc.callToleranceMin * 60_000
+}
+
+/**
+ * S3（2026-09-23 修）：「立即呼叫」确认弹窗正文。原文案固定写「早于顾客约定的 HH:mm」，
+ * 但到点未备好（CALL_DUE）或自动呼叫失败后店员点「立即呼叫」时，`etaIfCallNow` 早就晚于
+ * `scheduledAt` 了，固定文案变成一句假话。这里按 `etaIfCallNow` 与 `scheduledAt` 的真实
+ * 大小关系分两支，`etaIfCallNow` 取自服务端快照（≤10 秒旧），前端不重算。
+ */
+export function callNowConfirmText(sc: ScheduleInfo, now: number): string {
+  const eta = Date.parse(sc.etaIfCallNow)
+  const sched = Date.parse(sc.scheduledAt)
+  const prefix = isBeforeCallWindow(sc, now) ? `早于该呼叫时刻（${fmtHHmm(sc.callAt)}），` : ''
+  if (eta <= sched) return `${prefix}现在呼叫预计 ${fmtHHmm(eta)} 送达，早于顾客约定的 ${fmtHHmm(sched)}。`
+  return `${prefix}现在呼叫预计 ${fmtHHmm(eta)} 送达，已晚于顾客约定的 ${fmtHHmm(sched)} 约 ${Math.ceil((eta - sched) / 60_000)} 分钟。`
 }
 
 /** 卡片字段区那一行「12:00 送达 · 11:16 开始备餐 · 11:36 呼叫」 */

@@ -81,6 +81,16 @@ export function fmtMonthDayTime(v: Input, empty = EMPTY): string {
   return `${Number(p.month)}-${p.day} ${p.hour}:${p.minute}`
 }
 
+/**
+ * S9（预约送达 2026-09-23 修）：预约可约三天后，工作台/详情此前一律只显示 `HH:mm`——
+ * 「12:00 开始备餐」在跨日预约单上分不清是今天还是三天后的 12:00。上海同一自然日仍显示纯
+ * `HH:mm`（当天的单不需要日期噪音），跨日一律加 `M-DD` 前缀。`now` 显式传入以便测试钉时刻。
+ */
+export function fmtHHmmOrDate(v: Input, now: Input = new Date()): string {
+  const d = toDate(v); if (!d) return EMPTY
+  return sameDayKey(d, now) ? fmtHHmm(d) : fmtMonthDayTime(d)
+}
+
 /** 'M 月 D 日'——工作台顶栏那种给人读的写法 */
 export function fmtMonthDayCn(v: Input, empty = EMPTY): string {
   const d = toDate(v); if (!d) return empty
