@@ -212,3 +212,103 @@ docs/superpowers/previews/**
 ## 店主答复（2026-09-23，编排者转达）
 
 「待用户决定」三条均按规划默认：① 自取结算页提示与主页一起变；② 自取胶囊只看营业时段，不受外送暂停/关闭影响；③ 算不出最早可取时段时只显示「现在下单为预约自取」。无需改方案。
+
+---
+
+## 修订 1（2026-09-23，复核 R2 规划缺口 + 店主撤回条目 7）
+
+【工序】规划 【模型】Fable 5.1 【等级】M
+
+基线：执行结果 HEAD `c9db02d`（BASE 不变 `e7d44e3`）。本节只写增减；未提及的条目、验收、范围维持原方案。
+
+### 定级复核
+仍为 **M**。服务端追加的只是 `GET /api/local/meta` 的 `pickup` 节一个只读枚举字段，与既有 `earliestPickupText` 同一函数同源算出；不涉认证/支付/迁移/事务/破坏性变更。撤回条目 7 是纯样式回退。
+
+### R2 的事实核实（规划者按 HEAD 复算）
+- 复核说的「尾段」成立：`buildSlotDays` 只保留 `slotStart − lead ≥ now` 的格（`services/slots.ts:61`），自取 lead = 备餐 + 缓冲（`pickup.ts:39`）；一段营业时间末尾 lead + 半格内没有可选格。selftest base（10–14 / 17–20，slot 30，备餐 20、高峰 12–13 取 30，缓冲 5，daysAhead 1）逐点复算：13:04 → 13:30 格（13:30−25=13:05 ≥ 13:04）仍可选；13:06 → 13:30 格被剔除、14:00 格不满一格（`slots.ts:59` 的 `m + step <= end`）→ 最早 17:00；19:00 → 19:30 格可选；19:10 → 最早明天 10:00。这四个时刻是验收里「尾段」的固定复现点。
+- 「无格」成立：`daysAhead=0` 且今天最后一格已过 → `earliestAt === null`（`pickup.ts:45` 返回 `blocked:null` 但 `earliestAt:null`），HEAD 的 `earliestPickupText` 为空串、小程序三处只看 `closedKind`，会画「已打烊 · 可预约」却一格约不了。
+- 老服务端缺字段时小程序必须维持 HEAD 行为（`local-catalog.js:49-50 / :75-79 / :175-179`）。
+
+### 条目 2′（替换条目 2 的判据）：服务端出「最早可取时段相对当前营业段」的判据
+- 字段：`GET /api/local/meta` → `pickup.earliestPickupWhen: 'CURRENT' | 'LATER' | 'NONE'`。口径（与 `buildPickupSlots` 同源，同一次调用算出，选择器与提示不会打架）：
+  - `NONE`：`buildPickupSlots(s, now)` 为 `blocked` 或 `earliestAt === null`（自取未开通/暂停/休业/`daysAhead` 内一格都没有）。此时 `earliestPickupText === ''`。
+  - `CURRENT`：此刻落在某个营业段内（`shanghaiMinutesOf(now)` 满足 `toMin(h.start) ≤ cur < toMin(h.end)`，与 `local-settings.ts:763-766 inHours` 同口径，但在 `pickup.ts` 里用 `slots.ts` 导出的 `shanghaiMinutesOf/toMin` 自算，**不改 `local-settings.ts`**），且最早格是**今天**（`shanghaiDateStr(earliestAt) === shanghaiDateStr(now)`）并且起点分钟数 `< toMin(h.end)`（落在这一段内）。
+  - `LATER`：其余（最早格在下一段、明天或更远——含营业时间外与营业段尾段）。
+- 实现：`apps/server/src/services/pickup.ts` 新增 `earliestPickupInfo(s, now = new Date()): { text: string; when: 'CURRENT'|'LATER'|'NONE' }`，只调一次 `buildPickupSlots`；既有 `earliestPickupText` 改为 `earliestPickupInfo(s, now).text`（签名与六个既有自测不变）。`routes/local.ts:29-33` 的 `pickup` 节改为展开 `earliestPickupInfo(s)` 的两个字段（`earliestPickupText`、`earliestPickupWhen`）。`docs/api.md:1847` 字段清单与 `:2186` 变更行补 `earliestPickupWhen` 及三值口径。
+- 类型：`when` 的联合类型导出为 `PickupEarliestWhen`，供路由/自测引用；不新增 zod schema（出参无校验）。
+
+### 条目 4′/2′/1′（替换条目 4、2、1 的小程序规则）：`apps/miniapp/utils/local-catalog.js`
+统一读 `var when = pk.earliestPickupWhen`（可能为 `undefined`：老服务端）。三处规则（休业、未开通、暂停的优先级和结果不变，下面只写这三条之后的分支）：
+
+| 情形 | `storeStatusOf(meta,'PICKUP')` | `headNoticeOf(meta,'PICKUP')` | `pickupModeHint(meta)` |
+|---|---|---|---|
+| `when === 'NONE'` | `{ tone:'closed', label:'已打烊' }`（灰，不写「可预约」，不分 BREAK） | `{ text:'暂无可取时段', blocking:true }` | `''` |
+| `when === 'LATER'` 且 `outOfHours(meta)` | `{ tone:'schedule', label: closedLabel(meta) + ' · 可预约' }`（同 HEAD） | `{ text:'现在下单为预约自取' + ('，' + earliestPickupText，有则拼), blocking:false }`（同 HEAD） | `'（可预约）'` |
+| `when === 'LATER'` 且**不**`outOfHours`（营业段尾段） | `{ tone:'open', label:'营业中' }`（绿，店主定） | 同上一行的软提示 | `'（可预约）'` |
+| `when === 'CURRENT'` | `{ tone:'open', label:'营业中' }` | `{ text:'', blocking:false }` | `''` |
+| `when` 缺失（老服务端） | HEAD 行为：`outOfHours` → schedule「… · 可预约」，否则「营业中」 | HEAD 行为：`outOfHours` → 软提示（有 `earliestPickupText` 则拼），否则空 | HEAD 行为：`outOfHours ? '（可预约）' : ''` |
+
+- `blocking:true` 的理由（店主让规划者按现有语义定）：`blocking` 的定义是「真的挡住下单」（`local-catalog.js` 头注释、`headNoticeOf` 注释）；一格都约不了时结算必然失败，与「暂停/未开通」同一类。后果链已核实：主页/分类页购物车条按 `blocking` 给「暂不可结算」（`checkoutStateOf`）、门店头出「改用外送/去全国邮寄」出路；自取结算页 `pages/local/pickup.js:142-146` 把它写成 `blockReason`，页面顶部橙色阻塞条 + 「改用外送」（`pickup.wxml:3-5`）、时段区显示 `blockReason` 文案（`pickup.wxml:36`，与 :38 的选择器空态同一句「暂无可取时段」，不打架）、按钮走 `pickup-checkout-state.js:63` 的 BLOCKED 分支。`pages/local/pickup.js` 与 `pickup-checkout-state.js` 不需要改（仍禁改）。
+- `modeAvailable(meta,'PICKUP')`：追加 `when === 'NONE'` → `false`（否则外送阻塞时门店头会给「改用自取」这条走不通的出路；`altModeOf` 随之正确）。`resolveLocalMode` 不动（只看开通开关）。
+- 文件头与三处函数注释同步（「不看营业时段」那句要改成「不看时段，但看服务端给的 `earliestPickupWhen`」）。
+
+### 条目 7 撤回（店主 2026-09-23）
+- `apps/miniapp/components/local-cart-bar/index.wxss:115` 与 `apps/miniapp/pages/cart/index.wxss:182` 的 `.cart-tip` 规则**恢复到 BASE 原文**（去掉 `white-space: nowrap; overflow: hidden; text-overflow: ellipsis;` 三条声明；其余不动）。
+- 删除 `tests/miniapp/closed-schedule-hints.test.cjs:240-255`（`cartTipBlock` 辅助函数与「.cart-tip 都单行省略」用例）。
+- 原方案「实现方向 6」「验收 1-f」作废；这两个 wxss 从授权范围移到禁止修改（见下）。
+
+### 验收标准（增改；编号接原方案）
+- 1-a 改：`tests/miniapp/local-catalog.test.cjs` 在既有 PICKUP 用例基础上新增下列断言（fixture 用 `PK` 叠字段，不依赖时钟）：
+  - `PK + closedKind:'OPEN' + pickup.{earliestPickupWhen:'LATER', earliestPickupText:'最早今天 17:00–17:30 可取'}`（尾段）→ `storeStatusOf` `{ tone:'open', label:'营业中' }`；`headNoticeOf` `{ text:'现在下单为预约自取，最早今天 17:00–17:30 可取', blocking:false }`；`pickupModeHint` `'（可预约）'`。
+  - `PK + closedKind:'OPEN' + when:'CURRENT'` → `'营业中'` / `{ text:'', blocking:false }` / `''`。
+  - `PK + closedKind:'CLOSED' + when:'NONE' + earliestPickupText:''` → `{ tone:'closed', label:'已打烊' }` / `{ text:'暂无可取时段', blocking:true }` / `''`；`modeAvailable(…,'PICKUP') === false`；`altModeOf(该 meta + 外送暂停, 'DELIVERY') === null`。
+  - `PK + closedKind:'BREAK' + when:'NONE'` → 胶囊仍 `'已打烊'`（不写午间休息）。
+  - `PK + closedKind:'CLOSED' + when:'LATER'` → 与 HEAD 的「已打烊 · 可预约」三件套逐字节一致；`closedKind:'BREAK' + when:'LATER'` → `'午间休息 · 可预约'`。
+  - 老服务端：`PK + closedKind:'CLOSED'`（无 `when`、无 `earliestPickupText`）→ 仍 `{ tone:'schedule', label:'已打烊 · 可预约' }` / `{ text:'现在下单为预约自取', blocking:false }` / `'（可预约）'`（即 :82、:90-91、:141 既有断言不改）；`PK` 无 `when`（OPEN）→ 仍 `'营业中'` / 空 / `''`（:79-80、:140 不改）。
+  - 暂停/未开通/休业叠 `when:'NONE'` → 仍是各自原结果（优先级不变）。
+- 1-f 删除（条目 7 撤回）。
+- 1-g 增：`tests/miniapp/closed-schedule-hints.test.cjs` 其余 13 个用例不变仍绿。
+- 4 改：`selftest-pickup.ts` 在既有 6 个 `earliestPickupText` 用例之外新增 `earliestPickupInfo` 用例（base 设置、固定 `now`，与 HEAD 的 `sh()` 夹具同法；预期串是规划者按 `slots.ts:59-61` 复算的）：
+  - `sh('2026-09-11T13:04:00')` → `{ when:'CURRENT', text:'最早今天 13:30–14:00 可取' }`；`sh('2026-09-11T13:06:00')` → `{ when:'LATER', text:'最早今天 17:00–17:30 可取' }`（尾段边界对）。
+  - `sh('2026-09-11T19:00:00')` → `{ when:'CURRENT', text:'最早今天 19:30–20:00 可取' }`；`sh('2026-09-11T19:10:00')` → `{ when:'LATER', text:'最早明天 10:00–10:30 可取' }`。
+  - `sh('2026-09-11T15:10:00')`（午休）→ `when:'LATER'`；`sh('2026-09-11T22:39:00')` → `when:'LATER'`；`sh('2026-09-11T11:00:00')` → `{ when:'CURRENT', text:'最早今天 11:30–12:00 可取' }`。
+  - `daysAhead:0` + `sh('2026-09-11T19:10:00')` → `{ when:'NONE', text:'' }`；`daysAhead:0` + `sh('2026-09-11T22:39:00')` → `NONE`；未开通 / 暂停 / 休业覆盖两天 → `when:'NONE'`（与既有三条空串用例并列断言）。
+  - `earliestPickupText(base, sh(...))` 六条既有断言不改仍绿；总数 `全部通过 ≥ 14 + 6 + 8`。
+- 5 改（接口契约，用可控营业时间稳定复现，不靠等时钟）：开通自取后，用 `TZ=Asia/Shanghai date` 算出上海此刻 `HH:MM`（macOS：`TZ=Asia/Shanghai date +%H:%M`、`TZ=Asia/Shanghai date -v+40M +%H:%M`、`-v-10M`、`-v-3H`），分三次 PUT `businessHours` 并各 GET 一次 meta：
+  - ①「当前段」：`[{start: now−3h, end: now+3h}]`，`daysAhead=1` → `pickup.earliestPickupWhen === 'CURRENT'`、`earliestPickupText` 含「今天」；
+  - ②「尾段」：`[{start: now−3h, end: now+40m}]`（lead=备餐 20+缓冲 5=25，40 分钟内放不下「起点 ≥ now+25 且整格 ≤ end」的 30 分钟格，前提 `slotMinutes=30`、`prepMinutes=20`、非高峰窗口；执行者先 GET 设置核对这三项，不同则按实际值换算）→ `'LATER'`、`closedKind === 'OPEN'`、`earliestPickupText` 含「明天」；
+  - ③「无格」：`[{start: now−3h, end: now−10m}]`，`daysAhead=0` → `'NONE'`、`earliestPickupText === ''`、`closedKind === 'CLOSED'`。
+  - 每次 PUT 前 GET 全量设置、只改上述字段（照 `e2e.d/62-pickup.sh:6` 的 `p62_put`），跑完恢复原设置。跨日边界（上海 21:00 之后 `now+3h` 会过 24:00）时把 ①② 的 end 钳到 `23:59`、start 取 `now−3h`，判定不变。
+- 6 不变（e2e 对 `pickup` 节仍无键集合断言）。
+- 7 增：`index-local-closed.html` 不必新画尾段/无格镜像（无 wxml 结构变化，纯数据态）；但 R3 顺手修不修由编排者定，不在本修订范围内。
+- 8 改：范围 diff 为空的路径列表**追加** `apps/miniapp/components/local-cart-bar/index.wxss apps/miniapp/pages/cart/index.wxss`（须与 BASE 逐字节一致）。
+
+### 实现方向（增改）
+1. `services/pickup.ts`：`earliestPickupInfo` + `PickupEarliestWhen` 类型；`earliestPickupText` 改为薄包装；`routes/local.ts` 展开两个字段；`docs/api.md` 两处。
+2. `utils/local-catalog.js`：按上表改 `storeStatusOf`/`headNoticeOf`/`pickupModeHint`/`modeAvailable` 的 PICKUP 分支与注释；不新增导出。
+3. `local-catalog.test.cjs`、`selftest-pickup.ts` 按验收 1-a/4 补用例。
+4. 条目 7 回退：两个 wxss 恢复 BASE 原文；删测试 :240-255。
+5. `selftest-schedule.ts`、镜像、主页/分类页、`channel-sheet` 等 HEAD 已完成部分不动。
+
+### 授权范围（增减）
+- 增：无新文件。`apps/server/src/services/pickup.ts`、`routes/local.ts`、`scripts/selftest-pickup.ts`、`docs/api.md`、`utils/local-catalog.js`、`tests/miniapp/local-catalog.test.cjs`、`tests/miniapp/closed-schedule-hints.test.cjs` 原已在范围内。
+- 减（移入禁止修改）：`apps/miniapp/components/local-cart-bar/index.wxss`、`apps/miniapp/pages/cart/index.wxss`——只允许恢复到 BASE 原文这一个动作，之后视为禁改。
+- `tests/miniapp/closed-schedule-hints.test.cjs` 的「限定」：只允许删除 :240-255 那一段；其余 13 个用例不改。
+
+### 禁止修改（增）
+```
+apps/miniapp/components/local-cart-bar/index.wxss   （恢复 BASE 后禁改）
+apps/miniapp/pages/cart/index.wxss                   （恢复 BASE 后禁改）
+apps/miniapp/utils/pickup-checkout-state.js
+apps/miniapp/components/slot-picker/**
+```
+（`apps/server/src/services/local-settings.ts`、`slots.ts`、`pages/local/**` 原已禁改；`earliestPickupWhen` 的当前营业段判定在 `pickup.ts` 内自算，不得为此导出 `inHours`。）
+
+### 上报条件（增）
+- 验收 4 里任一固定时刻的 `when/text` 与规划者复算值不符且执行者核对 `slots.ts:59-61` 后认为复算有误——停下上报，不得改期望值凑绿。
+- 为实现 `CURRENT` 判定需要改 `local-settings.ts`（导出 `inHours`）或 `slots.ts`。
+- 验收 5 ② 在本机实测得不到 `LATER`（例如设置里 `slotMinutes/prepMinutes` 与 30/20 不同且换算后仍不成立）。
+- `headNoticeOf` 的 NONE 阻塞在自取结算页表现出与 §条目 4′ 描述不一致的东西（例如按钮文案不是 BLOCKED 分支、或「改用外送」不出现）。
+
+### 待用户决定
+- 无。（店主已定：尾段胶囊绿「营业中」+「（可预约）」+ 软提示；无格胶囊灰「已打烊」+ 提示「暂无可取时段」；规划者按既有 `blocking` 语义定为阻塞，理由见条目 4′。）
