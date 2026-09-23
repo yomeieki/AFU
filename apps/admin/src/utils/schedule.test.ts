@@ -83,6 +83,14 @@ test('S3：callNowConfirmText 三态', () => {
   assert.ok(textC.includes('早于顾客约定的 12:00'), textC)
   assert.ok(!textC.includes('早于该呼叫时刻'), textC)
 })
+test('R10（复核裁决）：callNowConfirmText 相等边界——eta 与 scheduledAt 完全相同时既不说「早于」也不说「已晚于」', () => {
+  // eta(12:00) === sched(12:00)
+  const equal = { ...base('CALL_DUE'), etaIfCallNow: iso(NOON) }
+  const textD = callNowConfirmText(equal, NOON - min(20))
+  assert.ok(textD.includes('与顾客约定的 12:00 相同'), textD)
+  assert.ok(!textD.includes('早于顾客约定'), textD)
+  assert.ok(!textD.includes('已晚于顾客约定'), textD)
+})
 test('findCardColumn：五列 + scheduled 桶一起找；WAITING 预约单只在 scheduled 里，colKey 记为 pending（R1）', () => {
   const card = (orderId: number) => ({ orderId } as unknown as WorkbenchCard)
   const columns = {

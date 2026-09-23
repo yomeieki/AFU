@@ -107,14 +107,16 @@ export function isBeforeCallWindow(sc: ScheduleInfo, now: number): boolean {
  * S3（2026-09-23 修）：「立即呼叫」确认弹窗正文。原文案固定写「早于顾客约定的 HH:mm」，
  * 但到点未备好（CALL_DUE）或自动呼叫失败后店员点「立即呼叫」时，`etaIfCallNow` 早就晚于
  * `scheduledAt` 了，固定文案变成一句假话。这里按 `etaIfCallNow` 与 `scheduledAt` 的真实
- * 大小关系分两支，`etaIfCallNow` 取自服务端快照（≤10 秒旧），前端不重算。
+ * 大小关系分三支（复核裁决 R10 补的相等边界：原来 `eta<=sched` 会把「刚好相同」也说成
+ * 「早于」，不准确），`etaIfCallNow` 取自服务端快照（≤10 秒旧），前端不重算。
  */
 export function callNowConfirmText(sc: ScheduleInfo, now: number): string {
   const eta = Date.parse(sc.etaIfCallNow)
   const sched = Date.parse(sc.scheduledAt)
   const prefix = isBeforeCallWindow(sc, now) ? `早于该呼叫时刻（${fmtHHmm(sc.callAt)}），` : ''
-  if (eta <= sched) return `${prefix}现在呼叫预计 ${fmtHHmm(eta)} 送达，早于顾客约定的 ${fmtHHmm(sched)}。`
-  return `${prefix}现在呼叫预计 ${fmtHHmm(eta)} 送达，已晚于顾客约定的 ${fmtHHmm(sched)} 约 ${Math.ceil((eta - sched) / 60_000)} 分钟。`
+  if (eta < sched) return `${prefix}现在呼叫预计 ${fmtHHmm(eta)} 送达，早于顾客约定的 ${fmtHHmm(sched)}。`
+  if (eta > sched) return `${prefix}现在呼叫预计 ${fmtHHmm(eta)} 送达，已晚于顾客约定的 ${fmtHHmm(sched)} 约 ${Math.ceil((eta - sched) / 60_000)} 分钟。`
+  return `${prefix}现在呼叫预计 ${fmtHHmm(eta)} 送达，与顾客约定的 ${fmtHHmm(sched)} 相同。`
 }
 
 /** 卡片字段区那一行「12:00 送达 · 11:16 开始备餐 · 11:36 呼叫」 */
