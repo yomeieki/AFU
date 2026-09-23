@@ -1103,10 +1103,17 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
         })
         autoRefunded = result.refund.status === 'SUCCESS' || result.refund.status === 'PROCESSING' || result.refund.status === 'PENDING'
       } catch (e) {
-        // 微信发起失败：退款单已标 FAILED 并告警，通知店员到后台「退款」标签重试
-        console.warn('[orders] 自助退款自动发起失败:', (e as Error).message)
-        const latest = await prisma.order.findUniqueOrThrow({ where: { id } })
-        notifyRefundRequest(latest)
+        // R5（复核裁决，2026-09-23）：50202（结果未知）时行仍 PENDING 占位，refund.ts 已发过
+        // 「结果未知、请勿重复退款」告警并交自动补查——此时后台三处页面按 hasActiveRefund
+        // 根本不画「重试退款」按钮，再推一条「需人工重试」只会引店员去商户平台手工重试，
+        // 实打实造成重复退款。只对「明确拒绝已标 FAILED」的情形推「需人工重试」。
+        if (e instanceof AppError && e.code === 50202) {
+          console.warn('[orders] 自助退款结果未知，交补查:', e.message)
+        } else {
+          console.warn('[orders] 自助退款自动发起失败:', (e as Error).message)
+          const latest = await prisma.order.findUniqueOrThrow({ where: { id } })
+          notifyRefundRequest(latest)
+        }
       }
       const updated = await prisma.order.findUniqueOrThrow({ where: { id } })
       return success(res, { ...withPayExpire(updated), autoRefunded })
