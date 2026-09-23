@@ -98,12 +98,12 @@ RC71_RN2C=$(sql "SELECT out_refund_no FROM refunds WHERE order_id=$RC71_O2C ORDE
 assert_eq "71.2c 行 FAILED" "$(sql "SELECT status FROM refunds WHERE out_refund_no='$RC71_RN2C';")" "FAILED"
 assert_eq "71.2c error_code=NOT_ENOUGH" "$(sql "SELECT error_code FROM refunds WHERE out_refund_no='$RC71_RN2C';")" "NOT_ENOUGH"
 assert_eq "71.2c active_order_id NULL" "$(sql "SELECT active_order_id IS NULL FROM refunds WHERE out_refund_no='$RC71_RN2C';")" "1"
-echo "-- 71.2(c) R6：FAILED 终态后微信回调晚到 SUCCESS → 不翻回、留痕疑似重复退款 --"
+echo "-- 71.2(c) R9：FAILED 终态后微信回调晚到 SUCCESS，无后续行 → 按微信结果落账（不再是「疑似重复」）--"
 RC71_R=$(req POST /api/admin/system/pay-mock/refund-notify "$AT" "{\"outRefundNo\":\"$RC71_RN2C\",\"status\":\"SUCCESS\"}")
-assert_eq "71.2c R6：回调 ack code 0" "$(code "$RC71_R")" "0"
-RC71_CHECK2C=$(sql "SELECT CONCAT(status,' ',reconcile_last_error LIKE '%疑似重复退款%') FROM refunds WHERE out_refund_no='$RC71_RN2C';")
-assert_eq "71.2c R6：FAILED 行不被翻回 SUCCESS，留痕疑似重复退款" "$RC71_CHECK2C" "FAILED 1"
-assert_eq "71.2c R6：refunded_amount 不变" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O2C;")" "0"
+assert_eq "71.2c R9：回调 ack code 0" "$(code "$RC71_R")" "0"
+RC71_CHECK2C=$(sql "SELECT CONCAT(status,' ',reconcile_last_error LIKE '%已按微信结果落账%') FROM refunds WHERE out_refund_no='$RC71_RN2C';")
+assert_eq "71.2c R9：FAILED 行翻成 SUCCESS，留痕「已按微信结果落账」" "$RC71_CHECK2C" "SUCCESS 1"
+assert_eq "71.2c R9：refunded_amount 累加为 100" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O2C;")" "100"
 
 echo "-- 71.2(d) 5xx 属未知，保留 PENDING，随后收口为 FAILED（R3：不留在途残留）--"
 RC71_O2D=$(rc71_mk); [[ -n "$RC71_O2D" ]] && ok "71.2d 造单 #$RC71_O2D" || fail "71.2d 造单失败"
@@ -252,17 +252,46 @@ assert_eq "71.3 D1 行 CLOSED+释放+已留痕" "$RC71_CHECK3D" "CLOSED 1 1"
 assert_eq "71.3 D1 订单仍 REFUNDING" "$(order_status $RC71_O3D)" "REFUNDING"
 assert_eq "71.3 D1 refunded_amount=0" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O3D;")" "0"
 assert_eq "71.3 D1 进「退款待处理」" "$(rc71_attn $RC71_O3D)" "1"
-RC71_R=$(req POST "/api/admin/orders/$RC71_O3D/refund" "$AT" "{\"amount\":$RC71_AMT3D}")
-assert_eq "71.3 D1 释放后重新发起 code 0" "$(code "$RC71_R")" "0"
-assert_eq "71.3 D1 订单 REFUNDED" "$(order_status $RC71_O3D)" "REFUNDED"
 
-echo "-- 71.3 D1 R6：原 CLOSED 行的回调晚到 SUCCESS → 不翻回、留痕「疑似重复退款」--"
+echo "-- 71.3 D1(i) R9：CLOSED 未重新发起，回调晚到 SUCCESS → 按微信结果落账（人工核实留痕保留，wxNotifyData 追加）--"
 RC71_R=$(req POST /api/admin/system/pay-mock/refund-notify "$AT" "{\"outRefundNo\":\"$RC71_ORN3D\",\"status\":\"SUCCESS\"}")
-assert_eq "71.3 D1 R6：回调 ack code 0" "$(code "$RC71_R")" "0"
-RC71_CHECK3D_LATE=$(sql "SELECT CONCAT(status,' ',active_order_id IS NULL,' ',reconcile_last_error LIKE '%疑似重复退款%',' ',wx_notify_data LIKE '%mock-notify%') FROM refunds WHERE id=$RC71_RID3D;")
-assert_eq "71.3 D1 R6：原 CLOSED 行不被翻回 SUCCESS，留痕疑似重复退款" "$RC71_CHECK3D_LATE" "CLOSED 1 1 1"
-assert_eq "71.3 D1 R6：refunded_amount 不变（仍是新那笔的实付）" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O3D;")" "$RC71_AMT3D"
-assert_eq "71.3 D1 R6：订单仍 REFUNDED" "$(order_status $RC71_O3D)" "REFUNDED"
+assert_eq "71.3 D1(i) 回调 ack code 0" "$(code "$RC71_R")" "0"
+RC71_CHECK3D_I=$(sql "SELECT CONCAT(status,' ',active_order_id IS NULL,' ',manual_resolved_by,' ',reconcile_last_error LIKE '%人工核实%',' ',wx_notify_data LIKE '%manual-verified%',' ',wx_notify_data LIKE '%mock-notify%') FROM refunds WHERE id=$RC71_RID3D;")
+assert_eq "71.3 D1(i) 行 SUCCESS+释放+manual 留痕仍在+人工核实文案+两段 wxNotifyData 都在（R10 追加不覆盖）" "$RC71_CHECK3D_I" "SUCCESS 1 admin 1 1 1"
+assert_eq "71.3 D1(i) 订单 REFUNDED" "$(order_status $RC71_O3D)" "REFUNDED"
+assert_eq "71.3 D1(i) refunded_amount=A" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O3D;")" "$RC71_AMT3D"
+assert_eq "71.3 D1(i) payments REFUNDED" "$(sql "SELECT status FROM payments WHERE order_id=$RC71_O3D;")" "REFUNDED"
+RC71_PJ_D1=$(req GET "/api/admin/print-jobs?orderId=$RC71_O3D" "$AT" | jq '[.data.list[] | select(.kind=="CANCEL")] | length')
+assert_eq "71.3 D1(i) print-jobs CANCEL 恰好 1 条" "$RC71_PJ_D1" "1"
+assert_eq "71.3 D1(i) 不再进「退款待处理」" "$(rc71_attn $RC71_O3D)" "0"
+RC71_R=$(req POST "/api/admin/orders/$RC71_O3D/refund" "$AT" "{\"amount\":$RC71_AMT3D}")
+assert_eq "71.3 D1(i) 已全额退款再退 → 42206" "$(code "$RC71_R")" "42206"
+
+echo "-- 71.3 D1(ii) R9：CLOSED 后已重新发起成功，原行回调晚到 SUCCESS → 仍留痕疑似重复退款，LEAST 封顶 --"
+RC71_O3D2=$(rc71_mk); [[ -n "$RC71_O3D2" ]] && ok "71.3 D1(ii) 造单 #$RC71_O3D2" || fail "71.3 D1(ii) 造单失败"
+RC71_AMT3D2=$(req GET "/api/admin/orders/$RC71_O3D2" "$AT" | jq -r .data.actualAmount)
+sql "UPDATE orders SET status='REFUNDING', cancelled_at=NOW(3), cancel_reason='e2e71d2' WHERE id=$RC71_O3D2;"
+RC71_ORN3D2="refund_${RC71_O3D2}_e2e71d2_$RANDOM"
+RC71_ONO3D2=$(sql "SELECT order_no FROM orders WHERE id=$RC71_O3D2;")
+sql "INSERT INTO refunds (order_id, order_no, out_trade_no, out_refund_no, amount, total_amount, status, mode, active_order_id, created_at, updated_at)
+     VALUES ($RC71_O3D2, '$RC71_ONO3D2', 'order_${RC71_O3D2}_e2e71d2', '$RC71_ORN3D2', $RC71_AMT3D2, $RC71_AMT3D2, 'PROCESSING', 'WECHAT', $RC71_O3D2, NOW(3), NOW(3));"
+rr68_q "$RC71_ORN3D2" '{"kind":"not_found"}'
+rr68_sched
+RC71_RID3D2=$(rc71_refund_id "$RC71_ORN3D2")
+RC71_R=$(rc71_resolve "$RC71_O3D2" "$RC71_RID3D2" "{\"result\":\"CLOSED\",\"verifiedAmount\":$RC71_AMT3D2,\"note\":\"商户平台查无此退款，未退\"}")
+assert_eq "71.3 D1(ii) 释放 code 0" "$(code "$RC71_R")" "0"
+RC71_R=$(req POST "/api/admin/orders/$RC71_O3D2/refund" "$AT" "{\"amount\":$RC71_AMT3D2}")
+assert_eq "71.3 D1(ii) 释放后重新发起 code 0" "$(code "$RC71_R")" "0"
+assert_eq "71.3 D1(ii) 重新发起后订单 REFUNDED" "$(order_status $RC71_O3D2)" "REFUNDED"
+assert_eq "71.3 D1(ii) refunded_amount=A" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O3D2;")" "$RC71_AMT3D2"
+RC71_R=$(req POST /api/admin/system/pay-mock/refund-notify "$AT" "{\"outRefundNo\":\"$RC71_ORN3D2\",\"status\":\"SUCCESS\"}")
+assert_eq "71.3 D1(ii) 原行回调晚到 ack code 0" "$(code "$RC71_R")" "0"
+RC71_CHECK3D2=$(sql "SELECT CONCAT(status,' ',reconcile_last_error LIKE '%疑似重复退款%') FROM refunds WHERE id=$RC71_RID3D2;")
+assert_eq "71.3 D1(ii) 原行翻 SUCCESS，留痕疑似重复退款" "$RC71_CHECK3D2" "SUCCESS 1"
+assert_eq "71.3 D1(ii) refunded_amount 仍是 A（LEAST 封顶，不因原行再累加）" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O3D2;")" "$RC71_AMT3D2"
+assert_eq "71.3 D1(ii) 订单仍 REFUNDED" "$(order_status $RC71_O3D2)" "REFUNDED"
+RC71_PLEDGER=$(sql "SELECT COUNT(*) FROM points_ledgers WHERE ref_type='REFUND' AND ref_id=$RC71_RID3D2;")
+assert_eq "71.3 D1(ii) 原行没有再产生一条积分扣回流水（已到上限扣 0 也不留痕）" "$RC71_PLEDGER" "0"
 
 echo "-- 71.3 D2：实退金额与记录不符时按实退落账 --"
 RC71_O3E=$(rc71_mk); [[ -n "$RC71_O3E" ]] && ok "71.3 D2 造单 #$RC71_O3E" || fail "71.3 D2 造单失败"
@@ -325,6 +354,26 @@ assert_eq "71.3 D2R4b 进「退款待处理」（无在途退款）" "$(rc71_att
 RC71_R=$(req POST "/api/admin/orders/$RC71_O3G/refund" "$AT" '{"amount":100}')
 assert_eq "71.3 D2R4b 补足剩余 code 0" "$(code "$RC71_R")" "0"
 assert_eq "71.3 D2R4b 订单 REFUNDED" "$(order_status $RC71_O3G)" "REFUNDED"
+
+echo "-- 71.3 D2（R11）：REFUNDING 全额 ABNORMAL 行，记录金额小于余额，真等额 override → REFUNDED --"
+RC71_O3H=$(rc71_mk); [[ -n "$RC71_O3H" ]] && ok "71.3 D2R11 造单 #$RC71_O3H" || fail "71.3 D2R11 造单失败"
+RC71_AMT3H=$(req GET "/api/admin/orders/$RC71_O3H" "$AT" | jq -r .data.actualAmount)
+sql "UPDATE orders SET status='REFUNDING', cancelled_at=NOW(3), cancel_reason='e2e71h2' WHERE id=$RC71_O3H;"
+RC71_ORN3H="refund_${RC71_O3H}_e2e71h2_$RANDOM"
+RC71_ONO3H=$(sql "SELECT order_no FROM orders WHERE id=$RC71_O3H;")
+# 记录金额（100）故意小于订单实付（RC71_AMT3H），模拟「记录小于余额」的历史脏数据；
+# 全额 ABNORMAL 的原意是「这笔占了订单全部余额」，记录金额本身写错不影响 D2 override 逻辑——
+# override 校验只看 verifiedAmount 与锁内 remaining 的关系，不看 refund.amount 原值。
+sql "INSERT INTO refunds (order_id, order_no, out_trade_no, out_refund_no, amount, total_amount, status, mode, active_order_id, created_at, updated_at)
+     VALUES ($RC71_O3H, '$RC71_ONO3H', 'order_${RC71_O3H}_e2e71h2', '$RC71_ORN3H', 100, $RC71_AMT3H, 'PROCESSING', 'WECHAT', $RC71_O3H, NOW(3), NOW(3));"
+rr68_q "$RC71_ORN3H" '{"kind":"not_found"}'
+rr68_sched
+RC71_RID3H=$(rc71_refund_id "$RC71_ORN3H")
+assert_eq "71.3 D2R11 造出 ABNORMAL（记录 100 < 实付）" "$(sql "SELECT status FROM refunds WHERE id=$RC71_RID3H;")" "ABNORMAL"
+RC71_R=$(rc71_resolve "$RC71_O3H" "$RC71_RID3H" "{\"result\":\"SUCCESS\",\"verifiedAmount\":$RC71_AMT3H,\"note\":\"真等额一次退空\"}")
+assert_eq "71.3 D2R11 REFUNDING 订单真等额 override → code 0" "$(code "$RC71_R")" "0"
+assert_eq "71.3 D2R11 订单 REFUNDED" "$(order_status $RC71_O3H)" "REFUNDED"
+assert_eq "71.3 D2R11 refunded_amount=A" "$(sql "SELECT refunded_amount FROM orders WHERE id=$RC71_O3H;")" "$RC71_AMT3H"
 
 echo "-- 71.4 P4「退款待处理」口径 --"
 echo "-- 71.4 部分退款 ABNORMAL（订单 PAID）进页签 --"
@@ -443,6 +492,52 @@ RC71_R=$(req POST "/api/admin/orders/$RC71_O4E/refund" "$AT" '{"amount":100,"rea
 assert_eq "71.4e 部分退款 code 0" "$(code "$RC71_R")" "0"
 assert_eq "71.4e 退款行经真实流程终结为 CLOSED（非 SQL）" "$(jq -r .data.refund.status <<<"$RC71_R")" "CLOSED"
 assert_eq "71.4e 无售后单的部分退款 CLOSED 不进页签" "$(rc71_attn $RC71_O4E)" "0"
+
+echo "-- 71.5 R9：事务 A 锁内重验——余额被前一步收口消耗之后，同金额再退必须被拦住 --"
+echo "-- 71.5(a) 部分 ABNORMAL 核实成功后，余额已减，原「全额」金额再退 → 42206 --"
+RC71_O5A=$(rc71_mk); [[ -n "$RC71_O5A" ]] && ok "71.5a 造单 #$RC71_O5A" || fail "71.5a 造单失败"
+RC71_AMT5A=$(req GET "/api/admin/orders/$RC71_O5A" "$AT" | jq -r .data.actualAmount)
+RC71_ORN5A="refund_${RC71_O5A}_e2e71j_$RANDOM"
+RC71_ONO5A=$(sql "SELECT order_no FROM orders WHERE id=$RC71_O5A;")
+sql "INSERT INTO refunds (order_id, order_no, out_trade_no, out_refund_no, amount, total_amount, status, mode, active_order_id, created_at, updated_at)
+     VALUES ($RC71_O5A, '$RC71_ONO5A', 'order_${RC71_O5A}_e2e71j', '$RC71_ORN5A', 100, $RC71_AMT5A, 'PROCESSING', 'WECHAT', $RC71_O5A, NOW(3), NOW(3));"
+rr68_q "$RC71_ORN5A" '{"kind":"not_found"}'
+rr68_sched
+RC71_RID5A=$(rc71_refund_id "$RC71_ORN5A")
+assert_eq "71.5a 造出部分 ABNORMAL（记录 100，订单 PAID）" "$(sql "SELECT status FROM refunds WHERE id=$RC71_RID5A;")" "ABNORMAL"
+RC71_R=$(rc71_resolve "$RC71_O5A" "$RC71_RID5A" '{"result":"SUCCESS","verifiedAmount":100,"note":"部分核实成功"}')
+assert_eq "71.5a 核实 code 0" "$(code "$RC71_R")" "0"
+assert_eq "71.5a 订单仍 PAID" "$(order_status $RC71_O5A)" "PAID"
+# 锁内重验命中点：这里仍拿「核实前」算出的全额 A 去发起，而不是核实后的剩余 A-100——
+# 事务 A 头句锁 orders + 锁内重读 remainingRefundable，与事务外传入的 amount 校验会发现
+# 「amount(A) 超过锁内剩余(A-100)」，拒绝，不建新行。
+RC71_R=$(req POST "/api/admin/orders/$RC71_O5A/refund" "$AT" "{\"amount\":$RC71_AMT5A}")
+assert_eq "71.5a 用核实前的全额再退 → 42206（锁内 remaining 已减）" "$(code "$RC71_R")" "42206"
+RC71_ROWS5A=$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$RC71_O5A;")
+assert_eq "71.5a 未建出第二笔退款行" "$RC71_ROWS5A" "1"
+RC71_R=$(req POST "/api/admin/orders/$RC71_O5A/refund" "$AT" "{\"amount\":$((RC71_AMT5A-100))}")
+assert_eq "71.5a 用正确的剩余金额再退 → code 0" "$(code "$RC71_R")" "0"
+assert_eq "71.5a 订单 REFUNDED" "$(order_status $RC71_O5A)" "REFUNDED"
+
+echo "-- 71.5(b) REFUNDING 单 D1 转 CLOSED，回调晚到 SUCCESS 落账 REFUNDED 后，原金额再退 → 42206 --"
+RC71_O5B=$(rc71_mk); [[ -n "$RC71_O5B" ]] && ok "71.5b 造单 #$RC71_O5B" || fail "71.5b 造单失败"
+RC71_AMT5B=$(req GET "/api/admin/orders/$RC71_O5B" "$AT" | jq -r .data.actualAmount)
+sql "UPDATE orders SET status='REFUNDING', cancelled_at=NOW(3), cancel_reason='e2e71j2' WHERE id=$RC71_O5B;"
+RC71_ORN5B="refund_${RC71_O5B}_e2e71j2_$RANDOM"
+RC71_ONO5B=$(sql "SELECT order_no FROM orders WHERE id=$RC71_O5B;")
+sql "INSERT INTO refunds (order_id, order_no, out_trade_no, out_refund_no, amount, total_amount, status, mode, active_order_id, created_at, updated_at)
+     VALUES ($RC71_O5B, '$RC71_ONO5B', 'order_${RC71_O5B}_e2e71j2', '$RC71_ORN5B', $RC71_AMT5B, $RC71_AMT5B, 'PROCESSING', 'WECHAT', $RC71_O5B, NOW(3), NOW(3));"
+rr68_q "$RC71_ORN5B" '{"kind":"not_found"}'
+rr68_sched
+RC71_RID5B=$(rc71_refund_id "$RC71_ORN5B")
+RC71_R=$(rc71_resolve "$RC71_O5B" "$RC71_RID5B" "{\"result\":\"CLOSED\",\"verifiedAmount\":$RC71_AMT5B,\"note\":\"商户平台查无，未退\"}")
+assert_eq "71.5b D1 释放 code 0" "$(code "$RC71_R")" "0"
+assert_eq "71.5b 订单仍 REFUNDING" "$(order_status $RC71_O5B)" "REFUNDING"
+RC71_R=$(req POST /api/admin/system/pay-mock/refund-notify "$AT" "{\"outRefundNo\":\"$RC71_ORN5B\",\"status\":\"SUCCESS\"}")
+assert_eq "71.5b 回调晚到落账 ack code 0" "$(code "$RC71_R")" "0"
+assert_eq "71.5b 原行翻 SUCCESS，订单 REFUNDED" "$(order_status $RC71_O5B)" "REFUNDED"
+RC71_R=$(req POST "/api/admin/orders/$RC71_O5B/refund" "$AT" "{\"amount\":$RC71_AMT5B}")
+assert_eq "71.5b 已全额落账后再退同样金额 → 42206" "$(code "$RC71_R")" "42206"
 
 echo "-- 71 分片收尾：本分片名下订单不留任何在途退款行，全部经真实流程收口（R3：不许 SQL 兜底改状态）--"
 RC71_ORDER_LIST=$(tr '\n' ',' < "$RC71_ORDERS_FILE" | sed 's/,$//')
