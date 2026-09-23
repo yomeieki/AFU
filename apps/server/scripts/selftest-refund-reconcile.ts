@@ -838,19 +838,37 @@ async function main() {
     assert.strictEqual(o.status, 'PAID', '未达上限不翻 REFUNDED')
     assert.strictEqual(p.status, 'SUCCESS', '未达上限不翻 REFUNDED')
   })
-  await t('用例 R4（REFUNDING 订单，amountOverride=全部余额 → applied:true，允许一次退空）', async () => {
+  await t('用例 R4（REFUNDING 订单，override 小于余额 → applied:true，仍 REFUNDING）', async () => {
     const order = await makeOrder({ actualAmount: 1000, status: 'REFUNDING' })
     const refund = await makeRefund(order.id, { status: 'ABNORMAL', amount: 100, totalAmount: 1000, activeOrderId: order.id })
     const applied = await refundMod.finalizeRefundSuccess({
       refundId: refund.id,
       expectStatus: 'ABNORMAL',
       amountOverride: 900,
-      manual: { by: 'selftest', note: 'REFUNDING 一次退空', at: new Date() },
+      manual: { by: 'selftest', note: 'REFUNDING 部分实退', at: new Date() },
     })
     assert.deepStrictEqual(applied, { applied: true })
     const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
     assert.strictEqual(o.refundedAmount, 900)
     assert.strictEqual(o.status, 'REFUNDING', '未达 actualAmount 上限（900<1000），仍留在 REFUNDING')
+  })
+  await t('用例 R4/R11（REFUNDING 订单，override=全部余额，真正等额 → REFUNDED）', async () => {
+    const order = await makeOrder({ actualAmount: 1000, status: 'REFUNDING' })
+    const refund = await makeRefund(order.id, { status: 'ABNORMAL', amount: 100, totalAmount: 1000, activeOrderId: order.id })
+    const applied = await refundMod.finalizeRefundSuccess({
+      refundId: refund.id,
+      expectStatus: 'ABNORMAL',
+      amountOverride: 1000,
+      manual: { by: 'selftest', note: 'REFUNDING 一次退空（真等额）', at: new Date() },
+    })
+    assert.deepStrictEqual(applied, { applied: true })
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
+    const p = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id } })
+    assert.strictEqual(r.status, 'SUCCESS')
+    assert.strictEqual(o.refundedAmount, 1000)
+    assert.strictEqual(o.status, 'REFUNDED', 'REFUNDING 订单允许一次退空，达上限翻 REFUNDED')
+    assert.strictEqual(p.status, 'REFUNDED')
   })
 
   // ────────────────────────────────────────────────────────────────
@@ -858,36 +876,79 @@ async function main() {
   // 「仍在途（PENDING/PROCESSING/ABNORMAL）」。CLOSED/FAILED 两个终态收到（回调晚到的）
   // SUCCESS 信号时不再被悄悄翻回 SUCCESS，而是留痕「疑似重复退款」并告警。
   // ────────────────────────────────────────────────────────────────
-  console.log('== R6. finalize 默认守卫收紧：CLOSED/FAILED 终态后收到 SUCCESS 信号 → 留痕告警，不翻转 ==')
-  await t('用例 R6（CLOSED 行收到回调 SUCCESS → applied:false，留痕疑似重复退款）', async () => {
+  console.log('== R6/R9. finalize 默认守卫恢复 ≠SUCCESS：终态后收到 SUCCESS 信号一律按微信结果落账，分文案告警 ==')
+  await t('用例 R6/R9（CLOSED 行收到回调 SUCCESS，无后续行 → applied:true，按微信结果落账，告警不含「疑似」）', async () => {
     const order = await makeOrder({ actualAmount: 100, status: 'REFUNDING' })
     const refund = await makeRefund(order.id, { status: 'CLOSED', amount: 100, totalAmount: 100, activeOrderId: null })
     resetCounters()
     const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id, rawData: 'late-closed', rawField: 'wxNotifyData' })
-    assert.deepStrictEqual(applied, { applied: false })
+    assert.deepStrictEqual(applied, { applied: true }, 'R9：终态后收到微信 SUCCESS 一律按微信结果落账')
     const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
     const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
-    assert.strictEqual(r.status, 'CLOSED', '不应被翻回 SUCCESS')
-    assert.strictEqual(o.refundedAmount, 0, '不应累加')
-    assert.ok(r.reconcileLastError?.includes('疑似重复退款'), `reconcileLastError 应含「疑似重复退款」，实际 ${r.reconcileLastError}`)
-    assert.strictEqual(r.wxNotifyData, 'late-closed', 'rawData 应落库供事后核查')
+    assert.strictEqual(r.status, 'SUCCESS')
+    assert.strictEqual(o.refundedAmount, 100, '按微信结果累加')
+    assert.strictEqual(o.status, 'REFUNDED')
+    assert.ok(r.reconcileLastError?.includes('已按微信结果落账'), `reconcileLastError 实际 ${r.reconcileLastError}`)
+    assert.strictEqual(r.wxNotifyData, 'late-closed')
     const lateAlert = alertCalls.find((c) => c.key === `refund-late-success:${refund.id}`)
-    assert.ok(lateAlert, '应发出「疑似重复退款」告警')
+    assert.ok(lateAlert, '应发出告警')
+    assert.ok(!lateAlert!.title.includes('疑似'), `无后续行时 title 不应含「疑似」，实际 ${lateAlert!.title}`)
     assert.strictEqual(lateAlert!.windowMs, 6 * 60 * 60 * 1000, '应带 6 小时限频窗口')
-    assert.strictEqual(refundResultCalls.length, 0, '不是真正翻转成功，不应推送顾客通知')
+    await sleep(150) // 顾客通知是事务外 fire-and-forget
+    assert.strictEqual(refundResultCalls.filter((c) => c.status === 'SUCCESS').length, 1, '真正翻转成功，应推送一次顾客通知')
   })
-  await t('用例 R6（FAILED 行收到回调 SUCCESS → applied:false，留痕疑似重复退款）', async () => {
+  await t('用例 R6/R9（CLOSED 行已有后续在途行 Y → applied:true，告警含「疑似重复退款」与 Y 的单号）', async () => {
+    const order = await makeOrder({ actualAmount: 300, status: 'PAID' })
+    const refund = await makeRefund(order.id, { status: 'CLOSED', amount: 100, totalAmount: 300, activeOrderId: null })
+    const laterRefund = await makeRefund(order.id, { status: 'PENDING', amount: 100, totalAmount: 300, activeOrderId: order.id })
+    assert.ok(laterRefund.id > refund.id, '前置：Y 的 id 必须大于 X（依赖自增顺序）')
+    resetCounters()
+    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id })
+    assert.deepStrictEqual(applied, { applied: true })
+    const lateAlert = alertCalls.find((c) => c.key === `refund-late-success:${refund.id}`)
+    assert.ok(lateAlert, '应发出告警')
+    assert.ok(lateAlert!.title.includes('疑似重复退款'), `实际 title ${lateAlert!.title}`)
+    assert.ok(lateAlert!.lines.some((l) => l.includes(laterRefund.outRefundNo)), `lines 应含 Y 的单号，实际 ${JSON.stringify(lateAlert!.lines)}`)
+  })
+  await t('用例 R6/R9（X 带 manualResolvedBy → lines 含「人工核实」，wxNotifyData 追加而非覆盖，R10）', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'REFUNDING' })
+    const refund = await makeRefund(order.id, { status: 'CLOSED', amount: 100, totalAmount: 100, activeOrderId: null })
+    const manualRaw = JSON.stringify({ source: 'manual-verified', result: 'CLOSED', operator: 'admin' })
+    await prisma.refund.update({ where: { id: refund.id }, data: { manualResolvedBy: 'admin', manualResolveNote: '核实为未退款', wxNotifyData: manualRaw } })
+    resetCounters()
+    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id, rawData: 'late-wechat-payload', rawField: 'wxNotifyData' })
+    assert.deepStrictEqual(applied, { applied: true })
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    assert.ok(r.reconcileLastError?.includes('人工核实'), `实际 ${r.reconcileLastError}`)
+    assert.ok(r.wxNotifyData?.includes(manualRaw), 'wxNotifyData 应保留原 manual-verified 记录（追加不覆盖）')
+    assert.ok(r.wxNotifyData?.includes('late-wechat-payload'), 'wxNotifyData 应追加本次微信信号')
+    assert.ok(r.wxNotifyData?.includes('---late-wechat-success---'), '应用约定分隔符')
+    const lateAlert = alertCalls.find((c) => c.key === `refund-late-success:${refund.id}`)
+    assert.ok(lateAlert!.lines.some((l) => l.includes('人工核实')), `lines 应含「人工核实」，实际 ${JSON.stringify(lateAlert!.lines)}`)
+  })
+  await t('用例 R6/R9（FAILED 行同 (i)：无后续行 → applied:true，按微信结果落账）', async () => {
     const order = await makeOrder({ actualAmount: 100, status: 'PAID' })
     const refund = await makeRefund(order.id, { status: 'FAILED', amount: 100, totalAmount: 100, activeOrderId: null })
     resetCounters()
     const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id })
-    assert.deepStrictEqual(applied, { applied: false })
+    assert.deepStrictEqual(applied, { applied: true })
     const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
-    assert.strictEqual(r.status, 'FAILED')
-    assert.ok(r.reconcileLastError?.includes('疑似重复退款'))
+    const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
+    assert.strictEqual(r.status, 'SUCCESS')
+    assert.strictEqual(o.refundedAmount, 100)
+    assert.ok(r.reconcileLastError?.includes('已按微信结果落账'))
     assert.ok(alertCalls.some((c) => c.key === `refund-late-success:${refund.id}`))
   })
-  await t('用例 R6（人工 expectStatus=ABNORMAL 对 CLOSED 行 → applied:false，且不发 late-success 告警）', async () => {
+  await t('用例 R6/R9（SUCCESS 行再次 finalize → applied:false，完全静默，真正的幂等重推）', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'PAID' })
+    const refund = await makeRefund(order.id, { status: 'SUCCESS', amount: 100, totalAmount: 100, activeOrderId: null })
+    resetCounters()
+    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id })
+    assert.deepStrictEqual(applied, { applied: false })
+    assert.strictEqual(alertCalls.length, 0, '真正的幂等重推，保持完全静默')
+    assert.strictEqual(refundResultCalls.length, 0)
+  })
+  await t('用例 R6/R9（人工 expectStatus=ABNORMAL 对 CLOSED 行 → applied:false，不落账不告警，不变）', async () => {
     const order = await makeOrder({ actualAmount: 100, status: 'REFUNDING' })
     const refund = await makeRefund(order.id, { status: 'CLOSED', amount: 100, totalAmount: 100, activeOrderId: null })
     resetCounters()
@@ -897,14 +958,74 @@ async function main() {
     assert.strictEqual(r.status, 'CLOSED')
     assert.strictEqual(alertCalls.length, 0, '人工路径的 count=0 是「行已不是 ABNORMAL」，不是重复退款信号，不应告警')
   })
-  await t('用例 R6（SUCCESS 行再次 finalize → applied:false，完全静默，用例 1/3 的幂等行为保持）', async () => {
-    const order = await makeOrder({ actualAmount: 100, status: 'PAID' })
-    const refund = await makeRefund(order.id, { status: 'SUCCESS', amount: 100, totalAmount: 100, activeOrderId: null })
+
+  // ────────────────────────────────────────────────────────────────
+  // 复核裁决（plan.md §8 R9，2026-09-23，第二轮复核）：initiateRefund 事务 A 头句上锁 + 锁内
+  // 重验，闭合「finalize 落账」与「本次发起」之间原本只靠事务外快照判断的并发窗口。
+  // ────────────────────────────────────────────────────────────────
+  console.log('== R9. initiateRefund 事务 A 锁内重验：闭合并发部分退款的 TOCTOU ==')
+  await t('用例 R9（顺序构造：事务外快照已过期 → 锁内重验命中，42204/42206，不建新行）', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'PAID', paymentType: 'MOCK', outTradeNo: null })
+    // 简化构造（非真并发）：模拟「事务外快照读到之后、事务 A 真正拿锁之前」订单已被另一路径退完。
+    // 这个具体构造本身在改动前也会被 :92 附近既有的「remaining<=0 → 42206」挡住（不是 R9 专属
+    // 的证伪场景），保留是为了盖住「锁内重验命中时不建任何新行」这条不变量；R9 真正闭合的并发
+    // 窗口由下一条用例（真并发部分退款）验证。
+    await prisma.order.update({ where: { id: order.id }, data: { refundedAmount: 100 } })
+    let threw: unknown = null
+    try {
+      await refundMod.initiateRefund({ orderId: order.id, amount: 100, operator: 'selftest' })
+    } catch (e) {
+      threw = e
+    }
+    assert.ok(threw, '可退余额已被抢走，应抛错（42206 「已全额退款」或 42204 视校验命中顺序而定）')
+    assert.ok([42204, 42206].includes((threw as { code: number }).code), `实际 code ${(threw as { code: number }).code}`)
+    const count = await prisma.refund.count({ where: { orderId: order.id } })
+    assert.strictEqual(count, 0, '锁内重验命中，不应建出任何退款行')
+  })
+  await t('用例 R9（真并发：两笔部分退款合计超过实付，不得出现「记录金额之和超过实付」的资损）', async () => {
+    const order = await makeOrder({ actualAmount: 200, status: 'PAID', paymentType: 'WECHAT' })
     resetCounters()
-    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id })
-    assert.deepStrictEqual(applied, { applied: false })
-    assert.strictEqual(alertCalls.length, 0, '真正的幂等重推，保持完全静默')
-    assert.strictEqual(refundResultCalls.length, 0)
+    // WECHAT 路径（非 mock）：createRefundStub 立即返回 SUCCESS，模拟微信同步成功——
+    // 两笔各自都在「合法范围内」（100<=200、150<=200）的部分退款，但合计 250 超过实付 200，
+    // 只有事务 A 的锁内重验能在其中一笔的事务外快照过期后正确拦下它。
+    createRefundStub = async (params: unknown) => {
+      const p = params as { amount: number; total: number; outRefundNo: string }
+      return { refund_id: `wxr-${p.outRefundNo}`, out_refund_no: p.outRefundNo, status: 'SUCCESS' as const, amount: { refund: p.amount, total: p.total } }
+    }
+    let yOk = false
+    let yErr: unknown = null
+    let xOk = false
+    let xErr: unknown = null
+    // 故意不 await：让 Y 的第一次 await（读订单快照）先发出去，再完整跑一遍 X——
+    // 这样 Y 恢复执行时手里的快照（无在途退款、余额 200）大概率已经落后于 X 跑完之后的真实状态。
+    // 两笔谁先拿到事务 A 的锁并不确定（取决于实际 I/O 调度），断言必须对两种胜负都成立。
+    const yPromise = refundMod
+      .initiateRefund({ orderId: order.id, amount: 100, operator: 'Y' })
+      .then(() => {
+        yOk = true
+      })
+      .catch((e) => {
+        yErr = e
+      })
+    try {
+      await refundMod.initiateRefund({ orderId: order.id, amount: 150, operator: 'X' })
+      xOk = true
+    } catch (e) {
+      xErr = e
+    }
+    await yPromise
+    assert.ok(xOk || yOk, '两笔至少要有一笔成功，不能两败俱伤')
+    if (!xOk) assert.ok([42205, 42204, 42206].includes((xErr as { code: number }).code), `X 失败时 code 实际 ${(xErr as { code: number })?.code}`)
+    if (!yOk) assert.ok([42205, 42204, 42206].includes((yErr as { code: number }).code), `Y 失败时 code 实际 ${(yErr as { code: number })?.code}`)
+    if (xOk && yOk) {
+      // 两笔都成功也不算错，只要没有资损：两笔 SUCCESS 记录的 amount 之和不能超过实付——
+      // 这正是 R9 之前的隐患：靠事务外快照各自放行，合计 250 超过实付 200 却都记成功。
+      const rows = await prisma.refund.findMany({ where: { orderId: order.id, status: 'SUCCESS' } })
+      const sum = rows.reduce((s, r) => s + r.amount, 0)
+      assert.ok(sum <= 200, `不应出现两笔并发部分退款合计超过实付的资损，实际 sum=${sum}`)
+    }
+    const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
+    assert.ok(o.refundedAmount <= 200, 'orders.refunded_amount 不能超过 actualAmount')
   })
 
   // ────────────────────────────────────────────────────────────────
