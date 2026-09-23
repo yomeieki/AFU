@@ -1844,7 +1844,7 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 
 | 接口 | 说明 |
 |---|---|
-| `GET /api/local/meta` | 新增 `delivery`、`pickup`、`holiday` 三节（老字段保留）。`pickup: { enabled, paused, available, minOrderAmountFen, discount, discountText, slotMinutes, daysAhead }`；`holiday` 休业中才非 null。 |
+| `GET /api/local/meta` | 新增 `delivery`、`pickup`、`holiday` 三节（老字段保留）。`pickup: { enabled, paused, available, minOrderAmountFen, discount, discountText, slotMinutes, daysAhead, earliestPickupText, earliestPickupWhen }`；`holiday` 休业中才非 null。 |
 | `GET /api/local/pickup-slots` | 公开。`{ days: [{ date, label('今天'/'明天'/'MM-DD'), slots: [{ startAt, endAt, label }] }], earliestAt, slotMinutes, blocked: null \| { kind: 'HOLIDAY'\|'PAUSED'\|'DISABLED', text } }`。不可选的格子不返回；今天为空时 `days[0].slots=[]`。 |
 | `POST /api/orders` | `deliveryType:'PICKUP'` 时 **不传** `addressId`，必传 `pickupAt`（须精确等于某格 `startAt`）与 `pickupContact: { name?, phone }`。计价：小计 → 自取优惠 → 满减（2026-09-17 加入，见附录 K）→ 券（门槛看原小计，面额封顶到小计−自取优惠−满减）→ 实付；运费 0。响应多 `pickupAt`、`pickupDiscountAmount`、`promoDiscountAmount`、`subscribeTemplates`。 |
 | `GET /api/orders` | `deliveryType` 接受 `PICKUP`；新增 `channel=LOCAL`（外送 + 自取）/ `channel=EXPRESS`。 |
@@ -2183,6 +2183,8 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | 接口 | 变化 |
 |---|---|
 | `GET /api/local/meta` | `delivery` 节加 `scheduleEnabled / slotMinutes / selfCancelLeadMin / earliestScheduleText` |
+| `GET /api/local/meta` | `pickup` 节加 `earliestPickupText`（『最早今天 17:00–17:30 可取』；不可约为空串） |
+| `GET /api/local/meta`（2026-09-23 修订 1） | `pickup` 节再加 `earliestPickupWhen: 'CURRENT'\|'LATER'\|'NONE'`——`CURRENT` 此刻在营业段内且最早格落在同一天同一段；`LATER` 其余（含营业时间外、本段已约不到的尾段、明天）；`NONE` 一格都约不了（`earliestPickupText` 同时为空串） |
 | `GET /api/local/delivery-slots?distanceM=` | 新增，结构同 `pickup-slots` |
 | `POST /api/orders` | LOCAL 可传 `scheduledAt`；42290 未开通 / 42291 时段不可选；预约单跳过暂停与营业时间判定 |
 | `GET /api/orders/:id` | 加 `schedule` 节；`canSelfCancel`/`canRequestCancel` 按约定前 `selfCancelLeadMin` 判（自取同） |

@@ -1,0 +1,8 @@
+/* 渠道切换弹层：z-index 100 > 购物车条 90；底部留安全区 */
+.channel-mask { position: fixed; z-index: 100; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.45); }
+.channel-sheet { position: absolute; left: 0; right: 0; bottom: 0; padding: 24rpx 24rpx calc(24rpx + env(safe-area-inset-bottom)); background: var(--card); border-radius: 24rpx 24rpx 0 0; box-sizing: border-box; }
+.channel-sheet-title { font-size: 26rpx; color: var(--text-3); padding: 0 8rpx 12rpx; }
+.channel-option { display: flex; align-items: center; justify-content: space-between; padding: 26rpx 16rpx; border-radius: 12rpx; font-size: 30rpx; color: var(--text-1); }
+.channel-option-hover { background: var(--bg); }
+.channel-option.active { color: var(--brand); font-weight: 600; }
+.channel-option-check { color: var(--brand); font-size: 30rpx; }

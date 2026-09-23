@@ -4,7 +4,7 @@
  */
 import assert from 'assert'
 import { DEFAULT_LOCAL_SETTINGS, sanitizeLocalSettings } from '../src/services/local-settings'
-import { buildPickupSlots, prepStartAt, pickupPrepMinutes, isValidPickupSlot, pickupDiscountOf, pickupSlotLabel, pickupTicketLabel } from '../src/services/pickup'
+import { buildPickupSlots, prepStartAt, pickupPrepMinutes, isValidPickupSlot, pickupDiscountOf, pickupSlotLabel, pickupTicketLabel, earliestPickupText, earliestPickupInfo } from '../src/services/pickup'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -101,6 +101,60 @@ t('小票取餐文案：绝对日期 + 星期；今天不盖戳、明天「明�
   assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-11T12:00:00'), 30, now), { text: '9月11日（周五）12:00–12:30', stamp: '' })
   assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-12T12:00:00'), 30, now), { text: '9月12日（周六）12:00–12:30', stamp: '明日单' })
   assert.deepStrictEqual(pickupTicketLabel(sh('2026-09-13T18:00:00'), 20, now), { text: '9月13日（周日）18:00–18:20', stamp: '9月13日单' })
+})
+
+t('earliestPickupText：15:10 下单看晚市首格 → 「最早今天 17:00–17:30 可取」', () => {
+  assert.strictEqual(earliestPickupText(base, sh('2026-09-11T15:10:00')), '最早今天 17:00–17:30 可取')
+})
+t('earliestPickupText：22:39 下单今天已收工 → 「最早明天 10:00–10:30 可取」', () => {
+  assert.strictEqual(earliestPickupText(base, sh('2026-09-11T22:39:00')), '最早明天 10:00–10:30 可取')
+})
+t('earliestPickupText：09:00 下单今天首格 → 「最早今天 10:00–10:30 可取」', () => {
+  assert.strictEqual(earliestPickupText(base, sh('2026-09-11T09:00:00')), '最早今天 10:00–10:30 可取')
+})
+t('earliestPickupText：自取未开通 → 空串', () => {
+  assert.strictEqual(earliestPickupText({ ...base, pickup: { ...base.pickup, enabled: false } }, sh('2026-09-11T09:00:00')), '')
+})
+t('earliestPickupText：自取暂停（until:null）→ 空串', () => {
+  assert.strictEqual(earliestPickupText({ ...base, pickup: { ...base.pickup, paused: { until: null, reason: '忙' } } }, sh('2026-09-11T09:00:00')), '')
+})
+t('earliestPickupText：休业覆盖两天 → 空串', () => {
+  assert.strictEqual(earliestPickupText({ ...base, holiday: { until: '2026-09-20', reason: '装修' } }, sh('2026-09-11T09:00:00')), '')
+})
+
+t('earliestPickupInfo：13:04 段内挪到稍后（13:30 仍在 10-14 这段内）→ CURRENT', () => {
+  assert.deepStrictEqual(earliestPickupInfo(base, sh('2026-09-11T13:04:00')), { when: 'CURRENT', text: '最早今天 13:30–14:00 可取' })
+})
+t('earliestPickupInfo：13:06 本段已约不到（13:30 格提前量不够），最早是晚市 17:00 → LATER（尾段边界对）', () => {
+  assert.deepStrictEqual(earliestPickupInfo(base, sh('2026-09-11T13:06:00')), { when: 'LATER', text: '最早今天 17:00–17:30 可取' })
+})
+t('earliestPickupInfo：19:00 段内挪到稍后（19:30 仍在 17-20 这段内）→ CURRENT', () => {
+  assert.deepStrictEqual(earliestPickupInfo(base, sh('2026-09-11T19:00:00')), { when: 'CURRENT', text: '最早今天 19:30–20:00 可取' })
+})
+t('earliestPickupInfo：19:10 晚市已约不到，最早是明天 → LATER', () => {
+  assert.deepStrictEqual(earliestPickupInfo(base, sh('2026-09-11T19:10:00')), { when: 'LATER', text: '最早明天 10:00–10:30 可取' })
+})
+t('earliestPickupInfo：15:10 午休（不在任何营业段内）→ LATER', () => {
+  assert.strictEqual(earliestPickupInfo(base, sh('2026-09-11T15:10:00')).when, 'LATER')
+})
+t('earliestPickupInfo：22:39 打烊（不在任何营业段内）→ LATER', () => {
+  assert.strictEqual(earliestPickupInfo(base, sh('2026-09-11T22:39:00')).when, 'LATER')
+})
+t('earliestPickupInfo：11:00 段内挪到稍后（11:30 仍在 10-14 这段内）→ CURRENT', () => {
+  assert.deepStrictEqual(earliestPickupInfo(base, sh('2026-09-11T11:00:00')), { when: 'CURRENT', text: '最早今天 11:30–12:00 可取' })
+})
+t('earliestPickupInfo：daysAhead=0 时今天已约不到（19:10）→ NONE', () => {
+  const s0 = { ...base, pickup: { ...base.pickup, daysAhead: 0 } }
+  assert.deepStrictEqual(earliestPickupInfo(s0, sh('2026-09-11T19:10:00')), { when: 'NONE', text: '' })
+})
+t('earliestPickupInfo：daysAhead=0 时打烊后（22:39）→ NONE', () => {
+  const s0 = { ...base, pickup: { ...base.pickup, daysAhead: 0 } }
+  assert.deepStrictEqual(earliestPickupInfo(s0, sh('2026-09-11T22:39:00')), { when: 'NONE', text: '' })
+})
+t('earliestPickupInfo：未开通 / 暂停 / 休业覆盖两天 → 均 NONE（与既有三条空串用例并列断言）', () => {
+  assert.strictEqual(earliestPickupInfo({ ...base, pickup: { ...base.pickup, enabled: false } }, sh('2026-09-11T09:00:00')).when, 'NONE')
+  assert.strictEqual(earliestPickupInfo({ ...base, pickup: { ...base.pickup, paused: { until: null, reason: '忙' } } }, sh('2026-09-11T09:00:00')).when, 'NONE')
+  assert.strictEqual(earliestPickupInfo({ ...base, holiday: { until: '2026-09-20', reason: '装修' } }, sh('2026-09-11T09:00:00')).when, 'NONE')
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

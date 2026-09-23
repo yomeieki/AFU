@@ -15,7 +15,7 @@ import {
 } from '../services/local-settings'
 import { promoPreviewOf } from '../services/promotion'
 import { measureRoadQuote } from '../services/delivery/quote'
-import { buildPickupSlots } from '../services/pickup'
+import { buildPickupSlots, earliestPickupInfo } from '../services/pickup'
 import { buildDeliverySlots, earliestScheduleText } from '../services/delivery/schedule'
 import { deliveryTypeSchema } from '../utils/channel'
 
@@ -26,7 +26,12 @@ router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => 
     const s = await getLocalSettings()
     const meta = publicLocalMeta(s)
     // 页头还没有地址算不出路上时间，用配送半径算一个保守的最早送达（spec §4.3）
-    success(res, { ...meta, delivery: { ...meta.delivery, earliestScheduleText: earliestScheduleText(s) } })
+    const pickupInfo = earliestPickupInfo(s)
+    success(res, {
+      ...meta,
+      delivery: { ...meta.delivery, earliestScheduleText: earliestScheduleText(s) },
+      pickup: { ...meta.pickup, earliestPickupText: pickupInfo.text, earliestPickupWhen: pickupInfo.when },
+    })
   } catch (e) {
     next(e)
   }

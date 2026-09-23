@@ -19,7 +19,7 @@
   <view style="height:{{navTotal}}px"></view>
 
   <!-- 同城：门店头（营业状态 / 配送规则 / 阻塞通知）取代 Banner 的位置 -->
-  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" />
+  <local-store-header wx:if="{{channel === 'LOCAL'}}" meta="{{meta}}" mode="{{mode}}" channel="{{channel}}" bind:goexpress="onGoExpress" bind:switchmode="onSwitchMode" bind:switchchannel="openChannelSheet" />
 
   <!-- 邮寄 Banner：后台配置的轮播优先，无配置时回退静态渐变 banner -->
   <swiper
@@ -95,7 +95,7 @@
   <!-- Recommended Products -->
   <view class="section">
     <view class="section-header">
-      <text class="section-title">{{channel === 'LOCAL' ? '今日现拌' : '推荐商品'}}</text>
+      <text class="section-title">{{channel === 'LOCAL' ? '今日推荐' : '推荐商品'}}</text>
     </view>
 
     <!-- 骨架屏 -->
@@ -171,6 +171,8 @@
   mode="{{mode}}"
   bind:change="onCartChange"
 />
+
+<channel-sheet open="{{channelSheetOpen}}" channel="{{channel}}" bind:pick="onPickChannel" bind:close="closeChannelSheet" />
 
 <local-sku-picker wx:if="{{channel === 'LOCAL'}}" id="local-sku-picker" bind:added="onAdded" />
 
