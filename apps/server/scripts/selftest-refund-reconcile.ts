@@ -963,13 +963,13 @@ async function main() {
   // 复核裁决（plan.md §8 R9，2026-09-23，第二轮复核）：initiateRefund 事务 A 头句上锁 + 锁内
   // 重验，闭合「finalize 落账」与「本次发起」之间原本只靠事务外快照判断的并发窗口。
   // ────────────────────────────────────────────────────────────────
-  console.log('== R9. initiateRefund 事务 A 锁内重验：闭合并发部分退款的 TOCTOU ==')
-  await t('用例 R9（顺序构造：事务外快照已过期 → 锁内重验命中，42204/42206，不建新行）', async () => {
+  console.log('== R9. initiateRefund 事务 A 锁内重验 ==')
+  await t('用例 R9-0（事务外快照已过期 → 42206，改动前后一致，仅盖『不建新行』不变量）', async () => {
     const order = await makeOrder({ actualAmount: 100, status: 'PAID', paymentType: 'MOCK', outTradeNo: null })
-    // 简化构造（非真并发）：模拟「事务外快照读到之后、事务 A 真正拿锁之前」订单已被另一路径退完。
-    // 这个具体构造本身在改动前也会被 :92 附近既有的「remaining<=0 → 42206」挡住（不是 R9 专属
-    // 的证伪场景），保留是为了盖住「锁内重验命中时不建任何新行」这条不变量；R9 真正闭合的并发
-    // 窗口由下一条用例（真并发部分退款）验证。
+    // 升级轮裁决（escalation-ruling.md R12）：这个构造本身在改动前也会被 :102 附近既有的
+    // 「remaining<=0 → 42206」挡住（事务外快照已经读到 refundedAmount=100），走不到锁内重验，
+    // 对 R9 的新代码没有证伪力——只保留作为「命中校验时不建任何新行」这条不变量的回归用例。
+    // R9 真正闭合的并发窗口由下一条「用例 R9-1」用真锁等待验证。
     await prisma.order.update({ where: { id: order.id }, data: { refundedAmount: 100 } })
     let threw: unknown = null
     try {
@@ -977,55 +977,79 @@ async function main() {
     } catch (e) {
       threw = e
     }
-    assert.ok(threw, '可退余额已被抢走，应抛错（42206 「已全额退款」或 42204 视校验命中顺序而定）')
-    assert.ok([42204, 42206].includes((threw as { code: number }).code), `实际 code ${(threw as { code: number }).code}`)
+    assert.ok(threw, '可退余额已被抢走，应抛错')
+    assert.strictEqual((threw as { code: number }).code, 42206, '事务外快照检查命中，应为 42206')
     const count = await prisma.refund.count({ where: { orderId: order.id } })
-    assert.strictEqual(count, 0, '锁内重验命中，不应建出任何退款行')
+    assert.strictEqual(count, 0, '不应建出任何退款行')
   })
-  await t('用例 R9（真并发：两笔部分退款合计超过实付，不得出现「记录金额之和超过实付」的资损）', async () => {
+  await t('用例 R9-1（另一连接先锁 orders 行 → initiateRefund 卡在事务 A 首句 → 锁内重验命中 42204，不建行）', async () => {
     const order = await makeOrder({ actualAmount: 200, status: 'PAID', paymentType: 'WECHAT' })
     resetCounters()
-    // WECHAT 路径（非 mock）：createRefundStub 立即返回 SUCCESS，模拟微信同步成功——
-    // 两笔各自都在「合法范围内」（100<=200、150<=200）的部分退款，但合计 250 超过实付 200，
-    // 只有事务 A 的锁内重验能在其中一笔的事务外快照过期后正确拦下它。
+    // createRefundStub 立即返回 SUCCESS：目的是让「改动前」代码在拿到锁之后能完整建出一条 SUCCESS
+    // 行，把资损做成可见的断言失败，而不是因为 stub 未设置抛一个无关的普通 Error。
     createRefundStub = async (params: unknown) => {
       const p = params as { amount: number; total: number; outRefundNo: string }
       return { refund_id: `wxr-${p.outRefundNo}`, out_refund_no: p.outRefundNo, status: 'SUCCESS' as const, amount: { refund: p.amount, total: p.total } }
     }
-    let yOk = false
-    let yErr: unknown = null
-    let xOk = false
-    let xErr: unknown = null
-    // 故意不 await：让 Y 的第一次 await（读订单快照）先发出去，再完整跑一遍 X——
-    // 这样 Y 恢复执行时手里的快照（无在途退款、余额 200）大概率已经落后于 X 跑完之后的真实状态。
-    // 两笔谁先拿到事务 A 的锁并不确定（取决于实际 I/O 调度），断言必须对两种胜负都成立。
-    const yPromise = refundMod
-      .initiateRefund({ orderId: order.id, amount: 100, operator: 'Y' })
-      .then(() => {
-        yOk = true
-      })
-      .catch((e) => {
-        yErr = e
-      })
-    try {
-      await refundMod.initiateRefund({ orderId: order.id, amount: 150, operator: 'X' })
-      xOk = true
-    } catch (e) {
-      xErr = e
-    }
-    await yPromise
-    assert.ok(xOk || yOk, '两笔至少要有一笔成功，不能两败俱伤')
-    if (!xOk) assert.ok([42205, 42204, 42206].includes((xErr as { code: number }).code), `X 失败时 code 实际 ${(xErr as { code: number })?.code}`)
-    if (!yOk) assert.ok([42205, 42204, 42206].includes((yErr as { code: number }).code), `Y 失败时 code 实际 ${(yErr as { code: number })?.code}`)
-    if (xOk && yOk) {
-      // 两笔都成功也不算错，只要没有资损：两笔 SUCCESS 记录的 amount 之和不能超过实付——
-      // 这正是 R9 之前的隐患：靠事务外快照各自放行，合计 250 超过实付 200 却都记成功。
-      const rows = await prisma.refund.findMany({ where: { orderId: order.id, status: 'SUCCESS' } })
-      const sum = rows.reduce((s, r) => s + r.amount, 0)
-      assert.ok(sum <= 200, `不应出现两笔并发部分退款合计超过实付的资损，实际 sum=${sum}`)
-    }
+
+    // p 必须在 T 提交之后才能 await——p 卡在等 T 释放锁，T 的提交又发生在回调返回之后；
+    // 若在回调内 await p 会自我死锁（回调迟迟不返回 ⇒ T 迟迟不提交 ⇒ p 迟迟拿不到锁）。
+    // 所以 p 声明在事务外层作用域，回调内只「启动不等待」，`await p` 放在 $transaction 之后。
+    let p: Promise<{ ok: unknown } | { err: unknown }> | null = null
+    let lockObserved = false
+    await prisma.$transaction(
+      async (tx) => {
+        // T 首句拿排他锁——与 initiateRefund 事务 A 竞争同一把 orders 行锁。
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`
+
+        // 拿到锁后，不 await 地启动 initiateRefund：它的事务外检查（快照读，不会被 T 的
+        // X 锁阻塞——RR 隔离下一致性非锁定读不受锁等待影响）会立刻通过，随后卡在事务 A 首句
+        // 的 FOR UPDATE 上，直到 T 提交释放锁。
+        p = refundMod
+          .initiateRefund({ orderId: order.id, amount: 100, operator: 'R9-1' })
+          .then((v) => ({ ok: v }))
+          .catch((e) => ({ err: e }))
+
+        // 轮询 performance_schema，确认 initiateRefund 的事务 A 真的已经卡在 orders 行的锁等待上，
+        // 不是靠猜时序——用非事务的 prisma（独立连接）查，不会被 T 自己的锁影响查询本身。
+        const deadline = Date.now() + 2000
+        while (Date.now() < deadline) {
+          const rows = await prisma.$queryRaw<{ n: bigint }[]>`
+            SELECT COUNT(*) AS n
+            FROM performance_schema.data_lock_waits w
+            JOIN performance_schema.data_locks r ON r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
+            WHERE r.OBJECT_SCHEMA = DATABASE() AND r.OBJECT_NAME = 'orders' AND r.LOCK_DATA = ${String(order.id)}
+          `
+          if (Number(rows[0]?.n ?? 0) >= 1) {
+            lockObserved = true
+            break
+          }
+          await sleep(50)
+        }
+        if (!lockObserved) {
+          throw new Error('R9-1 前置失败：2s 内未观察到 initiateRefund 对 orders 行的锁等待（不是被测逻辑的问题）')
+        }
+
+        // T 持锁期间把余额改满，模拟「另一笔退款已经把这单退完」——随后回调返回、T 提交释放锁，
+        // initiateRefund 的事务 A 才能继续往下走。整个 T 从拿锁到提交远小于 Prisma 交互事务的
+        // 默认 timeout（5s）与 innodb_lock_wait_timeout（50s）。
+        await tx.order.update({ where: { id: order.id }, data: { refundedAmount: 200 } })
+      },
+      { maxWait: 5000, timeout: 10000 }
+    )
+
+    assert.ok(lockObserved, '前置失败：未观察到锁等待')
+    assert.ok(p, 'initiateRefund 应已启动')
+    const settled = await (p as Promise<{ ok: unknown } | { err: unknown }>)
+    assert.ok('err' in settled, 'initiateRefund 应抛错（锁内重验命中）')
+    const err = (settled as { err: { code: number; message: string } }).err
+    assert.strictEqual(err.code, 42204, '只接受 42204（42206 说明时序滑到 T 提交之后，属前置失败；42205 同样不对）')
+    assert.ok(err.message.includes('退款额已变化'), `message 实际 ${err.message}`)
+    assert.strictEqual(await prisma.refund.count({ where: { orderId: order.id } }), 0, '锁内重验命中，不得建出任何退款行')
     const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
-    assert.ok(o.refundedAmount <= 200, 'orders.refunded_amount 不能超过 actualAmount')
+    assert.strictEqual(o.refundedAmount, 200, 'T 的改动应该在（未被 initiateRefund 反向覆盖）')
+    assert.strictEqual(refundResultCalls.length, 0)
+    assert.strictEqual(alertCalls.length, 0)
   })
 
   // ────────────────────────────────────────────────────────────────
