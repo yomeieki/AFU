@@ -62,12 +62,34 @@ test('scheduleCancelCopy：两小时外/两小时内未备好/已备好三段文
     scheduleCancelCopy({ canSelfCancel: false, canRequestCancel: true, schedule: { selfCancelUntil: 'SELF_CANCEL', readyAt: null } }, fakeFmt),
     '可申请取消，商家确认后全额退款'
   )
-  // 段三：已备好，两个取消权限都没有了
+  // 段三：已备好，两个取消权限都没有了。需求变化（M3）：这句只在 PREPARING（备餐中）
+  // 才该出现——服务端只在 PREPARING 写 readyAt（admin/delivery.ts），之后的
+  // SHIPPED/COMPLETED/REFUNDED/CANCELLED 详情仍会下发 schedule.readyAt，取消卡不该
+  // 再显示「餐品已在准备」这句已经不成立的话。
   assert.equal(
-    scheduleCancelCopy({ canSelfCancel: false, canRequestCancel: false, schedule: { selfCancelUntil: 'SELF_CANCEL', readyAt: '2026-09-23T05:00:00Z' } }, fakeFmt),
+    scheduleCancelCopy({ status: 'PREPARING', canSelfCancel: false, canRequestCancel: false, schedule: { selfCancelUntil: 'SELF_CANCEL', readyAt: '2026-09-23T05:00:00Z' } }, fakeFmt),
     '餐品已在准备，如有问题请联系商家'
   )
   assert.equal(scheduleCancelCopy({ canSelfCancel: true, canRequestCancel: false, schedule: null }, fakeFmt), '')
+})
+
+// T3a（M3，复审阻塞）：已备好（readyAt 非空）不再是「两个取消权限都没有」时的兜底——
+// 必须同时 status === 'PREPARING' 才显示这句话。终态单（配送中/已完成/已退款/已取消）
+// 与仍在退款流程中的单，即便服务端仍下发了 schedule.readyAt，也不该再显示这句已经
+// 不成立的「餐品已在准备」。
+test('T3a M3：readyAt 非空但不在 PREPARING 时，一律返回空；PREPARING 才显示', function () {
+  var terminalStatuses = ['SHIPPED', 'COMPLETED', 'REFUNDED', 'CANCELLED', 'REFUNDING']
+  terminalStatuses.forEach(function (status) {
+    assert.equal(
+      scheduleCancelCopy({ status: status, canSelfCancel: false, canRequestCancel: false, schedule: { selfCancelUntil: 'SELF_CANCEL', readyAt: '2026-09-23T05:00:00Z' } }, fakeFmt),
+      '',
+      status + ' 不该再显示「餐品已在准备」'
+    )
+  })
+  assert.equal(
+    scheduleCancelCopy({ status: 'PREPARING', canSelfCancel: false, canRequestCancel: false, schedule: { selfCancelUntil: 'SELF_CANCEL', readyAt: '2026-09-23T05:00:00Z' } }, fakeFmt),
+    '餐品已在准备，如有问题请联系商家'
+  )
 })
 
 test('scheduleTypeLabel：预约单列表卡标签，非预约单返回 null', function () {

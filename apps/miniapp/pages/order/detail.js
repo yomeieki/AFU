@@ -23,6 +23,9 @@ var STATUS_LABEL = {
 }
 
 var PICKUP_STATUS_LABEL = Object.assign({}, STATUS_LABEL, { PAID: '待接单', SHIPPED: '待取餐', COMPLETED: '已取餐' })
+// D3（店主决定，随 M2 顺带修）：详情页顶部同城 SHIPPED 单也显示「配送中」，
+// 与列表页（components/order-status-tag）一致——骑手在路上不是「已发货」。
+var LOCAL_STATUS_LABEL = Object.assign({}, STATUS_LABEL, { SHIPPED: '配送中' })
 
 // 同城配送的异常状态不展示运力侧的内部处理术语，避免顾客误解为订单出错。
 var DELIVERY_CUSTOMER_LABEL = {
@@ -334,7 +337,7 @@ function decorateOrder(order) {
   var isDeliveryNeutral = !!deliveryStatus && DELIVERY_NEUTRAL.indexOf(deliveryStatus) !== -1
   return Object.assign({}, order, {
     // 预约单 PAID 优先显示「已预约」（utils/schedule-order），其余沿用原表
-    statusLabel: scheduleOrderUtil.scheduleStatusLabel(order) || (isPickup ? PICKUP_STATUS_LABEL : STATUS_LABEL)[order.status] || order.status,
+    statusLabel: scheduleOrderUtil.scheduleStatusLabel(order) || (isPickup ? PICKUP_STATUS_LABEL : isLocal ? LOCAL_STATUS_LABEL : STATUS_LABEL)[order.status] || order.status,
     scheduleBanner: scheduleOrderUtil.scheduleBannerText(order),
     isLocal: isLocal,
     isExpress: isExpress,

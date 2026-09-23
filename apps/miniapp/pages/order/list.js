@@ -12,27 +12,11 @@ var TABS = [
   { label: '已取消', status: 'CANCELLED' },
 ]
 
-var EXPRESS_STATUS_LABEL = {
-  PENDING_PAYMENT: '待付款',
-  PAID: '待发货',
-  PREPARING: '备餐中',
-  REFUNDING: '退款中',
-  SHIPPED: '已发货',
-  COMPLETED: '已完成',
-  CANCELLED: '已取消',
-  REFUNDED: '已退款',
-}
-
-var LOCAL_STATUS_LABEL = Object.assign({}, EXPRESS_STATUS_LABEL, {
-  SHIPPED: '配送中',
-})
-
-// 自取单：PAID 是「待接单」，SHIPPED 复用为「待取餐」，COMPLETED 为「已取餐」（spec P8）
-var PICKUP_STATUS_LABEL = Object.assign({}, EXPRESS_STATUS_LABEL, {
-  PAID: '待接单',
-  SHIPPED: '待取餐',
-  COMPLETED: '已取餐',
-})
+// M2（复审阻塞，2026-09-23）：状态文案改由 <order-status-tag> 组件按
+// status/deliveryType/scheduled 直接算（list.wxml:47），本页不再自己维护一套
+// 状态表——原来这里三张表 + decorate() 算出的 statusLabel 早已没人渲染
+// （wxml 那一行 {{item.statusLabel}} 在换成组件时被替换掉了），是典型的
+// 「数据对、渲染早就不读它」假绿，见 tests/miniapp/order-status-tag.test.cjs。
 var TYPE_META = {
   LOCAL: { label: '同城', cls: 'local' },
   PICKUP: { label: '自取', cls: 'pickup' },
@@ -70,14 +54,11 @@ function coverItem(items) {
 
 function decorate(order) {
   var extra = ''
-  var statusLabels = order.deliveryType === 'LOCAL' ? LOCAL_STATUS_LABEL : order.deliveryType === 'PICKUP' ? PICKUP_STATUS_LABEL : EXPRESS_STATUS_LABEL
   if (order.refundedAmount > 0) extra = '已退 ¥' + formatPrice(order.refundedAmount)
   if (order.afterSale && AFTER_SALE_LABEL[order.afterSale.status]) {
     extra = (extra ? extra + ' · ' : '') + AFTER_SALE_LABEL[order.afterSale.status]
   }
   return Object.assign({}, order, {
-    // 预约单 PAID 优先显示「已预约」，其余沿用原状态表（utils/schedule-order）
-    statusLabel: scheduleOrderUtil.scheduleStatusLabel(order) || statusLabels[order.status] || order.status,
     actualAmountText: formatPrice(order.actualAmount),
     firstItem: coverItem(order.items),
     moreCount: order.items && order.items.length > 1 ? order.items.length - 1 : 0,
