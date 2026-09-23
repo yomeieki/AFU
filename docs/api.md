@@ -1137,7 +1137,7 @@ M2-B 店员默认落地页 `/workbench` 的唯一数据源：归类（五列）�
 | `POST /:id/call` | 呼叫骑手：落一条 `Delivery(PENDING→CALLING)` 占位（`activeOrderId` 唯一索引防并发重呼，撞了 → `42228`）→ 事务外调用快递100 `batchOrder`。仅 `PREPARING` 且无顾客取消申请、有收货坐标可呼叫，否则 `42204`/`42223`。响应 `{ deliveryId, deliveryNo, status: 'CALLING'\|'UNKNOWN', quotedFeeFen }`：`CALLING` = 下单成功；`UNKNOWN` = 下单响应超时，占位保留等回调认领。明确失败（配置错误/余额不足/运力异常重试耗尽）→ `42225`；熔断中 → `42232` |
 | `GET /:id/delivery` | 该订单当前有效配送单（无则取最近一张历史单）+ 事件时间线。响应 `{ delivery, events[] }`；`delivery` 为 `null` 表示从未呼叫过 |
 | `POST /:id/delivery/precancel` | 预估取消费（只读，不真取消，用于取消前给店员看一眼要扣多少钱）。响应 `{ cancelFeeFen }`。无在途单 → `42233`；尚未成单（无 `providerTaskId`）→ `42234` |
-| `POST /:id/delivery/cancel` | 取消在途配送单（真取消，调用快递100 `cancel`）。Body `{ reason? }`（≤255 字）。响应 `{ cancelFeeFen }`；取消费与小费一律店铺承担，记入 `Delivery` 对账。取消请求超时（状态未变化）→ `42238`；无在途单 → `42233`；状态已变化（并发）→ `42237`。**预约单**：店员在工作台点这个接口即撤回「已备好」（`readyAt` 置空），系统到点不再自动呼叫；重新呼叫走「已备好 / 立即呼叫」，改自送走 `self-deliver`。调度器自动升级（撤 D-1 建 D-2）走的是内部 `source:'SCHEDULER'`，不清 `readyAt`（2026-09-23 S1）。取消后顾客端按 `readyAt` 为空重新允许「申请取消」（前提仍是未过 `selfCancelUntil`）；若订单就此悬置，`remindScheduledNotReady` 会按「预约单应已备好未确认」继续催（店主决定 D2 选 A：保留、不改文案） |
+| `POST /:id/delivery/cancel` | 取消在途配送单（真取消，调用快递100 `cancel`）。Body `{ reason? }`（≤255 字）。响应 `{ cancelFeeFen }`；取消费与小费一律店铺承担，记入 `Delivery` 对账。取消请求超时（状态未变化）→ `42238`；无在途单 → `42233`；状态已变化（并发）→ `42237`。**预约单**：店员在工作台点这个接口即撤回「已备好」（`readyAt` 置空），系统到点不再自动呼叫；重新呼叫走「已备好 / 立即呼叫」，改自送走 `self-deliver`。调度器自动升级（撤 D-1 建 D-2）走的是内部 `source:'SCHEDULER'`，不清 `readyAt`（2026-09-23 S1）。取消后顾客端按 `readyAt` 为空重新恢复取消入口：未过 `selfCancelUntil` 走秒退（`canSelfCancelOf`，`PUT /:id/cancel`）；过了 `selfCancelUntil` 则只能「申请取消」（`canRequestCancelOf`，`POST /:id/cancel-request`，需店员同意）。若订单就此悬置，`remindScheduledNotReady` 会按「预约单应已备好未确认」继续催（店主决定 D2 选 A：保留、不改文案） |
 | `POST /:id/delivery/tip` | 加小费（仅 `CALLING` 待抢单阶段可加，超过设置里的单次/单笔累计上限 → `42235`）。Body `{ amount }`（整数分，1-100000）。响应 `{ tipFeeFen }`（累计小费）。运力拒绝/请求超时 → `42236` |
 | `POST /:id/self-deliver` | 店内自送：新建 `Delivery(provider='SELF', status='DELIVERING')`，订单 `PREPARING → SHIPPED`。Body `{ name, phone }`。响应 `{ deliveryId, deliveryNo }`。已有在途配送单 → `42228`（若是「状态未确认」单则提示先作废 → `42234`） |
 | `POST /:id/delivered` | 标记已送达：配送单 → `DELIVERED`，订单 → `COMPLETED`。无在途单 → `42233`；并发状态已变化 → `42237` |
@@ -2157,7 +2157,7 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 
 ### 阶段（`schedulePhase`，2026-09-23 S4/S5 + 复核裁决 R7 更新）
 
-`WAITING → TICKETED → PREPPING → CALL_DUE → READY_WAITING → CALLED`，`LATE` 优先（过约定送达时刻仍未取货）。已备好（`readyAt` 非空）之后：有在途配送单（`hasActiveDelivery`）或骑手已取货（`pickedUp`，含已送达——`activeOrderId` 此时已释放，只看 `hasActiveDelivery` 会误判）恒 `CALLED`；否则到点（`callAt`）起 2 分钟宽限内 `READY_WAITING`，宽限用尽回落 `CALL_DUE`（「该呼叫却没呼出去」，橙色，与「应已备好未点」共用同一视觉语言、文案按 `readyAt` 是否非空区分）。
+`WAITING → TICKETED → PREPPING → READY_WAITING → CALL_DUE → CALLED`，`LATE` 优先（过约定送达时刻仍未取货）。已备好（`readyAt` 非空）之后：有在途配送单（`hasActiveDelivery`）或骑手已取货（`pickedUp`，含已送达——`activeOrderId` 此时已释放，只看 `hasActiveDelivery` 会误判）恒 `CALLED`；否则到点（`callAt`）起 2 分钟宽限内 `READY_WAITING`，宽限用尽回落 `CALL_DUE`（「该呼叫却没呼出去」，橙色，与「应已备好未点」共用同一视觉语言、文案按 `readyAt` 是否非空区分）。
 
 ### 数据
 
