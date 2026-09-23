@@ -43,6 +43,11 @@
  *  用例 markRefundFailed-guard：守卫收窄为仅 PENDING，对 PROCESSING 行调用无效
  *  用例 P1：finalizeRefundSuccess/markRefundClosed 的 expectStatus='ABNORMAL' 人工出口
  *           （一正一反）、D2 amountOverride 按实退金额落账（一正一反，超余额抛 42206 且事务回滚）
+ *  用例 R4（复核裁决 plan.md §8）：amountOverride 收紧——非 REFUNDING 订单不能把可退余额一次
+ *           退空（42206 且事务回滚）；差一分允许；REFUNDING 订单允许一次退空
+ *  用例 R6（复核裁决 plan.md §8）：finalize 默认守卫收紧为「仍在途」；CLOSED/FAILED 终态收到
+ *           SUCCESS 信号 → applied:false、留痕「疑似重复退款」+ 6h 告警，不翻转、不通知顾客；
+ *           人工路径的 count=0 与 SUCCESS 行的幂等重推两种「输了」场景保持完全静默
  */
 import 'dotenv/config'
 import crypto from 'crypto'
@@ -780,6 +785,126 @@ async function main() {
     const r2 = await prisma.refund.findUniqueOrThrow({ where: { id: refund2.id } })
     assert.strictEqual(r2.status, 'ABNORMAL', '抛错后事务回滚，状态不变')
     assert.strictEqual(r2.amount, 100, '抛错后事务回滚，金额不变')
+  })
+
+  // ────────────────────────────────────────────────────────────────
+  // 复核裁决（plan.md §8 R4，2026-09-23）：订单不在 REFUNDING 时，amountOverride 不能把
+  // 可退余额一次退空——否则 refundedAmount=actualAmount、payment 翻 REFUNDED，但订单
+  // 仍停在 PAID/SHIPPED（finalize 只把 REFUNDING 翻成 REFUNDED），是隐蔽的状态不一致。
+  // ────────────────────────────────────────────────────────────────
+  console.log('== R4. amountOverride 收紧：非 REFUNDING 订单不能一次退空可退余额 ==')
+  await t('用例 R4（PAID 订单，amountOverride=可退余额 → 42206，事务回滚）', async () => {
+    const order = await makeOrder({ actualAmount: 1000, status: 'PAID' })
+    const refund = await makeRefund(order.id, { status: 'ABNORMAL', amount: 100, totalAmount: 1000, activeOrderId: order.id })
+    resetCounters()
+    let threw: unknown = null
+    try {
+      await refundMod.finalizeRefundSuccess({
+        refundId: refund.id,
+        expectStatus: 'ABNORMAL',
+        amountOverride: 1000,
+        manual: { by: 'selftest', note: '一次退空测试', at: new Date() },
+      })
+    } catch (e) {
+      threw = e
+    }
+    assert.ok(threw, 'PAID 订单实退=全部余额应抛错')
+    assert.strictEqual((threw as { code: number }).code, 42206)
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
+    const p = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id } })
+    assert.strictEqual(r.status, 'ABNORMAL', '事务回滚，状态不变')
+    assert.strictEqual(o.refundedAmount, 0)
+    assert.strictEqual(o.status, 'PAID')
+    assert.strictEqual(p.status, 'SUCCESS', 'payment 不应被拽去 REFUNDED')
+    assert.strictEqual(alertCalls.length, 0, '抛错事务回滚，不应有任何告警')
+    assert.strictEqual(refundResultCalls.length, 0)
+  })
+  await t('用例 R4（同一 PAID 订单，amountOverride=余额-1 → applied:true，差一分不算退空）', async () => {
+    const order = await makeOrder({ actualAmount: 1000, status: 'PAID' })
+    const refund = await makeRefund(order.id, { status: 'ABNORMAL', amount: 100, totalAmount: 1000, activeOrderId: order.id })
+    const applied = await refundMod.finalizeRefundSuccess({
+      refundId: refund.id,
+      expectStatus: 'ABNORMAL',
+      amountOverride: 999,
+      manual: { by: 'selftest', note: '差一分测试', at: new Date() },
+    })
+    assert.deepStrictEqual(applied, { applied: true })
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
+    const p = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id } })
+    assert.strictEqual(r.status, 'SUCCESS')
+    assert.strictEqual(o.refundedAmount, 999)
+    assert.strictEqual(o.status, 'PAID', '未达上限不翻 REFUNDED')
+    assert.strictEqual(p.status, 'SUCCESS', '未达上限不翻 REFUNDED')
+  })
+  await t('用例 R4（REFUNDING 订单，amountOverride=全部余额 → applied:true，允许一次退空）', async () => {
+    const order = await makeOrder({ actualAmount: 1000, status: 'REFUNDING' })
+    const refund = await makeRefund(order.id, { status: 'ABNORMAL', amount: 100, totalAmount: 1000, activeOrderId: order.id })
+    const applied = await refundMod.finalizeRefundSuccess({
+      refundId: refund.id,
+      expectStatus: 'ABNORMAL',
+      amountOverride: 900,
+      manual: { by: 'selftest', note: 'REFUNDING 一次退空', at: new Date() },
+    })
+    assert.deepStrictEqual(applied, { applied: true })
+    const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
+    assert.strictEqual(o.refundedAmount, 900)
+    assert.strictEqual(o.status, 'REFUNDING', '未达 actualAmount 上限（900<1000），仍留在 REFUNDING')
+  })
+
+  // ────────────────────────────────────────────────────────────────
+  // 复核裁决（plan.md §8 R6，2026-09-23）：finalize 默认守卫从「非 SUCCESS 皆可」收紧为
+  // 「仍在途（PENDING/PROCESSING/ABNORMAL）」。CLOSED/FAILED 两个终态收到（回调晚到的）
+  // SUCCESS 信号时不再被悄悄翻回 SUCCESS，而是留痕「疑似重复退款」并告警。
+  // ────────────────────────────────────────────────────────────────
+  console.log('== R6. finalize 默认守卫收紧：CLOSED/FAILED 终态后收到 SUCCESS 信号 → 留痕告警，不翻转 ==')
+  await t('用例 R6（CLOSED 行收到回调 SUCCESS → applied:false，留痕疑似重复退款）', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'REFUNDING' })
+    const refund = await makeRefund(order.id, { status: 'CLOSED', amount: 100, totalAmount: 100, activeOrderId: null })
+    resetCounters()
+    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id, rawData: 'late-closed', rawField: 'wxNotifyData' })
+    assert.deepStrictEqual(applied, { applied: false })
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    const o = await prisma.order.findUniqueOrThrow({ where: { id: order.id } })
+    assert.strictEqual(r.status, 'CLOSED', '不应被翻回 SUCCESS')
+    assert.strictEqual(o.refundedAmount, 0, '不应累加')
+    assert.ok(r.reconcileLastError?.includes('疑似重复退款'), `reconcileLastError 应含「疑似重复退款」，实际 ${r.reconcileLastError}`)
+    assert.strictEqual(r.wxNotifyData, 'late-closed', 'rawData 应落库供事后核查')
+    const lateAlert = alertCalls.find((c) => c.key === `refund-late-success:${refund.id}`)
+    assert.ok(lateAlert, '应发出「疑似重复退款」告警')
+    assert.strictEqual(lateAlert!.windowMs, 6 * 60 * 60 * 1000, '应带 6 小时限频窗口')
+    assert.strictEqual(refundResultCalls.length, 0, '不是真正翻转成功，不应推送顾客通知')
+  })
+  await t('用例 R6（FAILED 行收到回调 SUCCESS → applied:false，留痕疑似重复退款）', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'PAID' })
+    const refund = await makeRefund(order.id, { status: 'FAILED', amount: 100, totalAmount: 100, activeOrderId: null })
+    resetCounters()
+    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id })
+    assert.deepStrictEqual(applied, { applied: false })
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    assert.strictEqual(r.status, 'FAILED')
+    assert.ok(r.reconcileLastError?.includes('疑似重复退款'))
+    assert.ok(alertCalls.some((c) => c.key === `refund-late-success:${refund.id}`))
+  })
+  await t('用例 R6（人工 expectStatus=ABNORMAL 对 CLOSED 行 → applied:false，且不发 late-success 告警）', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'REFUNDING' })
+    const refund = await makeRefund(order.id, { status: 'CLOSED', amount: 100, totalAmount: 100, activeOrderId: null })
+    resetCounters()
+    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id, expectStatus: 'ABNORMAL', manual: { by: 'selftest', note: 'n', at: new Date() } })
+    assert.deepStrictEqual(applied, { applied: false })
+    const r = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })
+    assert.strictEqual(r.status, 'CLOSED')
+    assert.strictEqual(alertCalls.length, 0, '人工路径的 count=0 是「行已不是 ABNORMAL」，不是重复退款信号，不应告警')
+  })
+  await t('用例 R6（SUCCESS 行再次 finalize → applied:false，完全静默，用例 1/3 的幂等行为保持）', async () => {
+    const order = await makeOrder({ actualAmount: 100, status: 'PAID' })
+    const refund = await makeRefund(order.id, { status: 'SUCCESS', amount: 100, totalAmount: 100, activeOrderId: null })
+    resetCounters()
+    const applied = await refundMod.finalizeRefundSuccess({ refundId: refund.id })
+    assert.deepStrictEqual(applied, { applied: false })
+    assert.strictEqual(alertCalls.length, 0, '真正的幂等重推，保持完全静默')
+    assert.strictEqual(refundResultCalls.length, 0)
   })
 
   // ────────────────────────────────────────────────────────────────
