@@ -86,6 +86,18 @@ test('canApproveAfterSaleRefund：REFUNDING 且退款已 CLOSED/FAILED → true�
   assert.equal(canApproveAfterSaleRefund({ status: 'REFUNDING', remainingRefundable: 100, latestRefund: { status: 'FAILED' } }), true)
 })
 
+// R2（复核补测）：P4 放宽后，AfterSalePanel 的「重新退款」按钮场景——售后单已 APPROVED，
+// 订单本身可能停在 SHIPPED/COMPLETED（部分退款不改订单状态），退款同步失败/异步 CLOSED/FAILED。
+test('canApproveAfterSaleRefund：APPROVED 售后 + 无在途退款（CLOSED/FAILED）→ true（可点「重新退款」）', () => {
+  assert.equal(canApproveAfterSaleRefund({ status: 'SHIPPED', remainingRefundable: 100, latestRefund: { status: 'CLOSED' } }), true)
+  assert.equal(canApproveAfterSaleRefund({ status: 'COMPLETED', remainingRefundable: 100, latestRefund: { status: 'FAILED' } }), true)
+})
+test('canApproveAfterSaleRefund：APPROVED 售后 + 有在途退款（PENDING/PROCESSING/ABNORMAL）→ false', () => {
+  for (const status of ['PENDING', 'PROCESSING', 'ABNORMAL']) {
+    assert.equal(canApproveAfterSaleRefund({ status: 'SHIPPED', remainingRefundable: 100, latestRefund: { status } }), false, status)
+  }
+})
+
 test('canApproveAfterSaleRefund：余额 0 / 已退款 / 已取消 → false', () => {
   assert.equal(canApproveAfterSaleRefund({ status: 'COMPLETED', remainingRefundable: 0, latestRefund: null }), false)
   assert.equal(canApproveAfterSaleRefund({ status: 'REFUNDED', remainingRefundable: 0, latestRefund: { status: 'SUCCESS' } }), false)
