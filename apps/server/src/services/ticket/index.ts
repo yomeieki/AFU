@@ -189,7 +189,7 @@ const ORDER_SELECT = {
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
 
-type ScheduleForTicket = { slotLabel: string; stamp: string; prepStart: string; call: string; unaccepted: boolean } | null
+type ScheduleForTicket = { slotLabel: string; slotDate: string; slotTime: string; stamp: string; prepStart: string; call: string; unaccepted: boolean } | null
 
 function toTicketInput(order: OrderForTicket, slotMinutes: number, schedule: ScheduleForTicket = null): TicketOrderInput {
   const channel: TicketChannel = order.deliveryType === 'LOCAL' ? 'LOCAL' : order.deliveryType === 'PICKUP' ? 'PICKUP' : 'EXPRESS'
@@ -219,6 +219,9 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number, schedule: Sch
     pickupAt: order.pickupAt,
     // 票面印绝对日期（方案一）：付款时打的票第二天还在夹子上，「明天」会变成假话
     pickupSlotLabel: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).text : null,
+    // S7（店主决定 D3）：日期段 / 时段段拆开传，票面把日期普通字号、时段单独放大（content.ts）
+    pickupSlotDate: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).date : null,
+    pickupSlotTime: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).time : null,
     pickupDayStamp: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).stamp : null,
     pickupDiscountAmount: order.pickupDiscountAmount,
     promoDiscountAmount: order.promoDiscountAmount,
@@ -227,6 +230,9 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number, schedule: Sch
     // schedule 为 null 时把 scheduledAt 也回落为 null，让票面走立即单口径（印「预计送达：…」）。
     scheduledAt: schedule ? order.scheduledAt : null,
     scheduleSlotLabel: schedule?.slotLabel ?? null,
+    // S7：同上，日期段 / 时段段拆开传
+    scheduleSlotDate: schedule?.slotDate ?? null,
+    scheduleSlotTime: schedule?.slotTime ?? null,
     scheduleDayStamp: schedule?.stamp ?? null,
     schedulePrepStart: schedule?.prepStart ?? null,
     scheduleCall: schedule?.call ?? null,
@@ -331,7 +337,10 @@ export async function enqueueOrderTicket(
     ? (() => {
         const tl = scheduleTimeline(localS, order.scheduledAt, order.distanceM)
         const lb = ticketLabel(order.scheduledAt, localS.schedule.slotMinutes)
-        return { slotLabel: lb.text, stamp: lb.stamp, prepStart: hhmmOf(tl.prepStartAt), call: hhmmOf(tl.callAt), unaccepted: order.status === 'PAID' }
+        return {
+          slotLabel: lb.text, slotDate: lb.date, slotTime: lb.time, stamp: lb.stamp,
+          prepStart: hhmmOf(tl.prepStartAt), call: hhmmOf(tl.callAt), unaccepted: order.status === 'PAID',
+        }
       })()
     : null
 

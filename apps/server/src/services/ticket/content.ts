@@ -69,8 +69,12 @@ export interface TicketOrderInput {
    *  所以现在这里不会再有混淆对象——但字段名仍然刻意叫 announceNo，别改回 seq。 */
   // ── 自取专属（channel==='PICKUP'）──
   pickupAt?: Date | null
-  /** 「9月12日（周六）12:00–12:30」，由调用方用 services/pickup 的 pickupTicketLabel 算好传进来（本文件不算时区） */
+  /** 「9月12日（周六）12:00–12:30」，由调用方用 services/pickup 的 pickupTicketLabel 算好传进来（本文件不算时区）。
+   *  仍保留给非票面场景引用；票面本身改用下面 pickupSlotDate/pickupSlotTime 拆行（S7，店主决定 D3） */
   pickupSlotLabel?: string | null
+  /** S7（店主决定 D3，2026-09-23 一起修）：拆开的日期段与时段段，理由同 scheduleSlotDate/scheduleSlotTime */
+  pickupSlotDate?: string | null
+  pickupSlotTime?: string | null
   /** 票头戳：'' = 今天取（不盖），'明日单' / '9月13日单' = 不是今天取，提醒别今天做 */
   pickupDayStamp?: string | null
   /** 自取优惠（分）。>0 时取餐联在合计与券之间打一行；厨房联不打 */
@@ -80,8 +84,14 @@ export interface TicketOrderInput {
   announceNo?: number | null
   // ── 预约送达（channel==='LOCAL' 且 scheduledAt 非空；2026-09-21）──
   scheduledAt?: Date | null
-  /** 「9月22日（周二）12:00–12:30」，调用方用 slots.ticketLabel 算好传进来（本文件不算时区） */
+  /** 「9月22日（周二）12:00–12:30」，调用方用 slots.ticketLabel 算好传进来（本文件不算时区）。
+   *  仍保留给非票面场景引用；票面本身改用下面 scheduleSlotDate/scheduleSlotTime 拆行（S7） */
   scheduleSlotLabel?: string | null
+  /** S7（2026-09-23 修）：scheduleSlotLabel 拆开的日期段「9月22日（周二）」与时段段「12:00–12:30」——
+   *  整串塞进 <B> 放大行会到 33 列，远超真机 16 列可用宽度（BIG_LINE_WIDTH），必然折行断字。
+   *  票面改成「日期普通字号 + 时段单独放大」两行，只有时段那半截进 <B>。 */
+  scheduleSlotDate?: string | null
+  scheduleSlotTime?: string | null
   /** 票头戳：'' 今天送（不盖）/ '明日单' / '9月22日单' */
   scheduleDayStamp?: string | null
   /** 'HH:mm'：开始备餐 / 该呼叫，来自 scheduleTimeline */
@@ -106,7 +116,7 @@ const LINE_WIDTH = 32
  * 厨房联的商品行整行套在 `<B>` 里，若仍按 32 列排版，纸上会折成两行、右侧补的空格还会把
  * 断点推到奇怪的位置。
  */
-const BIG_LINE_WIDTH = LINE_WIDTH / 2
+export const BIG_LINE_WIDTH = LINE_WIDTH / 2
 
 /**
  * 赠品行前缀。**两联用同一个标记**。
@@ -124,7 +134,8 @@ const GIFT_MARK = '赠 '
 function charWidth(ch: string): number {
   return (ch.codePointAt(0) ?? 0) > 0xff ? 2 : 1
 }
-function strWidth(s: string): number {
+/** S7：导出供 scripts/selftest-ticket-schedule.ts 校验 `<B>` 放大行的显示宽度是否 ≤ 16 列（BIG_LINE_WIDTH） */
+export function strWidth(s: string): number {
   let w = 0
   for (const ch of s) w += charWidth(ch)
   return w
@@ -314,7 +325,11 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   const header: string[] = [
     o.prep ? '<CB>开始备餐</CB>' : `<CB>${isPickup ? '到店自取' : isScheduled ? '预约配送' : isLocal ? '同城配送' : '全国邮寄'}</CB>`,
     // 备餐票：第一行就是操作指令；[未接单] 提醒店员先接单
-    ...(o.prep ? [`<B>${esc(o.schedulePrepStart ?? '')} 开始备餐 · ${esc(o.scheduleCall ?? '')} 前备好</B>`, ...(o.prep.unaccepted ? ['<CB>[未接单]</CB>'] : [])] : []),
+    // S7（2026-09-23 修）：原「11:16 开始备餐 · 11:36 前备好」合成一行整段进 <B> 有 30 列，
+    // 超真机 16 列可用宽度（BIG_LINE_WIDTH）——拆成两条独立 <B> 行，各自都在 16 列以内。
+    ...(o.prep
+      ? [`<B>${esc(o.schedulePrepStart ?? '')} 开始备餐</B>`, `<B>${esc(o.scheduleCall ?? '')} 前备好</B>`, ...(o.prep.unaccepted ? ['<CB>[未接单]</CB>'] : [])]
+      : []),
     // 来单票：非今日送达盖戳（同自取），备餐票不盖——它就是当天出的
     ...(isScheduled && !o.prep && o.scheduleDayStamp ? [`<CB>【${esc(o.scheduleDayStamp)}】</CB>`] : []),
     // 非今日取的自取单盖一枚大字戳：票面日期已是绝对日期，这枚戳只负责「今天先别做」
@@ -338,7 +353,10 @@ export function renderOrderTicket(o: TicketOrderInput): string {
   const receiverBlock: string[] = isPickup
     ? [
         // 取餐联：时间放大（顾客几点来是店员要看的第一眼），姓名与脱敏电话普通字号；不印地址——地址是店自己
-        `<B>取餐 ${esc(o.pickupSlotLabel ?? '')}</B>`,
+        // S7（店主决定 D3，2026-09-23 一起修）：原「<B>取餐 9月12日（周六）12:00–12:30</B>」整段进
+        // <B> 有超过 30 列，超真机 16 列可用宽度——日期普通字号单独一行，时段单独放大一行。
+        `取餐 ${esc(o.pickupSlotDate ?? '')}`,
+        `<B>${esc(o.pickupSlotTime ?? '')}</B>`,
         `取餐人 ${esc(o.receiverName)}`,
         `电话 ${maskPhone(esc(o.receiverPhone))}`,
       ]
@@ -354,8 +372,10 @@ export function renderOrderTicket(o: TicketOrderInput): string {
           `<B>地址 ${esc([o.receiverPoiName, localShortAddress(o)].filter(Boolean).join(' '))}</B>`,
           `电话 ${maskPhone(esc(o.receiverPhone))}`,
           ...(o.distanceM !== null && o.distanceM !== undefined ? [`距离：${distanceText(o.distanceM)}`] : []),
+          // S7（2026-09-23 修）：原「<B>送达 10月22日（周四）12:00–12:30</B>」33 列，
+          // 拆成「送达 日期」普通行 + 「<B>时段</B>」放大行（≤16 列）。
           ...(isScheduled
-            ? [`<B>送达 ${esc(o.scheduleSlotLabel ?? '')}</B>`, `开始备餐 ${esc(o.schedulePrepStart ?? '')} · 呼叫骑手 ${esc(o.scheduleCall ?? '')}`]
+            ? [`送达 ${esc(o.scheduleSlotDate ?? '')}`, `<B>${esc(o.scheduleSlotTime ?? '')}</B>`, `开始备餐 ${esc(o.schedulePrepStart ?? '')} · 呼叫骑手 ${esc(o.scheduleCall ?? '')}`]
             : o.estimatedDeliveryAt ? [`预计送达：${fmtDateTime(o.estimatedDeliveryAt)}`] : []),
         ]
       : [
@@ -411,7 +431,8 @@ export function renderOrderTicket(o: TicketOrderInput): string {
       // 厨房联也用尾号（PO 2026-09-08 定）：两联靠同一个数联系，后厨出菜装袋时对得上配送联。
       // 尾号 4 位不是完整手机号，不算泄漏联系方式。
       `<CB>尾号${o.receiverPhone.slice(-4)}</CB>`,
-      ...(isScheduled ? [`<B>送达 ${esc(o.scheduleSlotLabel ?? '')}</B>`] : []),
+      // S7（2026-09-23 修）：同配送联，拆成普通日期行 + 放大时段行
+      ...(isScheduled ? [`送达 ${esc(o.scheduleSlotDate ?? '')}`, `<B>${esc(o.scheduleSlotTime ?? '')}</B>`] : []),
       ...tablewareBlock,
       HR,
       ...items.flatMap((it) => kitchenItemLines(it, level)),
@@ -483,7 +504,9 @@ export function renderReadyDueTicket(input: { receiverPhone: string; slotLabel: 
   return assemble([
     '<CB>预约单催备好</CB>',
     `<CB>尾号${input.receiverPhone.slice(-4)}</CB>`,
-    `<B>应于 ${esc(input.call)} 前备好</B>`,
+    // S7（2026-09-23 修）：原「应于 11:36 前备好」（含两个空格）17 列，超真机 16 列可用宽度；
+    // 去掉标签与数字之间的空格压到 15 列。
+    `<B>应于${esc(input.call)}前备好</B>`,
     `送达 ${esc(input.slotLabel)}`,
     `第 ${input.seq} 次提醒`,
     '请到工作台点「已备好」或「立即呼叫」',
