@@ -120,10 +120,28 @@ export async function reconcileRefund(refundId: number, query: RefundQuery = def
   }
 
   const r = result.refund
+
+  // D4（2026-09-23 店主决定 A）：CLOSED = 微信未退款、无资金变动，金额差异只是请求记录不一致，
+  // 不该因为金额校验被卡在 ABNORMAL 让人干等——照记 reconcileLastError 并告警，但直接按 CLOSED
+  // 释放在途占位（可重新发起）。这条判断必须排在金额比对之前，否则永远走不到这里。
+  if (r.status === 'CLOSED') {
+    if (r.amount && r.amount.refund !== refund.amount) {
+      const msg = `金额不一致：微信侧 ${r.amount.refund} 本地 ${refund.amount}（CLOSED 无资金变动，已按关闭释放）`
+      await prisma.refund.update({ where: { id: refundId }, data: { reconcileLastError: msg } })
+      notifySystemAlert('退款补查金额不一致（已按关闭释放）', [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, msg], {
+        key: `refund-reconcile-mismatch:${refundId}`,
+        windowMs: ALERT_WINDOW_MS,
+      })
+    }
+    const rawData = JSON.stringify({ source: 'reconcile-query', ...r })
+    await markRefundClosed(refundId, rawData)
+    return outcomeAfterMark(refundId, refund.status, 'CLOSED')
+  }
+
   if (r.amount && r.amount.refund !== refund.amount) {
     // 金额比对口径与 wechat-notify.ts 的回调金额校验一致：与本地记录的退款金额不符。
-    // 同上（查无此单）：不再只记录，标 ABNORMAL 让它进「退款待处理」；金额不符是数据不一致，
-    // 无论如何都得人去商户平台核对，自动落账反而危险。
+    // SUCCESS/ABNORMAL/PROCESSING 下的金额不符仍是数据不一致（可能已经把钱退出去了但金额对不上），
+    // 无论如何都得人去商户平台核对，自动落账反而危险——CLOSED 是唯一的例外（上面已处理）。
     const msg = `金额不一致：微信侧 ${r.amount.refund} 本地 ${refund.amount}`
     await prisma.refund.update({ where: { id: refundId }, data: { reconcileLastError: msg } })
     notifySystemAlert('退款补查金额不一致', [`订单 ${refund.orderNo}`, `退款单 ${refund.outRefundNo}`, msg, '已标退款异常'], {
@@ -147,9 +165,6 @@ export async function reconcileRefund(refundId: number, query: RefundQuery = def
         rawField: 'wxNotifyData',
       })
       return outcomeAfterMark(refundId, refund.status, 'SUCCESS')
-    case 'CLOSED':
-      await markRefundClosed(refundId, rawData)
-      return outcomeAfterMark(refundId, refund.status, 'CLOSED')
     case 'ABNORMAL':
       await markRefundAbnormal(refundId, rawData)
       return outcomeAfterMark(refundId, refund.status, 'ABNORMAL')

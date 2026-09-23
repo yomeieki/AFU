@@ -3,7 +3,7 @@ import { z } from 'zod'
 import prisma from '../../utils/prisma'
 import { success, paginate } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
-import { initiateRefund, remainingRefundable } from '../../services/refund'
+import { initiateRefund, remainingRefundable, ACTIVE_REFUND_STATUSES } from '../../services/refund'
 import { AFTER_SALE_REASON_LABEL, AfterSaleReason } from '../../utils/constants'
 
 const router = Router()
@@ -23,8 +23,15 @@ const orderSummarySelect = {
   pointsUsed: true,
   receiverName: true,
   receiverPhone: true,
-  // 「同意并退款」的显示规则要看订单有没有在途退款（与 orders 列表的 latestRefund 同口径）
-  refunds: { select: { status: true }, orderBy: { createdAt: 'desc' as const }, take: 1 },
+  // 「同意并退款」的显示规则要看订单有没有在途退款（与 orders 列表的 latestRefund 同口径）；
+  // 字段与 orders 列表的 orderListSelect.refunds.select 完全一致（同一个 RefundSummary 形状 +
+  // reconcileLastError），这样 AfterSalePanel 把 a.order.latestRefund 原样传给 RefundDialog
+  // （Pick<Order,...|'latestRefund'>）时类型对得上，不用另开一套窄字段。
+  refunds: {
+    select: { id: true, status: true, outRefundNo: true, amount: true, mode: true, errorMessage: true, reconcileLastError: true, createdAt: true },
+    orderBy: { createdAt: 'desc' as const },
+    take: 1,
+  },
   receiverFullAddress: true,
   completedAt: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true } },
@@ -78,9 +85,15 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
   try {
     const id = Number(req.params.id)
     const { amount, reply, idempotencyKey } = approveSchema.parse(req.body ?? {})
-    const afterSale = await prisma.afterSale.findUnique({ where: { id } })
+    const afterSale = await prisma.afterSale.findUnique({ where: { id }, include: { order: { include: { refunds: true } } } })
     if (!afterSale) throw new AppError(40401, '售后单不存在', 404)
-    if (afterSale.status !== 'PENDING') throw new AppError(42204, `售后单状态为 ${afterSale.status}，仅待处理可同意`)
+    // P4（2026-09-23）：APPROVED 且订单当前无在途退款也允许「重新退款」——同意时同步失败/之后
+    // 异步 CLOSED/FAILED 的售后单，2026-09-22 前只能永久卡在 APPROVED（面板只对 PENDING 画按钮）。
+    // 有在途退款时不放行：initiateRefund 内部的 42205 也会兜底，这里提前给更明确的提示。
+    const hasActiveRefund = afterSale.order.refunds.some((r) => (ACTIVE_REFUND_STATUSES as readonly string[]).includes(r.status))
+    if (afterSale.status !== 'PENDING' && !(afterSale.status === 'APPROVED' && !hasActiveRefund)) {
+      throw new AppError(42204, `售后单状态为 ${afterSale.status}，仅待处理（或已同意且无在途退款）可操作`)
+    }
 
     const reasonLabel = AFTER_SALE_REASON_LABEL[afterSale.reason as AfterSaleReason] ?? afterSale.reason
     const result = await initiateRefund({
@@ -91,9 +104,10 @@ router.post('/:id/approve', async (req: Request, res: Response, next: NextFuncti
       afterSaleId: id,
       idempotencyKey,
     })
-    // 退款已同步成功（mock / 微信同步 SUCCESS）时 finalizeRefundSuccess 已置 DONE；否则置 APPROVED 等回调
+    // 退款已同步成功（mock / 微信同步 SUCCESS）时 finalizeRefundSuccess 已置 DONE；否则置 APPROVED 等回调。
+    // where 放宽到 PENDING/APPROVED：「重新退款」场景下售后单已经是 APPROVED，仍要能把 refundId 更新成新那笔。
     await prisma.afterSale.updateMany({
-      where: { id, status: 'PENDING' },
+      where: { id, status: { in: ['PENDING', 'APPROVED'] } },
       data: {
         status: 'APPROVED',
         refundId: result.refund.id,
