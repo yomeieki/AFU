@@ -129,6 +129,8 @@ export interface RefundSummary {
   mode: 'MOCK' | 'WECHAT'
   errorMessage: string | null
   createdAt: string
+  /** ABNORMAL 行的异常原因（P1/P4，2026-09-23）：「已在商户平台核实」弹窗与退款待处理页签用 */
+  reconcileLastError?: string | null
 }
 
 export type AfterSaleStatus = 'PENDING' | 'APPROVED' | 'DONE' | 'REJECTED'
@@ -229,6 +231,15 @@ export interface RefundRecord extends RefundSummary {
   successTime: string | null
   errorCode: string | null
   afterSaleId: number | null
+  /**
+   * 人工核实出口留痕（P1，2026-09-23）：只有走 resolve-abnormal 落账的行才非空。
+   * 可选（而非必填 | null）：避免影响 order-detail.test.ts 里既有、未在本批授权范围内的
+   * RefundRecord 测试夹具（那些夹具是老服务端响应形状，服务端确实会带这三个字段，只是这里
+   * 用可选让「没提供也类型合法」，不强制所有既有夹具跟着改）。
+   */
+  manualResolvedBy?: string | null
+  manualResolvedAt?: string | null
+  manualResolveNote?: string | null
 }
 
 /** 订单详情页的一条售后申请（GET /admin/orders/:id 的 afterSales[]，全部倒序返回） */
@@ -313,8 +324,12 @@ export interface AfterSale {
     id: number
     orderNo: string
     status: OrderStatus
-    /** 最近一条退款记录（只有 status）；「同意并退款」按钮据此判有没有在途退款 */
-    latestRefund?: { status: string } | null
+    /**
+     * 最近一条退款记录（P4，2026-09-23 起与 orderListSelect 同一个 RefundSummary 形状）：
+     * 「同意/重新退款」按钮据此判有没有在途退款，也原样传给 RefundDialog（latestRefund prop）
+     * 与展示 ABNORMAL 的异常原因。
+     */
+    latestRefund?: RefundSummary | null
     /** 券前商品小计（分） */
     totalAmount: number
     shippingFee: number

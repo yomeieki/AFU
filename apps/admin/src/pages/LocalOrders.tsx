@@ -5,6 +5,7 @@ import { getOrders, getOrderDelivery } from '../api/admin'
 import Button from '../components/ui/Button'
 import Pagination from '../components/ui/Pagination'
 import RefundDialog from '../components/RefundDialog'
+import ResolveAbnormalRefundModal from '../components/ResolveAbnormalRefundModal'
 import { toast } from '../components/ui/Toast'
 import OrderListTable from '../components/orders/OrderListTable'
 import OrderDateFilter from '../components/orders/OrderDateFilter'
@@ -13,7 +14,7 @@ import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
 import { showWorkbenchLink } from '../utils/order-list'
 import { usePendingCounts } from '../hooks/usePendingOrders'
-import { canRefund, hasActiveRefund, refundLabel, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint } from '../utils/order-actions'
+import { canRefund, hasActiveRefund, refundLabel, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint, canResolveAbnormalRefund } from '../utils/order-actions'
 
 // 状态 Tab：同城订单历史检索用（工作台不做检索，见 workbench-ui-spec.md §10）
 const STATUS_TABS: { value: string; label: string }[] = [
@@ -72,6 +73,7 @@ export default function LocalOrders() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [deliveryCache, setDeliveryCache] = useState<Record<number, { delivery: DeliveryInfo | null; costFen: number }>>({})
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
+  const [resolveTarget, setResolveTarget] = useState<Order | null>(null)
   // 从 Layout 那份轮询取计数，不自己再挂一份（复核 R13）
   const { refundAttentionByChannel } = usePendingCounts()
   const refundAttentionCount = refundAttentionByChannel.LOCAL
@@ -274,6 +276,12 @@ export default function LocalOrders() {
                   )}
                 </>
               )}
+              {/* P1（2026-09-23）：ABNORMAL 行，与订单是否 REFUNDING 无关（部分退款异常可能订单仍 PAID） */}
+              {canResolveAbnormalRefund(o) && (
+                <Button size="sm" variant="danger" onClick={() => setResolveTarget(o)}>
+                  已在商户平台核实
+                </Button>
+              )}
             </>
           )}
           onRetry={() => load()}
@@ -288,6 +296,17 @@ export default function LocalOrders() {
           onClose={() => setRefundTarget(null)}
           onDone={() => {
             setRefundTarget(null)
+            load()
+          }}
+        />
+      )}
+
+      {resolveTarget && (
+        <ResolveAbnormalRefundModal
+          order={resolveTarget}
+          onClose={() => setResolveTarget(null)}
+          onDone={() => {
+            setResolveTarget(null)
             load()
           }}
         />

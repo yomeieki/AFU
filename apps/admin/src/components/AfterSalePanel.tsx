@@ -156,22 +156,24 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
                 )}
                 {a.reply && <p className="text-xs text-gray-600">店员回复：{a.reply}{a.handledBy && `（${a.handledBy}）`}</p>}
                 <div className="flex flex-wrap gap-2 pt-1">
+                  {/* 显示规则在 utils/order-actions.ts。P4（2026-09-23）：APPROVED 且订单当前无在途
+                      退款也画按钮（文案改「重新退款」）——同意时同步失败/之后异步 CLOSED/FAILED 的
+                      售后单，2026-09-22 前只能永久卡在 APPROVED，面板没有任何入口。 */}
+                  {(a.status === 'PENDING' || (a.status === 'APPROVED' && !hasActiveRefund(a.order))) && (
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setApproveTarget(a)}
+                      disabled={!canApproveAfterSaleRefund({ status: a.order.status, remainingRefundable: a.remainingRefundable, latestRefund: a.order.latestRefund })}
+                      title={hasActiveRefund(a.order) ? '有退款处理中' : a.remainingRefundable <= 0 ? '已无可退金额' : ''}
+                    >
+                      {a.status === 'APPROVED' ? '重新退款' : '同意并退款'}
+                    </Button>
+                  )}
                   {a.status === 'PENDING' && (
-                    <>
-                      {/* 显示规则在 utils/order-actions.ts（2026-09-22 前只看余额，订单已在退款中/有在途退款时照样可点） */}
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() => setApproveTarget(a)}
-                        disabled={!canApproveAfterSaleRefund({ status: a.order.status, remainingRefundable: a.remainingRefundable, latestRefund: a.order.latestRefund })}
-                        title={hasActiveRefund(a.order) ? '有退款处理中' : a.remainingRefundable <= 0 ? '已无可退金额' : ''}
-                      >
-                        同意并退款
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => { setRejectTarget(a); setRejectReply('') }}>
-                        拒绝
-                      </Button>
-                    </>
+                    <Button size="sm" variant="secondary" onClick={() => { setRejectTarget(a); setRejectReply('') }}>
+                      拒绝
+                    </Button>
                   )}
                   {/* 发券不限 PENDING：售后已经拒了或已经退过款，照样可能要再补一张券安抚。
                       与退款并列且互不依赖——spec §7 明确「可以只发券不退款」 */}
@@ -201,7 +203,7 @@ export default function AfterSalePanel({ onChanged }: { onChanged?: () => void }
             remainingRefundable: approveTarget.remainingRefundable,
             receiverName: approveTarget.order.receiverName,
             receiverPhone: approveTarget.order.receiverPhone,
-            latestRefund: null,
+            latestRefund: approveTarget.order.latestRefund ?? null,
           }}
           onClose={() => setApproveTarget(null)}
           onDone={() => {

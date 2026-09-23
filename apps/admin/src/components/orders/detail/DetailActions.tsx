@@ -4,7 +4,7 @@ import Button from '../../ui/Button'
 import { toast } from '../../ui/Toast'
 import { reprintOrder } from '../../../api/admin'
 import type { OrderDetail } from '../../../types'
-import { canRefund, hasActiveRefund, refundLabel, canReprint, refundRetryLabel, refundingHint } from '../../../utils/order-actions'
+import { canRefund, hasActiveRefund, refundLabel, canReprint, refundRetryLabel, refundingHint, canResolveAbnormalRefund } from '../../../utils/order-actions'
 
 interface Props {
   order: OrderDetail
@@ -12,6 +12,8 @@ interface Props {
    * 不在这里渲染——本组件在 <md 下被放进 `position:fixed` 的底部操作栏，那本身是一个新的
    * 层叠上下文，弹窗在其中渲染会被顶栏压在下面（需改 3）。 */
   onRefund: () => void
+  /** 点「已在商户平台核实」时触发（P1，2026-09-23）；弹窗同样由页面唯一持有，理由同上 */
+  onResolveAbnormal: () => void
   className?: string
 }
 
@@ -20,7 +22,7 @@ interface Props {
  * 不放宽——详情页不做接单/出餐/呼叫骑手/发货/标记完成/发赔偿券/取消，那些仍然只在
  * 对应列表页 / 工作台做（见实施计划 §1 T3③ DetailActions.tsx）。
  */
-export default function DetailActions({ order, onRefund, className = '' }: Props) {
+export default function DetailActions({ order, onRefund, onResolveAbnormal, className = '' }: Props) {
   const [reprinting, setReprinting] = useState(false)
 
   const handleReprint = async () => {
@@ -75,6 +77,12 @@ export default function DetailActions({ order, onRefund, className = '' }: Props
         </Button>
       )}
       {refundButton}
+      {/* P1（2026-09-23）：ABNORMAL 行，与订单是否 REFUNDING 无关 */}
+      {canResolveAbnormalRefund(order) && (
+        <Button variant="danger" onClick={onResolveAbnormal} className="flex-1 md:flex-none whitespace-nowrap">
+          已在商户平台核实
+        </Button>
+      )}
     </div>
   )
 }

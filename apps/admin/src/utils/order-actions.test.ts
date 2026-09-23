@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { everPaid, canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon, refundRetryLabel, refundingHint, canApproveAfterSaleRefund } from './order-actions.ts'
+import { everPaid, canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon, refundRetryLabel, refundingHint, canApproveAfterSaleRefund, canResolveAbnormalRefund } from './order-actions.ts'
 
 test('canRefund：没付款就取消的单（还可退金额>0）→ false，这就是 2026-09-22 同城页的 bug', () => {
   assert.equal(canRefund({ status: 'CANCELLED', remainingRefundable: 6210 }), false)
@@ -90,4 +90,16 @@ test('canApproveAfterSaleRefund：余额 0 / 已退款 / 已取消 → false', (
   assert.equal(canApproveAfterSaleRefund({ status: 'COMPLETED', remainingRefundable: 0, latestRefund: null }), false)
   assert.equal(canApproveAfterSaleRefund({ status: 'REFUNDED', remainingRefundable: 0, latestRefund: { status: 'SUCCESS' } }), false)
   assert.equal(canApproveAfterSaleRefund({ status: 'CANCELLED', remainingRefundable: 100, latestRefund: null }), false)
+})
+
+test('canResolveAbnormalRefund：latestRefund ABNORMAL → true，与订单状态无关', () => {
+  assert.equal(canResolveAbnormalRefund({ latestRefund: { status: 'ABNORMAL' } }), true)
+})
+
+test('canResolveAbnormalRefund：PENDING/PROCESSING/SUCCESS/CLOSED/FAILED/无记录 → false', () => {
+  for (const status of ['PENDING', 'PROCESSING', 'SUCCESS', 'CLOSED', 'FAILED']) {
+    assert.equal(canResolveAbnormalRefund({ latestRefund: { status } }), false, status)
+  }
+  assert.equal(canResolveAbnormalRefund({ latestRefund: null }), false)
+  assert.equal(canResolveAbnormalRefund({}), false)
 })

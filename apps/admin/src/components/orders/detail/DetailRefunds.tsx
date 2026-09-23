@@ -39,6 +39,11 @@ export default function DetailRefunds({ order }: { order: OrderDetail }) {
                 {r.reason && ' · '}操作人 {r.operator ?? '系统'}
               </p>
               {r.errorMessage && <p className="text-xs text-red-500">{r.errorMessage}</p>}
+              {r.manualResolvedBy && (
+                <p className="text-xs text-gray-500">
+                  人工核实：{r.manualResolvedBy} · {fmtMonthDayTime(r.manualResolvedAt ?? r.createdAt)} · {r.manualResolveNote}
+                </p>
+              )}
             </div>
           ))}
         </div>

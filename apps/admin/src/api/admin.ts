@@ -14,6 +14,7 @@ import type {
   ScanProductRow,
   Banner,
   RefundSummary,
+  RefundRecord,
   AfterSale,
   ExpressSettings,
   Channel,
@@ -130,6 +131,17 @@ export const shipOrder = (id: number, data: { expressCompany: string; expressNo:
 export const refundOrder = (id: number, data: { amount: number; reason?: string; idempotencyKey?: string }) =>
   client.post<ApiResponse<{ order: Order; refund: RefundSummary; mode: 'mock' | 'wechat'; isFull: boolean }>>(
     `/admin/orders/${id}/refund`,
+    data
+  )
+
+// P1 人工出口（2026-09-23）：仅对 ABNORMAL 退款行开放，店员已在微信商户平台核实结果后回填
+export const resolveAbnormalRefund = (
+  orderId: number,
+  refundId: number,
+  data: { result: 'SUCCESS' | 'CLOSED'; verifiedAmount: number; note: string }
+) =>
+  client.post<ApiResponse<{ refund: RefundRecord; order: Order }>>(
+    `/admin/orders/${orderId}/refunds/${refundId}/resolve-abnormal`,
     data
   )
 

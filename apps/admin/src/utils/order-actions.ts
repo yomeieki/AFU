@@ -93,3 +93,12 @@ export function canApproveAfterSaleRefund(o: {
   if (!(REFUNDABLE_STATUSES as readonly string[]).includes(o.status) && o.status !== 'REFUNDING') return false
   return !hasActiveRefund(o)
 }
+
+/**
+ * 「已在商户平台核实」按钮（P1，2026-09-23）：只对 latestRefund.status === 'ABNORMAL' 显示，
+ * 与订单状态无关——P4 让非 REFUNDING 单（部分退款异常）也能进「退款待处理」页签，这颗按钮要跟着出现。
+ * 窄口径：不恢复旧 refund-complete 那种「任何 REFUNDING 订单都能点」的宽入口。
+ */
+export function canResolveAbnormalRefund(o: { latestRefund?: { status: string } | null }): boolean {
+  return o.latestRefund?.status === 'ABNORMAL'
+}

@@ -8,6 +8,7 @@ import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Pagination from '../components/ui/Pagination'
 import RefundDialog from '../components/RefundDialog'
+import ResolveAbnormalRefundModal from '../components/ResolveAbnormalRefundModal'
 import IssueCouponModal from '../components/IssueCouponModal'
 import AfterSalePanel from '../components/AfterSalePanel'
 import { usePendingCounts } from '../hooks/usePendingOrders'
@@ -16,7 +17,7 @@ import OrderListTable from '../components/orders/OrderListTable'
 import OrderDateFilter from '../components/orders/OrderDateFilter'
 import { orderDetailPath } from '../navigation'
 import { readOrderDate, writeOrderDate, orderDateQuery, orderDateError, orderDateSummary } from '../utils/order-date-range'
-import { canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint } from '../utils/order-actions'
+import { canRefund, hasActiveRefund, refundLabel, canReprint, canIssueCoupon, REFUND_ATTENTION_FILTER, refundRetryLabel, refundingHint, canResolveAbnormalRefund } from '../utils/order-actions'
 
 // 状态 Tab（含「全部」）。「退款待处理」只列要人出手的退款中订单（伪状态，见 utils/order-actions.ts）；
 // 正常退款中的单由自动补查推到结局，不单独给 Tab，在「全部」里能看到状态标签。
@@ -66,13 +67,14 @@ export default function Orders() {
   const [shipError, setShipError] = useState('')
   const [shipping, setShipping] = useState(false)
   const [refundTarget, setRefundTarget] = useState<Order | null>(null)
+  const [resolveTarget, setResolveTarget] = useState<Order | null>(null)
   const [couponTarget, setCouponTarget] = useState<Order | null>(null)
   const [reprintingId, setReprintingId] = useState<number | null>(null)
   // 从 Layout 那份轮询取计数，不自己再挂一份（复核 R13：此前这里的第二份会让新单提示弹两次）
   const { afterSaleCount, refundAttentionByChannel } = usePendingCounts()
   const refundAttentionCount = refundAttentionByChannel.EXPRESS
   const modalOpenRef = useRef(false)
-  modalOpenRef.current = !!(shipModal || refundTarget)
+  modalOpenRef.current = !!(shipModal || refundTarget || resolveTarget)
   // 没有 catch 的话接口一挂就渲染「暂无订单」，店主会当成今天没单。
   // 显式刷新失败 → 错误态替换表格；30s 静默刷新失败 → 表格留着旧数据，
   // 但要有一条「已 N 分钟未更新」细条（思路同 Workbench 顶栏），否则店主分不清「没新单」和「页面早僵了」。
@@ -226,12 +228,22 @@ export default function Orders() {
   // 显示规则在 utils/order-actions.ts 一处判定，与 LocalOrders / DetailActions 共用
   const renderRefundActions = (order: Order, cls: { danger: string; muted: string }) => {
     const active = hasActiveRefund(order)
+    // P1（2026-09-23）：ABNORMAL 行给「已在商户平台核实」入口，与订单是否 REFUNDING 无关——
+    // P4 让部分退款异常单（订单可能仍是 PAID）也进「退款待处理」，这颗按钮要跟着出现。
+    const resolveBtn = canResolveAbnormalRefund(order) ? (
+      <button onClick={() => setResolveTarget(order)} className="text-red-600 hover:text-red-800 font-medium">
+        已在商户平台核实
+      </button>
+    ) : null
     if (order.status !== 'REFUNDING') {
-      if (!canRefund(order)) return null
+      if (!canRefund(order)) return resolveBtn
       return (
-        <button onClick={() => setRefundTarget(order)} className={cls.danger} disabled={active} title={active ? '有退款处理中' : ''}>
-          {refundLabel(order)}
-        </button>
+        <>
+          <button onClick={() => setRefundTarget(order)} className={cls.danger} disabled={active} title={active ? '有退款处理中' : ''}>
+            {refundLabel(order)}
+          </button>
+          {resolveBtn}
+        </>
       )
     }
     const hint = refundingHint(order)
@@ -243,6 +255,7 @@ export default function Orders() {
           </button>
         )}
         {hint === '微信处理中' ? <span className={cls.muted}>{hint}</span> : hint === '退款异常' ? <span className="text-red-500">{hint}</span> : null}
+        {resolveBtn}
         {/* 「手动标记完成」2026-09-22 已去掉：不问微信、不核金额就把单标成已退款，误点就是一笔假退款；
             回调丢失的场景由自动补查（services/refund-reconcile.ts）自己查微信落账 */}
       </>
@@ -393,6 +406,17 @@ export default function Orders() {
           onClose={() => setRefundTarget(null)}
           onDone={() => {
             setRefundTarget(null)
+            load()
+          }}
+        />
+      )}
+
+      {resolveTarget && (
+        <ResolveAbnormalRefundModal
+          order={resolveTarget}
+          onClose={() => setResolveTarget(null)}
+          onDone={() => {
+            setResolveTarget(null)
             load()
           }}
         />

@@ -5,6 +5,7 @@ import { getOrder, getOrderDelivery, getExpressBooking } from '../api/admin'
 import { toast } from '../components/ui/Toast'
 import Spinner from '../components/ui/Spinner'
 import RefundDialog from '../components/RefundDialog'
+import ResolveAbnormalRefundModal from '../components/ResolveAbnormalRefundModal'
 import DetailHero, { CHANNEL_TONE } from '../components/orders/detail/DetailHero'
 import { copyText } from '../components/orders/copyText'
 import DetailTimeline from '../components/orders/detail/DetailTimeline'
@@ -34,6 +35,7 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
   const [refundOpen, setRefundOpen] = useState(false)
+  const [resolveOpen, setResolveOpen] = useState(false)
 
   const [localData, setLocalData] = useState<LocalData>(null)
   const [localLoading, setLocalLoading] = useState(false)
@@ -169,7 +171,7 @@ export default function OrderDetail() {
               {channelLabel(order.deliveryType)}
             </span>
             <div className="ml-auto">
-              <DetailActions order={order} onRefund={() => setRefundOpen(true)} />
+              <DetailActions order={order} onRefund={() => setRefundOpen(true)} onResolveAbnormal={() => setResolveOpen(true)} />
             </div>
           </div>
         </div>
@@ -229,7 +231,7 @@ export default function OrderDetail() {
 
       {/* <md 底部固定操作栏 */}
       <div className="md:hidden fixed inset-x-0 bottom-0 bg-white border-t border-gray-100 px-3 pt-2" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
-        <DetailActions order={order} onRefund={() => setRefundOpen(true)} className="w-full" />
+        <DetailActions order={order} onRefund={() => setRefundOpen(true)} onResolveAbnormal={() => setResolveOpen(true)} className="w-full" />
       </div>
 
       {/* RefundDialog 只在这里渲染一份，不在上面的 fixed 底栏容器内——那是个新的层叠
@@ -241,6 +243,17 @@ export default function OrderDetail() {
           onClose={() => setRefundOpen(false)}
           onDone={() => {
             setRefundOpen(false)
+            load()
+          }}
+        />
+      )}
+
+      {resolveOpen && (
+        <ResolveAbnormalRefundModal
+          order={order}
+          onClose={() => setResolveOpen(false)}
+          onDone={() => {
+            setResolveOpen(false)
             load()
           }}
         />
