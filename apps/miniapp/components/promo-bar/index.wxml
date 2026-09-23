@@ -3,7 +3,10 @@
   <text class="promo-summary">{{bar.name}}　{{bar.summary}}</text>
   <text class="promo-detail">详情 ›</text>
 </view>
-<view wx:if="{{sheetOpen}}" class="promo-sheet-mask" catchtap="onCloseSheet">
+<!-- M5（复审规划缺口）：遮罩补 catchtouchmove="noop"，防止滑动穿透到底下的
+     分类页（onPageScroll 改高亮/吸顶）与首页（enablePullDownRefresh 下拉刷新）——
+     同仓其它弹层遮罩都有这一行（product/list.wxml、sku-popup、privacy-popup）。 -->
+<view wx:if="{{sheetOpen}}" class="promo-sheet-mask" catchtap="onCloseSheet" catchtouchmove="noop">
   <view class="promo-sheet" catchtap="noop">
     <view class="promo-sheet-head"><text class="promo-sheet-title">{{sheet.title}}</text><view class="promo-sheet-close" catchtap="onCloseSheet">✕</view></view>
     <view class="promo-sheet-row" wx:for="{{sheet.rows}}" wx:key="left">
