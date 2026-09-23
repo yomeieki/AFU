@@ -7,6 +7,8 @@ const { requestSubscribe } = require('../../utils/subscribe')
 var timeUtil = require('../../utils/time')
 var fmtDateTime = timeUtil.fmtDateTime
 var fmtHHmm = timeUtil.fmtHHmm
+// M11（复审建议，纳入本批）：预约可以约到三天后，取消/确认文案只给钟点分不清是哪天。
+var fmtDayHHmm = timeUtil.fmtDayHHmm
 var expressTrackUtil = require('../../utils/express-track')
 var tablewareUtil = require('../../utils/tableware')
 var scheduleOrderUtil = require('../../utils/schedule-order')
@@ -216,11 +218,11 @@ function buildLocalTimeline(order) {
   // 接单后把「商家已确认，HH:mm 开始备餐」挂在「商家接单」这步。非预约单两处都是 ''。
   steps.push({
     label: '支付成功', time: t(order.paidAt), done: !!order.paidAt,
-    extra: !order.acceptedAt ? scheduleOrderUtil.schedulePaidExtra(order, fmtHHmm) : '',
+    extra: !order.acceptedAt ? scheduleOrderUtil.schedulePaidExtra(order, fmtDayHHmm) : '',
   })
   steps.push({
     label: '商家接单 · 备餐中', time: t(order.acceptedAt), done: !!order.acceptedAt,
-    extra: order.acceptedAt ? scheduleOrderUtil.schedulePaidExtra(order, fmtHHmm) : '',
+    extra: order.acceptedAt ? scheduleOrderUtil.schedulePaidExtra(order, fmtDayHHmm) : '',
   })
   steps.push({ label: '骑手已接单', time: '', done: !!riderAccepted, extra: riderAccepted ? riderExtra : '' })
   steps.push({ label: '骑手已到店', time: '', done: !!riderAtStore })
@@ -370,7 +372,7 @@ function decorateOrder(order) {
         : (delivery && delivery.pickedUpAt ? '' : '骑手取货后更准')
     ),
     // 取消卡对预约单的三段文案（utils/schedule-order），非预约单为 ''
-    scheduleCancelCopy: scheduleOrderUtil.scheduleCancelCopy(order, fmtHHmm),
+    scheduleCancelCopy: scheduleOrderUtil.scheduleCancelCopy(order, fmtDayHHmm),
     cancelDeadlineText: deadlineText(order.cancelRequestDeadline),
     // 申请被驳回过（人工或超时自动）。顾客上一次看到的是「已提交，商家会尽快处理」，
     // 不给个结论他会一直等——而驳回把 cancelRequestedAt 清空了，只能靠这条痕迹。

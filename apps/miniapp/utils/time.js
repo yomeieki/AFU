@@ -55,9 +55,33 @@ function fmtAfterMinutes(minutes) {
   return fmtHHmm(Date.now() + (Number(minutes) || 0) * 60 * 1000)
 }
 
+/**
+ * M11（复审建议，纳入本批）：带日期的 'HH:mm'，按北京日与 now 比较——
+ *   同一个北京日     → 'HH:mm'
+ *   相差一个北京日   → '明天 HH:mm'
+ *   其它             → 'M月D日 HH:mm'（月日不补零，与 pickupDateText 一致）
+ * @param {*} v 目标时刻
+ * @param {*} now 比较基准，仅测试用；页面不传，缺省按 Date.now()
+ * 拿不到有效时间（任一侧解析失败）返回 ''。
+ */
+function fmtDayHHmm(v, now) {
+  var d = shDate(v)
+  var base = shDate(now === undefined || now === null ? Date.now() : now)
+  if (!d || !base) return ''
+  var DAY_MS = 24 * 3600 * 1000
+  // shDate 已经把原始时刻加了 8 小时再按 UTC 字段读——两个「加过 8 小时」的时间戳
+  // 落在同一个 UTC 自然日，等价于两个原始时刻落在同一个北京日（Unix 纪元的自然日
+  // 边界正好在 UTC 整点，不受手机/开发者工具本地时区影响）。
+  var diffDays = Math.floor(d.getTime() / DAY_MS) - Math.floor(base.getTime() / DAY_MS)
+  if (diffDays === 0) return fmtHHmm(v)
+  if (diffDays === 1) return '明天 ' + fmtHHmm(v)
+  return (d.getUTCMonth() + 1) + '月' + d.getUTCDate() + '日 ' + fmtHHmm(v)
+}
+
 module.exports = {
   fmtHHmm: fmtHHmm,
   fmtDate: fmtDate,
   fmtDateTime: fmtDateTime,
   fmtAfterMinutes: fmtAfterMinutes,
+  fmtDayHHmm: fmtDayHHmm,
 }

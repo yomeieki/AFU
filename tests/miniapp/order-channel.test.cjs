@@ -304,6 +304,18 @@ test('T3b 源码级：取消卡 wx:if 恰由五个析取项组成', function () 
   assert.deepEqual(otherOrderRefs, [], '不应有其它 order.* 项：' + otherOrderRefs.join(','))
 })
 
+// T11b（M11，源码级）：详情页把 schedulePaidExtra/scheduleCancelCopy 的第二实参
+// 从 fmtHHmm 换成 fmtDayHHmm——预约可以约到三天后，只给钟点不给日期分不清是哪天。
+test('T11b M11：detail.js 传给 schedulePaidExtra/scheduleCancelCopy 的格式化函数是 fmtDayHHmm', function () {
+  const src = readSrc('pages/order/detail.js')
+  const calls = src.match(/schedule(PaidExtra|CancelCopy)\(order, \w+\)/g) || []
+  assert.ok(calls.length >= 3, '至少应有三处调用（两处 schedulePaidExtra + 一处 scheduleCancelCopy）：' + calls.join(', '))
+  calls.forEach((c) => {
+    assert.match(c, /fmtDayHHmm/, c + ' 应传 fmtDayHHmm')
+    assert.doesNotMatch(c, /,\s*fmtHHmm\)/, c + ' 不该再传 fmtHHmm')
+  })
+})
+
 test('自取单详情：门店卡、尾号+时段、时间线、按钮按服务端 canSelfCancel', async function () {
   const order = {
     id: 21, orderNo: 'ORD21', deliveryType: 'PICKUP', status: 'SHIPPED',
