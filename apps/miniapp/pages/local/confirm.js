@@ -456,11 +456,14 @@ Page({
       clearTimeout(this._quoteTimer)
       this._quoteTimer = null
     }
-    // 预约送达（2026-09-21 §5.2）：任何让 quoteToken 失效的操作，已选时段也同时失效——
-    // 换地址/改数量后旧时段对应的路上时间（distanceM）已经不对了。
+    // M1（复审阻塞，2026-09-23）：已选时段**不**随报价作废——服务端只按 distanceM 与
+    // 后台设置算时段列表（services/delivery/schedule.ts），换地址/改数量/删商品都不改
+    // distanceM，原来这里连带清空 slotSelected，会让下一次报价成功后 loadSlots 的
+    // autoPick 分支（无选择时才自动预选）把顾客已经改选的较晚一格悄悄换回最早一格。
+    // 该格是否仍可选，交给下一次 loadSlots（:498 附近「已有选择只判 stale、不覆盖」
+    // 那个分支）去判——不在新列表里才标 stale，服务端 42291 仍是最后一道闸。
     this.setData({
       quoting: true, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null,
-      slotSelected: null, slotStale: false,
     })
     this.syncAction()
   },

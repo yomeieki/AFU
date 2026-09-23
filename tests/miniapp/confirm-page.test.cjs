@@ -85,6 +85,20 @@ function slotsWithoutFirst() {
   }
 }
 
+// M1：明天两格（04:00 / 05:00 UTC），用来验证「改成较晚一格」之后该选择是否被保留。
+function slotsWithTwoSlots() {
+  return {
+    blocked: null,
+    days: [
+      { date: '2026-09-22', label: '今天', slots: [] },
+      { date: '2026-09-23', label: '明天', slots: [
+        { startAt: '2026-09-23T04:00:00.000Z', endAt: '2026-09-23T04:30:00.000Z', label: '12:00–12:30' },
+        { startAt: '2026-09-23T05:00:00.000Z', endAt: '2026-09-23T05:30:00.000Z', label: '13:00–13:30' },
+      ] },
+    ],
+  }
+}
+
 function makeCtx(opts) {
   opts = opts || {}
   const urls = []
@@ -256,16 +270,85 @@ test('③打烊+预约关：blockReason 为 nextOpenText，金额态 blocked（�
   assert.equal(page.data.slotSelected, null)
 })
 
-test('④选好格后 invalidateCheckout：slotSelected 清空', async function () {
+// M1（复审阻塞，2026-09-23）：需求变化——时段不再随「让 quoteToken 失效」的操作
+// 一起作废。distanceM 才是时段是否仍可选的唯一依据（services/delivery/schedule.ts），
+// 改数量/删商品/换地址都不改 distanceM，本该由下一次 loadSlots 判断该格是否仍在列表里
+// （不在则标 stale），而不是无声清空、让 autoPick 悄悄选回最早一格。
+test('④选好格后 invalidateCheckout：slotSelected 保留、_slotSeq 递增、quoteToken 清空', async function () {
   const { page } = loadConfirm({
     meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
     quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
   })
   await settleAll()
   assert.ok(page.data.slotSelected)
+  const before = page.data.slotSelected
+  const seqBefore = page._slotSeq
   page.invalidateCheckout.call(page, 'address')
-  assert.equal(page.data.slotSelected, null)
+  assert.deepEqual(page.data.slotSelected, before, '时段不该随 invalidateCheckout 被清空')
   assert.equal(page.data.slotStale, false)
+  assert.equal(page.data.quoteToken, null)
+  assert.ok(page._slotSeq > seqBefore, '_slotSeq 仍要递增，作废在途的旧 loadSlots 响应')
+})
+
+// T1a：打烊 + 预约开，顾客把自动选中的最早格改成较晚一格，再改数量——已选格必须保留
+// （回退证据：invalidateCheckout 仍清 slotSelected 时，改数量后会看到 startAt 变回
+// 04:00，即被 autoPick 悄悄改选回最早格，这正是复审复现的事故）。
+test('T1a M1：改成较晚一格后改数量，已选格保留（不被悄悄换回最早格）', async function () {
+  const { page } = loadConfirm({
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
+    slots: slotsWithTwoSlots(),
+  })
+  await settleAll()
+  assert.equal(page.data.slotSelected.startAt, '2026-09-23T04:00:00.000Z', '打烊强制预约应先自动选中最早格')
+  page.onSlotPick.call(page, { detail: { idx: 1 } })
+  assert.equal(page.data.slotSelected.startAt, '2026-09-23T05:00:00.000Z')
+  page.onIncrease.call(page, { currentTarget: { dataset: { id: 1 } } })
+  await new Promise((r) => setTimeout(r, 600))
+  await settleAll()
+  assert.equal(page.data.slotSelected.startAt, '2026-09-23T05:00:00.000Z', '改数量后应仍是顾客选的较晚一格')
+  assert.equal(page.data.slotStale, false)
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  assert.equal(page.data.action.text, '预约下单')
+})
+
+// T1b：营业中顾客主动切预约并选格，改数量后同样不应被清空——覆盖「营业中主动预约」
+// 这条与「打烊强制预约」并列的路径，M1 的 bug 描述里两条都提到。
+test('T1b M1：营业中主动选预约并选格，改数量后不被清空', async function () {
+  const { page } = loadConfirm({
+    meta: defaultMeta({ isOpen: true, delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: true }),
+    slots: slotsWithTwoSlots(),
+  })
+  await settleAll()
+  page.pickMode.call(page, { currentTarget: { dataset: { mode: 'SCHEDULED' } } })
+  await settleAll()
+  page.onSlotPick.call(page, { detail: { idx: 0 } })
+  const picked = page.data.slotSelected.startAt
+  assert.ok(picked)
+  page.onIncrease.call(page, { currentTarget: { dataset: { id: 1 } } })
+  await new Promise((r) => setTimeout(r, 600))
+  await settleAll()
+  assert.equal(page.data.slotSelected.startAt, picked, '营业中主动选的格也不该被改数量清空')
+})
+
+// T1c：证明修复不是「不再校验」——改数量后重拉的列表里如果没有该格了（真正过期/被店主
+// 关掉），仍要标 stale 并把按钮改成「时段已过，请重选」。
+test('T1c M1：改数量后重拉列表里没有该格，标记 stale 且按钮提示重选', async function () {
+  const { page } = loadConfirm({
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业' }),
+    slotsSecond: slotsWithoutFirst(),
+  })
+  await settleAll()
+  assert.equal(page.data.slotSelected.startAt, '2026-09-23T04:00:00.000Z')
+  page.onIncrease.call(page, { currentTarget: { dataset: { id: 1 } } })
+  await new Promise((r) => setTimeout(r, 600))
+  await settleAll()
+  assert.equal(page.data.slotStale, true, '重拉列表里已经没有该格，应标 stale')
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  assert.equal(page.data.action.text, '时段已过，请重选')
+  assert.equal(page.data.action.action, 'slot')
 })
 
 test('⑤createOrder 返回 42291：slotStale=true 且重拉时段', async function () {
