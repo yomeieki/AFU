@@ -254,7 +254,14 @@ export async function callRider(input: CallRiderInput) {
   const seq = (await prisma.delivery.count({ where: { orderId } })) + 1
   const deliveryNo = `D${orderId}-${seq}`
   const callbackUrl = `${config.publicBaseUrl}/api/kd/${deliveryNo}`
-  if (callbackUrl.length > 50) throw new AppError(42225, `回调地址超长（${callbackUrl.length}>50），请联系管理员缩短域名/路径`)
+  if (callbackUrl.length > 50) {
+    // R8（复核裁决 §J）：这是确定性的配置错误（publicBaseUrl 配长了），不是运力方那头的偶发失败，
+    // 之前只在这里 throw、没有任何告警——由 autoCallScheduled 的 catch 静默吞掉后，没人会知道
+    // 这单从此永远呼不出去，直到店员自己发现。与 :380 CONFIG 类同一渠道与 key 前缀，确定性配置
+    // 错误不得静默。
+    notifySystemAlert('快递100 配置类错误', [`回调地址超长（${callbackUrl.length}>50），请联系管理员缩短域名/路径`], { key: 'kd100-config:CALLBACK_URL' })
+    throw new AppError(42225, `回调地址超长（${callbackUrl.length}>50），请联系管理员缩短域名/路径`)
+  }
   const callbackSalt = crypto.randomBytes(8).toString('hex')   // 16 字符 ≤ VarChar(20)
   let deliveryId: number
   try {

@@ -153,9 +153,13 @@ export async function autoCallScheduled(): Promise<number> {
     } catch (e) {
       const code = e instanceof AppError ? e.code : null
       // 42225 = 运力方失败，callRider 内部已按失败类型（CAPACITY/BALANCE/CONFIG/BUSINESS）
-      // 自己告过警了，这里不重复；其它错误（如 42204 并发状态变化、42223 缺坐标等）此前只有
-      // console.warn 悄悄丢掉，店员要等 10 分钟通用「未呼叫骑手」提醒才知道这单有问题。
-      if (code !== 42225) {
+      // 自己告过警了，这里不重复；42204 = 占位后原子复核发现「订单状态已变化」（状态非 PREPARING /
+      // 有取消申请 / S1 新加的 readyAt 已被清空这三条路径之一），复核裁决 R8：这是「订单刚被人
+      // 改过、下一跳自会重新评估」的自愈情形，此刻催店员去呼叫恰与店员/顾客刚做的决定相反
+      // （例如店员刚取消配送，readyAt 被清空触发这条 RACE，此时提醒「立即呼叫」是在教唆撤销
+      // 店员自己的操作）。这两类都只 console.warn，不重复告警；其它错误（如 42223 缺坐标等）
+      // 此前只有 console.warn 悄悄丢掉，店员要等 10 分钟通用「未呼叫骑手」提醒才知道这单有问题。
+      if (code !== 42204 && code !== 42225) {
         notifyLocalDeliveryAlert('预约单自动呼叫失败', [
           tail(o),
           (e as Error)?.message ?? String(e),
