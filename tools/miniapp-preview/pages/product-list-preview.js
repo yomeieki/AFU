@@ -36,6 +36,10 @@
   var clickLockUntil = 0
   var clickLockTimer = 0
   var clickLockRevision = 0
+  // M16（复审建议，纳入本批）：与真实页面 list.js:252/257 对齐——锁到期时只有真的
+  // 发生过滚动才重算高亮，不能无条件重算（否则点了分类不动，500ms 后也可能因为
+  // 与真实页面不一致的逻辑而跳走，掩盖真实页面这条修复本该验证到的行为）。
+  var scrolledSinceTap = false
 
   function esc(value) {
     return String(value).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] })
@@ -68,7 +72,7 @@
     if (local && mode === 'PICKUP') {
       return '<div class="delivery-rules-row" id="rules-row"><span class="delivery-rules delivery-rules-em">自取享 9.5 折</span><span class="delivery-rules delivery-rules-sep"> · </span><span class="delivery-rules">满 ¥15 起 · 自流井区丹桂街道丹桂40栋底楼</span><span class="delivery-rules-arrow">›</span></div>'
     }
-    return '<div class="delivery-rules-row" id="rules-row"><span class="delivery-rules">配送范围 5 公里 · ¥30 起送 · 运费结算时算</span><span class="delivery-rules-arrow">›</span></div>'
+    return '<div class="delivery-rules-row" id="rules-row"><span class="delivery-rules">配送范围 5 km · 满 ¥30 起送 · 基础运费 ¥6 起</span><span class="delivery-rules-arrow">›</span></div>'
   }
 
   function header() {
@@ -184,6 +188,7 @@
   function selectCategory(index) {
     if (state.search) clearSearch()
     setActive(index)
+    scrolledSinceTap = false
     if (clickLockTimer) clearTimeout(clickLockTimer)
     var revision = ++clickLockRevision
     clickLockUntil = Date.now() + 500
@@ -191,7 +196,7 @@
       if (revision !== clickLockRevision) return
       clickLockTimer = 0
       clickLockUntil = 0
-      if (!state.search) updateActive(document.querySelector('.catalog-toolbar').getBoundingClientRect().height)
+      if (!state.search && scrolledSinceTap) updateActive(document.querySelector('.catalog-toolbar').getBoundingClientRect().height)
     }, 500)
     var group = document.getElementById('g-' + groups[index].id)
     var pinned = document.querySelector('.catalog-toolbar').getBoundingClientRect().height
@@ -270,6 +275,7 @@
     document.querySelector('.promo-sheet-mask .promo-sheet').addEventListener('click', function (event) { event.stopPropagation() })
     window.addEventListener('resize', updateLayout)
     window.addEventListener('scroll', function () {
+      scrolledSinceTap = true
       if (raf) return
       raf = requestAnimationFrame(function () {
         raf = 0
