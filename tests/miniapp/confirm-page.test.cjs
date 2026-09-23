@@ -101,6 +101,8 @@ function makeCtx(opts) {
   // 刚变为 true」的处理）。与 pickup-page.test.cjs 的 holdSlots 同一套写法。
   const heldMeta = []
   let deliverySlotCalls = 0
+  let quoteCalls = 0
+  let cartCalls = 0
   const ctx = { app, urls, requests, holdMeta: !!opts.holdMeta }
   ctx.releaseMeta = function () {
     const pending = heldMeta.splice(0, heldMeta.length)
@@ -122,7 +124,11 @@ function makeCtx(opts) {
       urls.push(url)
       requests.push({ url: url, method: method, data: o.data })
       if (/\/cart/.test(url)) {
-        o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: cart } })
+        cartCalls += 1
+        // cartSeq（T4d 等用例）：第 n 次 GET /cart 按序返回；用尽后停在最后一项——
+        // 与 quoteSeq/slotsSeq 同一套「按序、越界钳到最后一个」的约定。
+        var cartData = (opts.cartSeq && opts.cartSeq.length) ? opts.cartSeq[Math.min(cartCalls - 1, opts.cartSeq.length - 1)] : cart
+        o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: cartData } })
         return
       }
       if (/^\/addresses/.test(url)) {
@@ -130,6 +136,14 @@ function makeCtx(opts) {
         return
       }
       if (/\/local\/quote/.test(url) && method === 'POST') {
+        quoteCalls += 1
+        // quoteSeq（M4b 竞态出路 / M7 等用例）：第 n 次 /local/quote 按序返回；
+        // 用尽后停在最后一项，不需要每条用例都精确算出请求会打几次。
+        if (opts.quoteSeq && opts.quoteSeq.length) {
+          var seqQuote = opts.quoteSeq[Math.min(quoteCalls - 1, opts.quoteSeq.length - 1)]
+          o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: seqQuote } })
+          return
+        }
         if (opts.quoteFail) {
           o.success({ statusCode: 200, data: { code: opts.quoteFail.code || 50001, message: opts.quoteFail.message || '系统开小差了' } })
           return
@@ -139,6 +153,18 @@ function makeCtx(opts) {
       }
       if (/\/local\/delivery-slots/.test(url)) {
         deliverySlotCalls += 1
+        // slotsSeq（M9 等用例）：第 n 次 GET /local/delivery-slots 按序返回，元素可写
+        // {fail:{code,message}} 模拟拉取失败；用尽后停在最后一项。与 slotsSecond
+        // （只区分「第一次/之后」两档）并存，slotsSeq 存在时优先于它。
+        if (opts.slotsSeq && opts.slotsSeq.length) {
+          var seqEntry = opts.slotsSeq[Math.min(deliverySlotCalls - 1, opts.slotsSeq.length - 1)]
+          if (seqEntry && seqEntry.fail) {
+            o.success({ statusCode: 200, data: { code: seqEntry.fail.code || 50001, message: seqEntry.fail.message || '时段获取失败' } })
+          } else {
+            o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: seqEntry } })
+          }
+          return
+        }
         var slotsData = (opts.slotsSecond && deliverySlotCalls > 1) ? opts.slotsSecond : slots
         o.success({ statusCode: 200, data: { code: 0, message: 'ok', data: slotsData } })
         return
@@ -351,6 +377,80 @@ test('⑨打烊强制预约场景下，再点一次已选中的「预约时段�
   page.pickMode.call(page, { currentTarget: { dataset: { mode: 'SCHEDULED' } } })
   assert.equal(page.data.pickerOpen, true, '已是预约模式时再点卡片应打开弹层')
   assert.equal(page.data.scheduleMode, 'SCHEDULED', '模式不应被重复点击改变')
+})
+
+// M4/M4b（复审阻塞，2026-09-23）：打烊 + 预约开时，超范围/未达起送这类与「打烊」无关
+// 的业务阻塞必须优先展示，不能被 NO_SLOT（请选择送达时段）或竞态纠正悄悄抹掉。
+test('T4b M4：打烊+预约开+未达起送，页面判 BLOCKED 而非 NO_SLOT，onSubmit 不提交也不开弹层', async function () {
+  const { ctx, page } = loadConfirm({
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业', belowMin: true, minOrderAmount: 10000, quoteToken: null }),
+  })
+  await settleAll()
+  assert.equal(page.data.action.text, '暂不可配送')
+  assert.equal(page.data.action.amountState, 'blocked')
+  assert.match(page.data.blockReason, /起送/)
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  const ordersBefore = ctx.requests.filter((r) => r.method === 'POST' && /^\/orders(\?|$)/.test(r.url)).length
+  page.onSubmit.call(page)
+  await settleAll()
+  assert.equal(page.data.pickerOpen, false)
+  assert.equal(ctx.requests.filter((r) => r.method === 'POST' && /^\/orders(\?|$)/.test(r.url)).length, ordersBefore)
+
+  // 超出配送范围同理
+  const { page: page2 } = loadConfirm({
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业', inRange: false, distanceM: 12400, quoteToken: null }),
+  })
+  await settleAll()
+  assert.match(page2.data.blockReason, /超出配送范围/)
+  assert.equal(page2.data.action.amountState, 'blocked')
+})
+
+// M4b：报价先回来时 scheduleAvailable 还是初值 false，若报价本身有超范围/未达起送这类
+// 与打烊无关的业务阻塞，loadMeta 后到时的竞态纠正不能无条件把它当「预约开着就放行」，
+// 必须按与 refreshQuote 成功分支同一套优先级重新判一次。
+test('T4c M4b：打烊竞态纠正遇到未达起送，blockReason 改判为「起送」而不是被无条件清空', async function () {
+  const { ctx, page } = loadConfirm({
+    holdMeta: true,
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+    quote: defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业', belowMin: true, minOrderAmount: 10000, quoteToken: null }),
+  })
+  await settleAll()
+  // meta 还没回来：报价先落地，此刻按老逻辑判成「打烊」阻塞
+  assert.equal(page.data.scheduleMode, 'ASAP')
+
+  ctx.releaseMeta()
+  await settleAll()
+  assert.match(page.data.blockReason, /起送/, page.data.blockReason)
+  assert.equal(page.data.action.text, '暂不可配送')
+  assert.equal(page.data.action.amountState, 'blocked')
+  assert.equal(page.data.scheduleMode, 'ASAP')
+  assert.equal(page.data.quoteToken, null)
+})
+
+// T4d：T4c 之后顾客把商品加够、重新报价成功（isOpen 仍 false 但 belowMin 已转 false）——
+// 应正常自动切预约并预选最早格，证明 M4b 的守卫不是把这条路彻底堵死，只是不再无条件放行。
+test('T4d M4b 出路：加够金额后重新报价成功，自动切预约并预选最早格', async function () {
+  const { ctx, page } = loadConfirm({
+    quoteSeq: [
+      defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业', belowMin: true, minOrderAmount: 10000, quoteToken: null }),
+      defaultQuote({ isOpen: false, nextOpenText: '明天 09:00 营业', belowMin: false }),
+    ],
+    meta: defaultMeta({ isOpen: false, nextOpenText: '明天 09:00 营业', delivery: { scheduleEnabled: true, slotMinutes: 30, earliestScheduleText: '' } }),
+  })
+  await settleAll()
+  assert.match(page.data.blockReason, /起送/)
+  page.onIncrease.call(page, { currentTarget: { dataset: { id: 1 } } })
+  // scheduleQuote 的 500ms 去抖是真实定时器，settleAll 的 setTimeout(0) 追不上，
+  // 必须真等过去（与 M1 的 T1a/T1b 同一手法）。
+  await new Promise((r) => setTimeout(r, 600))
+  await settleAll()
+  assert.equal(page.data.blockReason, '')
+  assert.equal(page.data.scheduleMode, 'SCHEDULED')
+  assert.ok(page.data.slotSelected, '应已自动选中最早格')
+  page.onTablewareConfirm.call(page, { detail: { mode: 'COUNT', count: 1 } })
+  assert.equal(page.data.action.text, '预约下单')
 })
 
 test('onSubmit 在 action:slot 时只打开选择器，不提交订单', async function () {
