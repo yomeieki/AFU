@@ -97,15 +97,34 @@ t('earliestScheduleText 按半径 5 km 算最坏路上 20 分：09:00 看首格 
 })
 t('phase 七态按时刻切换', () => {
   const tl = scheduleTimeline(base, sh('2026-09-22T11:30:00'), D3)
-  const none = { readyAt: null, pickedUp: false }
+  const none = { readyAt: null, pickedUp: false, hasActiveDelivery: false }
   assert.strictEqual(schedulePhase(tl, none, sh('2026-09-22T10:00:00')), 'WAITING')
   assert.strictEqual(schedulePhase(tl, none, sh('2026-09-22T10:31:00')), 'TICKETED')
   assert.strictEqual(schedulePhase(tl, none, sh('2026-09-22T10:46:00')), 'PREPPING')
   assert.strictEqual(schedulePhase(tl, none, sh('2026-09-22T11:06:00')), 'CALL_DUE')
-  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: false }, sh('2026-09-22T10:55:00')), 'READY_WAITING')
-  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: false }, sh('2026-09-22T11:10:00')), 'CALLED')
-  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: false }, sh('2026-09-22T11:31:00')), 'LATE')
-  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: true }, sh('2026-09-22T11:31:00')), 'CALLED')
+  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: false, hasActiveDelivery: false }, sh('2026-09-22T10:55:00')), 'READY_WAITING')
+  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: false, hasActiveDelivery: true }, sh('2026-09-22T11:10:00')), 'CALLED')
+  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: false, hasActiveDelivery: false }, sh('2026-09-22T11:31:00')), 'LATE')
+  assert.strictEqual(schedulePhase(tl, { readyAt: sh('2026-09-22T10:50:00'), pickedUp: true, hasActiveDelivery: true }, sh('2026-09-22T11:31:00')), 'CALLED')
+})
+t('S4：CALL_DUE 两分钟宽限——已备好到点但无在途单，过 2 分钟宽限才回落 CALL_DUE；有在途单恒 CALLED', () => {
+  // callAt = 11:06（同上：scheduledAt 11:30 送达）
+  const tl = scheduleTimeline(base, sh('2026-09-22T11:30:00'), D3)
+  const readyAt = sh('2026-09-22T10:50:00')
+  // 有在途配送单：提前呼出（callAt−10min）仍是 CALLED，不再显示「等自动呼叫」
+  assert.strictEqual(schedulePhase(tl, { readyAt, pickedUp: false, hasActiveDelivery: true }, sh('2026-09-22T10:56:00')), 'CALLED')
+  // 无在途单：callAt+1min 仍在两跳心跳的宽限内 → READY_WAITING
+  assert.strictEqual(schedulePhase(tl, { readyAt, pickedUp: false, hasActiveDelivery: false }, sh('2026-09-22T11:07:00')), 'READY_WAITING')
+  // 无在途单：callAt+2min 宽限用尽 → CALL_DUE（该呼叫却没呼出去）
+  assert.strictEqual(schedulePhase(tl, { readyAt, pickedUp: false, hasActiveDelivery: false }, sh('2026-09-22T11:08:00')), 'CALL_DUE')
+  // 无在途单：callAt+4min 同样 CALL_DUE
+  assert.strictEqual(schedulePhase(tl, { readyAt, pickedUp: false, hasActiveDelivery: false }, sh('2026-09-22T11:10:00')), 'CALL_DUE')
+  // readyAt 为空时原口径不变：到点即 CALL_DUE，与 hasActiveDelivery 无关
+  assert.strictEqual(schedulePhase(tl, { readyAt: null, pickedUp: false, hasActiveDelivery: false }, sh('2026-09-22T11:10:00')), 'CALL_DUE')
+})
+t('scheduleView 第 5 参（hasActiveDelivery）缺省 false 时原有断言不变', () => {
+  const v = scheduleView(base, { deliveryType: 'LOCAL', scheduledAt: sh('2026-09-22T11:30:00'), distanceM: D3, readyAt: null }, sh('2026-09-22T09:00:00'))!
+  assert.strictEqual(v.phase, 'WAITING')
 })
 t('scheduleView：非预约单/缺距离 → null；预约单给全部时刻与 phase', () => {
   assert.strictEqual(scheduleView(base, { deliveryType: 'LOCAL', scheduledAt: null, distanceM: D3, readyAt: null }), null)
