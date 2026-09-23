@@ -194,32 +194,36 @@ test('源码级：主页区块标题改为「今日推荐」，不再是「今�
 })
 
 // ── computeNavBar 矩阵：门店头永远不被胶囊压住（不同机型） ──────────────────
+// 复核 R1：这里必须调页面真实的 computeNavBar，不能自己在测试里另抄一份公式——
+// 抄出来的副本会在守卫/兜底改坏时仍然全绿，测不出真实实现的回归。
 
-function computeNavBar(statusBarHeight, menu) {
-  // 与 pages/index/index.js 的 computeNavBar 同一公式，供矩阵直接调用而不必走整页 onLoad。
-  var navContent = 44
-  if (menu && menu.height && menu.top >= statusBarHeight) {
-    navContent = (menu.top - statusBarHeight) * 2 + menu.height
-  }
-  return { navContent: navContent, navTotal: statusBarHeight + navContent }
+function runComputeNavBar(statusBarHeight, menu) {
+  const ctx = makeCtx('LOCAL')
+  ctx.wx.getWindowInfo = () => ({ windowWidth: 375, windowHeight: 812, statusBarHeight: statusBarHeight })
+  ctx.wx.getMenuButtonBoundingClientRect = () => menu
+  const page = loadPage('../../apps/miniapp/pages/index/index.js', ctx)
+  page.computeNavBar.call(page)
+  return page.data
 }
 
-test('computeNavBar：胶囊下沿永远不低于导航栏下沿（矩阵覆盖多机型 + 守卫不成立 + 拿不到胶囊）', function () {
+test('computeNavBar：胶囊下沿永远不低于导航栏下沿（矩阵覆盖多机型 + 守卫不成立，实跑页面方法）', function () {
   var cases = [
-    { statusBarHeight: 44, menu: { top: 48, height: 32 } },  // 刘海机
-    { statusBarHeight: 20, menu: { top: 24, height: 32 } },  // 非刘海机
-    { statusBarHeight: 24, menu: { top: 30, height: 32 } },
-    { statusBarHeight: 20, menu: { top: 26, height: 32 } },
-    { statusBarHeight: 44, menu: { top: 40, height: 32 } },  // 守卫不成立（top < statusBarHeight）
+    { statusBarHeight: 44, menu: { top: 48, height: 32, left: 280 } },  // 刘海机
+    { statusBarHeight: 20, menu: { top: 24, height: 32, left: 280 } },  // 非刘海机
+    { statusBarHeight: 24, menu: { top: 30, height: 32, left: 280 } },
+    { statusBarHeight: 20, menu: { top: 26, height: 32, left: 280 } },
+    { statusBarHeight: 44, menu: { top: 40, height: 32, left: 280 } },  // 守卫不成立（top < statusBarHeight）
   ]
   cases.forEach(function (c) {
-    var r = computeNavBar(c.statusBarHeight, c.menu)
-    assert.ok(r.navTotal >= c.menu.top + c.menu.height,
-      'navTotal=' + r.navTotal + ' 应 >= ' + (c.menu.top + c.menu.height) + '（案例 ' + JSON.stringify(c) + '）')
+    var data = runComputeNavBar(c.statusBarHeight, c.menu)
+    assert.ok(data.navTotal >= c.menu.top + c.menu.height,
+      'navTotal=' + data.navTotal + ' 应 >= ' + (c.menu.top + c.menu.height) + '（案例 ' + JSON.stringify(c) + '，实测 navTotal=' + data.navTotal + '）')
   })
-  // 拿不到胶囊信息（旧客户端/桩返回 null）：退回 44 常量
-  var fallback = computeNavBar(20, null)
-  assert.equal(fallback.navTotal, 20 + 44)
+})
+
+test('computeNavBar：拿不到胶囊信息（桩返回 null）时退回 44 常量，实跑页面方法', function () {
+  var data = runComputeNavBar(20, null)
+  assert.equal(data.navTotal, 20 + 44)
 })
 
 test('computeNavBar：与页面里实跑一致（通过 onLoad 触发真实 computeNavBar，走真实分支）', async function () {
