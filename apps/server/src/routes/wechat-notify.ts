@@ -5,6 +5,7 @@ import { verifyWechatNotify, hasVerifyMaterial } from '../services/wechat-pay-ve
 import { notifyOrderPaid } from '../services/order-notify'
 import { notifySystemAlert } from '../services/notify'
 import { finalizeRefundSuccess, initiateRefund, markRefundAbnormal, markRefundClosed } from '../services/refund'
+import { AppError } from '../middlewares/error'
 import { config } from '../config'
 import { sendPaidSubscribeMessage } from '../services/subscribe-message'
 import { enqueueOrderTicket } from '../services/ticket'
@@ -246,9 +247,14 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
           key: `late-pay:${orderId}`,
         })
       } catch (err) {
-        notifySystemAlert('取消订单收到付款，自动退款失败（请到后台退款 Tab 重试）', [`订单 ${info.orderNo}`, (err as Error).message], {
-          key: `late-pay-fail:${orderId}`,
-        })
+        // P3：50202（结果未知，行已保留交补查）与其它失败（明确拒绝/校验错误）文案不同——
+        // 前者不该让店员误以为「需要去后台重试」，那反而可能造成重复退款。
+        const uncertain = err instanceof AppError && err.code === 50202
+        notifySystemAlert(
+          uncertain ? '取消订单收到付款，自动退款结果未知（系统将自动核对）' : '取消订单收到付款，自动退款失败（请到后台退款 Tab 重试）',
+          [`订单 ${info.orderNo}`, (err as Error).message],
+          { key: `late-pay-fail:${orderId}` }
+        )
       }
       replyOk(res)
       return
