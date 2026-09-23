@@ -312,3 +312,57 @@ apps/miniapp/components/slot-picker/**
 
 ### 待用户决定
 - 无。（店主已定：尾段胶囊绿「营业中」+「（可预约）」+ 软提示；无格胶囊灰「已打烊」+ 提示「暂无可取时段」；规划者按既有 `blocking` 语义定为阻塞，理由见条目 4′。）
+
+---
+
+## 修订 2（2026-09-24，复核 R5 规划缺口：营业时段内 × 无格）
+
+【工序】规划 【模型】Fable 5.1 【等级】M
+
+基线：HEAD `1d3b98a`（BASE 不变 `e7d44e3`）。只写增减；其余维持修订 1。
+
+### 定级复核
+仍为 **M**。只改小程序纯函数 `storeStatusOf` 的 PICKUP 分支一个 label 与对应单测；服务端 `earliestPickupWhen` 的三值口径不变，无接口、无迁移。
+
+### R5 核实
+成立。修订 1 表格把 `NONE` 写成「已打烊（不分 BREAK/CLOSED）」，漏了 `closedKind === 'OPEN'`（店在营业段内）这一行；`local-catalog.js:56` 因而在「后台自取可预订=仅今天（`daysAhead=0`）+ 最后一段末尾 ≈ 55 分钟」时把自取胶囊画成灰「已打烊」，与同一门店头外送侧的绿「营业中」自相矛盾。生产 `daysAhead=1` 不触发，但选项是正式的，要做。
+
+### 条目 4″（替换修订 1 表格中 `when === 'NONE'` 那一行）
+`NONE` 按此刻是否在营业时段（`outOfHours(meta)`，即 `closedKind !== 'OPEN'`）分两支，**只有胶囊 label 不同**，其余四件（提示、blocking、切换栏小字、`modeAvailable`）两支相同：
+
+| 情形 | `storeStatusOf(meta,'PICKUP')` | `headNoticeOf` | `pickupModeHint` | `modeAvailable(…,'PICKUP')` |
+|---|---|---|---|---|
+| `NONE` × `closedKind:'OPEN'`（店开着、今天已无格） | `{ tone:'closed', label:'今日已约满' }` | `{ text:'暂无可取时段', blocking:true }` | `''` | `false` |
+| `NONE` × `closedKind:'BREAK'` 或 `'CLOSED'`（营业时间外） | `{ tone:'closed', label:'已打烊' }`（不写午间休息，同修订 1） | 同上 | `''` | `false` |
+
+- 休业 / 未开通 / 暂停仍在 `NONE` 判断之前，优先级不变。
+- `closedKind` 缺失时按 `outOfHours` 的现有实现视作 OPEN（`NONE` 只可能来自新服务端，新服务端恒下发 `closedKind`，此分支不会真的出现；不另加兜底）。
+- 自取结算页 `pages/local/pickup.js:142-146` 只消费 `headNoticeOf`，文案与 blocking 不变，不受影响，仍禁改。
+
+### 验收标准（增改）
+- 1-a 增：`tests/miniapp/local-catalog.test.cjs` 在 `noneClosed`/`noneBreak` 之外新增 `noneOpen = PK + closedKind:'OPEN' + pickup.{earliestPickupWhen:'NONE', earliestPickupText:''}`，断言：
+  - `storeStatusOf(noneOpen,'PICKUP')` → `{ tone:'closed', label:'今日已约满' }`（**新增**）；
+  - `headNoticeOf(noneOpen,'PICKUP')` → `{ text:'暂无可取时段', blocking:true }`；`pickupModeHint(noneOpen)` → `''`；`modeAvailable(noneOpen,'PICKUP')` → `false`（**新增**，与 CLOSED 支同结果，证明只有 label 变）；
+  - 既有 `:129`（CLOSED × NONE → `'已打烊'`）与 `:138`（BREAK × NONE → `'已打烊'`）**不改仍绿**，只把 :123 与 :134 的注释改成「营业时间外 × NONE」；
+  - `noneOpen` 叠 `paused` / `pickup.enabled:false` / `holiday` → 仍是各自原结果（可并入 :162-178 那组）。
+- 1-h 增（源码级，放 `closed-schedule-hints.test.cjs` 或 `local-catalog.test.cjs`）：`utils/local-catalog.js` 含字符串 `'今日已约满'` 恰一处，且不出现在 DELIVERY 分支（正则锚在 `normMode(mode) === 'PICKUP'` 之后、`if (meta.paused)` 之前的那段）。
+- 4 不变：`selftest-pickup.ts` 的 `earliestPickupInfo` 用例已覆盖 `daysAhead:0 + 19:10 → NONE`（closedKind 在服务端为 OPEN），服务端口径不改。
+- 5 增（接口 + 纯函数联动，可控时间）：修订 1 验收 5 ③ 的营业时间改为 `[now−3h, now+40m]` + `daysAhead=0`（与 ② 同窗口、只差 daysAhead）→ 期望 `closedKind === 'OPEN'`、`earliestPickupWhen === 'NONE'`、`earliestPickupText === ''`；把这份 meta 原样喂给 `storeStatusOf(meta,'PICKUP')`（node 一行脚本 `require('./apps/miniapp/utils/local-catalog')`）→ `'今日已约满'`。原 ③（`end = now−10m`）保留为「营业时间外 × NONE → `'已打烊'`」。
+- 7 查实：预览台四个主页镜像与分类页镜像都没有 NONE 态（`grep -c 'earliestPickupWhen\|NONE' tools/miniapp-preview/pages/*` 为 0），**不受影响、不改**；R3 仍由编排者定。
+- 8 不变。
+
+### 实现方向（增）
+1. `apps/miniapp/utils/local-catalog.js:56`：`when === 'NONE'` → `{ tone:'closed', label: outOfHours(meta) ? '已打烊' : '今日已约满' }`；`storeStatusOf` 头注释补一句「营业时段内一格都约不到写『今日已约满』（店主 2026-09-24）」。
+2. `tests/miniapp/local-catalog.test.cjs`：按验收 1-a 补 `noneOpen`，改两处注释。
+3. 其余文件不动。
+
+### 授权范围 / 禁止修改
+- 不变：本修订只动 `apps/miniapp/utils/local-catalog.js` 与 `tests/miniapp/local-catalog.test.cjs`（二者已在范围内）；`tests/miniapp/closed-schedule-hints.test.cjs` 若放 1-h 的源码级断言，限定为**只增一个用例**。预览台镜像、服务端、`pages/local/**` 不动。
+
+### 上报条件（增）
+- 实现 4″ 需要改 `outOfHours`/`closedLabel` 的定义或动 DELIVERY 分支。
+- 验收 5 增补那组实测 `closedKind` 不是 `OPEN`（说明窗口换算有误）或 `when` 不是 `NONE`（说明 `daysAhead=0` 没生效，先查 PUT 回显）。
+- 发现 `storeStatusOf(…,'PICKUP')` 的 label 在小程序里还有别的消费方按字面匹配「已打烊」（`command grep -rn "已打烊" apps/miniapp --include='*.js' --include='*.wxml'`，规划者查过只有 `local-catalog.js` 与 mirrors 的静态文案）。
+
+### 待用户决定
+- 无。（R6 首尾相接两段在 13:40 出软提示、R7 路由两次 `new Date()` 跨分钟不一致，均为复核建议，不在本批处理。）
