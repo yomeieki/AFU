@@ -6,6 +6,7 @@
  */
 import { Prisma } from '@prisma/client'
 import prisma from '../../utils/prisma'
+import { AppError } from '../../middlewares/error'
 import { getLocalSettings, LocalDeliverySettings } from '../local-settings'
 import { scheduleTimeline, ScheduleTimeline } from './schedule'
 import { slotLabel, hhmmOf } from '../slots'
@@ -46,7 +47,13 @@ export async function printPrepTickets(): Promise<number> {
     const marked = await prisma.order.updateMany({ where: { id: o.id, prepTicketAt: null }, data: { prepTicketAt: new Date() } })
     if (marked.count === 0) continue
     n++
-    enqueueOrderTicket(o.id, 'PREP').catch((e) => console.error('[schedule-tasks] 备餐票入队失败:', (e as Error).message))
+    // S6（店主决定 D5）：付款时已过出票时刻（约三分之一最早时段单）——来单票印的时候已经带上了
+    // 「送达 / 开始备餐 / 呼叫骑手」与厨房联全部信息，此刻再补一张 PREP 全票只是让后厨拿到两张
+    // 同单的票。只打标 + 企微提醒，不再入队 PREP。paidAt 为空（PAID 单理论不存在没付款时刻的）
+    // 按原逻辑照出，不缺这条路径。
+    if (!(o.paidAt && o.paidAt.getTime() >= tl.ticketAt.getTime())) {
+      enqueueOrderTicket(o.id, 'PREP').catch((e) => console.error('[schedule-tasks] 备餐票入队失败:', (e as Error).message))
+    }
     notifyLocalDeliveryAlert('预约单该开始备餐了', [
       tail(o),
       `${hhmmOf(tl.prepStartAt)} 开始备餐 · ${hhmmOf(tl.callAt)} 前备好 · ${slotLabel(tl.scheduledAt, s.schedule.slotMinutes)} 送达`,
@@ -111,18 +118,53 @@ export async function remindScheduledNotReady(): Promise<number> {
   return n
 }
 
-/** 已备好且 callAt 到了 → 自动呼叫（SCHEDULED_AUTO）。熔断/未开通不呼；有取消申请的单交给店员 */
+/**
+ * 已备好且 callAt 到了 → 自动呼叫（SCHEDULED_AUTO）。
+ *
+ * S4/S5（2026-09-23 修）：熔断/总开关关不再让整个函数静默 `return 0`——已备好到点的单会一直
+ * 卡在「等自动呼叫」且没有任何提示，直到过了约定送达时刻才变红。改成继续扫描候选，对每一张
+ * 已到点、无在途单的预约单发一次企微告警（10 分钟限频，与配送单侧的限频同一套机制）；
+ * `schedulePhase` 那边也已改成到点 2 分钟宽限后回落 `CALL_DUE`（该呼叫却没呼出去），
+ * 两处配合才是完整的「可见 + 有告警」。返回值口径改为「本轮动作数 = 成功呼叫 + 发出的告警」，
+ * 与其它定时任务一致；既有 e2e §69 ⑦ 的 `=0`/`≥1` 断言不受影响（已核对该时点无其它到点候选）。
+ * `s.enabled=false` 且库里没有到点的预约单时，候选查询本身为空，仍旧完全静默（既有约束不变）。
+ */
 export async function autoCallScheduled(): Promise<number> {
   const s = await getLocalSettings()
-  if (!s.enabled || isCircuitTripped()) return 0
+  const blocked = !s.enabled ? '同城配送总开关已关闭' : isCircuitTripped() ? '快递100 余额不足已熔断' : null
   const now = Date.now()
   let n = 0
   for (const o of await loadScheduled(['PREPARING'], { readyAt: { not: null }, cancelRequestedAt: null })) {
     const tl = tlOf(s, o)
     if (!tl || now < tl.callAt.getTime()) continue
     if (await getActiveDelivery(o.id)) continue
-    try { await callRider({ orderId: o.id, operator: 'scheduler', source: 'SCHEDULER', origin: 'SCHEDULED_AUTO' }); n++ }
-    catch (e) { console.warn('[autoCallScheduled] 呼叫订单', o.id, '失败，跳过:', (e as Error)?.message ?? e) }
+    if (blocked) {
+      notifyLocalDeliveryAlert('预约单到点未能自动呼叫', [
+        tail(o),
+        `${blocked}，系统不会自动呼叫骑手`,
+        `约定 ${slotLabel(tl.scheduledAt, s.schedule.slotMinutes)} 送达，请到工作台「立即呼叫」或「自己送」，或先恢复开关/熔断`,
+      ], { key: `sched-uncalled:${o.id}`, windowMs: 10 * MIN })
+      n++
+      continue
+    }
+    try {
+      await callRider({ orderId: o.id, operator: 'scheduler', source: 'SCHEDULER', origin: 'SCHEDULED_AUTO' })
+      n++
+    } catch (e) {
+      const code = e instanceof AppError ? e.code : null
+      // 42225 = 运力方失败，callRider 内部已按失败类型（CAPACITY/BALANCE/CONFIG/BUSINESS）
+      // 自己告过警了，这里不重复；其它错误（如 42204 并发状态变化、42223 缺坐标等）此前只有
+      // console.warn 悄悄丢掉，店员要等 10 分钟通用「未呼叫骑手」提醒才知道这单有问题。
+      if (code !== 42225) {
+        notifyLocalDeliveryAlert('预约单自动呼叫失败', [
+          tail(o),
+          (e as Error)?.message ?? String(e),
+          '请到工作台「立即呼叫」或「自己送」',
+        ], { key: `sched-uncalled:${o.id}`, windowMs: 10 * MIN })
+        n++
+      }
+      console.warn('[autoCallScheduled] 呼叫订单', o.id, '失败，跳过:', (e as Error)?.message ?? e)
+    }
   }
   return n
 }

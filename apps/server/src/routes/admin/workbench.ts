@@ -192,7 +192,9 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
         ? { prepStartAt: prepStartAt(settings, o.pickupAt).toISOString(), slotLabel: pickupSlotLabel(o.pickupAt, settings.pickup.slotMinutes) }
         : null
       const d = byOrder.get(o.id) ?? null
-      const sc = o.deliveryType === 'LOCAL' && o.scheduledAt ? scheduleView(settings, o, now, !!d?.pickedUpAt) : null
+      // S4：hasActiveDelivery 传 !!d——byOrder 对未完成单只含在途配送单（activeOrderId 命中），
+      // 已完成单补回的是最后一张（见上面 doneLocalIds 那段），done 列胶囊本就返回 null，不受影响。
+      const sc = o.deliveryType === 'LOCAL' && o.scheduledAt ? scheduleView(settings, o, now, !!d?.pickedUpAt, !!d) : null
       // 预约单出票之前收进折叠分组，不进五列（spec §6.1 WAITING）
       if (sc?.phase === 'WAITING' && (o.status === 'PAID' || o.status === 'PREPARING') && !d) { cols.scheduled.push(toCard(o, o.paidAt, d, null, null, sc)); continue }
       if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d, bookingByOrder.get(o.id) ?? null, pk, sc))

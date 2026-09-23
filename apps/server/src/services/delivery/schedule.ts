@@ -101,12 +101,29 @@ export function etaIfCallNow(s: LocalDeliverySettings, distanceM: number, now: D
   return new Date(now.getTime() + (s.callToPickupMin + rideMinutes(s, distanceM)) * MIN)
 }
 
+/**
+ * S4/S5（2026-09-23 修）：到点后店员点「已备好」但自动呼叫没能真的发出去（熔断/总开关关/查询接口
+ * 报错等），原口径只按「readyAt 非空 + 到点」就判 CALLED，卡片会一直显示「等自动呼叫」而不点亮，
+ * 直到过了约定送达时刻才变红——期间没有任何视觉提示告诉店员「该呼叫却没呼出去」。
+ * 两跳心跳（60s 一跳）的宽限：刚到点那一下心跳可能还没轮到，不是异常，不点亮。
+ */
+export const CALL_GRACE_MS = 2 * MIN
+
 /** 工作台卡片阶段（spec §6.1 六态 + CALLED，计划差异⑥）。LATE 优先：过了约定时刻骑手还没取餐 */
 export type SchedulePhase = 'WAITING' | 'TICKETED' | 'PREPPING' | 'CALL_DUE' | 'READY_WAITING' | 'CALLED' | 'LATE'
-export function schedulePhase(tl: ScheduleTimeline, o: { readyAt: Date | null; pickedUp: boolean }, now: Date = new Date()): SchedulePhase {
+export function schedulePhase(
+  tl: ScheduleTimeline,
+  o: { readyAt: Date | null; pickedUp: boolean; hasActiveDelivery: boolean },
+  now: Date = new Date(),
+): SchedulePhase {
   const t = now.getTime()
   if (!o.pickedUp && t > tl.scheduledAt.getTime()) return 'LATE'
-  if (o.readyAt) return t < tl.callAt.getTime() ? 'READY_WAITING' : 'CALLED'
+  if (o.readyAt) {
+    if (o.hasActiveDelivery) return 'CALLED'
+    // 已备好、到点、但无在途配送单：过了两跳心跳的宽限仍没呼出去 → CALL_DUE（该呼叫却没呼出去），
+    // 复用「橙 + 该呼叫」这套既有视觉语言，不新增枚举值（小程序读 phase，本批禁改小程序）。
+    return t < tl.callAt.getTime() + CALL_GRACE_MS ? 'READY_WAITING' : 'CALL_DUE'
+  }
   if (t >= tl.callAt.getTime()) return 'CALL_DUE'
   if (t >= tl.prepStartAt.getTime()) return 'PREPPING'
   if (t >= tl.ticketAt.getTime()) return 'TICKETED'
@@ -119,6 +136,7 @@ export function scheduleView(
   order: { deliveryType: string; scheduledAt: Date | null; distanceM: number | null; readyAt: Date | null },
   now: Date = new Date(),
   pickedUp = false,
+  hasActiveDelivery = false,
 ) {
   if (order.deliveryType !== 'LOCAL' || !order.scheduledAt || order.distanceM === null) return null
   const tl = scheduleTimeline(s, order.scheduledAt, order.distanceM)
@@ -131,7 +149,7 @@ export function scheduleView(
     acceptDueAt: tl.acceptDueAt.toISOString(),
     selfCancelUntil: tl.selfCancelUntil.toISOString(),
     readyAt: order.readyAt?.toISOString() ?? null,
-    phase: schedulePhase(tl, { readyAt: order.readyAt, pickedUp }, now),
+    phase: schedulePhase(tl, { readyAt: order.readyAt, pickedUp, hasActiveDelivery }, now),
     etaIfCallNow: etaIfCallNow(s, order.distanceM, now).toISOString(),
     callToleranceMin: s.schedule.callToleranceMin,
   }

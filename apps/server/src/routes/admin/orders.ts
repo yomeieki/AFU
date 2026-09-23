@@ -143,8 +143,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     // 预约 / 尽快筛选（2026-09-21）；不传不过滤
+    // S8（2026-09-23 修）：ASAP 原来只按 scheduledAt:null 过滤——自取单（PICKUP）的 scheduledAt
+    // 恒为空，会被一并算成「尽快」的同城外送单。加 deliveryType:'LOCAL' 限定为「立即同城单」。
+    // channel=LOCAL 时叠加只剩 LOCAL，行为不变；deliveryType=PICKUP&schedule=ASAP 结果恒为空——
+    // 前端切到自取渠道时已经把 schedule 参数删掉了（LocalOrders.tsx），不会发出这种组合。
     const sc = req.query.schedule ? z.enum(['SCHEDULED', 'ASAP']).parse(req.query.schedule) : undefined
-    const scWhere: Prisma.OrderWhereInput = sc === 'SCHEDULED' ? { scheduledAt: { not: null } } : sc === 'ASAP' ? { scheduledAt: null } : {}
+    const scWhere: Prisma.OrderWhereInput = sc === 'SCHEDULED' ? { scheduledAt: { not: null } } : sc === 'ASAP' ? { scheduledAt: null, deliveryType: 'LOCAL' } : {}
 
     // 显式 AND 数组而非顶层展开：attentionWhere（REFUND_ATTENTION_WHERE）自身带 OR 键，
     // 与 keyword 分支的 OR 键顶层展开会互相覆盖（后者赢，前者的过滤条件整个失效）——
@@ -304,13 +308,21 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
           select: { name: true, code: true, amount: true, threshold: true, source: true, issuedBy: true, remark: true },
         })
       : null
+    // S4 复核：这里原来完全没传 pickedUp/hasActiveDelivery（缺省 false）——LATE 判定会把骑手
+    // 已取货但过了约定时刻的单也误判成 LATE，CALL_DUE 判定也会把已呼出去的单误判成「未呼出」。
+    // 只在预约单上多查一次是否有在途配送单（activeOrderId 命中）。
+    const scDelivery = order.deliveryType === 'LOCAL' && order.scheduledAt
+      ? await prisma.delivery.findFirst({ where: { activeOrderId: id }, select: { pickedUpAt: true } })
+      : null
     success(res, {
       ...order,
       coupon,
       receiverDisplayAddress: displayAddress(order, order.deliveryType === 'LOCAL' || order.deliveryType === 'PICKUP'),
       remainingRefundable: remainingRefundable(order),
       // 预约送达（2026-09-21）：非预约单或计算不出（缺距离）为 null，见 scheduleView
-      schedule: order.deliveryType === 'LOCAL' && order.scheduledAt ? scheduleView(await getLocalSettings(), order, new Date()) : null,
+      schedule: order.deliveryType === 'LOCAL' && order.scheduledAt
+        ? scheduleView(await getLocalSettings(), order, new Date(), !!scDelivery?.pickedUpAt, !!scDelivery)
+        : null,
     })
   } catch (e) {
     next(e)

@@ -855,10 +855,14 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     const activeAfterSale = afterSales[0] && ['PENDING', 'APPROVED'].includes(afterSales[0].status) ? afterSales[0] : null
     let delivery: ReturnType<typeof customerDeliveryView> | null = null
     let pickedUp = false
+    let hasActiveDelivery = false
     if (order.deliveryType === 'LOCAL') {
       const d = await prisma.delivery.findFirst({ where: { orderId: id }, orderBy: { id: 'desc' } })
       delivery = d ? customerDeliveryView(d) : null
       pickedUp = !!d?.pickedUpAt
+      // S4：d 是「最近一张」（含已取消/失败的终态行），必须再判 activeOrderId 是否仍指回本单，
+      // 才是真正意义上的「有在途配送单」——终态行的 activeOrderId 已被释放为 null。
+      hasActiveDelivery = !!d && d.activeOrderId === id
     }
     // 顾客白名单：不给手机号、不给费用（同城 customerDeliveryView 同一原则）。
     // FAILED/VOID 对顾客等同「没预约」；CANCELLED 也下发，顾客端按「商家备货中」显示（Task 7 处理）。
@@ -893,7 +897,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
       canApplyAfterSale: ['SHIPPED', 'COMPLETED'].includes(order.status) && remaining > 0 && !activeAfterSale,
       subscribeTemplateIds: getSubscribeTemplateIds(),
       pickup: await pickupViewOf(order),
-      schedule: order.deliveryType === 'LOCAL' && order.scheduledAt ? scheduleView(await getLocalSettings(), order, new Date(), pickedUp) : null,
+      schedule: order.deliveryType === 'LOCAL' && order.scheduledAt ? scheduleView(await getLocalSettings(), order, new Date(), pickedUp, hasActiveDelivery) : null,
       canSelfCancel: await canSelfCancelOf(order),
       subscribeTemplates: getSubscribeTemplateGroups(),
       delivery,
