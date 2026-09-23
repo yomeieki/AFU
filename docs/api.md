@@ -1137,7 +1137,7 @@ M2-B 店员默认落地页 `/workbench` 的唯一数据源：归类（五列）�
 | `POST /:id/call` | 呼叫骑手：落一条 `Delivery(PENDING→CALLING)` 占位（`activeOrderId` 唯一索引防并发重呼，撞了 → `42228`）→ 事务外调用快递100 `batchOrder`。仅 `PREPARING` 且无顾客取消申请、有收货坐标可呼叫，否则 `42204`/`42223`。响应 `{ deliveryId, deliveryNo, status: 'CALLING'\|'UNKNOWN', quotedFeeFen }`：`CALLING` = 下单成功；`UNKNOWN` = 下单响应超时，占位保留等回调认领。明确失败（配置错误/余额不足/运力异常重试耗尽）→ `42225`；熔断中 → `42232` |
 | `GET /:id/delivery` | 该订单当前有效配送单（无则取最近一张历史单）+ 事件时间线。响应 `{ delivery, events[] }`；`delivery` 为 `null` 表示从未呼叫过 |
 | `POST /:id/delivery/precancel` | 预估取消费（只读，不真取消，用于取消前给店员看一眼要扣多少钱）。响应 `{ cancelFeeFen }`。无在途单 → `42233`；尚未成单（无 `providerTaskId`）→ `42234` |
-| `POST /:id/delivery/cancel` | 取消在途配送单（真取消，调用快递100 `cancel`）。Body `{ reason? }`（≤255 字）。响应 `{ cancelFeeFen }`；取消费与小费一律店铺承担，记入 `Delivery` 对账。取消请求超时（状态未变化）→ `42238`；无在途单 → `42233`；状态已变化（并发）→ `42237` |
+| `POST /:id/delivery/cancel` | 取消在途配送单（真取消，调用快递100 `cancel`）。Body `{ reason? }`（≤255 字）。响应 `{ cancelFeeFen }`；取消费与小费一律店铺承担，记入 `Delivery` 对账。取消请求超时（状态未变化）→ `42238`；无在途单 → `42233`；状态已变化（并发）→ `42237`。**预约单**：店员在工作台点这个接口即撤回「已备好」（`readyAt` 置空），系统到点不再自动呼叫；重新呼叫走「已备好 / 立即呼叫」，改自送走 `self-deliver`。调度器自动升级（撤 D-1 建 D-2）走的是内部 `source:'SCHEDULER'`，不清 `readyAt`（2026-09-23 S1） |
 | `POST /:id/delivery/tip` | 加小费（仅 `CALLING` 待抢单阶段可加，超过设置里的单次/单笔累计上限 → `42235`）。Body `{ amount }`（整数分，1-100000）。响应 `{ tipFeeFen }`（累计小费）。运力拒绝/请求超时 → `42236` |
 | `POST /:id/self-deliver` | 店内自送：新建 `Delivery(provider='SELF', status='DELIVERING')`，订单 `PREPARING → SHIPPED`。Body `{ name, phone }`。响应 `{ deliveryId, deliveryNo }`。已有在途配送单 → `42228`（若是「状态未确认」单则提示先作废 → `42234`） |
 | `POST /:id/delivered` | 标记已送达：配送单 → `DELIVERED`，订单 → `COMPLETED`。无在途单 → `42233`；并发状态已变化 → `42237` |
@@ -2188,7 +2188,7 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | `POST /admin/local/orders/:id/accept-and-call` | 预约单 42292 |
 | `POST /admin/local/orders/:id/call` | 加 `force`；预约单早于 `callAt − callToleranceMin` 无 force → 42292 |
 | `POST /admin/local/orders/:id/ready` | 新增；`{ readyAt, called, callAt }`；`distanceM` 缺失（数据异常）→ 42292，不写 `readyAt`，店员改用「立即呼叫」或「自己送」 |
-| `GET /admin/orders` | 加 `schedule=SCHEDULED|ASAP` |
+| `GET /admin/orders` | 加 `schedule=SCHEDULED|ASAP`；`ASAP` 等价 `{ scheduledAt: null, deliveryType: 'LOCAL' }`，不再把自取单（PICKUP，scheduledAt 恒空）一并算进「尽快」（2026-09-23 S8） |
 | `GET /admin/orders/:id` | 加 `schedule` 节 |
 | `GET /admin/workbench/snapshot` | 加 `columns.scheduled`、卡片 `local.schedule`、顶层 `scheduleEnabled / scheduleBar` |
 | `GET /api/admin/stats/local` | `kpi.scheduledCount` / `kpi.prev.scheduledCount`（预约单计数） |
@@ -2200,7 +2200,7 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | `schedPrepTicket` | `printPrepTickets` | `ticketAt`，每单一次（`prep_ticket_at`） |
 | `schedUnaccepted` | `remindScheduledUnaccepted` | max(付款+15, `acceptDueAt`)，每单一次 |
 | `schedNotReady` | `remindScheduledNotReady` | `callAt` 起每 `readyRemindEveryMin`，`every×max` 后告警一次 |
-| `schedAutoCall` | `autoCallScheduled` | 已备好且 `callAt` 到 |
+| `schedAutoCall` | `autoCallScheduled` | 已备好且 `callAt` 到；总开关关/熔断/呼叫失败（非 42225）时按单发企微告警而不再静默跳过，返回值=成功呼叫数+告警数（2026-09-23 S4/S5） |
 | `schedLate` | `remindScheduledLate` | `scheduledAt`+10 分未取餐，限频 60 分钟 |
 
 `remindUnacceptedOrders / autoCallRiders / remindLocalUncalled / autoRejectStaleCancelRequests` 排除预约单；`repeatAnnounce` 对预约单锚在 `acceptDueAt`。
