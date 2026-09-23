@@ -207,7 +207,10 @@ export async function refreshStaleQuotes(min?: number): Promise<number> {
   const threshold = min ?? QUOTE_FRESH_MS / 60000
   const orders = await prisma.order.findMany({
     where: {
-      deliveryType: 'LOCAL', status: 'PREPARING', cancelRequestedAt: null,
+      // S2：预约单排除在保鲜之外——接单到呼叫可能隔十几小时，每 5 分钟把收件人姓名手机号
+      // 发给运力方一次毫无用处（查价接口按规格要传收件信息）。呼叫前 resolveCallProviders
+      // 见快照过期会自己同步现查一次（orchestrator.ts），不靠这条定时任务兜底。
+      deliveryType: 'LOCAL', status: 'PREPARING', cancelRequestedAt: null, scheduledAt: null,
       receiverLatE6: { not: null }, receiverLngE6: { not: null },
       deliveries: { none: { activeOrderId: { not: null } } },
       OR: [{ quotedAt: null }, { quotedAt: { lt: ago(threshold) } }],
@@ -329,7 +332,9 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
       const nextMode = NEXT_RUNG[d.callStrategy as DeliveryCallStrategy]
       if (!nextMode) continue
       const rungText = `并呼最便宜 ${s.callStrategy.cheapestN} 家`
-      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为${rungText}` })
+      // S1：升级是「撤 D-1 立刻建 D-2」，店员没有表达过「不要骑手」——source:'SCHEDULER' 让
+      // cancelDelivery 不清 readyAt（见其注释），预约单不会因为这次自动升级又被打回 CALL_DUE。
+      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为${rungText}`, source: 'SCHEDULER' })
       try {
         await callRider({
           orderId: d.orderId, operator: 'scheduler', source: 'SCHEDULER', forceMode: nextMode,

@@ -237,11 +237,16 @@ export async function callRider(input: CallRiderInput) {
   const snapshotForDelivery = fresh?.snapshot ?? order.quoteSnapshot
   const quotedAtForDelivery = fresh?.quotedAt ?? order.quotedAt
 
+  // S1（2026-09-23 修）：调度器到点自动呼叫（SCHEDULER + SCHEDULED_AUTO）不得替店员「重新表达已备好」。
+  // 店员在工作台点「取消呼叫/取消配送」等于撤回「已备好」（见 cancelDelivery），之后系统不该再自动把
+  // readyAt 补回去——虽然 autoCallScheduled 的候选查询本身已要求 readyAt 非空（这条写从不会被它触发），
+  // 这里仍显式排除，把「调度器绝不主动写 readyAt」的不变量钉死在这一处，不依赖候选查询这一层防线。
+  const schedulerAuto = source === 'SCHEDULER' && input.origin === 'SCHEDULED_AUTO'
   // 预约单：呼叫即视为已备好（spec §4.5 不变量：有在途配送单 ⇒ readyAt 非空）。呼叫失败也保留——店员表达过「好了」。
   // 复核 R1：必须挪到占位 delivery.create 之前写——这样任何时刻只要有 delivery 行存在，readyAt 必已非空，
   // 不再有「占位已建但 readyAt 仍为 null」的窗口（下面的原子复核在占位创建之后才跑，补不上这半程）。
   // where 补 status: 'PREPARING'：此刻订单可能已被并发的秒退/取消翻走，不带状态条件会在 REFUNDING 上误写 readyAt。
-  if (order.scheduledAt && !order.readyAt) {
+  if (order.scheduledAt && !order.readyAt && !schedulerAuto) {
     await prisma.order.updateMany({ where: { id: orderId, status: 'PREPARING', readyAt: null }, data: { readyAt: new Date() } })
   }
 
@@ -276,7 +281,10 @@ export async function callRider(input: CallRiderInput) {
   // 原子复核：:34 读到的是占位创建前的快照，纯 JS 判断挡不住之后几毫秒内插进来的退款/取消——
   // 那笔事务可能在我们创建占位之后、外呼之前才提交。占位已经拿到 activeOrderId 唯一索引，
   // 此刻再读一次订单当前状态，不行就照 :105 落库失败的形状释放占位，绝不能带着这单去外呼。
-  const stillValid = await prisma.order.count({ where: { id: orderId, status: 'PREPARING', cancelRequestedAt: null } })
+  // S1：调度器自动呼叫再加一条 readyAt 非空复核——「心跳已加载候选 → 店员取消提交（清空 readyAt）
+  // → 心跳走到这里」这段毫秒级窗口里，占位建好后这次复核会发现 readyAt 已空，按下面同一形状
+  // 释放占位并抛错，绝不外呼。ADMIN 来源（店员手动呼叫/立即呼叫）不受影响，不加这条件。
+  const stillValid = await prisma.order.count({ where: { id: orderId, status: 'PREPARING', cancelRequestedAt: null, ...(schedulerAuto ? { readyAt: { not: null } } : {}) } })
   if (stillValid === 0) {
     await prisma.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: {
       status: 'FAILED', activeOrderId: null, errorCode: 'RACE', failReason: '占位后发现订单状态已变化（可能正在退款/取消），呼叫已取消',
@@ -459,7 +467,8 @@ export async function precancelDelivery(orderId: number): Promise<{ cancelFeeFen
   return { cancelFeeFen: (await getDeliveryProvider().precancelOrder({ taskId: d.providerTaskId })).cancelFeeFen }
 }
 
-export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string }): Promise<{ cancelFeeFen: number | null }> {
+export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string; source?: 'ADMIN' | 'SCHEDULER' }): Promise<{ cancelFeeFen: number | null }> {
+  const source = input.source ?? 'ADMIN'
   const d = await requireActive(input.orderId)
   let cancelFeeFen: number | null = 0
   if (d.provider !== 'SELF' && d.providerTaskId) {
@@ -500,7 +509,19 @@ export async function cancelDelivery(input: { orderId: number; operator: string;
         '订单未能回退到备餐中（可能存在在途退款/售后），订单会停留在 SHIPPED 且无在途配送单，请人工核对',
       ], { key: `dlv-cancel-order-stuck:${d.id}` })
     }
-    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）${rollbackStuck ? '【订单未回退，请核对】' : ''}`, operator: input.operator })
+    // S1（店主决定 D1）：ADMIN 来源（店员在工作台主动取消）= 撤回「已备好」——readyAt 清空后，
+    // schedulePhase 回落到 CALL_DUE/PREPPING，autoCallScheduled 的候选查询（readyAt 非空）不会
+    // 再选中这张单，系统到点不再自动重呼；店员需要重新点「已备好/立即呼叫」或改自己送。
+    // SCHEDULER 来源（escalateSoloCalls 撤 D-1 建 D-2 的自动升级）不清：店员没有表达过「不要骑手」，
+    // 菜还是那盘做好的菜，升级只是换一批运力接着呼。scheduledAt 非空限定只对预约单生效，
+    // 立即单 scheduledAt 恒为空，这条 updateMany 恒不命中，零影响。
+    const unreadied = source === 'ADMIN'
+      ? await tx.order.updateMany({
+          where: { id: input.orderId, deliveryType: 'LOCAL', scheduledAt: { not: null }, status: 'PREPARING', readyAt: { not: null } },
+          data: { readyAt: null },
+        })
+      : null
+    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）${rollbackStuck ? '【订单未回退，请核对】' : ''}${unreadied && unreadied.count > 0 ? '【已撤回「已备好」，到点不再自动呼叫】' : ''}`, operator: input.operator })
   })
   return { cancelFeeFen }
 }
