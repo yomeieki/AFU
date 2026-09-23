@@ -6,6 +6,26 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fsForTag = require('node:fs')
+const vmForTag = require('node:vm')
+
+// M2/M3：与 tests/miniapp/order-status-tag.test.cjs 同一套 node:vm 加载手法（各自
+//维护一份，不跨 .test.cjs 文件 require——node --test 按文件隔离运行，互相 require
+// 会把对方的用例又注册执行一遍）。tagLabelOf 让本文件的页面级用例断言「真实渲染出的
+// 标签」，而不是 decorate() 算出但已经无人读取的 statusLabel 字段——那正是本文件旧
+// 用例测不出 M2 回归（LOCAL SHIPPED 显示「已发货」）的原因：decorate() 里的
+// LOCAL_STATUS_LABEL 一直都是对的，假绿出在渲染早就换成了这个组件。
+function tagLabelOf(status, deliveryType, scheduled) {
+  const file = path.resolve(__dirname, '../../apps/miniapp/components/order-status-tag/index.js')
+  let config
+  vmForTag.runInNewContext(fsForTag.readFileSync(file, 'utf8'), {
+    require: (name) => require(path.resolve(path.dirname(file), name)),
+    Component: (c) => { config = c },
+  })
+  const c = { data: { label: '' }, setData(p) { Object.assign(this.data, p) } }
+  config.observers['status, deliveryType, scheduled'].call(c, status, deliveryType, !!scheduled)
+  return c.data.label
+}
 
 function loadPage(relPath, ctx) {
   Object.keys(require.cache)
@@ -211,7 +231,7 @@ test('取消申请有防双击，且在弹窗确认后再判一次', function ()
   assert.ok(guards >= 3, '弹窗前、确认后各要判一次并置位，实际出现 ' + guards + ' 次')
 })
 
-test('自取单卡片：标签「自取」、待取餐/已取餐文案', async function () {
+test('自取单卡片：标签「自取」、待取餐/已取餐文案（按真实渲染出的组件标签断言）', async function () {
   const ctx = makeCtx('LOCAL', [
     { id: 11, deliveryType: 'PICKUP', status: 'SHIPPED', items: [], actualAmount: 1200 },
     { id: 12, deliveryType: 'PICKUP', status: 'COMPLETED', items: [], actualAmount: 1200 },
@@ -223,10 +243,77 @@ test('自取单卡片：标签「自取」、待取餐/已取餐文案', async f
   await settle(); await settle()
   const byId = (id) => page.data.orders.find((o) => o.id === id)
   assert.equal(byId(11).typeLabel, '自取'); assert.equal(byId(11).typeClass, 'pickup')
-  assert.equal(byId(11).statusLabel, '待取餐')
-  assert.equal(byId(12).statusLabel, '已取餐')
-  assert.equal(byId(13).statusLabel, '配送中', '外送文案不变')
+  // T2b（M2）：列表页实际渲染的是 <order-status-tag> 组件算出的标签，不是 decorate()
+  // 算出但已经无人读取的 item.statusLabel——用同一份组件逻辑复算，断言真实会显示的文案。
+  assert.equal(tagLabelOf(byId(11).status, byId(11).deliveryType, !!byId(11).scheduledAt), '待取餐')
+  assert.equal(tagLabelOf(byId(12).status, byId(12).deliveryType, !!byId(12).scheduledAt), '已取餐')
+  assert.equal(tagLabelOf(byId(13).status, byId(13).deliveryType, !!byId(13).scheduledAt), '配送中', '同城配送中不应显示「已发货」')
   page.onUnload.call(page)
+})
+
+// T3b（M3，复审阻塞）：同城预约单进入 SHIPPED（配送中）后，取消卡的五个析取项
+// 必须全假——不能因为服务端仍下发 schedule.readyAt 就显示「餐品已在准备」。
+// 附带 D3（店主决定）：详情页顶部同城 SHIPPED 也改「配送中」，与列表页 M2 一致。
+test('T3b M3：预约单进入 SHIPPED 后取消卡五项全假，横幅仍在；D3 顶部状态改「配送中」', async function () {
+  const order = {
+    id: 31, orderNo: 'ORD31', deliveryType: 'LOCAL', status: 'SHIPPED',
+    scheduledAt: '2026-09-23T04:00:00Z',
+    createdAt: '2026-09-23T01:00:00Z', paidAt: '2026-09-23T01:01:00Z', acceptedAt: '2026-09-23T01:05:00Z',
+    receiverName: '张三', receiverPhone: '13800001234', receiverFullAddress: '自流井区丹桂路1号',
+    totalAmount: 1200, shippingFee: 500, actualAmount: 1700, refundedAmount: 0, discountAmount: 0, pointsUsed: 0,
+    items: [{ id: 1, productName: '凉拌牛肉', productPrice: 1200, quantity: 1, subtotal: 1200 }], refunds: [], afterSale: null,
+    canSelfCancel: false, canRequestCancel: false, cancelRequestedAt: null, cancelRequestRejectedAt: null,
+    subscribeTemplateIds: [],
+    schedule: { slotLabel: '明天 12:00–12:30', selfCancelUntil: '2026-09-23T02:00:00Z', readyAt: '2026-09-23T01:30:00Z', acceptDueAt: '2026-09-23T01:10:00Z', prepStartAt: '2026-09-23T01:06:00Z' },
+    readyAt: '2026-09-23T01:30:00Z',
+  }
+  const ctx = makeCtx('LOCAL', [])
+  ctx.wx.request = (r) => {
+    ctx.urls.push(r.url)
+    r.success({ statusCode: 200, data: { code: 0, message: 'ok', data: order } })
+  }
+  Object.assign(ctx.wx, { showLoading() {}, hideLoading() {}, openLocation() {}, makePhoneCall() {} })
+  const page = loadPage('../../apps/miniapp/pages/order/detail.js', ctx)
+  page.startCourierPoll = () => {}
+  page.onLoad.call(page, { id: '31' })
+  await settle(); await settle()
+  const o = page.data.order
+  assert.equal(o.scheduleCancelCopy, '')
+  assert.equal(o.showLocalCancelUnavailable, false)
+  assert.equal(o.showLocalCancelRejected, false)
+  assert.equal(o.canRequestCancel, false)
+  assert.ok(!o.cancelRequestedAt)
+  assert.ok(o.scheduleBanner, '横幅不受影响')
+  // D3：顶部状态标签同 M2 一致改「配送中」
+  assert.equal(o.statusLabel, '配送中')
+  page.onUnload.call(page)
+})
+
+// 源码级：锁住 detail.wxml:107 取消卡的 wx:if 仍恰由这五个析取项组成，不多不少——
+// 证明上面 T3b 的「五项全假」真的对应到会渲染的那一行判断，而不是巧合。
+test('T3b 源码级：取消卡 wx:if 恰由五个析取项组成', function () {
+  const wxml = readSrc('pages/order/detail.wxml')
+  const line = /<view class="card local-cancel-card" wx:if="\{\{[\s\S]*?\}\}">/.exec(wxml)
+  assert.ok(line, '找不到取消卡这一行')
+  const names = ['canRequestCancel', 'cancelRequestedAt', 'showLocalCancelRejected', 'showLocalCancelUnavailable', 'scheduleCancelCopy']
+  names.forEach((n) => {
+    const count = (line[0].match(new RegExp('order\\.' + n + '(?![A-Za-z])', 'g')) || []).length
+    assert.equal(count, 1, n + ' 应恰出现一次：' + line[0])
+  })
+  const otherOrderRefs = (line[0].match(/order\.[A-Za-z]+/g) || []).filter((s) => names.indexOf(s.slice(6)) === -1 && s !== 'order.isLocal' && s !== 'order.isExpress' && s !== 'order.isPickup')
+  assert.deepEqual(otherOrderRefs, [], '不应有其它 order.* 项：' + otherOrderRefs.join(','))
+})
+
+// T11b（M11，源码级）：详情页把 schedulePaidExtra/scheduleCancelCopy 的第二实参
+// 从 fmtHHmm 换成 fmtDayHHmm——预约可以约到三天后，只给钟点不给日期分不清是哪天。
+test('T11b M11：detail.js 传给 schedulePaidExtra/scheduleCancelCopy 的格式化函数是 fmtDayHHmm', function () {
+  const src = readSrc('pages/order/detail.js')
+  const calls = src.match(/schedule(PaidExtra|CancelCopy)\(order, \w+\)/g) || []
+  assert.ok(calls.length >= 3, '至少应有三处调用（两处 schedulePaidExtra + 一处 scheduleCancelCopy）：' + calls.join(', '))
+  calls.forEach((c) => {
+    assert.match(c, /fmtDayHHmm/, c + ' 应传 fmtDayHHmm')
+    assert.doesNotMatch(c, /,\s*fmtHHmm\)/, c + ' 不该再传 fmtHHmm')
+  })
 })
 
 test('自取单详情：门店卡、尾号+时段、时间线、按钮按服务端 canSelfCancel', async function () {

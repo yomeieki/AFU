@@ -136,7 +136,12 @@ Page({
       if (seq !== self._promoSeq) return
       self.setData({ promoTip: promo.progressTipOf(res, opts) })
     }, function() {
-      if (seq === self._promoSeq) self.setData({ promoTip: { show: false } })
+      // M12（复审建议，纳入本批）：请求失败与「满减关闭/本渠道未勾」同一处理——
+      // 不请求不代表没有免运费进度可显示，仍经 progressTipOf(null, opts) 走一遍
+      // （与上面 :129 满减关闭分支、local-cart-bar/index.js:120 的 apply(null) 同一口径）。
+      // 原来直接 {show:false} 会把免运费进度也一起抹掉，一次网络抖动就让顾客看到的
+      // 提示条消失又重新出现。
+      if (seq === self._promoSeq) self.setData({ promoTip: promo.progressTipOf(null, opts) })
     })
   },
 

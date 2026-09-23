@@ -76,6 +76,42 @@ function decorateQuote(quote) {
   })
 }
 
+// 报价结果 → 阻塞判定的共用口径（refreshQuote 成功分支 与 loadMeta 的打烊竞态纠正
+// 共用同一份优先级：未开通/暂停 > 打烊 > 超范围 > 未达起送，否则放行）。
+// 两处一旦分叉，就会出现「同一个报价被判出两种阻塞原因」——M4b 复审阻塞就是这么来的：
+// 竞态纠正原来完全不看 belowMin/inRange，只要「预约开着」就无条件放行。
+function quoteBlockPatch(quote, scheduleAvailable, subtotal) {
+  var patch = {}
+  if (!quote.enabled) {
+    patch.blockReason = '同城配送暂未开通'
+    patch.quoteToken = null
+    patch.payAmount = null
+  } else if (quote.paused) {
+    patch.blockReason = '暂停接单' + (quote.paused.reason ? '：' + quote.paused.reason : '')
+    patch.quoteToken = null
+    patch.payAmount = null
+  } else if (!quote.isOpen && !scheduleAvailable) {
+    patch.blockReason = quote.nextOpenText || '当前非营业时间'
+    patch.quoteToken = null
+    patch.payAmount = null
+  } else if (!quote.inRange) {
+    patch.blockReason = '超出配送范围（约 ' + (quote.distanceM / 1000).toFixed(1) + ' km）'
+    patch.quoteToken = null
+    patch.payAmount = null
+  } else if (quote.belowMin) {
+    patch.blockReason = '还差 ¥' + formatPrice(quote.minOrderAmount - subtotal) + ' 起送'
+    patch.quoteToken = null
+    patch.payAmount = null
+  } else {
+    patch.promoFen = quote.promoDiscountFen || 0
+    patch.blockReason = ''
+    patch.quoteToken = quote.quoteToken
+    // 打烊只能预约：自动切到预约（S8）；营业中保持顾客当前的选择。
+    if (!quote.isOpen) patch.scheduleMode = 'SCHEDULED'
+  }
+  return patch
+}
+
 function selectedItems(cart, cartItemIds) {
   return (cart.items || []).filter(function(item) { return cartItemIds.indexOf(item.id) !== -1 }).map(function(item) {
     return Object.assign({}, item, { priceText: formatPrice(item.price) })
@@ -244,15 +280,24 @@ Page({
         // 次是报价先回落进了阻塞分支，头条被写成了旧的阻塞文案，纠正必须补上同一口径的
         // getHeadNotice(quote, true) 调用，否则顶部会一直显示「打烊/去邮寄」，与下面已经
         // 可提交的预约单状态矛盾（R1）。
+        // M4b（2026-09-23 复审阻塞）：不能无条件假定「预约开着 = 可以放行」——报价本身
+        // 可能还有超范围/未达起送这类与「打烊」无关的业务阻塞。原来这里发现预约开着就
+        // 直接清空 blockReason、取回 quoteToken，会把「还差 ¥X 起送」抹掉、把服务端根本
+        // 没签发过的 quoteToken 当成有效值取回，按钮永远卡在「正在计算运费」。
+        // 改为按与 refreshQuote 成功分支同一份优先级（quoteBlockPatch）重新判一次：
+        // 报价本身没问题才切预约并预选最早格，否则原样展示阻塞原因（换个地址/改用全国邮寄
+        // 的出口已经在 confirm.wxml 的阻塞条里）。
         var correctedNotice = getHeadNotice(self.data.quote, true)
-        self.setData({
-          scheduleAvailable: true, scheduleMode: 'SCHEDULED', blockReason: '',
-          quoteToken: self.data.quote.quoteToken,
+        var correctionPatch = Object.assign({
+          scheduleAvailable: true,
           headNotice: correctedNotice.text, headBlocking: correctedNotice.blocking,
-        })
+        }, quoteBlockPatch(self.data.quote, true, self.data.subtotal))
+        self.setData(correctionPatch)
         self.syncPayAmount()
         self.syncAction()
-        self.loadSlots(self.data.quote.distanceM, true)
+        if ((correctionPatch.scheduleMode === 'SCHEDULED' || self.data.scheduleMode === 'SCHEDULED') && self.data.quote.distanceM != null) {
+          self.loadSlots(self.data.quote.distanceM, true)
+        }
       }
     }).catch(function() {
       // 报价结果才是确认页的最终状态；meta 仅为报价前的店头信息兜底，拉取失败不影响主流程。
@@ -326,7 +371,7 @@ Page({
         // 报价结果比 meta 新（提交前必然会重新报价），这里清空它，避免留着一个陈旧
         // 的结论去污染后面几条早退分支（缺地址/缺坐标/购物车为空）的兜底判断。
         self._metaNotice = null
-        var patch = {
+        var patch = Object.assign({
           quoting: false,
           quote: quote,
           promoFen: 0,
@@ -344,43 +389,15 @@ Page({
           // 纠正条件永远不成立，顾客只能等下一次重新报价才能脱困。
           closedNow: !quote.isOpen,
           scheduleAvailable: scheduleAvailable,
-        }
-        // 服务端的状态结论优先级：未开通/暂停 > 打烊 > 超范围 > 未达起送。
-        // m5: blockReason 生效时不保留可支付合计，避免底部展示收不到的金额。
-        if (!quote.enabled) {
-          patch.blockReason = '同城配送暂未开通'
-          patch.quoteToken = null
-          patch.payAmount = null
-        } else if (quote.paused) {
-          patch.blockReason = '暂停接单' + (quote.paused.reason ? '：' + quote.paused.reason : '')
-          patch.quoteToken = null
-          patch.payAmount = null
-        } else if (!quote.isOpen && !scheduleAvailable) {
-          patch.blockReason = quote.nextOpenText || '当前非营业时间'
-          patch.quoteToken = null
-          patch.payAmount = null
-        } else if (!quote.inRange) {
-          patch.blockReason = '超出配送范围（约 ' + (quote.distanceM / 1000).toFixed(1) + ' km）'
-          patch.quoteToken = null
-          patch.payAmount = null
-        } else if (quote.belowMin) {
-          patch.blockReason = '还差 ¥' + formatPrice(quote.minOrderAmount - self.data.subtotal) + ' 起送'
-          patch.quoteToken = null
-          patch.payAmount = null
-        } else {
-          patch.promoFen = quote.promoDiscountFen || 0
-          patch.blockReason = ''
-          patch.quoteToken = quote.quoteToken
           // 券只抵扣商品金额，不抵扣配送费。打包费与运费同层相加，不参与券封顶。
           // ⚠️ 传给 /local/quote 的 subtotal 仍是**券前**小计（见 refreshQuote 入口，一行没动）：
           // 服务端 `q.fee > quoted.fee` 那道防线依赖两边口径一致，起送线也按券前判。
           // payAmount 交给 syncPayAmount 统一算（见下面 setData 之后那一行）——
           // 它读 this.data.quote，所以必须等 patch（含 quote/quoteToken/blockReason）
           // 真正落到 this.data 之后再调用。
-          // 打烊只能预约：自动切到预约并预选最早格（S8）；营业中保持顾客当前的选择
-          // （不强行改回 ASAP——顾客可能在营业中主动选了预约时段）。
-          if (!quote.isOpen) patch.scheduleMode = 'SCHEDULED'
-        }
+        // 服务端的状态结论优先级：未开通/暂停 > 打烊 > 超范围 > 未达起送，否则放行——
+        // 与 loadMeta 竞态纠正共用同一份判定（quoteBlockPatch），见该函数注释（M4b）。
+        }, quoteBlockPatch(quote, scheduleAvailable, self.data.subtotal))
         // m1: 报价成功后复位，后续 42901 仍可自动重试一次
         self._retriedRateLimit = false
         self.setData(patch)
@@ -439,11 +456,15 @@ Page({
       clearTimeout(this._quoteTimer)
       this._quoteTimer = null
     }
-    // 预约送达（2026-09-21 §5.2）：任何让 quoteToken 失效的操作，已选时段也同时失效——
-    // 换地址/改数量后旧时段对应的路上时间（distanceM）已经不对了。
+    // M1（复审阻塞，2026-09-23）：已选时段**不**随报价作废——服务端只按 distanceM 与
+    // 后台设置算时段列表（services/delivery/schedule.ts），换地址/改数量/删商品都不改
+    // distanceM，原来这里连带清空 slotSelected，会让下一次报价成功后 loadSlots 的
+    // autoPick 分支（无选择时才自动预选）把顾客已经改选的较晚一格悄悄换回最早一格。
+    // 该格是否仍可选，交给下一次 loadSlots（:498 附近「已有选择只判 stale、不覆盖」
+    // 那个分支）去判——不在新列表里才标 stale，服务端 42291 仍是最后一道闸。
+    this._openPickerAfterLoad = false
     this.setData({
       quoting: true, promoFen: 0, promoDiscount: 0, quoteToken: null, quoteExpiresAtMs: 0, payAmount: null,
-      slotSelected: null, slotStale: false,
     })
     this.syncAction()
   },
@@ -505,10 +526,17 @@ Page({
         var f = st.firstSlot(view)
         patch.slotActiveDay = f ? f.dayIndex : 0
       }
+      // M8/M9（复审建议，纳入本批）：openPicker 在时段还没拉回来时会先记一个
+      // 「拉完就开」的标记（见 openPicker），这里拉完之后兑现它——不论这一轮是
+      // pickMode 触发的首次拉取，还是 openPicker 自己发起的失败重试。
+      var openAfterLoad = self._openPickerAfterLoad
+      self._openPickerAfterLoad = false
+      if (openAfterLoad && hasAny && !view.blocked) patch.pickerOpen = true
       self.setData(patch)
       self.syncAction()
     }).catch(function(err) {
       if (seq !== self._slotSeq) return
+      self._openPickerAfterLoad = false
       self.setData({ slotsLoading: false, slotsError: (err && err.message) || '时段获取失败', hasAnySlot: false })
       self.syncAction()
     })
@@ -518,6 +546,7 @@ Page({
   pickMode: function(e) {
     var mode = e.currentTarget.dataset.mode
     if (mode === 'ASAP' && this.data.closedNow) return   // 打烊时「尽快送达」置灰，点不动
+    if (mode === 'ASAP') this._openPickerAfterLoad = false
     if (mode === 'SCHEDULED' && !this.data.scheduleAvailable) return   // 预约未开通时置灰，点不动（R3）
     if (mode === this.data.scheduleMode) {
       // 已经是预约模式时再点一次「预约时段」卡片：唯一能打开时段选择器的入口原来只有
@@ -531,8 +560,26 @@ Page({
     if (mode === 'SCHEDULED') this.openPicker()
     this.syncAction()
   },
+  // M8/M9（复审建议，纳入本批）：原来只在 hasAnySlot 已经是 true 时才开弹层——
+  // 营业中第一次点「预约时段」，loadSlots 还没回来，这里读到的是初值 false，弹层
+  // 不开，顾客得再点一次；时段拉取失败（slotsError）或已选格失效且一格不剩
+  // （hasAnySlot 也是 false）时同样没有重试入口。改为按当前状态分派：
+  //   已有列表 → 直接开；
+  //   正在拉取中 → 记个标记，拉完后 loadSlots 的回调负责开（避免重复发请求）；
+  //   都不是（还没拉过 / 失败过 / 空过）且有距离可拉 → 重新拉一次，拉完再开。
   openPicker: function() {
-    if (this.data.hasAnySlot) this.setData({ pickerOpen: true })
+    if (this.data.hasAnySlot) {
+      this.setData({ pickerOpen: true })
+      return
+    }
+    if (this.data.slotsLoading) {
+      this._openPickerAfterLoad = true
+      return
+    }
+    if (this.data.quote && this.data.quote.distanceM != null) {
+      this._openPickerAfterLoad = true
+      this.loadSlots(this.data.quote.distanceM, false)
+    }
   },
   closePicker: function() {
     this.setData({ pickerOpen: false })
@@ -886,6 +933,18 @@ Page({
           if (result.confirm && self.data.address) self.onFixAddress()
         },
       })
+      return
+    }
+    // M7（复审建议，纳入本批）：营业中尽快模式提交时恰好跨过打烊时刻，服务端拒 42222。
+    // 预约开着时其实还有路可走——原来一律写死 blockReason、隐藏送达时间卡，逼顾客
+    // 只能点「改用全国邮寄」，明明预约可用却没有入口。预约关着才走老的阻塞文案。
+    if (code === 42222 && this.data.scheduleAvailable) {
+      wx.showToast({ title: '已到打烊时间，已为您改为预约送达，请确认送达时段', icon: 'none', duration: 2500 })
+      // 先刷 meta（同 onRetryQuote）：万一店铺状态又变了，头条通知不该停在旧结论上。
+      // 重新报价会让 refreshQuote 的成功分支判出 isOpen=false，自动切 SCHEDULED 并
+      // 按 :392-393 预选最早格（S8），不需要在这里另写一套判断。
+      this.loadMeta()
+      this.refreshQuote('retry')
       return
     }
     if (code === 42220 || code === 42222 || code === 42226) {

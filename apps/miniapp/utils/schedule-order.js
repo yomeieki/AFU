@@ -48,8 +48,15 @@ function scheduleStatusLabel(order) {
  * 取消卡文案（三段，读 canSelfCancel / canRequestCancel / schedule.selfCancelUntil / schedule.readyAt）：
  *   两小时外（canSelfCancel）  ：「HH:mm 前可直接取消」
  *   两小时内且未备好（canRequestCancel）：「可申请取消，商家确认后全额退款」
- *   已备好（schedule.readyAt 非空，两个取消权限都没有了）：「餐品已在准备，如有问题请联系商家」
+ *   已备好且仍在备餐中（order.status === 'PREPARING' 且 schedule.readyAt 非空）：
+ *     「餐品已在准备，如有问题请联系商家」
  * 非预约单返回 ''。
+ *
+ * ⚠️ M3（复审阻塞，2026-09-23）：第三段原来只看 readyAt 非空，服务端只在 PREPARING
+ * 那一刻写 readyAt（apps/server/src/routes/admin/delivery.ts），但之后订单进入
+ * SHIPPED/COMPLETED/REFUNDED/CANCELLED 等终态、以及 REFUNDING 流程中，详情接口
+ * 仍会原样带着这个已经写过的字段——不按 status 收口的话，已完成/已退款的预约单
+ * 详情页会一直挂着「餐品已在准备」这句不成立的话。
  */
 function scheduleCancelCopy(order, fmtHHmm) {
   if (!order || !order.schedule) return ''
@@ -60,7 +67,7 @@ function scheduleCancelCopy(order, fmtHHmm) {
   if (order.canRequestCancel) {
     return '可申请取消，商家确认后全额退款'
   }
-  if (schedule.readyAt) {
+  if (schedule.readyAt && order.status === 'PREPARING') {
     return '餐品已在准备，如有问题请联系商家'
   }
   return ''

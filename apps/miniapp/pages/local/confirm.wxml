@@ -205,4 +205,4 @@
 </view>
 
 <tableware-sheet show="{{tablewareOpen}}" value="{{tableware}}" bind:confirm="onTablewareConfirm" bind:close="closeTableware" />
-<slot-picker show="{{pickerOpen}}" title="选择送达时间" days="{{slotDays}}" active-day="{{slotActiveDay}}" selected-start-at="{{slotSelected ? slotSelected.startAt : ''}}" bind:daychange="onSlotDay" bind:select="onSlotPick" bind:close="closePicker" />
+<slot-picker show="{{pickerOpen}}" title="选择送达时间" days="{{slotDays}}" active-day="{{slotActiveDay}}" selected-start-at="{{slotSelected ? slotSelected.startAt : ''}}" empty-label="无可选时段" day-empty-label="这一天已无可选时段" bind:daychange="onSlotDay" bind:select="onSlotPick" bind:close="closePicker" />

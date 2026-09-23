@@ -9,7 +9,7 @@
       <view wx:for="{{days}}" wx:key="date" class="day-tab {{activeDay === index ? 'active' : ''}}" bindtap="onDay" data-idx="{{index}}">
         <text>{{item.label}}</text>
         <text class="day-date">{{item.dateText}}</text>
-        <text wx:if="{{item.empty}}" class="day-empty">无可取时段</text>
+        <text wx:if="{{item.empty}}" class="day-empty">{{emptyLabel}}</text>
       </view>
     </view>
     <scroll-view scroll-y class="slot-grid-wrap">
@@ -18,7 +18,7 @@
               class="slot-cell {{selectedStartAt === item.startAt ? 'active' : ''}}"
               bindtap="onSlot" data-idx="{{index}}">{{item.label}}</view>
       </view>
-      <view wx:else class="slot-grid-empty">这一天已无可取时段</view>
+      <view wx:else class="slot-grid-empty">{{dayEmptyLabel}}</view>
     </scroll-view>
   </view>
 </view>

@@ -7,6 +7,11 @@ Component({
     days: { type: Array, value: [] },
     activeDay: { type: Number, value: 0 },
     selectedStartAt: { type: String, value: '' },
+    // M10（复审建议，纳入本批）：自取与外送（同城预约送达）共用这个组件，
+    // 但外送说「取」不通顺——「无可取时段」是自取页的用词。默认值保持自取页
+    // 原文案不变，外送页（confirm.wxml）显式传「无可选时段」（店主决定 D4）。
+    emptyLabel: { type: String, value: '无可取时段' },
+    dayEmptyLabel: { type: String, value: '这一天已无可取时段' },
   },
   methods: {
     noop: function() {},

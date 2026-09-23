@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const vm = require('node:vm')
 const sheetPath = '../../apps/miniapp/components/promo-bar/sheet.js'
 const promoPath = '../../apps/miniapp/utils/promo'
 
@@ -124,4 +125,58 @@ test('index.wxss 含品牌色强调与安全区', () => {
   const wxss = read('components/promo-bar/index.wxss')
   assert.match(wxss, /\.promo-sheet-em[^}]*var\(--brand\)/)
   assert.match(wxss, /env\(safe-area-inset-bottom\)/)
+})
+
+// M5（复审规划缺口）：活动详情弹层打开后，遮罩没有挡住滑动——分类页/首页在遮罩
+// 下面继续跟着滚（触发 onPageScroll 改高亮/吸顶，首页还会触发下拉刷新）。
+// 同仓库其它弹层的遮罩都带 catchtouchmove="noop"（product/list.wxml、sku-popup、
+// privacy-popup），这里补齐同一惯例。
+test('T5 M5：弹层遮罩带 catchtouchmove="noop"，不透传滑动到底下的页面', () => {
+  const wxml = read('components/promo-bar/index.wxml')
+  assert.match(wxml, /class="promo-sheet-mask"[^>]*catchtouchmove="noop"/)
+})
+
+// M6（复审规划缺口）：原有用例只统计 catchtap/onCloseSheet 出现次数，把面板本身的
+// catchtap="noop" 删掉、或把 onCloseSheet 改成误设 sheetOpen:true，308 条用例照样
+// 全绿——完全没锁住「点面板不关」与「onCloseSheet 真的关」这两条运行时行为。
+function promoBarComponentForSheet() {
+  let config
+  const file = path.resolve(__dirname, '../../apps/miniapp/components/promo-bar/index.js')
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), {
+    require: (name) => require(path.resolve(path.dirname(file), name)),
+    Component: (c) => { config = c },
+  })
+  const c = Object.assign(
+    { data: JSON.parse(JSON.stringify(config.data)), properties: {}, setData(p) { Object.assign(this.data, p) } },
+    config.methods
+  )
+  return { c, config }
+}
+
+test('T6a M6 源码级：面板自身带 catchtap="noop"，wxml 里所有 (catch|bind)tap 都对应组件真实方法', () => {
+  const wxml = read('components/promo-bar/index.wxml')
+  // class="promo-sheet" 后紧跟引号，不会误配到 "promo-sheet-mask"/"promo-sheet-ok" 等前缀相同的类
+  assert.match(wxml, /class="promo-sheet"[^>]*catchtap="noop"/)
+  const { config } = promoBarComponentForSheet()
+  const handlerNames = []
+  const re = /(?:catchtap|bindtap)="(\w+)"/g
+  let m
+  while ((m = re.exec(wxml))) handlerNames.push(m[1])
+  assert.ok(handlerNames.length >= 4, '至少应有 4 处事件绑定：' + handlerNames.join(','))
+  handlerNames.forEach((name) => {
+    assert.equal(typeof config.methods[name], 'function', name + ' 不是组件的真实方法')
+  })
+})
+
+test('T6b M6 运行时：点面板（noop）不改任何状态；onCloseSheet 真的把 sheetOpen 关掉', () => {
+  const { c, config } = promoBarComponentForSheet()
+  c.properties = { kind: 'freeship', meta: { radiusKm: 8, fee: { freeShipTiers: liveTiers } }, promotion: null, deliveryType: 'LOCAL' }
+  config.observers['kind, promotion, meta, deliveryType'].call(c)
+  c.onTapDetail()
+  assert.equal(c.data.sheetOpen, true, 'onTapDetail 应已打开弹层')
+  const snapshotBefore = JSON.stringify(c.data)
+  c.noop()
+  assert.equal(JSON.stringify(c.data), snapshotBefore, '点面板（noop）不该改任何状态')
+  c.onCloseSheet()
+  assert.equal(c.data.sheetOpen, false, 'onCloseSheet 应真的关闭弹层')
 })
