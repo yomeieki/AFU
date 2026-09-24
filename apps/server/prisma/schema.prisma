@@ -728,11 +728,24 @@ model Delivery {
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")
 
+  // ── 取消意图（P15-P20，2026-09-24）──
+  // 店员对缺 taskId/orderId 的非终态单点「取消」时只记意图，不外呼；单号一到自动取消，
+  // 5 分钟无回调无单号自动结束。见 services/delivery/cancel-intent.ts。
+  cancelIntentAt        DateTime? @map("cancel_intent_at")
+  cancelIntentBy        String?   @db.VarChar(64) @map("cancel_intent_by")
+  cancelIntentReason    String?   @db.VarChar(255) @map("cancel_intent_reason")
+  cancelIntentAttempts  Int       @default(0) @map("cancel_intent_attempts")
+  cancelIntentLastError String?   @db.VarChar(255) @map("cancel_intent_last_error")
+  cancelIntentAlertedAt DateTime? @map("cancel_intent_alerted_at")
+  // 已结束配送单收到在途回调（幽灵活单）→ 自动向运力方撤销。原子抢占列，同批多条回调只有一个赢家。
+  ghostCancelAt          DateTime? @map("ghost_cancel_at")
+
   order  Order           @relation(fields: [orderId], references: [id])
   events DeliveryEvent[]
 
   @@index([orderId])
   @@index([status, calledAt])
+  @@index([cancelIntentAt])
   @@map("deliveries")
 }
 
