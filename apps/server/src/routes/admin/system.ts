@@ -130,6 +130,7 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         autoCallDelayMin: num(body.autoCallDelayMin),
         quoteRefreshMin: num(body.quoteRefreshMin),
         escalateAfterMin: num(body.escalateAfterMin),
+        cancelIntentVoidMin: num(body.cancelIntentVoidMin),
         settleMissedPointsAfterMin: num(body.settleMissedPointsAfterMin),
         forceDailyMemberTasks: bool(body.forceDailyMemberTasks),
         dailyTaskBatchLimit: num(body.dailyTaskBatchLimit),

@@ -24,7 +24,7 @@ import { scanLowStockAlerts, pushDailyLowStockSummary } from './low-stock'
 import {
   remindCallTimeout, remindAcceptedStuck, remindDeliveringTimeout, remindUnknownGhost,
   remindLocalUncalled, remindCancelRequestPending, autoRejectStaleCancelRequests, autoCallRiders, autoCompleteLocalDelivered,
-  housekeepingDelivery, refreshStaleQuotes, escalateSoloCalls,
+  housekeepingDelivery, refreshStaleQuotes, escalateSoloCalls, processCancelIntents,
 } from './delivery/tasks'
 import {
   printPrepTickets, remindScheduledUnaccepted, remindScheduledNotReady, autoCallScheduled, remindScheduledLate,
@@ -75,6 +75,9 @@ export interface SchedulerOverrides {
   // 只呼最低价 → 并呼的升级门槛（分钟）。0 = 不自动升级。e2e 传 0 是「关掉」而不是「立刻升级」，
   // 所以要立刻命中得传 0.01（600 毫秒），与 autoCallDelayMin 同一套约定。
   escalateAfterMin?: number
+  // 取消意图（P17）收尾等待阈值（分钟）：意图记下超过这么久仍无回调无单号 → 自动结束。
+  // 0 与本文件其它阈值同一套约定，是「立刻命中」不是「关闭」——意图单没有「不用收尾」这回事。
+  cancelIntentVoidMin?: number
   // 会员积分/优惠券（M1）：settleMissedPoints 下界（默认 2 分钟前，防止扫到还没跑完 confirm
   // 钩子那一瞬间的单）；e2e 要验证「漏挂钩子 2 分钟后被兜底任务补发」等不到 2 分钟，传 0 绕过。
   settleMissedPointsAfterMin?: number
@@ -133,6 +136,11 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['schedLate', remindScheduledLate],
     ['lowStockScan', scanLowStockAlerts],
     ['lowStockDaily', () => pushDailyLowStockSummary(new Date(), overrides.forceLowStockDaily)],
+    // 取消意图收尾（P17）：排在 localCallTimeout 之前——先把等运力方确认/等超时结束的意图单
+    // 收个尾（有单号的重试取消、缺单号的到点结束），提醒/升级任务再扫时这些单已经离场
+    // （processCancelIntents 与升级/提醒的候选都排除了 cancelIntentAt 非空的行，顺序其实
+    // 不影响正确性，但先收尾能让同一轮里下游任务看到的候选集更干净）。
+    ['localCancelIntent', () => processCancelIntents(overrides.cancelIntentVoidMin)],
     ['localCallTimeout', () => remindCallTimeout(overrides.callTimeoutMin)],
     // 只呼最低价的单等太久 → 取消重呼并呼。排在 localAutoCall 之前：升级会先撤单再建新单，
     // 中间那一瞬订单是「PREPARING 且无在途单」，正好是 autoCallRiders 的候选条件——

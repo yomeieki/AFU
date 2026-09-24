@@ -15,6 +15,8 @@ import { recordDeliveryEvent, adminEventKey } from './events'
 import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert, notifyExpressAlert } from '../order-notify'
 import { DELIVERY_STATUS_LABEL, TERMINAL, providerLabel } from './state'
+import { executeCancelIntent, CANCEL_INTENT_MAX_ATTEMPTS, CANCEL_INTENT_VOID_MIN } from './cancel-intent'
+import { ProviderError } from './types'
 
 const BATCH = 100
 const ago = (min: number) => new Date(Date.now() - min * 60 * 1000)
@@ -28,7 +30,8 @@ export async function remindCallTimeout(min?: number): Promise<number> {
   const s = await getLocalSettings()
   const threshold = min ?? s.callTimeoutMin
   const rows = await prisma.delivery.findMany({
-    where: { status: 'CALLING', calledAt: { lt: ago(threshold) }, callTimeoutRemindedAt: null },
+    // P20：意图单不需要「待抢单超时」提醒——它正在走取消流程，不是在等人接单
+    where: { status: 'CALLING', calledAt: { lt: ago(threshold) }, callTimeoutRemindedAt: null, cancelIntentAt: null },
     take: BATCH, select: { id: true, orderNo: true, calledAt: true },
   })
   let n = 0
@@ -46,7 +49,7 @@ export async function remindAcceptedStuck(min?: number): Promise<number> {
   const s = await getLocalSettings()
   const threshold = min ?? s.acceptedStuckMin
   const rows = await prisma.delivery.findMany({
-    where: { status: { in: ['ACCEPTED', 'ARRIVING', 'ARRIVED'] }, acceptedAt: { lt: ago(threshold) }, acceptedStuckRemindedAt: null },
+    where: { status: { in: ['ACCEPTED', 'ARRIVING', 'ARRIVED'] }, acceptedAt: { lt: ago(threshold) }, acceptedStuckRemindedAt: null, cancelIntentAt: null },
     take: BATCH, select: { id: true, orderNo: true, status: true },
   })
   let n = 0
@@ -64,7 +67,7 @@ export async function remindDeliveringTimeout(min?: number): Promise<number> {
   const s = await getLocalSettings()
   const threshold = min ?? s.deliveringTimeoutMin
   const rows = await prisma.delivery.findMany({
-    where: { status: 'DELIVERING', pickedUpAt: { lt: ago(threshold) }, deliveringRemindedAt: null },
+    where: { status: 'DELIVERING', pickedUpAt: { lt: ago(threshold) }, deliveringRemindedAt: null, cancelIntentAt: null },
     take: BATCH, select: { id: true, orderNo: true },
   })
   let n = 0
@@ -269,7 +272,8 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
   // 第二级到头：并呼 N 家仍无人接 → 只提醒一次，不撤单不重呼。
   // 放在升级扫描之前、且不经过 precancel（那是一次外呼，到头的单没必要每分钟去问一次取消费）。
   const ended = await prisma.delivery.findMany({
-    where: { status: 'CALLING', callStrategy: 'CHEAPEST', calledAt: { lt: ago(threshold) }, callTimeoutRemindedAt: null },
+    // P20：意图单不进升级/提醒扫描——它已经在走取消流程
+    where: { status: 'CALLING', callStrategy: 'CHEAPEST', calledAt: { lt: ago(threshold) }, callTimeoutRemindedAt: null, cancelIntentAt: null },
     take: BATCH, select: { id: true, orderNo: true, calledProviders: true },
   })
   for (const d of ended) {
@@ -283,13 +287,16 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
   }
   const rows = await prisma.delivery.findMany({
     where: {
-      // providerTaskId 非空 = 运力方那头确实有单可撤（占位/UNKNOWN 行没有它，precancel 会 42234）
-      status: 'CALLING', callStrategy: { in: ['SOLO', 'MANUAL'] }, providerTaskId: { not: null }, calledAt: { lt: ago(threshold) },
+      // providerTaskId **与 providerOrderId** 都非空 = 运力方那头确实有单可撤且 precancel/cancel
+      // 打得通（P4：两接口都要 orderId，只有 taskId 会被运力方拒 30001）。占位/UNKNOWN 行两者皆无。
+      status: 'CALLING', callStrategy: { in: ['SOLO', 'MANUAL'] }, providerTaskId: { not: null }, providerOrderId: { not: null }, calledAt: { lt: ago(threshold) },
       // 顾客已经申请取消的单不许升级：callRider 对这个条件是硬拦截（42204），
       // 而 cancelDelivery 不拦——不排除的话会「先把 D-1 撤了、再在重呼那一步必然失败」，
       // 留下一条「请到工作台手动呼叫骑手」的告警，把店员引向与顾客意愿相反的操作。
       // 顾客可取消窗口（默认 5 分钟）与 3 分钟升级窗口高度重叠，这不是罕见路径。
       order: { cancelRequestedAt: null },
+      // P20：意图单排除在升级候选之外——它没有在等人接单，是在等自动取消/自动结束
+      cancelIntentAt: null,
     },
     take: BATCH, select: { id: true, orderId: true, orderNo: true, deliveryNo: true, calledProviders: true, quotedFee: true, callStrategy: true },
   })
@@ -350,9 +357,67 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
         ], { key: `dlv-escalate:${d.id}` })
       }
     } catch (e) {
-      // 单行失败不能拖垮整轮：最常见的是这一秒里骑手正好接了单（precancel/cancel 撞状态），
-      // 属正常竞态，下一轮该行已不在 CALLING 里，自然不再命中。
-      console.warn('[escalateSoloCalls] 配送单', d.deliveryNo, '升级失败，跳过:', (e as Error)?.message ?? e)
+      if (e instanceof ProviderError) {
+        // P6：precancelDelivery 外呼失败——生产已连续静默失败过（此前只 console.warn，
+        // 每分钟无声重试）。必须留痕 + 告警，且 CONFIG 类错误（如 orderId 缺失）额外接入
+        // kd100-config 那一路配置类告警渠道（与 orchestrator.ts:403 同 key 前缀）。
+        await recordDeliveryEvent(prisma, {
+          deliveryId: d.id, dedupeKey: adminEventKey(), source: 'SCHEDULER', operator: 'scheduler',
+          statusDesc: `自动升级预估取消费失败（${e.kind}:${e.code}）：${e.message}`,
+        })
+        notifySystemAlert('自动升级并呼失败（预估取消费失败）', [
+          `订单 ${d.orderNo}（${d.deliveryNo}）`, `${e.kind}:${e.code} ${e.message}`, '已保留原呼叫，请人工核对',
+        ], { key: `dlv-escalate-precancel:${d.id}` })
+        if (e.kind === 'CONFIG') notifySystemAlert('快递100 配置类错误', [`订单 ${d.orderNo}：${e.code} ${e.message}`], { key: `kd100-config:${e.code}` })
+      } else {
+        // 单行失败不能拖垮整轮：最常见的是这一秒里骑手正好接了单（cancelDelivery/callRider 撞状态），
+        // 属正常竞态，下一轮该行已不在 CALLING 里，自然不再命中。
+        console.warn('[escalateSoloCalls] 配送单', d.deliveryNo, '升级失败，跳过:', (e as Error)?.message ?? e)
+      }
+    }
+  }
+  return n
+}
+
+/**
+ * P17：取消意图收尾——有单号的每分钟重试自动取消（最多 5 次；第 5 次失败告警在
+ * executeCancelIntent 内部完成，同一轮内立即生效，不必等下一轮再扫一次 §表条件 c）；
+ * 缺单号的等满 voidMin 分钟仍无回调无单号，视为未成单，自动结束（VOIDED），释放
+ * activeOrderId 让店员能立即重呼/自送。
+ *
+ * voidMin 的 0 与本文件其它阈值同一套约定：**立刻命中**，不是「关闭」（意图单不存在
+ * 「不需要收尾」这回事，不像 escalateAfterMin/autoCallDelayMin 可以被店主主动关掉）。
+ *
+ * 与回调认领的互斥：自动结束的 updateMany 带 `providerTaskId: null` 条件——这一刻若
+ * 回调已经抢先把 taskId 焊上（P3 认领），这条更新会落空（count=0），下一轮该行走
+ * 「有单号」分支，交给 executeCancelIntent 收尾，不会出现「已认领单号又被判定为未成单」。
+ */
+export async function processCancelIntents(voidMin?: number): Promise<number> {
+  const threshold = voidMin ?? CANCEL_INTENT_VOID_MIN
+  const rows = await prisma.delivery.findMany({
+    where: { cancelIntentAt: { not: null }, status: { notIn: [...TERMINAL] } },
+    take: BATCH, select: { id: true, providerTaskId: true, providerOrderId: true, cancelIntentAt: true, cancelIntentAttempts: true },
+  })
+  let n = 0
+  for (const d of rows) {
+    if (d.providerTaskId && d.providerOrderId) {
+      if (d.cancelIntentAttempts < CANCEL_INTENT_MAX_ATTEMPTS) {
+        await executeCancelIntent(d.id)
+        n++
+      }
+      continue
+    }
+    if (d.cancelIntentAt && d.cancelIntentAt < ago(threshold)) {
+      const moved = await prisma.delivery.updateMany({
+        where: { id: d.id, status: { notIn: [...TERMINAL] }, providerTaskId: null },
+        data: { status: 'FAILED', activeOrderId: null, errorCode: 'VOIDED', failReason: '店员要求取消；5 分钟内无回调无单号，视为未成单，自动结束' },
+      })
+      if (moved.count === 0) continue   // 回调已抢先认领 taskId，下一轮走「有单号」分支
+      await recordDeliveryEvent(prisma, {
+        deliveryId: d.id, dedupeKey: adminEventKey(), source: 'SCHEDULER', operator: 'scheduler',
+        statusDesc: `店员要求取消；等待 ${threshold} 分钟内无回调无单号，已自动结束`,
+      })
+      n++
     }
   }
   return n
