@@ -1217,8 +1217,10 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
             {card.local?.schedule && <span className="wb__sched">{scheduleFieldsLine(card.local.schedule)}</span>}
             {kmText && <span>距离 {kmText}</span>}
             {/* D1=A：工作台卡片不加实时骑手信息（距店/ETA），那些只在抽屉里给；卡片只多一句
-                「取消处理中」——意图单（P18）没有在等人接单，是在等快递100 确认取消。 */}
-            <span>{d?.cancelIntentAt ? '取消处理中，等快递100 确认' : `骑手 ${d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}`}</span>
+                「取消处理中」——意图单（P18）没有在等人接单，是在等快递100 确认取消。
+                复核 R5：只在非终态时显示这句——一旦自动结束/自动取消（FAILED/CANCELLED），
+                cancelIntentAt 仍然非空（历史痕迹，不清空），卡片不该继续说「处理中」。 */}
+            <span>{d?.cancelIntentAt && !TERMINAL_DELIVERY.includes(d.status) ? '取消处理中，等快递100 确认' : `骑手 ${d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}`}</span>
             {card.local?.schedule
               ? (card.local.schedule.phase === 'CALL_DUE' || card.local.schedule.phase === 'PREPPING') && <span>{etaTextIfCallNow(card.local.schedule)}</span>
               : <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>}
@@ -2150,9 +2152,14 @@ export default function Workbench() {
               <div className="wb__block">
                 <div className="wb__block-t">配送员</div>
                 {/* P18：取消意图状态行——店员点了取消但配送单缺快递100 单号，只记了意图，
-                    卡片与这里用同一句「取消处理中」措辞，但这里多带上是谁、什么时候点的。 */}
-                {d.cancelIntentAt && (
+                    卡片与这里用同一句「取消处理中」措辞，但这里多带上是谁、什么时候点的。
+                    复核 R5：cancelIntentAt 是历史痕迹、终态后不清空，非终态才说「处理中」；
+                    终态（多半是自动结束/自动取消）改说「曾要求取消」，不再暗示还在等。 */}
+                {d.cancelIntentAt && !TERMINAL_DELIVERY.includes(d.status) && (
                   <div className="wb__line"><span>状态</span><span>取消处理中，等快递100 确认 · 店员 {hhmm(d.cancelIntentAt)} 要求取消</span></div>
+                )}
+                {d.cancelIntentAt && TERMINAL_DELIVERY.includes(d.status) && (
+                  <div className="wb__line"><span>状态</span><span className="wb__muted">店员 {hhmm(d.cancelIntentAt)} 曾要求取消</span></div>
                 )}
                 <div className="wb__line"><span>配送单</span><span>{d.deliveryNo}</span></div>
                 {/* 哪一家接的单——数据一直在库里（courierCompany 也在管理端白名单里），
@@ -2449,6 +2456,10 @@ export default function Workbench() {
               ? !!card.express?.booking && ['BOOKED', 'ACCEPTED', 'UNKNOWN'].includes(card.express.booking.status)
               : ch === 'PICKUP' ? false
                 : !!d && d.activeOrderId === o.id && !TERMINAL_DELIVERY.includes(d.status)}
+            // 复核 R5 同款教训：cancelIntentAt 是历史痕迹，自动结束/自动取消后不清空——这里必须
+            // 同样判终态，否则「同意退款」在配送单已经收尾之后还会误判成「还在等」，把店员晾在
+            // 一个多余的等待提示上，进不了真正的退款步骤。
+            cancelIntentAt={ch === 'LOCAL' && d && !TERMINAL_DELIVERY.includes(d.status) ? d.cancelIntentAt : null}
             expressBookingStatus={ch === 'EXPRESS' ? (card.express?.booking?.status ?? null) : null}
             onClose={close}
             onDone={async () => { await afterAction(ch === 'EXPRESS' ? '已取消预约并退款' : ch === 'PICKUP' ? '已同意取消并退款' : '已取消配送并退款'); closeDrawer() }}
