@@ -737,6 +737,10 @@ model Delivery {
   cancelIntentAttempts  Int       @default(0) @map("cancel_intent_attempts")
   cancelIntentLastError String?   @db.VarChar(255) @map("cancel_intent_last_error")
   cancelIntentAlertedAt DateTime? @map("cancel_intent_alerted_at")
+  // 在途租约（复核 R2）：executeCancelIntent 外呼期间（cancelOrder 一次网络往返）另一个触发点
+  // 读到的 attempts 值与抢占时相同也会再抢一次，造成重复外呼。租约条件 = 未加锁或加锁已超过
+  // 60 秒（进程崩溃兜底；cancelOrder 超时上限 8 秒，60 秒足够富余）。
+  cancelIntentLockedAt  DateTime? @map("cancel_intent_locked_at")
   // 已结束配送单收到在途回调（幽灵活单）→ 自动向运力方撤销。原子抢占列，同批多条回调只有一个赢家。
   ghostCancelAt          DateTime? @map("ghost_cancel_at")
 

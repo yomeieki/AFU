@@ -7,6 +7,7 @@ ALTER TABLE `deliveries`
   ADD COLUMN `cancel_intent_attempts` INT NOT NULL DEFAULT 0,
   ADD COLUMN `cancel_intent_last_error` VARCHAR(255) NULL,
   ADD COLUMN `cancel_intent_alerted_at` DATETIME(3) NULL,
-  ADD COLUMN `ghost_cancel_at` DATETIME(3) NULL;
+  ADD COLUMN `ghost_cancel_at` DATETIME(3) NULL,
+  ADD COLUMN `cancel_intent_locked_at` DATETIME(3) NULL;
 
 CREATE INDEX `deliveries_cancel_intent_at_idx` ON `deliveries`(`cancel_intent_at`);

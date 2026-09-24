@@ -13,6 +13,7 @@ ALTER TABLE `deliveries`
   DROP COLUMN `cancel_intent_attempts`,
   DROP COLUMN `cancel_intent_last_error`,
   DROP COLUMN `cancel_intent_alerted_at`,
-  DROP COLUMN `ghost_cancel_at`;
+  DROP COLUMN `ghost_cancel_at`,
+  DROP COLUMN `cancel_intent_locked_at`;
 DELETE FROM `_prisma_migrations` WHERE `migration_name` = '20260924120000_delivery_cancel_intent';
 ```
