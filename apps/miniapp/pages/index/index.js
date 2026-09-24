@@ -31,6 +31,9 @@ Page({
     channelLabel: '全国邮寄',
     channelRight: 0,
     channelSheetOpen: false,
+    // 微信「单页模式」（朋友圈内打开分享卡片）：本页只浏览，隐私门/登录/加购全部
+    // 关闭，见 onLoad 与 utils/share.js 头注释。
+    singlePage: false,
     // LOCAL 专用
     meta: null,
     mode: 'DELIVERY',
@@ -68,6 +71,9 @@ Page({
   // 它登记的是「这次 onLoad 见过的入口」，热启动时 wx.onAppShow 可能会把同一个
   // 入口（比如这次冷启动本身）又送一遍，要靠它去重（见 utils/share.js 头注释 R1）。
   onLoad(options) {
+    // 单页模式下不弹隐私门（只浏览，位置许可放到进普通模式后再问，见
+    // gateThenLoad 顶部短路与 utils/share.js 头注释）。
+    this.setData({ singlePage: !!app.globalData.singlePage })
     this.computeNavBar()
     share.rememberEntry('pages/index/index', options)
     var self = this
@@ -114,6 +120,16 @@ Page({
   // 失败/拒绝都要落回邮寄」的收尾。
   gateThenLoad() {
     var self = this
+    // 单页模式：不问位置许可（wx.requirePrivacyAuthorize 在单页模式下不可信，
+    // 且这里本来就只是浏览），直接按 LOCAL 落地——冷启动（onReady）与热启动
+    // （applyEntryChannel）共用这一个出口，见 utils/share.js 头注释。
+    if (app.globalData.singlePage) {
+      this._shareGate = false
+      this._pendingEntryChannel = null
+      app.setShoppingChannel('LOCAL')
+      this.loadData()
+      return
+    }
     this._shareGate = true
     function settle(ok) {
       self._shareGate = false
@@ -404,6 +420,9 @@ Page({
 
   // 同城「+」。列表项即可，规格由 local-sku-picker 自己去拉。
   onAddToCart(e) {
+    // 单页模式只浏览：POST /cart 会因为没有登录态而必然失败（见 utils/request.js），
+    // 且加购弹层本身在单页模式也不该出现，见 index.wxml 的 add-btn wx:if。
+    if (this.data.singlePage) return
     const id = e.currentTarget.dataset.id
     var product = null
     for (var i = 0; i < this.data.products.length; i++) {

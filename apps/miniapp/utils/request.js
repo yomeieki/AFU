@@ -33,6 +33,20 @@ function doRequest({ url, method = 'GET', data = {}, silent = false }, retried) 
         }
         // 未登录/token 过期：自动重新登录后重试一次（登录接口本身除外，防循环）
         const isAuthError = body && (body.code === 40101 || body.code === 40102)
+        if (isAuthError) {
+          // 微信「单页模式」（朋友圈内打开分享卡片）下 wx.login 不可用：这里的
+          // 40101/40102 是「本来就没登录」的必然结果，不是异常——不重登，
+          // 也不弹「登录已过期」（那句话是给普通模式下 token 真过期时看的，
+          // 单页模式弹出来是误报）。见 app.js/_tryLogin 与 utils/share.js 头注释。
+          const singlePageApp = getApp()
+          if (singlePageApp && singlePageApp.globalData && singlePageApp.globalData.singlePage) {
+            const err = new Error((body && body.message) || '未登录')
+            err.code = body.code
+            err.data = (body && body.data) || null
+            reject(err)
+            return
+          }
+        }
         if (isAuthError && !retried && url.indexOf('/auth/') !== 0) {
           const app = getApp()
           if (app && app._tryLogin) {

@@ -145,7 +145,7 @@
             <!-- catchtap 而不是 bindtap：不 catch 的话会冒泡到整张卡的 goToDetail，
                  顾客按一下加购、页面却跳进了详情页。 -->
             <view
-              wx:if="{{channel === 'LOCAL'}}"
+              wx:if="{{channel === 'LOCAL' && !singlePage}}"
               class="add-btn {{item.stock <= 0 ? 'add-btn-disabled' : ''}}"
               catchtap="onAddToCart"
               data-id="{{item.id}}"

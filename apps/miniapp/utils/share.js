@@ -34,6 +34,30 @@ var SHARE_LANDING_PATH = '/pages/cover/index' // 「转发给好友」卡片的�
 var CARD_IMAGE = '/assets/share/card.png'
 var TIMELINE_IMAGE = '/assets/share/timeline.png'
 
+// ── 微信「单页模式」判定（2026-09-24）───────────────────────────────────────
+//
+// 朋友圈内直接点开分享卡片，先进入的是官方「单页模式」，并不会真正打开小程序
+// （微信文档 share-timeline.html）：页面无登录态，wx.login 等登录相关接口都不
+// 可用，也不允许真正跳转；点操作栏「前往小程序」才是一次真正的新启动（新 App
+// 实例，scene 变成 1155）。单页模式对应的场景值是 1154，只需要在 App.onLaunch
+// 判一次并缓存到 globalData，不必每次都重新判断。
+var SINGLE_PAGE_SCENE = 1154
+
+// options 里不保证一定带 scene；没有时退到 wx.getLaunchOptionsSync() 兜底，
+// 旧基础库没有这个 API（或调用抛错）时按 try/catch 收口，一律当作「不是单页
+// 模式」——宁可让普通启动多判一次，也不能把普通启动误判成单页模式而漏了登录。
+function isSinglePageLaunch(options) {
+  var scene = options && options.scene
+  if (scene === undefined) {
+    try {
+      scene = wx.getLaunchOptionsSync && wx.getLaunchOptionsSync().scene
+    } catch (e) {
+      scene = undefined
+    }
+  }
+  return scene === SINGLE_PAGE_SCENE
+}
+
 // 「转发给好友」卡片：固定落到封面页，不带渠道参数——对方点开后在封面自己选
 // 同城/邮寄（见文件头注释）。标题与卡片图跟调整前完全一样，没有变化。
 function shareCard() {
@@ -119,6 +143,8 @@ module.exports = {
   SHARE_LANDING_PATH: SHARE_LANDING_PATH,
   CARD_IMAGE: CARD_IMAGE,
   TIMELINE_IMAGE: TIMELINE_IMAGE,
+  SINGLE_PAGE_SCENE: SINGLE_PAGE_SCENE,
+  isSinglePageLaunch: isSinglePageLaunch,
   shareCard: shareCard,
   homeTimeline: homeTimeline,
   channelFromQuery: channelFromQuery,

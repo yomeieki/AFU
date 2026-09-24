@@ -1,6 +1,7 @@
 const { wechatLogin } = require('./api/auth')
 const { getCart } = require('./api/cart')
 const channelUtil = require('./utils/channel')
+const shareUtil = require('./utils/share')
 
 // tabBar 中购物车的索引（主页/分类/购物车/我的）
 var CART_TAB_INDEX = 2
@@ -26,8 +27,11 @@ App({
     selectedAddress: null,
     // 当前待决的官方隐私授权回调，由挂载的 privacy-popup 消费
     privacyResolve: null,
+    // 微信「单页模式」（朋友圈内打开分享卡片，scene 1154）：无登录态、wx.login
+    // 不可用。onLaunch 判一次并缓存在这里，见 utils/share.js 头注释。
+    singlePage: false,
   },
-  onLaunch() {
+  onLaunch(options) {
     // 渠道要在任何一次 getCart / 拉商品之前恢复好，否则冷启动第一屏会按错的渠道拉一轮。
     this.globalData.shoppingChannel = channelUtil.getShoppingChannel()
     this.globalData.localMode = channelUtil.getLocalMode()
@@ -41,10 +45,15 @@ App({
     if (userInfo && typeof userInfo === 'object') {
       this.globalData.userInfo = userInfo
     }
-    var self = this
-    this._tryLogin()
-      .then(function() { self.updateCartCount() })
-      .catch(function(err) { console.warn('[app] wechatLogin failed', err) })
+    // 单页模式下不做自动登录：wx.login 不可用，且这只是浏览，不是异常
+    // （见 utils/share.js 头注释与 _tryLogin 的对应短路）。
+    this.globalData.singlePage = shareUtil.isSinglePageLaunch(options)
+    if (!this.globalData.singlePage) {
+      var self = this
+      this._tryLogin()
+        .then(function() { self.updateCartCount() })
+        .catch(function(err) { console.warn('[app] wechatLogin failed', err) })
+    }
     if (wx.onNeedPrivacyAuthorization) {
       wx.onNeedPrivacyAuthorization(function(resolve) {
         // 小程序没有全局事件机制；同一时刻只可能有一个待决的授权请求。
@@ -66,6 +75,9 @@ App({
   },
   // 登录（返回 Promise；并发调用共享同一次登录，避免重复 wx.login）
   _tryLogin() {
+    // 单页模式下 wx.login 不可用（见 utils/share.js 头注释），不缓存进
+    // _loginPromise——不是「登录中」的状态，下次普通启动要能正常重新登录。
+    if (this.globalData.singlePage) return Promise.reject(new Error('single-page mode: wx.login unavailable'))
     if (this._loginPromise) return this._loginPromise
     var self = this
     var p = new Promise(function(resolve, reject) {
