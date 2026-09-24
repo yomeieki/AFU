@@ -15,7 +15,7 @@ import { recordDeliveryEvent, adminEventKey } from './events'
 import { notifySystemAlert } from '../notify'
 import { notifyLocalDeliveryAlert, notifyExpressAlert } from '../order-notify'
 import { DELIVERY_STATUS_LABEL, TERMINAL, providerLabel } from './state'
-import { executeCancelIntent, CANCEL_INTENT_MAX_ATTEMPTS, CANCEL_INTENT_VOID_MIN } from './cancel-intent'
+import { executeCancelIntent, notifyIntentDoneIfRefundPending, shouldAutoVoidCancelIntent, CANCEL_INTENT_MAX_ATTEMPTS, CANCEL_INTENT_VOID_MIN } from './cancel-intent'
 import { ProviderError } from './types'
 
 const BATCH = 100
@@ -396,11 +396,11 @@ export async function processCancelIntents(voidMin?: number): Promise<number> {
   const threshold = voidMin ?? CANCEL_INTENT_VOID_MIN
   const rows = await prisma.delivery.findMany({
     where: { cancelIntentAt: { not: null }, status: { notIn: [...TERMINAL] } },
-    take: BATCH, select: { id: true, providerTaskId: true, providerOrderId: true, cancelIntentAt: true, cancelIntentAttempts: true },
+    take: BATCH, select: { id: true, orderId: true, providerTaskId: true, providerOrderId: true, cancelIntentAt: true, cancelIntentAttempts: true },
   })
   let n = 0
   for (const d of rows) {
-    if (d.providerTaskId && d.providerOrderId) {
+    if (!shouldAutoVoidCancelIntent(d.providerTaskId, d.providerOrderId)) {
       if (d.cancelIntentAttempts < CANCEL_INTENT_MAX_ATTEMPTS) {
         await executeCancelIntent(d.id)
         n++
@@ -408,16 +408,32 @@ export async function processCancelIntents(voidMin?: number): Promise<number> {
       continue
     }
     if (d.cancelIntentAt && d.cancelIntentAt < ago(threshold)) {
+      // 复核 R3：方案 P17(b) 写的是「任一为空」，旧代码 where 只判断了 providerTaskId:null，
+      // 「有 taskId 无 orderId」的行永远进不了这条自动结束分支（也进不了上面 (a) 的执行分支，
+      // 因为那条要求两个 id 都非空）——永久卡住，改自送/重呼都会因 activeOrderId 未释放而 42228。
+      // 快递100 的 cancel/precancel 接口两个 id 都必填（见 kd100.ts 生产实测），缺 orderId
+      // 同样无法自动取消，用不同的 errorCode 区分「完全没成单」与「成单了但没拿到 orderId」，
+      // 后者更值得人去后台核实一次；两者都不告警（P19 兜底：万一后续回调带来了完整 id，
+      // killGhostDelivery 会自动撤销）。
+      const hasTaskIdOnly = !!d.providerTaskId && !d.providerOrderId
+      const errorCode = hasTaskIdOnly ? 'VOIDED_NOID' : 'VOIDED'
+      const failReason = hasTaskIdOnly
+        ? '店员要求取消；已有快递100 taskId 但缺 orderId（取消接口必填 orderId），5 分钟内无回调补全，视为无法自动取消，先结束占位；若之后回调带来完整 id，会自动撤销'
+        : '店员要求取消；5 分钟内无回调无单号，视为未成单，自动结束'
       const moved = await prisma.delivery.updateMany({
-        where: { id: d.id, status: { notIn: [...TERMINAL] }, providerTaskId: null },
-        data: { status: 'FAILED', activeOrderId: null, errorCode: 'VOIDED', failReason: '店员要求取消；5 分钟内无回调无单号，视为未成单，自动结束' },
+        where: { id: d.id, status: { notIn: [...TERMINAL] }, OR: [{ providerTaskId: null }, { providerOrderId: null }] },
+        data: { status: 'FAILED', activeOrderId: null, errorCode, failReason },
       })
-      if (moved.count === 0) continue   // 回调已抢先认领 taskId，下一轮走「有单号」分支
+      if (moved.count === 0) continue   // 回调已抢先认领齐两个 id，下一轮走「有单号」分支
       await recordDeliveryEvent(prisma, {
         deliveryId: d.id, dedupeKey: adminEventKey(), source: 'SCHEDULER', operator: 'scheduler',
-        statusDesc: `店员要求取消；等待 ${threshold} 分钟内无回调无单号，已自动结束`,
+        statusDesc: hasTaskIdOnly
+          ? '店员要求取消；有 taskId 无 orderId，5 分钟内无回调补全，已自动结束占位'
+          : `店员要求取消；等待 ${threshold} 分钟内无回调无单号，已自动结束`,
       })
       n++
+      // P22（R7）：自动结束释放了 activeOrderId，若顾客早申请了取消，退款不会再被 42221 拦
+      void notifyIntentDoneIfRefundPending(d.orderId)
     }
   }
   return n
