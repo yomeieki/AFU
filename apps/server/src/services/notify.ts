@@ -23,6 +23,18 @@ interface AlertRecord {
 
 const alertRecords = new Map<string, AlertRecord>()
 
+// P11：告警不可断言（e2e 无观测口）。进程内环形缓冲，最近 200 条，含被抑制的调用——
+// 「不再发告警」在 e2e 里必须能查「压根没进这个缓冲」，不能只查「没调用发送」。
+const RECENT_ALERTS_MAX = 200
+export interface RecentAlert { title: string; lines: string[]; key: string; at: number; suppressed: boolean }
+const recentAlerts: RecentAlert[] = []
+function pushRecentAlert(a: RecentAlert): void {
+  recentAlerts.push(a)
+  if (recentAlerts.length > RECENT_ALERTS_MAX) recentAlerts.shift()
+}
+export function getRecentAlerts(): RecentAlert[] { return [...recentAlerts] }
+export function clearRecentAlerts(): void { recentAlerts.length = 0 }
+
 /**
  * 企微群机器人与 PushPlus 的业务失败都是 HTTP 200 + body 里的错误码
  * （企微 errcode≠0：webhook 失效 93000 / 限频 45009；PushPlus code≠200：token 失效、超额），
@@ -125,11 +137,13 @@ export function notifySystemAlert(
   const record = alertRecords.get(key)
   if (record && now - record.lastSentAt < windowMs) {
     record.suppressed += 1
+    pushRecentAlert({ title, lines, key, at: now, suppressed: true })
     return
   }
   const suppressed = record?.suppressed ?? 0
   alertRecords.set(key, { lastSentAt: now, suppressed: 0 })
   pruneAlertRecords(now)
+  pushRecentAlert({ title, lines, key, at: now, suppressed: false })
 
   const env = process.env.NODE_ENV ?? 'development'
   const content = [

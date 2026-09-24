@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { success } from '../../utils/response'
 import { AppError } from '../../middlewares/error'
 import { queueDirective, getCalls, resetMock, MockDirective } from '../../services/delivery/mock'
+import { getRecentAlerts, clearRecentAlerts } from '../../services/notify'
 import prisma from '../../utils/prisma'
 
 const router = Router()
@@ -57,6 +58,25 @@ router.get('/salt/:deliveryNo', async (req: Request, res: Response, next: NextFu
     }
 
     success(res, { salt: delivery.callbackSalt })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/admin/system/kd100-mock/alerts — P11：告警观测口，e2e 断言「有没有告警/告警文案」
+router.get('/alerts', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    success(res, getRecentAlerts())
+  } catch (e) {
+    next(e)
+  }
+})
+
+// POST /api/admin/system/kd100-mock/alerts/reset — 清空告警观测缓冲
+router.post('/alerts/reset', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    clearRecentAlerts()
+    success(res, {})
   } catch (e) {
     next(e)
   }
