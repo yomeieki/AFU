@@ -307,3 +307,118 @@ apps/*/package.json
 ### 待用户决定
 
 - 无（三条已答复；休业日即时推送照常按 R1-2 的理由自行定，不再问）。
+
+---
+
+## 修订 2（2026-09-24，L 级复核阻断项 R1/R2；建议项 R3–R7 的处理）
+
+【工序】规划 【模型】Fable 5.1 【等级】L（编排者定级，§2.2 第 2 条：事务/一致性；定级只升不降）
+
+以下条目覆盖正文与修订 1 中对应内容。行号按执行者提交 `c9df644`。
+
+### R2-0 复核证据的亲自核实（§3.2）
+
+在本 worktree 用 `c9df644` 起了一套隔离环境（库 `food_shop_ls_plan`、端口 3141、`SCHEDULER_DISABLED=true`、全 mock），造多规格商品 P（A/B/C 各 10）后重跑复核者的两个脚本形态（mysql 会话持锁 2 秒 + `PUT /api/admin/products/:id/stock` 并发）：
+
+```
+== race1（下单事务扣 B 期间 PUT A=5）==
+before: product=30 skus=A:10,B:10,C:10
+{"code":0,...,"data":{"productId":10,"skuId":7,"stock":5,"productStock":25}}
+after:  product=25 skus=A:5,B:9,C:10 realSum=24        ← 丢 1
+== race2（取消回滚 B+1 期间 PUT A=0）==
+before: product=11 skus=A:1,B:0,C:10
+after:  product=10 skus=A:0,B:1,C:10 realSum=11        ← 丢 1
+```
+
+**R1 成立**。根因如复核所述：`routes/admin/products.ts:330-333` 先 `update sku`，再 `aggregate _sum`（REPEATABLE-READ 下是事务开始时的一致性快照，读不到并发事务已提交/在途的 B），再把这个陈旧和**绝对覆盖** `product.stock`。`@@transaction_isolation = REPEATABLE-READ`、`innodb_lock_wait_timeout = 50`（本机 docker MySQL 实查）。
+
+同一环境用 mysql 会话模拟「修订 2 的写法」（`SELECT … FOR UPDATE` 读旧值 → 写 sku 绝对值 → `product.stock = stock + (新 − 旧)`）：
+
+```
+-- 正向：扣 B 期间 PUT A=5 --      after: product=24 skus=A:5,B:9,C:10 realSum=24   ✔
+-- 反向：回滚 B+1 期间 PUT A=0 --  after: product=20 skus=A:0,B:10,C:10 realSum=20  ✔
+-- 死锁：两行订单（先 B 再 A）vs PUT A --
+  [put] ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction
+  [order] order-done
+  after: product=28 skus=A:9,B:9,C:10 realSum=28                                   ✔（不变量保住，但 PUT 被选为牺牲者）
+```
+
+结论：相对增量 + sku→product 锁序**修得掉 R1**；两行订单（同一商品两个规格）与 PUT 之间存在**可被 InnoDB 即时检测**的死锁（不是 50 秒等待），牺牲者由 InnoDB 选（本机三次都是 PUT），所以 PUT 必须对死锁重试。这个死锁类别与**既有的**「两笔多行订单以不同顺序扣同一商品的规格」完全同类（`routes/orders.ts:612-632` 逐行 sku→product，没有重试）——本批不引入新的锁序，只是把后台改库存也纳入同一锁序。
+
+### R2-1 [R1 阻断] `PUT /api/admin/products/:id/stock` 改为「锁读旧值 + 相对增量 + 死锁重试」
+
+覆盖正文实现方向 7 第二条。文件 `apps/server/src/routes/admin/products.ts`（`:312-344` 那一段整体重写，其余路由不动）：
+
+- **有规格分支**（`skuId` 非空）：事务内
+  1. `tx.$queryRaw` ``SELECT id, stock FROM product_skus WHERE id = ${skuId} AND product_id = ${id} FOR UPDATE``（X 锁 sku 行；查不到 → `40401 '规格不存在'`）；
+  2. `tx.productSku.update({ where: { id: skuId }, data: { stock } })`（绝对值，编辑的那个单位以店员实点数为准）；
+  3. `delta = stock − 旧值`；`tx.product.update({ where: { id }, data: { stock: { increment: delta } } })`（X 锁 product 行；**相对增量**，并发的扣减/回滚不会被覆盖）；响应里的 `productStock` 取这条 update 的返回行 `.stock`，**不再 aggregate**；
+  4. 事务前的 `findFirst(product)`/`count(skus)` 存在性与「有无规格」校验保留（非锁定读只用于分派错误码，不参与算术）。
+- **锁序**：sku → product，与 `routes/orders.ts:612-623`（每行先 `productSku.updateMany` 再 `product.update`）和 `utils/order-stock.ts:19-30`（先 sku 再 product）**同序**。任何一方持 product 锁时都已经持有了自己那行 sku 的锁，两个单行事务之间无环。**多行订单 vs PUT** 的环（订单持 B+product 等 A；PUT 持 A 等 product）由 InnoDB 死锁检测即时打断（实测 `ERROR 1213`，不走 50 秒 `innodb_lock_wait_timeout`）。
+- **死锁重试**：把整个 `prisma.$transaction(...)` 包成最多 3 次的循环，只对 Prisma `P2034`（`PrismaClientKnownRequestError`，MySQL 1213/40001 的映射）重试，两次之间 `await sleep(50 * attempt)` 毫秒；第 3 次仍失败原样抛出（走统一错误处理）。重试安全：sku 写的是绝对值、delta 每次从 `FOR UPDATE` 的新鲜值重算。重试时 `console.warn('[products] 改库存遇死锁，重试 %d/3', attempt)`。
+- **无规格分支**：保持 `UPDATE products SET stock = ?`（绝对值）。理由：无规格商品没有 sum 不变量；`UPDATE` 本身会等在途订单事务的 product 行锁释放后再写，最终值就是店员的实点数；并发那一单的扣减被实点数覆盖是「绝对值编辑」的固有语义，与既有 `PUT /:id {stock}`（e2e `e2e.sh:334/:798` 在用）完全一致。写进 `docs/api.md`。
+- **既有整表单 `PUT /:id`（`:346-431`）不修**，理由：它在同一事务里把每个 sku 与 `product.stock` 都从**同一份 payload** 写出（`:359-375` + `aggregateFromSkus`），任何交错下 `product.stock == SUM(sku.stock)` 都成立；它丢的只是并发那一单的扣减（绝对值编辑语义，本批之前就如此）。残留缺口：带 `stock` 但不带 `skus` 的 `PUT /:id` 打在多规格商品上（`Products.tsx:261` 用前端旧列表算的 sum）会破坏不变量——**本批之前就存在、不在本批范围**，记入本修订末尾「留后」。
+
+### R2-2 [R1 验收] e2e 分片 74 新增 74.11「并发一致性」（放在 74.7 之后、74.8 收尾之前）
+
+helper：`p74_sql_bg() { ( sql "$1" >/dev/null 2>&1 ) & }`（复用 `e2e.sh:1723` 的 `sql()`，后台子 shell），`p74_sum() { sql "SELECT stock FROM products WHERE id=$1;"; sql "SELECT COALESCE(SUM(stock),0) FROM product_skus WHERE product_id=$1;"; }`。每步先复位 A=B=C=10（三次 `p74_stock`）并断言 `product=30`。
+
+| 步 | 后台 mysql 会话（`BEGIN; …; SELECT SLEEP(2); COMMIT;`） | 0.7s 后并发的接口 | 断言 |
+|---|---|---|---|
+| a 扣减 | `UPDATE product_skus SET stock=stock-1 WHERE id=$B AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P` | `p74_stock $P {skuId:$A, stock:5}` | `code 0`、`data.stock=5`、`data.productStock=24`；`wait` 后 `products.stock=24`、`SUM(sku)=24`、A=5、B=9 |
+| b 回滚 | `… stock=stock+1 WHERE id=$B; UPDATE products SET stock=stock+1, sales_count=sales_count-1 …`（先把 B 钉成 0） | `p74_stock $P {skuId:$A, stock:0}` | `code 0`；`wait` 后 `products.stock == SUM(sku)`，A=0、B=1（或按复位值算） |
+| c 死锁 | `UPDATE sku B -1; UPDATE product -1; SELECT SLEEP(1.5); UPDATE product_skus SET stock=stock-1 WHERE id=$A AND stock>=1; UPDATE product -1` | `p74_stock $P {skuId:$A, stock:5}` | **`code 0`**（重试后成功；`e2e.sh:33` 的 `req` 不重试，所以 5xx 会直接现形）；`wait` 后 `products.stock == SUM(sku)`；A=5；B ∈ {9,10}（订单会话也可能是牺牲者，其语句整批回滚）——用 `[[ "$B" == 9 || "$B" == 10 ]]` |
+| d 无规格 | `UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$Q AND stock>=1`（先把 Q 钉成 10） | `p74_stock $Q {stock:7}` | `code 0`、`productStock=7`；`wait` 后 `products.stock=7`（绝对值语义） |
+
+- 全部数值经 `num()`；`wait` 只等本分片自己起的后台会话（74 之前的分段都已各自 `wait` 过，`e2e.sh:150` 同样用法）。四步共增加 ≈ 9 秒。
+- **改坏验证**（执行者必做并贴输出）：① 把第 3 步改回 `aggregate` 绝对覆盖 → 74.11-a/b 必红（`product ≠ SUM`）；② 去掉 `P2034` 重试 → 74.11-c 连跑 3 次至少 1 次红（`code` 非 0）。本机三次复现里牺牲者都是 PUT，若执行者 3 次都是订单会话被牺牲，把 `SLEEP(1.5)` 改 `SLEEP(1)`、`sleep 0.7` 改 `sleep 0.5` 再试并注明。
+
+### R2-3 [R2 阻断] 商品列表局部更新后 `stockAlert` 失真
+
+覆盖正文实现方向 11 与 `Products.tsx:303-336` 现状：
+
+- **服务端**（`routes/admin/products.ts`）：`PUT /:id`（`:429 success(res, product)`）与 `POST /`（`:241`）的响应都补 `stockAlert: productAlertSummary(product, await getLowStockSettings())`——与列表同一口径、同一门槛来源，前端不必自己算、不受 `PendingCounts` 30 秒轮询的门槛陈旧影响。`product` 已 `include: skuInclude`（含 `skus`），`productAlertSummary` 的入参形状满足。
+- **前端**：`apps/admin/src/utils/stock-alert.ts` 新增纯函数 `mergeProductPatch(list, id, patch)`：把 `patch`（含 `status`/`stock`/`stockAlert` 任意子集）合并到 `id` 那一项，`patch.stockAlert === undefined` 时保留原值。`Products.tsx` 的 `handleToggleStatus`（`:306-307`）与 `handleStockSave`（`:329-330`）改为拿 `updateProduct` 的响应 `res.data.data.stockAlert`，用 `mergeProductPatch(ls, id, { status|stock, stockAlert })` 更新列表；不整页 `load()`（保留「局部更新不整页刷新」的既有设计）。
+- **测试**：`stock-alert.test.ts` 加 3 例：合并 `status` 与 `stockAlert`；`patch` 无 `stockAlert` 时保留原值；不改其它 id 的项。e2e 74.12（放在 74.6 之后）：`PUT /admin/products/$P74 {status:'OFF_SHELF'}` 响应 `.data.stockAlert == {"out":0,"low":0}`；此时 A=0、B=1、C=0 → `PUT {status:'ON_SHELF'}` 响应 `{"out":2,"low":1}`；`PUT /admin/products/$Q74 {stock:50}` 响应 `{"out":0,"low":0}`、`{stock:0}` → `{"out":1,"low":0}`。
+- **人工检查追加**（验收 9）：列表里把一个无规格售罄商品库存改成 50 → 红标即刻消失、数字变灰；把带售罄规格的商品下架 → 标签即刻消失；再上架 → 标签即刻回来；都不刷新页面。
+
+### R2-4 [R6，本方案自身的验收缺口] 74.7 的「当天已发」门要可证明
+
+修订 1 的 74.9/74.7 依赖「现在已过应发时刻」，上午 08:30（seed 默认营业 `09:00`，`local-settings.ts:329`）之前跑就证明不了。改法：74.9 开头先 `P74_BH_ORIG=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data.businessHours)`，再 `p74_local_put '.businessHours=[{start:"00:00",end:"23:59"}]'`（应发时刻 = 前一天 23:30，任何时刻都已过），74.7 的三条断言不变但此后**确实**在证明日切门；74.8 收尾 `p74_local_put ".businessHours=$P74_BH_ORIG"` 复位（62 分片在 74 之前跑、且自己会重设 `businessHours`，但保持「谁改谁复位」）。
+
+### R2-5 建议项处理（§2.4：建议项不安排修改）
+
+- **R3**（`low-stock.ts:332-347` 读库失败/JSON 损坏当空状态）：**不修**。不与 R1/R2 同文件；且 `scanLowStockAlerts` 的 `listStockUnits` 与 `getAlertState` 打同一个库，库不可用时单位也读不出、任务在 scheduler 的 try/catch 里失败，不会形成推送风暴；JSON 损坏只会重推一轮后被合法状态覆盖。记入「留后」。
+- **R4**（上线首次心跳把现有 ≤1/0 的在架规格各推一条）：店主已答复「要，推一次就行」。**不改行为**；编排者交付说明里写明：部署后第一次心跳会收到一条「库存告急」，按生产 2026-09-24 只读快照约 12 个售罄 + 若干「低于 2」，之后只推变化。
+- **R5**（`LowStock.tsx` 保存行库存后 `load()` 覆盖门槛草稿；行输入不在未保存守卫内）：**不修**（不与 R1/R2 同文件）。记入「留后」。
+- **R7**（`ticket/index.ts:830-832` 注释引用已删的 `lastLowStockPushAt`）：禁改文件，**留后**。
+
+### 验收增补汇总
+
+- 验收 7 分片 74：新增 74.11（并发一致性四步 + 两项改坏验证）、74.12（PUT/POST 响应 `stockAlert`）；74.9/74.8 按 R2-4 增改。
+- 验收 4：`stock-alert.test.ts` +3 例（`pass ≥ 143 + 9 + 3`）。
+- 验收 9：R2-3 的三条人工步骤。
+- 验收 1/5：不变（`$queryRaw` 模板字面量需 `Prisma.sql` 类型，`tsc` 会查）。
+- `docs/api.md`：`PUT /api/admin/products/:id/stock` 小节补「有规格：锁读旧值、product 相对增量、死锁自动重试 3 次；无规格：绝对值；并发语义」；`PUT /:id`、`POST /` 响应补 `stockAlert`。
+- **既有断言放开情况：无**。74.2 的 `productStock=21`、74.5、74.6 的期望在相对增量下不变。
+
+### 授权范围增减
+
+- **不新增文件**。R1 落在 `apps/server/src/routes/admin/products.ts`（已授权）；R2 落在 `products.ts`、`apps/admin/src/pages/Products.tsx`、`apps/admin/src/utils/stock-alert.ts`、`stock-alert.test.ts`（已授权）；R6 落在 `scripts/e2e.d/74-low-stock.sh`（已授权）；`docs/api.md`（已授权）。
+- 正文对 `Products.tsx` 的限定放宽一句：允许改 `handleToggleStatus`/`handleStockSave` 两个函数体（其余限定不变）。
+- **禁止清单不变**，特别重申：`apps/server/src/routes/orders.ts`、`apps/server/src/utils/order-stock.ts`、`apps/server/src/services/refund.ts` 不动——修法是让 PUT 对齐它们的锁序，不是改它们。
+
+### 上报条件增补
+
+- Prisma 对 MySQL 1213 的映射若不是 `P2034`（用 `e.code` 与 `e.message` 实测），停下上报实际错误对象，不得按 message 文本模糊匹配。
+- 74.11-c 若出现 PUT 重试 3 次仍失败（响应非 0）——上报，附 server 日志里的 `[products] 改库存遇死锁` 行。
+- 分片里的 `wait` 若等到了不属于 74 的后台作业（表现为分片耗时异常或前序分段 fail）——上报，不得改 `e2e.sh`。
+
+### 待用户决定
+
+- 无。
+
+### 留后（不在本批，交编排者登记）
+
+- 既有 `PUT /:id` 带 `stock` 不带 `skus` 打在多规格商品上会用前端旧 sum 覆盖 `product.stock`（`Products.tsx:261`），本批前已存在。
+- R3、R5、R7 原文见复核。
