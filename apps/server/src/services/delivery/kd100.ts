@@ -45,6 +45,18 @@ export function _buildOrderParam(input: CreateDeliveryOrderInput, providers: str
   }
 }
 
+// P4：生产实测 precancel 只传 taskId 返 30001「orderId不能为空」——precancel/cancel/addfee
+// 三接口按官方文档都要 taskId + orderId。抽成纯函数供 selftest 断言 param 形状，不必真的外呼。
+export function _buildPrecancelParam(taskId: string, orderId: string): Record<string, unknown> {
+  return { taskId, orderId, cancelMsgType: 8, cancelMsg: '预览取消费用' }
+}
+export function _buildCancelParam(taskId: string, orderId: string, reason: string): Record<string, unknown> {
+  return { taskId, orderId, cancelMsgType: 8, cancelMsg: trunc(reason, 60) ?? '商家取消' }
+}
+export function _buildAddfeeParam(taskId: string, orderId: string, amountFen: number): Record<string, unknown> {
+  return { taskId, orderId, tips: (amountFen / 100).toFixed(2), remark: '商家加小费' }
+}
+
 interface Kd100Response { code?: number | string; returnCode?: number | string; success?: boolean; message?: string; data?: Record<string, unknown> }
 /** 默认请求超时。调用方可逐次覆盖（目前只有顾客侧查价这么做，见 DeliveryProvider.price 的注释） */
 const DEFAULT_TIMEOUT_MS = 8000
@@ -134,16 +146,16 @@ export const kd100Provider: DeliveryProvider = {
       distanceM: toInt(fees[0]?.deliveryDistance ?? d.deliveryDistance), quotes, raw: data,
     }
   },
-  async precancelOrder({ taskId }) {
-    const data = await post('precancel', { taskId, cancelMsgType: 8, cancelMsg: '预览取消费用' })
+  async precancelOrder({ taskId, orderId }) {
+    const data = await post('precancel', _buildPrecancelParam(taskId, orderId))
     return { cancelFeeFen: yuanToFen(data.data?.cancelFee) }
   },
-  async cancelOrder({ taskId, reason }) {
-    const data = await post('cancel', { taskId, cancelMsgType: 8, cancelMsg: trunc(reason, 60) ?? '商家取消' })
+  async cancelOrder({ taskId, orderId, reason }) {
+    const data = await post('cancel', _buildCancelParam(taskId, orderId, reason))
     return { cancelFeeFen: yuanToFen(data.data?.cancelFee), raw: data }
   },
-  async addTip({ taskId, amountFen }) {
-    await post('addfee', { taskId, tips: (amountFen / 100).toFixed(2), remark: '商家加小费' })
+  async addTip({ taskId, orderId, amountFen }) {
+    await post('addfee', _buildAddfeeParam(taskId, orderId, amountFen))
   },
   async queryCourier({ taskId, orderId }) {
     // ⚠️ 这个接口认的是 **orderId**（快递100 侧订单号，回调里的 orderId → Delivery.providerOrderId），
@@ -184,6 +196,8 @@ export const kd100Provider: DeliveryProvider = {
     const ut = typeof p.updateTime === 'string' && p.updateTime ? new Date(p.updateTime.replace(' ', 'T') + '+08:00') : null
     const payload: DeliveryCallbackPayload = {
       taskId: trunc(String(body.taskId ?? p.taskId ?? ''), 64) ?? '',
+      providerOrderId: trunc(p.orderId != null ? String(p.orderId) : undefined, 64),
+      cancelReason: trunc(p.cancelReason as string | undefined, 255),
       providerStatus: String(p.status ?? ''),
       statusDesc: trunc(p.statusDesc as string | undefined, 255),
       courierCompany: trunc(p.kuaidicom as string | undefined, 32),

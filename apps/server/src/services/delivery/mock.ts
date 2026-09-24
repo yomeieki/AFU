@@ -38,9 +38,13 @@ export type MockDirective =
   // 所以那条链路必须能把它压成 0——写死 200 的话正常升级路径在 mock 下永远走不到。
   // courier 只对 queryCourier 有意义：给一对 GCJ-02 坐标（与真实 lbsType=2 同系），
   // 让「骑手距店/距顾客多远」那条链路可测；不给就照旧返回 null。
-  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number; quotes?: ProviderQuote[]; cancelFeeFen?: number; courier?: { latE6: number; lngE6: number } }
-  | { kind: 'error'; code: '30001' | '30002' | '30003' | '30004' | '30005' | '30006' | '50000' }
-  | { kind: 'timeout' }
+  // holdMs（P10）：时序注入——让 act() 在返回/抛错前 await 这么久，唯一的定时器，用来测
+  // 「回调先于下单同步响应到达」这类竞态；不传 = 立即返回（既有行为零变化）。
+  | { kind: 'ok'; taskId?: string; providerOrderId?: string; quotedFeeFen?: number; distanceM?: number; quotes?: ProviderQuote[]; cancelFeeFen?: number; courier?: { latE6: number; lngE6: number }; holdMs?: number }
+  | { kind: 'error'; code: '30001' | '30002' | '30003' | '30004' | '30005' | '30006' | '50000'; holdMs?: number }
+  | { kind: 'timeout'; holdMs?: number }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const queues = new Map<string, MockDirective[]>()
 const calls: { op: string; input: unknown; at: string }[] = []
@@ -75,9 +79,10 @@ function record(op: string, input: unknown) {
   calls.push({ op, input, at: new Date().toISOString() })
 }
 
-function act(op: string, input: unknown): MockDirective {
+async function act(op: string, input: unknown): Promise<MockDirective> {
   record(op, input)
   const d = take(op)
+  if (d.holdMs) await sleep(d.holdMs)
   if (d.kind === 'error') throw new ProviderError(_mapReturnCode(d.code), d.code, `mock:${d.code}`)
   if (d.kind === 'timeout') throw new ProviderError('TIMEOUT', 'TIMEOUT', 'mock timeout')
   return d
@@ -86,7 +91,7 @@ function act(op: string, input: unknown): MockDirective {
 export const mockProvider: DeliveryProvider = {
   name: 'MOCK',
   async price(input) {
-    const d = act('price', input)
+    const d = await act('price', input)
     const distanceM = d.kind === 'ok' && d.distanceM != null ? d.distanceM : mockDistanceM(input)
     const quotes: ProviderQuote[] = d.kind === 'ok' && d.quotes?.length
       ? d.quotes.map((q) => ({ provider: q.provider, feeFen: q.feeFen, distanceM: q.distanceM ?? distanceM }))
@@ -95,7 +100,7 @@ export const mockProvider: DeliveryProvider = {
     return { feeFen: Math.min(...quotes.map((q) => q.feeFen)), distanceM, quotes }
   },
   async createOrder(input): Promise<CreateDeliveryOrderResult> {
-    const d = act('createOrder', input)
+    const d = await act('createOrder', input)
     seq += 1
     const distanceM = d.kind === 'ok' && d.distanceM != null ? d.distanceM : mockDistanceM(input)
     const feeFen = d.kind === 'ok' && d.quotedFeeFen != null ? d.quotedFeeFen : 500
@@ -119,18 +124,18 @@ export const mockProvider: DeliveryProvider = {
     }
   },
   async precancelOrder(i) {
-    const d = act('precancelOrder', i)
+    const d = await act('precancelOrder', i)
     return { cancelFeeFen: d.kind === 'ok' && d.cancelFeeFen != null ? d.cancelFeeFen : 200 }
   },
   async cancelOrder(i) {
-    const d = act('cancelOrder', i)
+    const d = await act('cancelOrder', i)
     return { cancelFeeFen: d.kind === 'ok' && d.cancelFeeFen != null ? d.cancelFeeFen : 200, raw: { mock: true } }
   },
   async addTip(i) {
-    act('addTip', i)
+    await act('addTip', i)
   },
   async queryCourier(i) {
-    const d = act('queryCourier', i)
+    const d = await act('queryCourier', i)
     // 默认仍回 null（「拿不到位置」是真实世界里最常见的一种结果，也是既有用例的期望），
     // 但要能指令化地给出坐标——否则「工作台显示骑手距店多远」整条链路在 mock 下测不了，
     // 而这正是 queryCourier 传错参数半个月没人发现的那类静默失败最需要护栏的地方。

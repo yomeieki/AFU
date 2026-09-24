@@ -82,6 +82,10 @@ export interface CreateDeliveryOrderResult {
 export interface DeliveryCallbackPayload {
   /** 批次级：同一次并呼下单里所有被呼运力共享同一个 taskId，不能用它区分「哪一家」 */
   taskId: string
+  /** 快递100 侧订单号（回调 param.orderId）。P3：此前从不解析，callback.ts 无法据此认领非 UNKNOWN 行 */
+  providerOrderId: string | null
+  /** 720 撤单原因（回调 param.cancelReason，仅 720 且下游返回时才有） */
+  cancelReason: string | null
   providerStatus: string
   statusDesc: string | null
   /**
@@ -111,9 +115,10 @@ export interface DeliveryProvider {
     timeoutMs?: number
   }): Promise<{ feeFen: number; distanceM: number | null; quotes: ProviderQuote[] }>
   createOrder(input: CreateDeliveryOrderInput): Promise<CreateDeliveryOrderResult>
-  precancelOrder(i: { taskId: string }): Promise<{ cancelFeeFen: number | null }>
-  cancelOrder(i: { taskId: string; reason: string }): Promise<{ cancelFeeFen: number | null; raw: unknown }>
-  addTip(i: { taskId: string; amountFen: number }): Promise<void>
+  // P4：三接口生产实测漏传 orderId（precancel 返 30001「orderId不能为空」）；orderId 必填
+  precancelOrder(i: { taskId: string; orderId: string }): Promise<{ cancelFeeFen: number | null }>
+  cancelOrder(i: { taskId: string; orderId: string; reason: string }): Promise<{ cancelFeeFen: number | null; raw: unknown }>
+  addTip(i: { taskId: string; orderId: string; amountFen: number }): Promise<void>
   // orderId 才是这个接口认的键（快递100 侧订单号 = Delivery.providerOrderId）；taskId 一并传只是冗余。
   // 2026-09-06 生产实测：只传 taskId 会被拒 30001「orderId不能为空」。
   queryCourier(i: { taskId: string; orderId: string | null }): Promise<{ latE6: number; lngE6: number } | null>
