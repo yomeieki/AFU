@@ -566,8 +566,15 @@ function CancelDeliveryModal({ orderId, channel, title, onClose, onDone }: {
   const submit = async () => {
     setBusy(true); setError('')
     try {
-      await (isExpress ? cancelExpressBooking(orderId, '商家取消') : cancelDelivery(orderId, '商家取消'))
-      onDone(isExpress ? '已取消取件预约' : '已取消配送')
+      if (isExpress) {
+        await cancelExpressBooking(orderId, '商家取消')
+        onDone('已取消取件预约')
+      } else {
+        const r = await cancelDelivery(orderId, '商家取消')
+        // P15：pending=true（缺快递100 单号，只记了取消意图）要换一句不同的提示——
+        // 不能说「已取消配送」，那时配送单其实还没终态化，骑手也还没真的被撤掉。
+        onDone(r.data.data.pending ? '已记录取消，等快递100 确认（最多 5 分钟），期间请勿重复呼叫' : '已取消配送')
+      }
     } catch (e) {
       setError(apiCode(e) === 42238 ? '运力方响应超时，请稍后重试（配送单状态未变化）' : apiMessage(e, '取消失败，请重试'))
     } finally { setBusy(false) }
@@ -1209,7 +1216,9 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
           <>
             {card.local?.schedule && <span className="wb__sched">{scheduleFieldsLine(card.local.schedule)}</span>}
             {kmText && <span>距离 {kmText}</span>}
-            <span>骑手 {d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}</span>
+            {/* D1=A：工作台卡片不加实时骑手信息（距店/ETA），那些只在抽屉里给；卡片只多一句
+                「取消处理中」——意图单（P18）没有在等人接单，是在等快递100 确认取消。 */}
+            <span>{d?.cancelIntentAt ? '取消处理中，等快递100 确认' : `骑手 ${d?.courierName ? `${d.courierName}${d.courierMobile ? ` ${d.courierMobile}` : ''}` : (d ? d.statusLabel : '未呼叫')}`}</span>
             {card.local?.schedule
               ? (card.local.schedule.phase === 'CALL_DUE' || card.local.schedule.phase === 'PREPPING') && <span>{etaTextIfCallNow(card.local.schedule)}</span>
               : <span>预计送达 {hhmm(card.local?.estimatedDeliveryAt)}</span>}
@@ -1955,7 +1964,11 @@ export default function Workbench() {
     }
 
     if (colKey === 'waitingCourier') {
-      if (active?.status === 'CALLING') {
+      if (active?.cancelIntentAt) {
+        // P18：意图单——加小费/取消呼叫/取消配送/自己送全部隐藏，只留一句不可点的灰字。
+        // 打给骑手不受影响（下面 active?.courierMobile 那行仍会渲染，联系骑手与取消流程无关）。
+        btns.push(<span key="cancel-intent-pending" className="wb__muted">取消处理中（最多 5 分钟）</span>)
+      } else if (active?.status === 'CALLING') {
         btns.push(fill('tip', '加小费', () => setModal({ kind: 'tip' })))
         btns.push(ghost('cancel-call', '取消呼叫', () => setModal({ kind: 'cancelDelivery', title: '取消呼叫' })))
       } else if (active?.status === 'UNKNOWN') {
@@ -2136,6 +2149,11 @@ export default function Workbench() {
             {local && d && (
               <div className="wb__block">
                 <div className="wb__block-t">配送员</div>
+                {/* P18：取消意图状态行——店员点了取消但配送单缺快递100 单号，只记了意图，
+                    卡片与这里用同一句「取消处理中」措辞，但这里多带上是谁、什么时候点的。 */}
+                {d.cancelIntentAt && (
+                  <div className="wb__line"><span>状态</span><span>取消处理中，等快递100 确认 · 店员 {hhmm(d.cancelIntentAt)} 要求取消</span></div>
+                )}
                 <div className="wb__line"><span>配送单</span><span>{d.deliveryNo}</span></div>
                 {/* 哪一家接的单——数据一直在库里（courierCompany 也在管理端白名单里），
                     只是从来没显示过。首单时店员完全不知道是闪送接的。 */}

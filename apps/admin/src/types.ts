@@ -643,6 +643,14 @@ export interface DeliveryInfo {
   deliveredAt: string | null
   cancelledAt: string | null
   cancelReason: string | null
+  /** 取消意图（P15-P20）：非空 = 店员点了取消但缺 taskId/orderId，只记了意图；抽屉据此隐藏按钮 */
+  cancelIntentAt: string | null
+  cancelIntentBy: string | null
+  cancelIntentReason: string | null
+  cancelIntentAttempts: number
+  cancelIntentLastError: string | null
+  cancelIntentAlertedAt: string | null
+  ghostCancelAt: string | null
 }
 
 /** 配送单事件时间线（与服务端 DeliveryEvent 模型同构，仅取前端用得到的字段） */
@@ -779,6 +787,9 @@ export interface WorkbenchCard {
       provider?: string | null
       /** 最近一次呼叫骑手失败（运力方拒单/下单报错），订单还停在备餐中等店员重呼或改自送。服务端可选下发 */
       callFailed?: boolean
+      /** 取消意图（P15-P20）：店员点过取消但配送单缺 taskId/orderId，只记了意图没有真取消。
+       *  非空 = 正在等快递100 确认或等 5 分钟自动结束，卡片/抽屉都要换成「取消处理中」文案。 */
+      cancelIntentAt: string | null
     } | null
     /** 预约单才有；立即单为 null */
     schedule?: ScheduleInfo | null

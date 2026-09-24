@@ -370,8 +370,10 @@ export const getCourierLive = (id: number) =>
   client.get<ApiResponse<CourierLive>>(`/admin/local/orders/${id}/courier`)
 export const precancelDelivery = (id: number) =>
   client.post<ApiResponse<{ cancelFeeFen: number | null }>>(`/admin/local/orders/${id}/delivery/precancel`)
+// pending:true（P15）= 配送单缺快递100 单号，只记了取消意图，没有真的外呼取消；
+// 单号一到系统会自动执行真取消，取消费自动记账，不需要店员再操作一次。
 export const cancelDelivery = (id: number, reason?: string) =>
-  client.post<ApiResponse<{ cancelFeeFen: number | null }>>(`/admin/local/orders/${id}/delivery/cancel`, { reason })
+  client.post<ApiResponse<{ cancelFeeFen: number | null; pending?: true }>>(`/admin/local/orders/${id}/delivery/cancel`, { reason })
 // 驳回顾客的取消申请（同城）——邮寄单用上面的 rejectExpressCancelRequest
 export const rejectCancelRequest = (id: number) =>
   client.post<ApiResponse<Order>>(`/admin/local/orders/${id}/cancel-request/reject`)
