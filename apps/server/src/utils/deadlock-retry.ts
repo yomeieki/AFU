@@ -1,12 +1,23 @@
 import { Prisma } from '@prisma/client'
 
 /**
- * P2034 = Prisma 对 MySQL 1213（Deadlock found when trying to get lock）的映射。
+ * P2034 = Prisma 对 MySQL 1213（Deadlock found when trying to get lock）的映射，覆盖
+ * `updateMany`/`update`/`create` 等常规查询构建器语句。
  * 1205（锁等待超时）在本仓库 `innodb_lock_wait_timeout`（50s）远大于事务 `timeout`（15s）
  * 的配置下，实际总是先撞事务 timeout 变成 P2028，不在这里出现，因此不重试 P2028。
+ *
+ * P2010 + `meta.code === '1213'`（2026-09-24，L 级复核 R2 成立）：`$queryRaw`/`$executeRaw`
+ * 撞上 1213 时 Prisma **不会**映射成 P2034，而是包成 P2010（"Raw query failed"），真实
+ * MySQL 错误号在 `meta.code`（字符串）里——复核者与执行者的探针都两次实测
+ * `class=PrismaClientKnownRequestError code=P2010 meta={"code":"1213",…}`。这个仓库唯一
+ * 用到 `$queryRaw` 且可能被选为死锁牺牲者的地方是 `routes/orders.ts` 里
+ * `SELECT ... FOR UPDATE users`（它前面已经持有 sku/products 的 X 锁，是有持锁量的一方，
+ * 可能被 InnoDB 选中回滚）；不判这一支会让这类死锁直接以原始错误上抛，绕过整个重试兜底。
  */
 export function isDeadlockError(e: unknown): boolean {
-  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2034'
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError)) return false
+  if (e.code === 'P2034') return true
+  return e.code === 'P2010' && String((e.meta as { code?: unknown } | undefined)?.code ?? '') === '1213'
 }
 
 function sleep(ms: number): Promise<void> {
