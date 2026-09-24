@@ -320,12 +320,22 @@ router.get('/low-stock', async (_req: Request, res: Response, next: NextFunction
 //   1. `SELECT ... FOR UPDATE` 锁住并读到这一刻的真实旧值（不是快照）；
 //   2. 把这一个 sku 写成店员实点的绝对值；
 //   3. product.stock 只按 `delta = 新值 − 旧值` 相对增量，不去动其它 sku 贡献的部分。
-// 锁序 sku → product，与 routes/orders.ts:612-623（下单扣减）、utils/order-stock.ts:19-30
-// （取消/退款回滚）同序，两个「单行」事务之间不会互相等待成环。唯一会成环的是
-// 「一张跨两个 sku 的订单」与「这个改库存请求」互锁——这与既有的「两笔多行订单以不同
-// 顺序扣同一商品」是同一类死锁，InnoDB 会立即探测到并选一方做牺牲者（MySQL 1213 →
-// Prisma P2034），所以这里对 P2034 做有限重试；无规格分支没有 sum 不变量，维持绝对值写入
-// （与既有 `PUT /:id {stock}` 的编辑语义一致）。
+// 锁序与事实（2026-09-24 修订 3，L 级复核 R2：下面这段锁序分析原先漏了外键 S 锁，
+// 「单行事务之间不会成环」的说法与事实不符，已改正）：
+//   1. 下单事务的锁序（`routes/orders.ts`：`order.create({ items: { create } })` 在扣减
+//      循环之前）：`INSERT order_items` 因外键 `order_items_product_id_fkey` 先取得
+//      **products 行的 S 锁** → 扣 sku 行 X 锁 → 扣 products 行 X 锁（S→X 升级）。
+//   2. 这个接口：sku 行 X 锁（`FOR UPDATE`）→ products 行 X 锁。
+//   3. 成环条件：订单行与改库存是**同一规格**——改库存持 X(sku) 等 X(products)，被订单的
+//      S(products) 挡住；订单接着要 X(sku)，被改库存挡住 → 环。**单行订单也会成环**，
+//      不是只有跨规格的订单才会。**不同规格不成环**：订单的 S→X 升级只等其它事务已授予
+//      的冲突锁，改库存那个等待中的 X 请求不挡它；改库存等订单提交后再拿到 products 行。
+//   4. 取消/退款回滚（`utils/order-stock.ts`）没有外键插入，锁序 sku → products，与改库存
+//      只在「多行回滚跨到改库存那一规格」时成环。
+//   5. 牺牲者：InnoDB 选 undo 量小的一方，实测恒为改库存事务（订单事务已插入
+//      `orders`/`order_items`），顾客下单不受影响；改库存捕获 P2034 重试，重试时重新
+//      `FOR UPDATE` 读到订单提交后的新值，delta 仍正确。
+//   6. 既有的「两笔多行订单以不同顺序扣同一商品」死锁不在本批，`orders.ts` 不动。
 const stockUpdateSchema = z.object({
   skuId: z.number().int().positive().nullable().optional(),
   stock: z.number().int().min(0).max(999999),
@@ -341,7 +351,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-const STOCK_UPDATE_MAX_ATTEMPTS = 3
+// 修订 3：3 → 5。按复核饱和压测的每次尝试死锁率 p≈0.22 估算，3 次连败≈1.0%、5 次连败≈0.05%；
+// 真实下单形态本机 180 轮 0 次；改库存是店员低频手工操作，多两次尝试没有代价。
+const STOCK_UPDATE_MAX_ATTEMPTS = 5
 
 router.put('/:id/stock', async (req: Request, res: Response, next: NextFunction) => {
   try {

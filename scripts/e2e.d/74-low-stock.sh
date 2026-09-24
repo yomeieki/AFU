@@ -10,6 +10,8 @@ p74_stock() { req PUT "/api/admin/products/$1/stock" "$AT" "$2"; }
 p74_kw() { curl -s -G "$BASE/api/admin/products" --data-urlencode "keyword=$1" -H "Authorization: Bearer $AT"; }
 # R2-2（修订 2）：并发一致性测试用——后台 mysql 会话（子 shell 里跑，不阻塞主脚本）与复位。
 p74_sql_bg() { ( sql "$1" >/dev/null 2>&1 ) & }
+# 修订 3（R4）：墙钟毫秒时间戳，用于断言 PUT 真的在锁上等过（macOS date 无 %N）。
+p74_now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time*1000'; }
 p74_reset() {
   p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":10}" >/dev/null
   p74_stock "$P74_PID" "{\"skuId\":$P74_B,\"stock\":10}" >/dev/null
@@ -158,7 +160,9 @@ assert_eq "74.11 复位后 product=30" "$R" "30"
 echo "-- 74.11-a 下单事务扣减 B 期间 PUT 改 A --"
 p74_sql_bg "BEGIN; UPDATE product_skus SET stock=stock-1 WHERE id=$P74_B AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; SELECT SLEEP(2); COMMIT;"
 sleep 0.7
+P74_T0=$(p74_now_ms)
 R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":5}")
+P74_T1=$(p74_now_ms)
 assert_eq "74.11-a code 0" "$(code "$R")" "0"
 assert_eq "74.11-a data.stock=5" "$(jq -r .data.stock <<<"$R")" "5"
 assert_eq "74.11-a data.productStock=24" "$(jq -r .data.productStock <<<"$R")" "24"
@@ -169,13 +173,17 @@ assert_eq "74.11-a products.stock == SUM(sku)" "$P74_A_PS" "$P74_A_SS"
 assert_eq "74.11-a products.stock=24" "$P74_A_PS" "24"
 assert_eq "74.11-a A=5" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "5"
 assert_eq "74.11-a B=9" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")" "9"
+P74_ELAPSED=$((P74_T1 - P74_T0))
+[[ "$P74_ELAPSED" -ge 700 ]] && ok "74.11-a PUT 耗时 ${P74_ELAPSED}ms ≥700（确实等过锁，不是巧合绿）" || fail "74.11-a PUT 耗时 ${P74_ELAPSED}ms < 700，怀疑没有真正并发" "$P74_ELAPSED"
 
 echo "-- 74.11-b 取消回滚 B+1 期间 PUT 改 A --"
 p74_reset
 p74_stock "$P74_PID" "{\"skuId\":$P74_B,\"stock\":0}" >/dev/null   # 先把 B 钉成 0（此时 product=20）
 p74_sql_bg "BEGIN; UPDATE product_skus SET stock=stock+1 WHERE id=$P74_B; UPDATE products SET stock=stock+1, sales_count=sales_count-1 WHERE id=$P74_PID; SELECT SLEEP(2); COMMIT;"
 sleep 0.7
+P74_T0=$(p74_now_ms)
 R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":0}")
+P74_T1=$(p74_now_ms)
 assert_eq "74.11-b code 0" "$(code "$R")" "0"
 wait
 P74_B_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
@@ -184,12 +192,16 @@ assert_eq "74.11-b products.stock == SUM(sku)" "$P74_B_PS" "$P74_B_SS"
 assert_eq "74.11-b products.stock=11" "$P74_B_PS" "11"
 assert_eq "74.11-b A=0" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "0"
 assert_eq "74.11-b B=1" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")" "1"
+P74_ELAPSED=$((P74_T1 - P74_T0))
+[[ "$P74_ELAPSED" -ge 700 ]] && ok "74.11-b PUT 耗时 ${P74_ELAPSED}ms ≥700（确实等过锁，不是巧合绿）" || fail "74.11-b PUT 耗时 ${P74_ELAPSED}ms < 700，怀疑没有真正并发" "$P74_ELAPSED"
 
 echo "-- 74.11-c 两行订单（先 B 后 A）与 PUT 改 A 互锁 → InnoDB 死锁检测 → PUT 重试后成功 --"
 p74_reset
 p74_sql_bg "BEGIN; UPDATE product_skus SET stock=stock-1 WHERE id=$P74_B AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; SELECT SLEEP(1.5); UPDATE product_skus SET stock=stock-1 WHERE id=$P74_A AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; COMMIT;"
 sleep 0.7
+P74_T0=$(p74_now_ms)
 R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":5}")
+P74_T1=$(p74_now_ms)
 assert_eq "74.11-c code 0（P2034 重试后成功，不是 5xx）" "$(code "$R")" "0"
 wait
 P74_C_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
@@ -198,16 +210,74 @@ assert_eq "74.11-c products.stock == SUM(sku)" "$P74_C_PS" "$P74_C_SS"
 assert_eq "74.11-c A=5" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "5"
 P74_C_B=$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")
 [[ "$P74_C_B" == "9" || "$P74_C_B" == "10" ]] && ok "74.11-c B∈{9,10}（实际 $P74_C_B，取决于死锁牺牲者是订单会话还是 PUT）" || fail "74.11-c B 值异常" "$P74_C_B"
+P74_ELAPSED=$((P74_T1 - P74_T0))
+[[ "$P74_ELAPSED" -ge 700 ]] && ok "74.11-c PUT 耗时 ${P74_ELAPSED}ms ≥700（确实等过锁，不是巧合绿）" || fail "74.11-c PUT 耗时 ${P74_ELAPSED}ms < 700，怀疑没有真正并发" "$P74_ELAPSED"
 
-echo "-- 74.11-d 无规格商品：绝对值编辑语义（无 sum 不变量，不做锁读+增量） --"
+# 修订 3（L 级复核 R2·规划缺口）：锁序分析漏了外键 S 锁——INSERT order_items 因外键
+# order_items_product_id_fkey 先给 products 行加 S 锁，单笔订单（不用跨两个规格）与改
+# 库存打**同一规格**也会成环；打不同规格不成环，只是排队等锁。e/f 两步复现这两种形态。
+echo "-- 74.11-e 外键 S 锁 · 同一规格（订单行与改库存打同一个 sku，单笔订单也成环，R2） --"
+p74_reset
+P74_OID=$(sql "SELECT MAX(id) FROM orders;")
+if [[ -z "$P74_OID" || "$P74_OID" == "NULL" ]]; then
+  fail "74.11-e 前置：orders 表取不到可引用的 id（分段顺序异常，需上报，不得自造 orders 行）" "P74_OID=[$P74_OID]"
+else
+  p74_sql_bg "BEGIN; INSERT INTO order_items (order_id,product_id,sku_id,product_name,product_price,quantity,subtotal,updated_at) VALUES ($P74_OID,$P74_PID,$P74_A,'e2e-fk-lock',1000,1,1000,NOW(3)); SELECT SLEEP(1.5); UPDATE product_skus SET stock=stock-1 WHERE id=$P74_A AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; COMMIT;"
+  sleep 0.7
+  P74_T0=$(p74_now_ms)
+  R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":5}")
+  P74_T1=$(p74_now_ms)
+  assert_eq "74.11-e code 0（外键 S 锁+同一规格也会成环，重试后成功，不是 5xx）" "$(code "$R")" "0"
+  assert_eq "74.11-e data.stock=5" "$(jq -r .data.stock <<<"$R")" "5"
+  wait
+  P74_E_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
+  P74_E_SS=$(sql "SELECT COALESCE(SUM(stock),0) FROM product_skus WHERE product_id=$P74_PID;")
+  assert_eq "74.11-e products.stock == SUM(sku)" "$P74_E_PS" "$P74_E_SS"
+  assert_eq "74.11-e products.stock=25" "$P74_E_PS" "25"
+  assert_eq "74.11-e A=5" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "5"
+  assert_eq "74.11-e B=10（无论哪一方是牺牲者，终值都相同）" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")" "10"
+  assert_eq "74.11-e C=10" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_C;")" "10"
+  P74_ELAPSED=$((P74_T1 - P74_T0))
+  [[ "$P74_ELAPSED" -ge 700 ]] && ok "74.11-e PUT 耗时 ${P74_ELAPSED}ms ≥700（确实等过锁，不是巧合绿）" || fail "74.11-e PUT 耗时 ${P74_ELAPSED}ms < 700，怀疑没有真正并发" "$P74_ELAPSED"
+  sql "DELETE FROM order_items WHERE product_name='e2e-fk-lock';"
+fi
+
+echo "-- 74.11-f 外键 S 锁 · 不同规格（订单行是另一规格，不成环，只是排队等锁） --"
+p74_reset
+P74_OID=$(sql "SELECT MAX(id) FROM orders;")
+if [[ -z "$P74_OID" || "$P74_OID" == "NULL" ]]; then
+  fail "74.11-f 前置：orders 表取不到可引用的 id（分段顺序异常，需上报，不得自造 orders 行）" "P74_OID=[$P74_OID]"
+else
+  p74_sql_bg "BEGIN; INSERT INTO order_items (order_id,product_id,sku_id,product_name,product_price,quantity,subtotal,updated_at) VALUES ($P74_OID,$P74_PID,$P74_B,'e2e-fk-lock',1000,1,1000,NOW(3)); SELECT SLEEP(1.5); UPDATE product_skus SET stock=stock-1 WHERE id=$P74_B AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; COMMIT;"
+  sleep 0.7
+  P74_T0=$(p74_now_ms)
+  R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":5}")
+  P74_T1=$(p74_now_ms)
+  assert_eq "74.11-f code 0（不同规格不成环，只是排队等订单提交后的 products 行锁）" "$(code "$R")" "0"
+  wait
+  P74_F_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
+  P74_F_SS=$(sql "SELECT COALESCE(SUM(stock),0) FROM product_skus WHERE product_id=$P74_PID;")
+  assert_eq "74.11-f products.stock == SUM(sku)" "$P74_F_PS" "$P74_F_SS"
+  assert_eq "74.11-f A=5" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "5"
+  assert_eq "74.11-f B=9" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")" "9"
+  P74_ELAPSED=$((P74_T1 - P74_T0))
+  [[ "$P74_ELAPSED" -ge 700 ]] && ok "74.11-f PUT 耗时 ${P74_ELAPSED}ms ≥700（确实等过锁，不是巧合绿）" || fail "74.11-f PUT 耗时 ${P74_ELAPSED}ms < 700，怀疑没有真正并发" "$P74_ELAPSED"
+  sql "DELETE FROM order_items WHERE product_name='e2e-fk-lock';"
+fi
+
+echo "-- 74.11-d 无规格商品：绝对值编辑语义（无 sum 不变量，不做锁读+增量）；R4：改真并发，PUT 要真等过锁 --"
 p74_stock "$Q74_PID" '{"stock":10}' >/dev/null   # 先把 Q 钉成 10
-p74_sql_bg "UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$Q74_PID AND stock>=1;"
+p74_sql_bg "BEGIN; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$Q74_PID AND stock>=1; SELECT SLEEP(2); COMMIT;"
 sleep 0.7
+P74_T0=$(p74_now_ms)
 R=$(p74_stock "$Q74_PID" '{"stock":7}')
+P74_T1=$(p74_now_ms)
 assert_eq "74.11-d code 0" "$(code "$R")" "0"
 assert_eq "74.11-d productStock=7" "$(jq -r .data.productStock <<<"$R")" "7"
 wait
 assert_eq "74.11-d products.stock=7（绝对值语义）" "$(sql "SELECT stock FROM products WHERE id=$Q74_PID;")" "7"
+P74_ELAPSED=$((P74_T1 - P74_T0))
+[[ "$P74_ELAPSED" -ge 1000 ]] && ok "74.11-d PUT 耗时 ${P74_ELAPSED}ms ≥1000（真等过锁，不是裸 UPDATE 瞬间提交后的巧合绿）" || fail "74.11-d PUT 耗时 ${P74_ELAPSED}ms < 1000，怀疑没有真正并发" "$P74_ELAPSED"
 
 echo "-- 74.8/74.10 收尾：删除清理 + 复位设置 --"
 R=$(sql "SELECT value FROM settings WHERE setting_key='low_stock_alert_state';")
