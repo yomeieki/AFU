@@ -396,7 +396,7 @@ export async function processCancelIntents(voidMin?: number): Promise<number> {
   const threshold = voidMin ?? CANCEL_INTENT_VOID_MIN
   const rows = await prisma.delivery.findMany({
     where: { cancelIntentAt: { not: null }, status: { notIn: [...TERMINAL] } },
-    take: BATCH, select: { id: true, orderId: true, providerTaskId: true, providerOrderId: true, cancelIntentAt: true, cancelIntentAttempts: true },
+    take: BATCH, select: { id: true, orderId: true, orderNo: true, deliveryNo: true, providerTaskId: true, providerOrderId: true, cancelIntentAt: true, cancelIntentAttempts: true },
   })
   let n = 0
   for (const d of rows) {
@@ -432,6 +432,17 @@ export async function processCancelIntents(voidMin?: number): Promise<number> {
           : `店员要求取消；等待 ${threshold} 分钟内无回调无单号，已自动结束`,
       })
       n++
+      // R15-1（复核第 2 轮）：VOIDED_NOID 是「已知快递100 有单（真的拿到过 taskId），却始终
+      // 拿不到取消必填的 orderId」这一刻——不是「压根没成单」，是自动化在这里明确放弃了，
+      // 店主的原则「唯一需要人介入 = 自动化最终失败」在这里成立，必须告警一次；纯 VOIDED
+      // （连 taskId 都没有，大概率是真没成单）不告警，那是正常路径不是失败。
+      if (hasTaskIdOnly) {
+        notifySystemAlert('配送单已结束但快递100 侧可能仍有真实单，需人工核实', [
+          `配送单 ${d.deliveryNo}（订单 ${d.orderNo}）`,
+          `店员要求取消；快递100 已返回 taskId=${d.providerTaskId} 但始终未拿到 orderId（取消接口必填），系统等待 ${threshold} 分钟无回调补全，已结束占位，店员可重呼/自送`,
+          '请管理员登录快递100 企业后台按 taskId 核实：若有活单请手动取消（后台取消后系统会收到 720 自动收尾）；若无单可忽略',
+        ], { key: `dlv-void-noid:${d.id}` })
+      }
       // P22（R7）：自动结束释放了 activeOrderId，若顾客早申请了取消，退款不会再被 42221 拦
       void notifyIntentDoneIfRefundPending(d.orderId)
     }

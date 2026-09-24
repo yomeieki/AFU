@@ -208,7 +208,13 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
         // 一张 FAILED 无 id 的行，本次回调恰恰是它第一次带来 taskId，若拿认领后的值判断，
         // 「已结束」这件事本身反而会被这次回调自己的认领动作掩盖掉。
         if (shouldKillGhost(delivery.status, delivery.providerTaskId, mapped)) {
-          after.push(() => void killGhostDelivery(delivery.id))
+          // shouldKillGhost 已经要求 mapped.type==='rank'（side 类型一律 false），
+          // 这里的 mapped.rank 一定存在——R15-2：告不告警按本次回调的 rank 判断。
+          const rank = mapped.type === 'rank' ? mapped.rank : 0
+          after.push(() => void killGhostDelivery(delivery.id, {
+            providerStatus: p.providerStatus, rank, statusDesc: p.statusDesc,
+            courierName: p.courierName, courierMobile: p.courierMobile,
+          }))
           return
         }
         const endedWithoutRealCancel = delivery.status === 'FAILED' || (delivery.status === 'CANCELLED' && !delivery.providerTaskId)
@@ -302,7 +308,13 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
             '运力方已取消配送，但订单未能回退到备餐中（可能存在在途退款/售后），请人工核对订单状态',
           ], { key: `dlv-cb-720-order-stuck:${delivery.id}` }))
         }
-        after.push(() => notifyLocalDeliveryAlert('配送单被取消', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '运力方取消', '请重新呼叫骑手或改自己送']))
+        // P25（R16）：顾客已经申请取消时，别再劝店员「重新呼叫」——两件事矛盾，店员该做的
+        // 是去工作台处理顾客的取消申请（走退款），不是再叫一个骑手。delivery.order 是
+        // include 整行（:24-27），cancelRequestedAt 现成可读，不用再改查询形状。
+        after.push(() => notifyLocalDeliveryAlert('配送单被取消', [
+          `订单 ${delivery.orderNo}`, p.statusDesc ?? '运力方取消',
+          delivery.order.cancelRequestedAt ? '顾客已申请取消，请到工作台「去处理」退款（不要重呼）' : '请重新呼叫骑手或改自己送',
+        ]))
       }
       if (p.providerStatus === '510') after.push(() => notifyLocalDeliveryAlert('配送异常', [`订单 ${delivery.orderNo}`, p.statusDesc ?? '', '请联系骑手/顾客确认']))
       if (p.providerStatus === '515') after.push(() => notifyLocalDeliveryAlert('骑手改派中', [`订单 ${delivery.orderNo}`, '平台正在重新分配骑手']))

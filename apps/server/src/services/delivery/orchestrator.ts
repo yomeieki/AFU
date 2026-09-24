@@ -337,6 +337,10 @@ export async function callRider(input: CallRiderInput) {
     const after0Push: (() => void)[] = []
     let after0FailedId: number | null = null
     let after0Status: string | null = null
+    // R15-2：这条 killGhostDelivery 不是由「本次回调」触发，是回调先到、行已在 FAILED，
+    // 下单响应姗姗来迟才发现——ctx 就地取材于刚回填完的这一行本身（courierName/courierMobile/
+    // providerStatus/statusDesc 都是回调写进去的），rank 按行上的 status 换算（DELIVERY_RANK）
+    let after0Ctx: { providerStatus: string; rank: number; statusDesc: string | null; courierName: string | null; courierMobile: string | null } | null = null
     try {
       await prisma.$transaction(async (tx) => {
         // 回填「接单并呼叫」路径上系统性落空的快照（:76 注释）：kickOffQuote 的查价是
@@ -391,6 +395,14 @@ export async function callRider(input: CallRiderInput) {
               // 多半是取消意图 5 分钟无回应已自动结束（P17），单号这才姗姗来迟——交给
               // 幽灵自动撤销处理，不在这里告警（CANCELLED 同理，只留痕，上面事件已经写了）
               after0FailedId = deliveryId
+              // R15-2 的规则只针对「回调」带来的 rank（骑手确认在动才升级告警）；这里触发
+              // killGhostDelivery 的不是回调，是下单响应姗姗来迟本身——原有逻辑早就注释明确
+              // 「不在这里告警，交给幽灵自动撤销处理」，rank 传 0（不到 20 的告警门槛）
+              // 保持这个既有判断不被这次签名变更意外改掉。
+              after0Ctx = {
+                providerStatus: after.providerStatus != null ? String(after.providerStatus) : '',
+                rank: 0, statusDesc: after.statusDesc, courierName: after.courierName, courierMobile: after.courierMobile,
+              }
             }
           } else if (after?.cancelIntentAt) {
             // 非终态但已经记过取消意图（店员点了取消、单号才经这条落库路径补上）：立刻执行
@@ -412,7 +424,7 @@ export async function callRider(input: CallRiderInput) {
       throw new AppError(42225, '呼叫已发出但本地记录失败，请到快递100 后台核对后重试')
     }
     for (const fn of after0Push) { try { fn() } catch { /* 兜底不升级 */ } }
-    if (after0FailedId) void killGhostDelivery(after0FailedId)
+    if (after0FailedId) void killGhostDelivery(after0FailedId, after0Ctx ?? { providerStatus: '', rank: 0, statusDesc: null, courierName: null, courierMobile: null })
     const finalStatus = after0Status ?? 'CALLING'
     return { deliveryId, deliveryNo, status: finalStatus as string, quotedFeeFen: result.quotedFeeFen }
   }
@@ -422,6 +434,7 @@ export async function callRider(input: CallRiderInput) {
     // 下单可能已成功：UNKNOWN 占位、不释放，等回调按 URL 认领或人工作废（决策见 spec §5.4）
     let timeoutRaceStatus: string | null = null
     let timeoutFailedId: number | null = null
+    let timeoutCtx: { providerStatus: string; rank: number; statusDesc: string | null; courierName: string | null; courierMobile: string | null } | null = null
     await prisma.$transaction(async (tx) => {
       const landed = await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: { status: 'UNKNOWN', calledAt: new Date(), errorCode: trunc(err.code, 16), failReason: trunc(err.message, 255) } })
       if (landed.count === 0) {
@@ -434,8 +447,15 @@ export async function callRider(input: CallRiderInput) {
         timeoutRaceStatus = after?.status ?? null
         await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: `下单响应超时，但回调已先到达（当前 ${after?.status ?? '未知'}），按回调继续`, operator })
         if (after && TERMINAL.includes(after.status as typeof TERMINAL[number])) {
-          if (after.status === 'FAILED') timeoutFailedId = deliveryId
-          else if (after.status === 'DELIVERED') {
+          if (after.status === 'FAILED') {
+            timeoutFailedId = deliveryId
+            // 同 P1 landing race：这条也不是「回调」触发 killGhostDelivery，是下单响应本身
+            // 超时——原逻辑不在此告警，rank 传 0 保持既有判断不变（R15-2 的门槛只针对回调）。
+            timeoutCtx = {
+              providerStatus: after.providerStatus != null ? String(after.providerStatus) : '',
+              rank: 0, statusDesc: after.statusDesc, courierName: after.courierName, courierMobile: after.courierMobile,
+            }
+          } else if (after.status === 'DELIVERED') {
             notifySystemAlert('下单响应超时但呼叫结果补录到已终态配送单，请核对', [`订单 ${order.orderNo}（${deliveryNo}）`, `当前 ${after.status}`], { key: `kd100-landing-race-timeout:${orderId}` })
           }
         }
@@ -443,7 +463,7 @@ export async function callRider(input: CallRiderInput) {
       }
       await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: `下单响应超时，等待回调认领：${err.message}`, operator })
     })
-    if (timeoutFailedId) void killGhostDelivery(timeoutFailedId)
+    if (timeoutFailedId) void killGhostDelivery(timeoutFailedId, timeoutCtx ?? { providerStatus: '', rank: 0, statusDesc: null, courierName: null, courierMobile: null })
     if (timeoutRaceStatus !== null) {
       // 行非终态（多半仍是 CALLING）：回调已经接管，不再发「下单响应超时」这类会误导店员
       // 去后台核对「是否已产生真实单」的告警——它已经确定产生了。

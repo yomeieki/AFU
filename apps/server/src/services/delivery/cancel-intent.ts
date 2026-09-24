@@ -197,6 +197,16 @@ export function shouldKillGhost(
 }
 
 /**
+ * R15-2（复核第 2 轮）：killGhostDelivery 缺 orderId 时该不该告警——只在骑手确认在动
+ * （rank>=20：100/210/230/310）时才升级为告警；`0`（rank10，仅「已呼叫待抢单」，
+ * 并呼噪声，不代表真有骑手动了）和 rank>=100（终态，shouldKillGhost 早已挡在外面，
+ * 不会传到这里）都不告警。
+ */
+export function ghostNoIdShouldAlert(rank: number): boolean {
+  return rank >= 20 && rank < 100
+}
+
+/**
  * P19：已结束的配送单仍收到在途回调（幽灵活单）→ 自动向运力方撤销。原子抢占（ghostCancelAt）
  * 保证同批多条回调只有一个真的外呼；调用方（callback.ts）已在同一次回调事务里把 taskId/
  * orderId 按列认领到这张行上（P3），这里直接读行上的值即可，不需要调用方再传一遍。
@@ -208,16 +218,31 @@ export function shouldKillGhost(
  * （按 deliveryId+status 去重，同一状态下重复的缺 id 回调不会连续刷事件），等下一条带全 id
  * 的回调再来才真正抢占。
  */
-export async function killGhostDelivery(deliveryId: number): Promise<void> {
+export async function killGhostDelivery(
+  deliveryId: number,
+  ctx: { providerStatus: string; rank: number; statusDesc: string | null; courierName: string | null; courierMobile: string | null },
+): Promise<void> {
   const d = await prisma.delivery.findUnique({ where: { id: deliveryId } })
   if (!d) return
   if (!d.providerTaskId || !d.providerOrderId) {
+    // R15-2：事件去重键按「是否达到告警门槛」分桶，而不是笼统按 deliveryId+status——
+    // 这样同一状态下反复出现的低 rank 噪声（如多条并呼 `0`）只留一条事件，但从低 rank
+    // 升到高 rank（骑手确认在动）时会新留一条，事件本身也能看出「何时升级」。
+    const alertEligible = ghostNoIdShouldAlert(ctx.rank)
     try {
       await recordDeliveryEvent(prisma, {
-        deliveryId, dedupeKey: `GHOSTWAIT:${deliveryId}:${d.status}`.slice(0, 64), source: 'CALLBACK',
-        statusDesc: `已结束配送单收到在途回调，但 taskId/orderId 尚不齐全（taskId=${d.providerTaskId ?? '缺'} orderId=${d.providerOrderId ?? '缺'}），暂不撤销，等下一条回调带齐后自动处理`,
+        deliveryId, dedupeKey: `GHOSTWAIT:${deliveryId}:${d.status}:${alertEligible ? 'ALERT' : 'WAIT'}`.slice(0, 64), source: 'CALLBACK',
+        statusDesc: `已结束配送单收到在途回调（${ctx.providerStatus}${ctx.statusDesc ? ` ${ctx.statusDesc}` : ''}），但 taskId/orderId 尚不齐全（taskId=${d.providerTaskId ?? '缺'} orderId=${d.providerOrderId ?? '缺'}），暂不撤销，等下一条回调带齐后自动处理`,
       })
     } catch { /* 留痕失败不升级 */ }
+    if (alertEligible) {
+      notifySystemAlert('已结束的配送单有骑手在途，但缺 orderId 无法自动撤销', [
+        `配送单 ${d.deliveryNo}（订单 ${d.orderNo}，本地 ${d.status}/${d.errorCode ?? ''}）`,
+        `回调状态 ${ctx.providerStatus}（${ctx.statusDesc ?? ''}），骑手 ${ctx.courierName ?? ''}${ctx.courierMobile ? ` ${ctx.courierMobile}` : ''}`,
+        `taskId=${d.providerTaskId ?? ''} orderId=缺：快递100 取消接口必填 orderId，系统无法自动撤销`,
+        '该订单可能已重呼/自送，请管理员立即在快递100 后台按 taskId 取消，避免两个骑手两笔费用',
+      ], { key: `kd-cb-ghost-noid:${d.id}` })
+    }
     return
   }
   const seized = await prisma.delivery.updateMany({ where: { id: deliveryId, ghostCancelAt: null }, data: { ghostCancelAt: new Date() } })
