@@ -216,11 +216,14 @@ FAQ「同城配送覆盖哪些区域？」答复只有一句：**「以查价/�
 
 Java/Go/.NET 官方 demo 均有 `BSAMECITY_PRECANCEL` / `bsamecity_precancel.go`，参数与 `cancel` 相同（`orderId`、`cancelMsgType`、`cancelMsg`、`taskId`）。【推断】用于在真正取消前预览取消费；建议在小程序「取消配送」二次确认弹窗前调用。上线前用真实单验证一次。
 
+**2026-09-24 生产证实**：`precancel` 只传 `taskId` 不传 `orderId` 会被拒 `30001`「orderId不能为空」——与 §3.9 `queryCourier` 同一类坑（`taskId` 不能替代 `orderId`）。`cancel`/`addfee` 按同一文档参数表推断也要求 `orderId`，本仓已统一在这三个方法都同时传 `taskId`+`orderId`（`apps/server/src/services/delivery/kd100.ts` 的 `_buildPrecancelParam/_buildCancelParam/_buildAddfeeParam`）。
+
 ### 3.8 加小费 `method=addfee`
 
 - 参数：`taskId`、`orderId`、`tips`（「小费金额，单位：元」）、`remark`（可选）。
 - 时机（官方）：「订单创建且骑手未接单的情况下通过该接口对订单进行加小费，截止订单完成前，都可以对订单加小费」。
 - 应对超时无人接单的主要手段。
+- 同 §3.7：`orderId` 必填，见该节 2026-09-24 生产证实。
 
 ### 3.9 骑手位置 `method=queryCourier`
 

@@ -575,6 +575,28 @@ SET GLOBAL time_zone = '+00:00';
 - 回滚：`SET GLOBAL time_zone = 'SYSTEM'` + 删掉配置行。
 - 代价：运维习惯要改——之后手工查询看到的 `NOW()` 是 UTC。
 
+### 3.11 配送单取消意图（`deliveries` 七个新列，2026-09-24）
+
+`deliveries` 表在第二节没有详表（第一节标 `—`，精确结构见 `schema.prisma`），这里只记「为什么
+要加这七列」——设计动机放这类概念性说明比放列类型表更合适，具体类型/默认值仍以 schema 为准。
+
+背景：店员多数没有快递100 企业账号，配送单缺 `providerTaskId`/`providerOrderId`
+时既没法去运力方后台核实，本地也没法外呼取消（`precancel`/`cancel` 都要两个 id 同时给，
+见 `docs/research/2026-09-03-kuaidi100-same-city-api.md` §3.7 的生产实测）。旧实现在这种情况下
+直接本地伪造取消（不外呼、直接 `CANCELLED`），如果运力方那头其实真有一张活单，就会造出
+「本地已取消、运力方仍在途」的幽灵活单。
+
+新增列把「店员点了取消」与「配送单真的终态化」这两件事分开记：
+
+| 列 | 作用 |
+|---|---|
+| `cancel_intent_at/by/reason` | 店员点取消但缺 id 时只记这三列，不改 `status`、不释放 `active_order_id`、不外呼 |
+| `cancel_intent_attempts/last_error` | 单号到达后自动重试真取消（最多 5 次）的计数与最后一次失败原因；`attempts` 同时是原子抢占锁（`updateMany where attempts=读到的值`），保证并发触发只有一个真的外呼 |
+| `cancel_intent_alerted_at` | 第 5 次仍失败时的「只告警一次」标记，与全仓其它提醒任务同一范式 |
+| `ghost_cancel_at` | 已结束（`FAILED`/`CANCELLED` 且无 id）的配送单收到在途回调（幽灵活单）时的原子抢占锁，保证同批多条回调只有一个真的向运力方撤销 |
+
+详细状态流转见 `apps/server/src/services/delivery/cancel-intent.ts` 文件头注释。
+
 ---
 
 ## 四、Prisma Schema

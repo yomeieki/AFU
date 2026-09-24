@@ -1219,9 +1219,9 @@ M2-B 店员默认落地页 `/workbench` 的唯一数据源：归类（五列）�
 | `POST /:id/accept-and-call` | 接单 + 立即呼叫骑手的组合端点。接单成功但呼叫失败时**接单结果保留**（不回滚），错误信息前缀「已接单，」；响应 `{ accepted: true, ...call响应 }` |
 | `POST /:id/call` | 呼叫骑手：落一条 `Delivery(PENDING→CALLING)` 占位（`activeOrderId` 唯一索引防并发重呼，撞了 → `42228`）→ 事务外调用快递100 `batchOrder`。仅 `PREPARING` 且无顾客取消申请、有收货坐标可呼叫，否则 `42204`/`42223`。响应 `{ deliveryId, deliveryNo, status: 'CALLING'\|'UNKNOWN', quotedFeeFen }`：`CALLING` = 下单成功；`UNKNOWN` = 下单响应超时，占位保留等回调认领。明确失败（配置错误/余额不足/运力异常重试耗尽）→ `42225`；熔断中 → `42232` |
 | `GET /:id/delivery` | 该订单当前有效配送单（无则取最近一张历史单）+ 事件时间线。响应 `{ delivery, events[] }`；`delivery` 为 `null` 表示从未呼叫过 |
-| `POST /:id/delivery/precancel` | 预估取消费（只读，不真取消，用于取消前给店员看一眼要扣多少钱）。响应 `{ cancelFeeFen }`。无在途单 → `42233`；尚未成单（无 `providerTaskId`）→ `42234` |
-| `POST /:id/delivery/cancel` | 取消在途配送单（真取消，调用快递100 `cancel`）。Body `{ reason? }`（≤255 字）。响应 `{ cancelFeeFen }`；取消费与小费一律店铺承担，记入 `Delivery` 对账。取消请求超时（状态未变化）→ `42238`；无在途单 → `42233`；状态已变化（并发）→ `42237`。**预约单**：店员在工作台点这个接口即撤回「已备好」（`readyAt` 置空），系统到点不再自动呼叫；重新呼叫走「已备好 / 立即呼叫」，改自送走 `self-deliver`。调度器自动升级（撤 D-1 建 D-2）走的是内部 `source:'SCHEDULER'`，不清 `readyAt`（2026-09-23 S1）。取消后顾客端按 `readyAt` 为空重新恢复取消入口：未过 `selfCancelUntil` 走秒退（`canSelfCancelOf`，`PUT /:id/cancel`）；过了 `selfCancelUntil` 则只能「申请取消」（`canRequestCancelOf`，`POST /:id/cancel-request`，需店员同意）。若订单就此悬置，`remindScheduledNotReady` 会按「预约单应已备好未确认」继续催（店主决定 D2 选 A：保留、不改文案） |
-| `POST /:id/delivery/tip` | 加小费（仅 `CALLING` 待抢单阶段可加，超过设置里的单次/单笔累计上限 → `42235`）。Body `{ amount }`（整数分，1-100000）。响应 `{ tipFeeFen }`（累计小费）。运力拒绝/请求超时 → `42236` |
+| `POST /:id/delivery/precancel` | 预估取消费（只读，不真取消，用于取消前给店员看一眼要扣多少钱）。响应 `{ cancelFeeFen }`。无在途单 → `42233`；缺 `providerTaskId`/`providerOrderId`（占位/UNKNOWN 单，或店员没有快递100 企业账号导致回调尚未认领）→ **不外呼、不报错**，直接回 `{ cancelFeeFen: null }`，让取消弹窗照常能走到确认键（2026-09-24 P15） |
+| `POST /:id/delivery/cancel` | 取消在途配送单。Body `{ reason? }`（≤255 字）。**有 `providerTaskId` 且有 `providerOrderId`**（含 `provider='SELF'`）：真取消（非 SELF 调用快递100 `cancel`），响应 `{ cancelFeeFen }`；取消费与小费一律店铺承担，记入 `Delivery` 对账。**缺任一 id**（2026-09-24 P15，取消意图）：不外呼、不改状态、不释放 `activeOrderId`，只记录取消意图，响应 `{ cancelFeeFen: null, pending: true }`；单号一到（回调认领/落库补录）系统自动执行真取消，取消费自动接受并记账；5 分钟内仍无回调无单号则自动结束为 `FAILED`（`errorCode='VOIDED'`），释放 `activeOrderId` 供店员重呼/自送；重复调用（`cancelIntentAt` 已非空）幂等返回同样的 `pending:true`，不重复留痕/外呼。取消请求超时（状态未变化）→ `42238`；无在途单 → `42233`；状态已变化（并发）→ `42237`。**预约单**：店员在工作台点这个接口即撤回「已备好」（`readyAt` 置空），系统到点不再自动呼叫；重新呼叫走「已备好 / 立即呼叫」，改自送走 `self-deliver`。调度器自动升级（撤 D-1 建 D-2）走的是内部 `source:'SCHEDULER'`，不清 `readyAt`（2026-09-23 S1）。取消后顾客端按 `readyAt` 为空重新恢复取消入口：未过 `selfCancelUntil` 走秒退（`canSelfCancelOf`，`PUT /:id/cancel`）；过了 `selfCancelUntil` 则只能「申请取消」（`canRequestCancelOf`，`POST /:id/cancel-request`，需店员同意）。若订单就此悬置，`remindScheduledNotReady` 会按「预约单应已备好未确认」继续催（店主决定 D2 选 A：保留、不改文案） |
+| `POST /:id/delivery/tip` | 加小费（仅 `CALLING` 待抢单阶段可加，超过设置里的单次/单笔累计上限 → `42235`；配送单正在走取消意图流程（`cancelIntentAt` 非空）→ `42235`，2026-09-24）。Body `{ amount }`（整数分，1-100000）。响应 `{ tipFeeFen }`（累计小费）。运力拒绝/请求超时 → `42236` |
 | `POST /:id/self-deliver` | 店内自送：新建 `Delivery(provider='SELF', status='DELIVERING')`，订单 `PREPARING → SHIPPED`。Body `{ name, phone }`。响应 `{ deliveryId, deliveryNo }`。已有在途配送单 → `42228`（若是「状态未确认」单则提示先作废 → `42234`） |
 | `POST /:id/delivered` | 标记已送达：配送单 → `DELIVERED`，订单 → `COMPLETED`。无在途单 → `42233`；并发状态已变化 → `42237` |
 | `POST /:id/delivery/void` | 作废「状态未确认」（`UNKNOWN`）配送单——人工核实快递100 后台确认无单后使用。仅 `UNKNOWN` 状态可作废，否则 → `42234` |
@@ -1341,8 +1341,8 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 |---|---|---|---|
 | 42232 | 400 | 快递100 余额不足已暂停呼叫，请充值后在系统状态页点「恢复」 | `POST /:id/call`（`isCircuitTripped()` 为真时直接拒绝，不再外呼） |
 | 42233 | 400 | 无在途配送单 | `POST /:id/delivered`、`delivery/precancel`、`delivery/cancel`、`delivery/void` 等要求存在有效 `Delivery` 的操作 |
-| 42234 | 400 | 配送单状态不允许该操作（尚未成单 / 状态未确认需先等回调认领或作废 / 仅「状态未确认」可作废） | `delivery/void`（非 `UNKNOWN` 状态）、`delivery/precancel`/`delivery/tip`（无 `providerTaskId`）、`self-deliver`（存在 `UNKNOWN` 单需先作废）、其余要求「非 `UNKNOWN`」的操作 |
-| 42235 | 400 | 加小费超限或状态不允许（仅 `CALLING` 可加、超单次上限、超单笔累计上限、状态已变化） | `delivery/tip` |
+| 42234 | 400 | 配送单状态不允许该操作（尚未成单 / 状态未确认需先等回调认领或作废 / 仅「状态未确认」可作废） | `delivery/void`（非 `UNKNOWN` 状态）、`delivery/tip`（缺 `providerTaskId`/`providerOrderId`）、`self-deliver`（存在 `UNKNOWN` 单需先作废）、其余要求「非 `UNKNOWN`」的操作。**注**：`delivery/precancel` 缺 id 时 2026-09-24 起不再报此码，改为静默回 `{cancelFeeFen:null}`（P15，见上表） |
+| 42235 | 400 | 加小费超限或状态不允许（仅 `CALLING` 可加、超单次上限、超单笔累计上限、状态已变化、配送单正在走取消意图流程） | `delivery/tip` |
 | 42236 | 400 | 加小费被运力方拒绝，或请求超时 | `delivery/tip`（调用快递100 `addfee` 失败/超时） |
 | 42237 | 400 | 配送单状态已变化，请刷新（并发保护：`updateMany` 命中 0 行） | `delivery/void`、`delivery/cancel`、`delivered` |
 | 42238 | 400 | 取消请求超时，请稍后重试（状态未变化） | `delivery/cancel`（调用快递100 `cancel` 超时；本地状态保证未被误改） |
