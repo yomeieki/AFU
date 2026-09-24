@@ -10,6 +10,8 @@ import { channelOfCategory, assertNoUnpaidAndPurgeCarts } from '../../services/p
 import { Channel } from '../../utils/channel'
 import { sortProducts, type CategorySortInfo, type ProductSortMode } from '../../services/product-sort'
 import { getSales30d } from '../../services/product-sales'
+import { getLowStockSettings } from '../../services/low-stock-settings'
+import { lowStockOverview, productAlertSummary } from '../../services/low-stock'
 
 const router = Router()
 
@@ -144,7 +146,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     const sales = await getSales30d()
-    const withSales = <T extends { id: number }>(rows: T[]) => rows.map((p) => ({ ...p, sales30d: sales.get(p.id) ?? 0 }))
+    const lowStockSettings = await getLowStockSettings()
+    const withSales = <T extends { id: number; status: string; stock: number; skus?: { stock: number }[] }>(rows: T[]) =>
+      rows.map((p) => ({ ...p, sales30d: sales.get(p.id) ?? 0, stockAlert: productAlertSummary(p, lowStockSettings) }))
 
     let list: unknown[]
     let total: number
@@ -290,6 +294,50 @@ router.post('/qrcode/batch', async (req: Request, res: Response, next: NextFunct
       }
     }
     success(res, { generated, failed })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/admin/products/low-stock — 库存预警总览（后台新页签，2026-09-24）
+// 注意：必须注册在 /:id 类路由之前，避免 "low-stock" 被当作 :id 匹配
+router.get('/low-stock', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    success(res, await lowStockOverview())
+  } catch (e) {
+    next(e)
+  }
+})
+
+// PUT /api/admin/products/:id/stock — 库存预警页/商品列表库存快改（按规格或无规格商品本身）
+const stockUpdateSchema = z.object({
+  skuId: z.number().int().positive().nullable().optional(),
+  stock: z.number().int().min(0).max(999999),
+})
+
+router.put('/:id/stock', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const { skuId, stock } = stockUpdateSchema.parse(req.body)
+    const result = await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findFirst({ where: { id, deletedAt: null } })
+      if (!product) throw new AppError(40401, '商品不存在', 404)
+      const skuCount = await tx.productSku.count({ where: { productId: id } })
+      if (skuId != null) {
+        if (skuCount === 0) throw new AppError(40001, '该商品没有规格，请直接改库存', 400)
+        const sku = await tx.productSku.findFirst({ where: { id: skuId, productId: id } })
+        if (!sku) throw new AppError(40401, '规格不存在', 404)
+        await tx.productSku.update({ where: { id: skuId }, data: { stock } })
+        const agg = await tx.productSku.aggregate({ where: { productId: id }, _sum: { stock: true } })
+        const productStock = agg._sum.stock ?? 0
+        await tx.product.update({ where: { id }, data: { stock: productStock } })
+        return { productId: id, skuId, stock, productStock }
+      }
+      if (skuCount > 0) throw new AppError(40001, '多规格商品请按规格改库存', 400)
+      await tx.product.update({ where: { id }, data: { stock } })
+      return { productId: id, skuId: null, stock, productStock: stock }
+    })
+    success(res, result)
   } catch (e) {
     next(e)
   }

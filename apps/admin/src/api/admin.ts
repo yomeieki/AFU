@@ -44,6 +44,8 @@ import type {
   ExpressBookingQuotes,
   OrderDetail,
   ExpressTrack,
+  LowStockSettings,
+  LowStockOverview,
 } from '../types'
 import type { PauseScope } from '../utils/pause-scope'
 import { endOfTodayIso } from '../utils/pause-scope'
@@ -99,6 +101,21 @@ export const deleteProduct = (id: number) =>
 
 export const generateQrCode = (id: number) =>
   client.post<ApiResponse<QrCodeResult>>(`/admin/products/${id}/qrcode`)
+
+// 库存预警（2026-09-24）
+export const getLowStockOverview = () =>
+  client.get<ApiResponse<LowStockOverview>>('/admin/products/low-stock').then((r) => r.data.data)
+export const updateUnitStock = (productId: number, data: { skuId: number | null; stock: number }) =>
+  client
+    .put<ApiResponse<{ productId: number; skuId: number | null; stock: number; productStock: number }>>(
+      `/admin/products/${productId}/stock`,
+      data
+    )
+    .then((r) => r.data.data)
+export const getLowStockSettings = () =>
+  client.get<ApiResponse<LowStockSettings>>('/admin/settings/low-stock').then((r) => r.data.data)
+export const updateLowStockSettings = (payload: LowStockSettings) =>
+  client.put<ApiResponse<LowStockSettings>>('/admin/settings/low-stock', payload).then((r) => r.data.data)
 
 // Orders
 export const getOrders = (params?: {

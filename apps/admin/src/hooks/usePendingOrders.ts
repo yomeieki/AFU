@@ -12,9 +12,15 @@ export interface PendingCounts {
   localPendingCount: number
   refundAttentionCount: number
   refundAttentionByChannel: { EXPRESS: number; LOCAL: number }
+  /** 售罄或紧张的规格数（在架），门槛见 lowStockThreshold（2026-09-24 库存预警） */
+  lowStockCount: number
+  lowStockThreshold: number
 }
 
-const ZERO_COUNTS: PendingCounts = { count: 0, afterSaleCount: 0, localPendingCount: 0, refundAttentionCount: 0, refundAttentionByChannel: { EXPRESS: 0, LOCAL: 0 } }
+const ZERO_COUNTS: PendingCounts = {
+  count: 0, afterSaleCount: 0, localPendingCount: 0, refundAttentionCount: 0,
+  refundAttentionByChannel: { EXPRESS: 0, LOCAL: 0 }, lowStockCount: 0, lowStockThreshold: 3,
+}
 
 /**
  * Layout 里那一份 usePendingOrders 的结果。Layout 下的页面（订单页、同城页）要用计数时**只能**从这里取，
@@ -46,9 +52,10 @@ export function usePendingOrders(options?: UsePendingOrdersOptions): PendingCoun
   const [refundAttentionCount, setRefundAttentionCount] = useState(0)
   const [refundAttentionByChannel, setRefundAttentionByChannel] = useState<{ EXPRESS: number; LOCAL: number }>({ EXPRESS: 0, LOCAL: 0 })
   const [localPendingCount, setLocalPendingCount] = useState(0)
+  const [lowStockCount, setLowStockCount] = useState(0)
+  const [lowStockThreshold, setLowStockThreshold] = useState(3)
   const lastPaidAtRef = useRef<string | null>(null)
   const initializedRef = useRef(false)
-  const lowStockNotifiedRef = useRef(false)
   const flashTimerRef = useRef<number | null>(null)
   const navigate = useNavigate()
   // 用 ref 存最新的 options：轮询 effect 只跑一次（依赖数组是 []，避免调用方每次渲染新回调
@@ -80,17 +87,17 @@ export function usePendingOrders(options?: UsePendingOrdersOptions): PendingCoun
       try {
         const res = await getPendingOrderCount()
         if (disposed) return
-        const { count: c, latestPaidAt, lowStockCount, lowStockThreshold, afterSaleCount: asc, localPendingCount: lpc, refundAttentionCount: rac, refundAttentionByChannel: rabc } = res.data.data
+        const { count: c, latestPaidAt, lowStockCount: lsc, lowStockThreshold: lst, afterSaleCount: asc, localPendingCount: lpc, refundAttentionCount: rac, refundAttentionByChannel: rabc } = res.data.data
         setCount(c)
         setAfterSaleCount(asc ?? 0)
         setRefundAttentionCount(rac ?? 0)
         setRefundAttentionByChannel({ EXPRESS: rabc?.EXPRESS ?? 0, LOCAL: rabc?.LOCAL ?? 0 })
         setLocalPendingCount(lpc ?? 0)
-        // 低库存预警：每次会话只提醒一次
-        if (lowStockCount > 0 && !lowStockNotifiedRef.current) {
-          lowStockNotifiedRef.current = true
-          toast.info(`有 ${lowStockCount} 个商品库存不足（≤${lowStockThreshold}），请及时补货`)
-        }
+        setLowStockCount(lsc ?? 0)
+        setLowStockThreshold(lst ?? 3)
+        // 登录时那条一次性 toast 已删除（2026-09-24）：改由「商品管理」页签/侧栏角标常驻提示，
+        // 不再每次登录弹「有 N 个规格售罄或紧张」——同城三道菜的 100 克规格会长期保持上架且
+        // 库存为 0，一次性 toast 会变成每次登录都弹的噪音。
         const prev = lastPaidAtRef.current
         lastPaidAtRef.current = latestPaidAt
         // 首次轮询只记基线，不提醒历史积压
@@ -132,7 +139,7 @@ export function usePendingOrders(options?: UsePendingOrdersOptions): PendingCoun
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { count, afterSaleCount, localPendingCount, refundAttentionCount, refundAttentionByChannel }
+  return { count, afterSaleCount, localPendingCount, refundAttentionCount, refundAttentionByChannel, lowStockCount, lowStockThreshold }
 }
 
 // 铃铛点击时调用：在用户手势内请求 Notification 权限

@@ -24,9 +24,14 @@ interface BusinessCenterProps {
   title: string
   description: string
   tabs: CenterTab[]
+  /**
+   * 页签角标（按 `tab.to` 取数），如 { '/catalog/low-stock': 12 }。可选：不传则页签不带角标，
+   * 对其余业务中心零影响（2026-09-24 库存预警只给「商品管理」传）。
+   */
+  badges?: Record<string, number>
 }
 
-export default function BusinessCenter({ title, description, tabs }: BusinessCenterProps) {
+export default function BusinessCenter({ title, description, tabs, badges }: BusinessCenterProps) {
   // ref 回调 + state 而非 useRef：portal 的目标必须是已挂载的真实节点，
   // useRef 在首次渲染时还是 null 且不会触发重渲染，按钮就永远不出现。
   const [actionSlot, setActionSlot] = useState<HTMLElement | null>(null)
@@ -67,31 +72,39 @@ export default function BusinessCenter({ title, description, tabs }: BusinessCen
       <div className="-mx-4 flex flex-wrap items-center gap-2 border-y border-gray-200 bg-white px-2 shadow-sm sm:mx-0 sm:rounded-xl sm:border">
         <nav className="min-w-0 flex-auto overflow-x-auto" aria-label={`${title}功能导航`}>
           <div className="flex min-w-max" role="tablist">
-            {tabs.map((tab) => (
-              <NavLink
-                key={tab.to}
-                to={tab.to}
-                end
-                role="tab"
-                onClick={(event) => {
-                  if (isModifiedLinkClick(event)) return // 开新标签/新窗口，不离开本页，不用守
-                  event.preventDefault()
-                  void leave(tab.to)
-                }}
-                className={({ isActive }) =>
-                  // 手机上收内边距：推广运营 5 个页签在 360dp 安卓上实测正好 344/344 卡满，
-                  // 零余量——字号、字体或系统文字放大任何一点变化都会掉进横划。
-                  // px-2.5 换来 10px 安全垫（5 个页签 × 左右各 1px）。触控高度不受影响（py-3 仍是 48px）。
-                  `border-b-2 px-2.5 py-3 text-sm transition-colors sm:px-4 ${
-                    isActive
-                      ? 'border-brand-500 text-brand-600 font-medium'
-                      : 'border-transparent text-gray-600 hover:text-gray-900'
-                  }`
-                }
-              >
-                {tab.label}
-              </NavLink>
-            ))}
+            {tabs.map((tab) => {
+              const count = badges?.[tab.to] ?? 0
+              return (
+                <NavLink
+                  key={tab.to}
+                  to={tab.to}
+                  end
+                  role="tab"
+                  onClick={(event) => {
+                    if (isModifiedLinkClick(event)) return // 开新标签/新窗口，不离开本页，不用守
+                    event.preventDefault()
+                    void leave(tab.to)
+                  }}
+                  className={({ isActive }) =>
+                    // 手机上收内边距：推广运营 5 个页签在 360dp 安卓上实测正好 344/344 卡满，
+                    // 零余量——字号、字体或系统文字放大任何一点变化都会掉进横划。
+                    // px-2.5 换来 10px 安全垫（5 个页签 × 左右各 1px）。触控高度不受影响（py-3 仍是 48px）。
+                    `border-b-2 px-2.5 py-3 text-sm transition-colors sm:px-4 ${
+                      isActive
+                        ? 'border-brand-500 text-brand-600 font-medium'
+                        : 'border-transparent text-gray-600 hover:text-gray-900'
+                    }`
+                  }
+                >
+                  {tab.label}
+                  {count > 0 && (
+                    <span className="ml-1 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] leading-none text-white align-middle">
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  )}
+                </NavLink>
+              )
+            })}
           </div>
         </nav>
         {/* py-1.5 让同排时这一格高度与 py-3 的页签一致（36+12 = 48），行高不被撑大。

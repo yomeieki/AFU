@@ -6,6 +6,7 @@ import WebviewLogin from './pages/WebviewLogin'
 import Dashboard from './pages/Dashboard'
 import Categories from './pages/Categories'
 import Products from './pages/Products'
+import LowStock from './pages/LowStock'
 import Orders from './pages/Orders'
 import Users from './pages/Users'
 import ScanStats from './pages/ScanStats'
@@ -72,6 +73,7 @@ export default function App() {
             <Route index element={<LegacyRedirect />} />
             <Route path="products" element={<Products />} />
             <Route path="categories" element={<Categories />} />
+            <Route path="low-stock" element={<LowStock />} />
           </Route>
           <Route path="orders" element={<OrderCenter />}>
             <Route index element={<LegacyRedirect />} />

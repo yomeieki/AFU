@@ -7,6 +7,11 @@
  */
 
 import { sendWecomMarkdown, sendPushPlus, shouldSendAlert } from './notify'
+import {
+  buildLowStockChangeContent, buildLowStockDailyContent,
+  type StockUnit as LowStockUnit, type AlertLevel as LowStockAlertLevel, type LowStockOverview,
+} from './low-stock'
+import type { LowStockSettings } from './low-stock-settings'
 
 interface NotifyOrderInfo {
   orderNo: string
@@ -290,18 +295,27 @@ export function notifyAcceptReminder(
   if (pushplusToken) sendPushPlus(pushplusToken, `${orders.length} 单待接单催单`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }
 
-/** 低库存推送（定时任务，12 小时最多一次） */
-export function notifyLowStock(products: { name: string; stock: number }[], threshold: number): void {
+/**
+ * 库存预警（2026-09-24 起按规格判定，取代旧的商品总库存 ≤5、12 小时最多一次）：
+ * 即时推送（低于 pushBelow / 卖到 0，去重在 services/low-stock.ts）与每日汇总各一个函数，
+ * 文案都是 low-stock.ts 导出的纯函数——这里只负责按渠道开关决定发不发、往哪个通道投递。
+ */
+export function notifyLowStockChange(pushes: { unit: LowStockUnit; level: LowStockAlertLevel }[], s: LowStockSettings): void {
   const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
   const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
   if (!wecom && !pushplusToken) return
-  const content = [
-    `**📉 库存预警（≤${threshold}）**`,
-    ...products.map((p) => `- ${p.name}：剩 ${p.stock}${p.stock === 0 ? '（已售罄）' : ''}`),
-    `请及时补货或在后台下架`,
-  ].join('\n')
+  const content = buildLowStockChangeContent(pushes, s)
   if (wecom) sendWecomMarkdown(wecom, content)
-  if (pushplusToken) sendPushPlus(pushplusToken, `库存预警 ${products.length} 项`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+  if (pushplusToken) sendPushPlus(pushplusToken, `库存告急 ${pushes.length} 项`, content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
+}
+
+export function notifyLowStockDaily(overview: LowStockOverview, s: LowStockSettings): void {
+  const wecom = process.env.ORDER_NOTIFY_WECOM_WEBHOOK
+  const pushplusToken = process.env.ORDER_NOTIFY_PUSHPLUS_TOKEN
+  if (!wecom && !pushplusToken) return
+  const content = buildLowStockDailyContent(overview, s)
+  if (wecom) sendWecomMarkdown(wecom, content)
+  if (pushplusToken) sendPushPlus(pushplusToken, '今日库存清单', content, process.env.ORDER_NOTIFY_PUSHPLUS_TOPIC)
 }
 
 /** 自取：取餐时间过后仍没人点「已取走」（每单一次，pickupRemindedAt 记录） */

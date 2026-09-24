@@ -42,7 +42,7 @@ export default function Layout() {
   const { dirty, confirmLeave } = useUnsavedSettings()
   // 全后台唯一一份轮询（Workbench 在 Layout 外另挂）；结果经 PendingCountsContext 下发给子页面
   const pending = usePendingOrders()
-  const { count: pendingCount, afterSaleCount, localPendingCount, refundAttentionCount } = pending
+  const { count: pendingCount, afterSaleCount, localPendingCount, refundAttentionCount, lowStockCount } = pending
   const [panelOpen, setPanelOpen] = useState(false)
 
   /**
@@ -54,10 +54,12 @@ export default function Layout() {
   const navBadge: Record<string, number> = {
     '/workbench': localPendingCount,
     '/orders': pendingCount + afterSaleCount + refundAttentionCount,
+    '/catalog': lowStockCount,
   }
   const badgeTitle: Record<string, string> = {
     '/workbench': `同城待接单 ${localPendingCount}`,
     '/orders': `待处理 ${pendingCount} · 售后 ${afterSaleCount} · 退款待处理 ${refundAttentionCount}`,
+    '/catalog': `售罄或紧张的规格 ${lowStockCount}`,
   }
   const badgeOf = (prefix: string) => navBadge[prefix] ?? 0
 

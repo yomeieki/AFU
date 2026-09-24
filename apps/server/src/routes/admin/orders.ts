@@ -10,7 +10,8 @@ import { initiateRefund, remainingRefundable, finalizeRefundSuccess, markRefundC
 import { sendShipSubscribeMessage, sendPickupReadySubscribeMessage } from '../../services/subscribe-message'
 import { notifySystemAlert } from '../../services/notify'
 import { enqueueOrderTicket } from '../../services/ticket'
-import { LOW_STOCK_THRESHOLD } from '../../utils/constants'
+import { getLowStockSettings } from '../../services/low-stock-settings'
+import { countLowStockUnits } from '../../services/low-stock'
 import { displayAddress } from '../../utils/address'
 import { BOOKING_STATUS_LABEL } from '../../services/delivery/express-booking-state'
 import { rejectCancelRequest } from '../../services/cancel-request'
@@ -226,6 +227,7 @@ const REFUND_ATTENTION_WHERE: Prisma.OrderWhereInput = {
 // 注意：必须注册在 GET /:id 之前，否则会被 :id 匹配吞掉
 router.get('/pending-count', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    const lowStockSettings = await getLowStockSettings()
     const [count, latest, refundingCount, refundAttentionCount, refundAttentionExpress, refundAttentionLocal, lowStockCount, afterSaleCount, localPendingCount] = await Promise.all([
       // 待处理 = 待接单(PAID) + 备餐中(PREPARING)（邮寄铃铛只数邮寄）
       prisma.order.count({ where: { status: { in: ['PAID', 'PREPARING'] }, deliveryType: 'EXPRESS' } }),
@@ -243,9 +245,7 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       prisma.order.count({ where: REFUND_ATTENTION_WHERE }),
       prisma.order.count({ where: { ...REFUND_ATTENTION_WHERE, deliveryType: 'EXPRESS' } }),
       prisma.order.count({ where: { ...REFUND_ATTENTION_WHERE, deliveryType: { in: ['LOCAL', 'PICKUP'] } } }),
-      prisma.product.count({
-        where: { deletedAt: null, status: 'ON_SHELF', stock: { lte: LOW_STOCK_THRESHOLD } },
-      }),
+      countLowStockUnits(lowStockSettings),
       prisma.afterSale.count({ where: { status: 'PENDING' } }),
       prisma.order.count({
         where: {
@@ -265,7 +265,7 @@ router.get('/pending-count', async (_req: Request, res: Response, next: NextFunc
       refundAttentionCount,
       refundAttentionByChannel: { EXPRESS: refundAttentionExpress, LOCAL: refundAttentionLocal },
       lowStockCount,
-      lowStockThreshold: LOW_STOCK_THRESHOLD,
+      lowStockThreshold: lowStockSettings.lowThreshold,
       afterSaleCount,
       localPendingCount,
     })

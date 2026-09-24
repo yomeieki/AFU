@@ -50,6 +50,8 @@ export const centerTabs: Record<
   catalog: [
     { to: '/catalog/products', label: '商品列表' },
     { to: '/catalog/categories', label: '分类管理' },
+    // 库存预警（2026-09-24）：按规格列出售罄/紧张的，角标见 CatalogCenter 传给 BusinessCenter 的 badges
+    { to: '/catalog/low-stock', label: '库存预警' },
   ],
   orders: [
     { to: '/orders/local', label: '同城配送' },

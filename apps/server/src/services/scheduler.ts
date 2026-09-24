@@ -4,7 +4,8 @@
  *  1. 待付款超时自动取消（回滚库存 + 微信关单）
  *  2. 已发货 N 天自动确认收货
  *  3. 已付款超 15 分钟未接单 → 企微群催单（每单一次）
- *  4. 低库存推送（每 12 小时最多一次）
+ *  4. 库存预警（2026-09-24）：按规格判定，即时推送（低于门槛/卖到 0，去重）+ 每日开店前汇总，
+ *     实现在 services/low-stock.ts
  *  ……（同城配送相关任务见各自注释）
  *  + 出票三任务（规格 §8b，M2b 接入）：printQueueSweep 兜扫队列 / repeatAnnounce 未接单重复播报 /
  *    printerHealth 打印机离线-恢复告警与补打，实现在 services/ticket/index.ts。
@@ -17,8 +18,9 @@ import { rollbackOrderStock } from '../utils/order-stock'
 import { releaseOrderBenefits } from './member/checkout'
 import { closeOrder } from './wechat-pay'
 import { notifySystemAlert } from './notify'
-import { notifyAcceptReminder, notifyLowStock } from './order-notify'
-import { LOW_STOCK_THRESHOLD, ACCEPT_REMIND_AFTER_MIN } from '../utils/constants'
+import { notifyAcceptReminder } from './order-notify'
+import { ACCEPT_REMIND_AFTER_MIN } from '../utils/constants'
+import { scanLowStockAlerts, pushDailyLowStockSummary } from './low-stock'
 import {
   remindCallTimeout, remindAcceptedStuck, remindDeliveringTimeout, remindUnknownGhost,
   remindLocalUncalled, remindCancelRequestPending, autoRejectStaleCancelRequests, autoCallRiders, autoCompleteLocalDelivered,
@@ -39,11 +41,9 @@ import { getCronState, patchCronState, isSameLocalDay } from './member/cron-stat
 import { reconcileStuckRefunds } from './refund-reconcile'
 
 const TICK_MS = 60 * 1000
-const LOW_STOCK_PUSH_INTERVAL_MS = 12 * 60 * 60 * 1000
 const BATCH = 100
 
 let running = false
-let lastLowStockPushAt = 0
 
 export function startScheduler(): void {
   if (!config.schedulerEnabled) {
@@ -106,6 +106,11 @@ export interface SchedulerOverrides {
   refundReconcileAbnormalIntervalMin?: number
   refundReconcileAlertAfter?: number
   refundReconcileBatch?: number
+  /**
+   * 库存预警每日汇总（2026-09-24）：绕过 dailySentOn 与应发时刻两道门（不绕过休业门），
+   * e2e 用来在任意时刻立刻命中，与 forceDailyMemberTasks 同一套约定。
+   */
+  forceLowStockDaily?: boolean
 }
 
 /** 跑一轮；可由非生产环境的 /admin/system/run-scheduler 手动触发（e2e 用，可传阈值覆盖） */
@@ -126,7 +131,8 @@ export async function runSchedulerTick(overrides: SchedulerOverrides = {}): Prom
     ['schedNotReady', remindScheduledNotReady],
     ['schedAutoCall', autoCallScheduled],
     ['schedLate', remindScheduledLate],
-    ['lowStock', pushLowStock],
+    ['lowStockScan', scanLowStockAlerts],
+    ['lowStockDaily', () => pushDailyLowStockSummary(new Date(), overrides.forceLowStockDaily)],
     ['localCallTimeout', () => remindCallTimeout(overrides.callTimeoutMin)],
     // 只呼最低价的单等太久 → 取消重呼并呼。排在 localAutoCall 之前：升级会先撤单再建新单，
     // 中间那一瞬订单是「PREPARING 且无在途单」，正好是 autoCallRiders 的候选条件——
@@ -258,21 +264,6 @@ export async function remindUnacceptedOrders(afterMin = ACCEPT_REMIND_AFTER_MIN)
   })
   notifyAcceptReminder(stale)
   return stale.length
-}
-
-/** 低库存推送：上架且 stock ≤ 阈值，每 12 小时最多一次；无低库存则不发 */
-export async function pushLowStock(): Promise<number> {
-  if (Date.now() - lastLowStockPushAt < LOW_STOCK_PUSH_INTERVAL_MS) return 0
-  const low = await prisma.product.findMany({
-    where: { deletedAt: null, status: 'ON_SHELF', stock: { lte: LOW_STOCK_THRESHOLD } },
-    select: { name: true, stock: true },
-    orderBy: { stock: 'asc' },
-    take: 30,
-  })
-  lastLowStockPushAt = Date.now()
-  if (low.length === 0) return 0
-  notifyLowStock(low, LOW_STOCK_THRESHOLD)
-  return low.length
 }
 
 // ─────────────────────────────────────────────────────────
