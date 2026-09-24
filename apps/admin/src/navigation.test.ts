@@ -32,7 +32,8 @@ test('uses express when a catalog URL has no valid channel', () => {
 })
 
 test('defines the approved child tabs for every business center', () => {
-  assert.deepEqual(centerTabs.catalog.map((tab) => tab.label), ['商品列表', '分类管理'])
+  // 2026-09-24 库存预警：新增第三个页签，角标数字见 CatalogCenter 传给 BusinessCenter 的 badges
+  assert.deepEqual(centerTabs.catalog.map((tab) => tab.label), ['商品列表', '分类管理', '库存预警'])
   assert.deepEqual(centerTabs.orders.map((tab) => tab.label), ['同城配送', '全国邮寄'])
   // 页签名不带「设置」：与「订单管理」的渠道叫法统一，也让页签在 375px 手机上更容易放下
   // （2026-09-22 加「预约送达」后共五项，375px 实际是否一行放下未重新实测，仅沿用简称策略）

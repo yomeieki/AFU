@@ -8,6 +8,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { config } from '../../config'
 import { getMemberSettings, setMemberSettings } from '../../services/member/settings'
+import { getLowStockSettings, setLowStockSettings, validateLowStockSettings } from '../../services/low-stock-settings'
 import { AppError } from '../../middlewares/error'
 import {
   getLocalSettings, setLocalSettings, patchLocalSettings, sanitizeLocalSettings,
@@ -176,6 +177,24 @@ router.post('/local-delivery/probe', async (req, res, next) => {
       receiver: { name: '探测', mobile: '13800000000', province: s.store.province, city: s.store.city, district: s.store.district, address: '探测点', latE6, lngE6 },
     })
     res.json({ code: 0, message: 'ok', data: { feeFen: r.feeFen, distanceM: r.distanceM } })
+  } catch (e) { next(e) }
+})
+
+// 库存预警门槛（2026-09-24）
+const lowStockSchema = z.object({
+  lowThreshold: z.number().int().min(1).max(999),
+  pushBelow: z.number().int().min(1).max(999),
+})
+
+router.get('/low-stock', async (_req, res, next) => {
+  try { res.json({ code: 0, message: 'ok', data: await getLowStockSettings() }) } catch (e) { next(e) }
+})
+router.put('/low-stock', async (req, res, next) => {
+  try {
+    const body = lowStockSchema.parse(req.body)
+    const errs = validateLowStockSettings(body)
+    if (errs.length) throw new AppError(40001, errs.join('；'))
+    res.json({ code: 0, message: 'ok', data: await setLowStockSettings(body) })
   } catch (e) { next(e) }
 })
 

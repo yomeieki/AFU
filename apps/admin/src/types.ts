@@ -84,6 +84,46 @@ export interface Product {
   images?: { imageUrl: string }[]
   specDimensions?: SpecDimension[] | null
   skus?: ProductSku[]
+  /** 售罄/紧张的规格数（无规格商品最多 1）；仅 GET /api/admin/products 返回（2026-09-24 库存预警） */
+  stockAlert?: { out: number; low: number }
+}
+
+// ── 库存预警（2026-09-24）────────────────────────────────────
+export interface LowStockSettings {
+  /** 0 < stock ≤ lowThreshold 视为「紧张」 */
+  lowThreshold: number
+  /** stock < pushBelow 立即推送 */
+  pushBelow: number
+}
+
+export interface LowStockUnit {
+  key: string
+  skuId: number | null
+  specText: string | null
+  stock: number
+  level: 'OUT' | 'LOW'
+}
+
+export interface LowStockGroup {
+  productId: number
+  productName: string
+  channel: Channel
+  coverImage: string | null
+  hasSkus: boolean
+  out: number
+  low: number
+  units: LowStockUnit[]
+}
+
+export interface LowStockOverview {
+  settings: LowStockSettings
+  counts: {
+    total: number
+    out: number
+    low: number
+    byChannel: Record<Channel, { out: number; low: number }>
+  }
+  groups: LowStockGroup[]
 }
 
 export interface QrCodeResult {

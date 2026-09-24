@@ -10,6 +10,8 @@ import { channelOfCategory, assertNoUnpaidAndPurgeCarts } from '../../services/p
 import { Channel } from '../../utils/channel'
 import { sortProducts, type CategorySortInfo, type ProductSortMode } from '../../services/product-sort'
 import { getSales30d } from '../../services/product-sales'
+import { getLowStockSettings } from '../../services/low-stock-settings'
+import { lowStockOverview, productAlertSummary } from '../../services/low-stock'
 
 const router = Router()
 
@@ -144,7 +146,9 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     const sales = await getSales30d()
-    const withSales = <T extends { id: number }>(rows: T[]) => rows.map((p) => ({ ...p, sales30d: sales.get(p.id) ?? 0 }))
+    const lowStockSettings = await getLowStockSettings()
+    const withSales = <T extends { id: number; status: string; stock: number; skus?: { stock: number }[] }>(rows: T[]) =>
+      rows.map((p) => ({ ...p, sales30d: sales.get(p.id) ?? 0, stockAlert: productAlertSummary(p, lowStockSettings) }))
 
     let list: unknown[]
     let total: number
@@ -234,7 +238,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       },
       include: skuInclude,
     })
-    success(res, product)
+    // R2-3（修订 2）：与列表同一口径下发 stockAlert，前端局部合并时不必自己算、
+    // 也不受 pending-count 30 秒轮询门槛陈旧的影响
+    success(res, { ...product, stockAlert: productAlertSummary(product, await getLowStockSettings()) })
   } catch (e) {
     next(e)
   }
@@ -290,6 +296,106 @@ router.post('/qrcode/batch', async (req: Request, res: Response, next: NextFunct
       }
     }
     success(res, { generated, failed })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/admin/products/low-stock — 库存预警总览（后台新页签，2026-09-24）
+// 注意：必须注册在 /:id 类路由之前，避免 "low-stock" 被当作 :id 匹配
+router.get('/low-stock', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    success(res, await lowStockOverview())
+  } catch (e) {
+    next(e)
+  }
+})
+
+// PUT /api/admin/products/:id/stock — 库存预警页/商品列表库存快改（按规格或无规格商品本身）
+//
+// R1（2026-09-24 修订 2，L 级复核阻断）：有规格分支不能再「改 sku → aggregate 全部 sku →
+// 绝对覆盖 product.stock」——REPEATABLE-READ 下 aggregate 读到的是事务开始时的快照，读不到
+// 并发下单扣减/取消回滚已提交或在途的其它 sku 行，绝对覆盖会把它们的改动冲掉（复核实测
+// product=15 而 SUM=14 一类的丢更新）。改为「锁读旧值 + 相对增量」：
+//   1. `SELECT ... FOR UPDATE` 锁住并读到这一刻的真实旧值（不是快照）；
+//   2. 把这一个 sku 写成店员实点的绝对值；
+//   3. product.stock 只按 `delta = 新值 − 旧值` 相对增量，不去动其它 sku 贡献的部分。
+// 锁序与事实（2026-09-24 修订 3，L 级复核 R2：下面这段锁序分析原先漏了外键 S 锁，
+// 「单行事务之间不会成环」的说法与事实不符，已改正）：
+//   1. 下单事务的锁序（`routes/orders.ts`：`order.create({ items: { create } })` 在扣减
+//      循环之前）：`INSERT order_items` 因外键 `order_items_product_id_fkey` 先取得
+//      **products 行的 S 锁** → 扣 sku 行 X 锁 → 扣 products 行 X 锁（S→X 升级）。
+//   2. 这个接口：sku 行 X 锁（`FOR UPDATE`）→ products 行 X 锁。
+//   3. 成环条件：订单行与改库存是**同一规格**——改库存持 X(sku) 等 X(products)，被订单的
+//      S(products) 挡住；订单接着要 X(sku)，被改库存挡住 → 环。**单行订单也会成环**，
+//      不是只有跨规格的订单才会。**不同规格不成环**：订单的 S→X 升级只等其它事务已授予
+//      的冲突锁，改库存那个等待中的 X 请求不挡它；改库存等订单提交后再拿到 products 行。
+//   4. 取消/退款回滚（`utils/order-stock.ts`）没有外键插入，锁序 sku → products，与改库存
+//      只在「多行回滚跨到改库存那一规格」时成环。
+//   5. 牺牲者：InnoDB 选 undo 量小的一方，实测恒为改库存事务（订单事务已插入
+//      `orders`/`order_items`），顾客下单不受影响；改库存捕获 P2034 重试，重试时重新
+//      `FOR UPDATE` 读到订单提交后的新值，delta 仍正确。
+//   6. 既有的「两笔多行订单以不同顺序扣同一商品」死锁不在本批，`orders.ts` 不动。
+const stockUpdateSchema = z.object({
+  skuId: z.number().int().positive().nullable().optional(),
+  stock: z.number().int().min(0).max(999999),
+})
+
+type StockUpdateResult = { productId: number; skuId: number | null; stock: number; productStock: number }
+
+function isDeadlockRetry(e: unknown): boolean {
+  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2034'
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// 修订 3：3 → 5。按复核饱和压测的每次尝试死锁率 p≈0.22 估算，3 次连败≈1.0%、5 次连败≈0.05%；
+// 真实下单形态本机 180 轮 0 次；改库存是店员低频手工操作，多两次尝试没有代价。
+const STOCK_UPDATE_MAX_ATTEMPTS = 5
+
+router.put('/:id/stock', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id)
+    const { skuId, stock } = stockUpdateSchema.parse(req.body)
+
+    let result: StockUpdateResult | null = null
+    for (let attempt = 1; attempt <= STOCK_UPDATE_MAX_ATTEMPTS; attempt++) {
+      try {
+        result = await prisma.$transaction(async (tx) => {
+          const product = await tx.product.findFirst({ where: { id, deletedAt: null } })
+          if (!product) throw new AppError(40401, '商品不存在', 404)
+          const skuCount = await tx.productSku.count({ where: { productId: id } })
+          if (skuId != null) {
+            if (skuCount === 0) throw new AppError(40001, '该商品没有规格，请直接改库存', 400)
+            // 锁定读：拿到的是这一刻的真实值，不是事务开始时的一致性快照
+            const locked = await tx.$queryRaw<
+              { id: number; stock: number }[]
+            >`SELECT id, stock FROM product_skus WHERE id = ${skuId} AND product_id = ${id} FOR UPDATE`
+            if (locked.length === 0) throw new AppError(40401, '规格不存在', 404)
+            const prevStock = locked[0].stock
+            await tx.productSku.update({ where: { id: skuId }, data: { stock } })
+            const delta = stock - prevStock
+            const updated = await tx.product.update({ where: { id }, data: { stock: { increment: delta } } })
+            return { productId: id, skuId, stock, productStock: updated.stock }
+          }
+          if (skuCount > 0) throw new AppError(40001, '多规格商品请按规格改库存', 400)
+          // 无规格商品没有 sum 不变量：维持绝对值写入，语义同既有 PUT /:id {stock}
+          const updated = await tx.product.update({ where: { id }, data: { stock } })
+          return { productId: id, skuId: null, stock, productStock: updated.stock }
+        })
+        break
+      } catch (e) {
+        if (isDeadlockRetry(e) && attempt < STOCK_UPDATE_MAX_ATTEMPTS) {
+          console.warn(`[products] 改库存遇死锁，重试 ${attempt}/${STOCK_UPDATE_MAX_ATTEMPTS}`)
+          await sleep(50 * attempt)
+          continue
+        }
+        throw e
+      }
+    }
+    success(res, result)
   } catch (e) {
     next(e)
   }
@@ -378,7 +484,9 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
         include: skuInclude,
       })
     })
-    success(res, product)
+    // R2-3（修订 2）：局部更新（上下架/改库存走这个整包 PUT 的调用方也会经过这里）响应
+    // 补 stockAlert，前端不必整页刷新就能拿到最新值
+    success(res, { ...product, stockAlert: productAlertSummary(product, await getLowStockSettings()) })
   } catch (e) {
     next(e)
   }

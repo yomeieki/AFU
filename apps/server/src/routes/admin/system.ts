@@ -147,6 +147,8 @@ router.post('/run-scheduler', async (_req: Request, res: Response, next: NextFun
         refundReconcileAbnormalIntervalMin: num(body.refundReconcileAbnormalIntervalMin),
         refundReconcileAlertAfter: num(body.refundReconcileAlertAfter),
         refundReconcileBatch: num(body.refundReconcileBatch),
+        // 库存预警每日汇总（2026-09-24）：绕过 dailySentOn/应发时刻，e2e 用来立刻命中
+        forceLowStockDaily: bool(body.forceLowStockDaily),
       })
     )
   } catch (e) {

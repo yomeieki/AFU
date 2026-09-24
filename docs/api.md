@@ -677,6 +677,8 @@
 
 `categoryId` 有值时，列表顺序与顾客端 `GET /api/products` 一致（同一套 `sortProducts` 规则，见该接口文档的「排序规则」）；不带 `categoryId` 时顺序仍是 `createdAt desc`。每项都新增 `sortOrder`（分类内手动排序值）与 `sales30d`（近 30 天销量，整数，无销量为 0）。手动排序方式下的拖拽保存见 `POST /api/admin/categories/:id/product-order`。
 
+每项还新增 `stockAlert: { out, low }`（2026-09-24 库存预警，见附录 N）：按规格判定该商品有几个规格售罄/紧张，无规格商品最多算 1 个单位；下架商品恒 `{out:0,low:0}`。
+
 ---
 
 #### POST /api/admin/products
@@ -706,11 +708,13 @@
 }
 ```
 
+响应（与 `PUT /:id` 一样）增 `stockAlert: { out, low }`（2026-09-24 修订 2）：与列表同一口径、同一门槛来源现算，前端局部合并列表项时不用自己再算一遍，也不受角标轮询门槛陈旧的影响。
+
 ---
 
 #### PUT /api/admin/products/:id
 
-编辑商品（字段同新增）。
+编辑商品（字段同新增）。响应同样带 `stockAlert`（见上）。
 
 ---
 
@@ -740,6 +744,53 @@
   }
 }
 ```
+
+---
+
+#### GET /api/admin/products/low-stock
+
+库存预警总览（2026-09-24，详见附录 N）。按「库存单位」（有规格商品的每个规格；无规格商品就是商品本身）判定紧张/售罄，只统计 `deletedAt=null && status='ON_SHELF'` 的商品。
+
+**Response:**
+```json
+{
+  "code": 0,
+  "data": {
+    "settings": { "lowThreshold": 3, "pushBelow": 2 },
+    "counts": {
+      "total": 5, "out": 2, "low": 3,
+      "byChannel": { "EXPRESS": { "out": 1, "low": 1 }, "LOCAL": { "out": 1, "low": 2 } }
+    },
+    "groups": [
+      {
+        "productId": 9, "productName": "冷吃兔", "channel": "EXPRESS", "coverImage": null,
+        "hasSkus": true, "out": 1, "low": 0,
+        "units": [{ "key": "sku:6", "skuId": 6, "specText": "特辣/去骨", "stock": 0, "level": "OUT" }]
+      }
+    ]
+  }
+}
+```
+组排序：先含售罄的组，再按最小库存升序，再按 `productId` 升序；组内单位按 `sortOrder`。
+
+#### PUT /api/admin/products/:id/stock
+
+库存预警页 / 商品列表快改库存共用的接口。
+
+**Request Body:** `{ "skuId": 6, "stock": 1 }`（`skuId` 传 `null` 或不传 = 改无规格商品本身）
+
+**校验：**
+- 商品不存在或已删除 → `40401`
+- 商品有规格但未传 `skuId` → `40001`（「多规格商品请按规格改库存」）
+- 商品**没有**规格却传了 `skuId` → `40001`
+- 传的 `skuId` 不属于该商品（含不存在的 id）→ `40401`（「规格不存在」）
+- `stock` 非负整数、≤999999，否则 `40001`
+
+**Response:** `{ "code": 0, "data": { "productId": 9, "skuId": 6, "stock": 1, "productStock": 176 } }`（`productStock` 是有规格商品按 sku 汇总后回写的商品总库存；无规格商品时等于 `stock`）。
+
+**并发语义（2026-09-24 修订 2；锁序分析 2026-09-24 修订 3 改正；两道防线的分工 2026-09-24 修订 4）：**
+- **有规格**：事务内先 `SELECT ... FOR UPDATE` 锁定读该规格行的当前真实值（不是 REPEATABLE-READ 快照），把这个规格写成传入的绝对值，再用 `delta = 新值 − 旧值` 对 `product.stock` 做**相对增量**——不会覆盖并发下单扣减/取消回滚对其它规格的改动。锁序固定为「规格行 → 商品行」，与取消/退款回滚（`utils/order-stock.ts`，锁序同为规格行 → 商品行）一致；但下单事务（`routes/orders.ts`）在扣减之前先 `INSERT order_items`，外键 `order_items_product_id_fkey` 会先给**商品行加 S 锁**，再扣规格行 X 锁、扣商品行 X 锁（S→X 升级）——**只要订单行与这次改库存是同一规格，单笔订单也会与这个接口互锁**，不是只有「跨两个规格的订单」才会；不同规格的订单不成环（订单的 S→X 升级只等已授予的冲突锁，不等改库存那个等待中的 X 请求）。命中互锁时由 MySQL 立即探测为死锁（1213 → Prisma `P2034`，实测牺牲者恒为改库存这一方，顾客下单不受影响），接口对此**自动重试最多 5 次**（每次间隔 50ms×次数），重试期间对调用方透明，第 5 次仍失败才对外抛错。`FOR UPDATE` 与死锁重试各管一类交错、缺一不可：`FOR UPDATE` 防的是**快照陈旧**（对方先锁住这一个规格行、持锁到提交才放，如取消/退款回滚——这时 PUT 不持任何锁，不会死锁，全靠锁定读拿到真实值）；死锁重试防的是**锁序成环**（对方先持商品行 S 锁再来抢同一规格行，如下单——这时 PUT 与对方互锁，一致性读救不了，靠重试拿新事务的新读）。e2e 覆盖分别见 `scripts/e2e.d/74-low-stock.sh` 的 74.11-g（快照陈旧形态）与 74.11-e（锁序成环形态）。
+- **无规格**：`UPDATE products SET stock = ?` 直接写绝对值——无规格商品没有「规格库存之和」这条不变量，并发下单的扣减会被店员这次编辑的实点数覆盖，语义与既有 `PUT /:id { stock }` 一致。
 
 ---
 
@@ -1021,10 +1072,13 @@
 | `GET /api/admin/after-sales?status=` | 售后单列表（含订单摘要、`remainingRefundable`、`reasonLabel`；2026-09-22 起 `order.latestRefund`，后台据此禁点「同意并退款」；**2026-09-23 起** `order.latestRefund` 与 `orders` 列表同一套 `RefundSummary` 字段，含 `reconcileLastError`） |
 | `POST /api/admin/after-sales/:id/approve` | `{ amount, reply? }` → 发起退款并置 APPROVED（回调成功 → DONE）；**2026-09-23 起**：`status=APPROVED` 且无在途退款时也允许（「重新退款」，见上文详情） |
 | `POST /api/admin/after-sales/:id/reject` | `{ reply }` → REJECTED |
-| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount`；2026-09-22 增 `refundAttentionCount`（「退款待处理」全渠道数，侧栏角标）与 `refundAttentionByChannel {EXPRESS, LOCAL}`（两个订单页各自的页签角标，LOCAL 含自取），口径与 `?status=REFUND_ATTENTION` 同一个 where（**2026-09-23 收口新口径**，见上文 status 参数说明） |
+| `GET /api/admin/orders/pending-count` | 增 `afterSaleCount`；2026-09-22 增 `refundAttentionCount`（「退款待处理」全渠道数，侧栏角标）与 `refundAttentionByChannel {EXPRESS, LOCAL}`（两个订单页各自的页签角标，LOCAL 含自取），口径与 `?status=REFUND_ATTENTION` 同一个 where（**2026-09-23 收口新口径**，见上文 status 参数说明）；`lowStockCount`/`lowStockThreshold` **2026-09-24 起新口径**：在架商品的售罄+紧张**规格**数（按 `low-stock` 设置的 `lowThreshold` 判定，门槛可改，不再是写死的 5），详见附录 N |
+| `GET/PUT /api/admin/settings/low-stock`（2026-09-24 新增） | 库存预警门槛 `{ lowThreshold, pushBelow }`，详见附录 N |
+| `GET /api/admin/products/low-stock`（2026-09-24 新增） | 库存预警总览（设置/计数/按商品分组的售罄紧张单位），详见 3.3 节与附录 N |
+| `PUT /api/admin/products/:id/stock`（2026-09-24 新增） | 库存预警页/商品列表快改库存（按规格或整商品），详见 3.3 节与附录 N |
 | `POST /api/admin/webview-code` | admin token → 一次性 code（2 分钟） |
 | `POST /api/admin/login/webview` | `{ code }` → token（小程序 web-view `/m?code=` 用） |
-| `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖；2026-09-21 起新增 5 个退款补查覆盖键（附录 L） |
+| `POST /api/admin/system/run-scheduler` | 非生产：手动跑一轮定时任务，可传阈值覆盖；2026-09-21 起新增 5 个退款补查覆盖键（附录 L）；2026-09-24 新增 `forceLowStockDaily`（附录 N） |
 | `POST /api/admin/system/pay-mock/{reset,refund-query,refund-create,refund-notify,calls}` | 仅 `WECHAT_PAY_MOCK=true` 时挂载，退款 mock 控制面（附录 L，2026-09-23 增 `refund-create`/`refund-notify`） |
 
 ### 错误码新增
@@ -2222,3 +2276,46 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 | 42290 | 预约配送未开通 |
 | 42291 | 送达时段不可选 |
 | 42292 | 操作与预约单状态不符（接单并呼叫 / 过早呼叫 / 对立即单点已备好 / 标记已备好但 `distanceM` 缺失） |
+
+---
+
+## 附录 N：库存预警（2026-09-24）
+
+按「库存单位」（有规格商品的每个规格；无规格商品就是商品本身）判定紧张/售罄，取代旧的「商品总库存 ≤5、12 小时最多一次」（`utils/constants.ts` 的 `LOW_STOCK_THRESHOLD` 已删除）。本批不改顾客端小程序、不碰下单/支付/退款/库存扣减链路，零迁移。
+
+### 档位
+
+- `lowThreshold`（默认 3，后台可改，1–999）：`0 < stock ≤ lowThreshold` → **紧张**；`stock ≤ 0` → **售罄**；只统计 `deletedAt=null && status='ON_SHELF'` 的单位。
+- `pushBelow`（默认 2，后台可改，`1 ≤ pushBelow ≤ lowThreshold`，越界夹到 `lowThreshold`）：即时推送门槛，`stock ≤ 0` → 推「售罄」；`0 < stock < pushBelow` → 推「低于 pushBelow」；否则不推。
+- 两个门槛都存在 `Setting(key='low_stock')`，接口见 `GET/PUT /api/admin/settings/low-stock`。
+
+### 去重状态
+
+`Setting(key='low_stock_alert_state')`，`{ levels: { "sku:<id>"|"product:<id>": "OUT"|"LOW" }, dailySentOn: "YYYY-MM-DD"|null }`。转移规则（`services/low-stock.ts` 的 `diffAlertTransitions`，有纯函数自测 `scripts/selftest-low-stock.ts`）：
+
+1. `stock ≥ pushBelow` → 删状态（唯一的重置条件，**不看在架与否**——下架不清状态，只有补货到 ≥`pushBelow` 才重置）；
+2. 不在架（`status ≠ 'ON_SHELF'`）且 `stock < pushBelow` → 不推，状态原样保留（有就留着，没有也不新建）；
+3. 在架且 `stock < pushBelow`：售罄档位无论之前是否已是「紧张」都会推一次（除非已经是「售罄」）；紧张档位只有「无状态」时才推（`0→1` 这种从售罄回升不算补货，不把状态降级）；
+4. 商品被软删或规格被删除（不再出现在扫描结果里）→ 状态一并丢弃；**下架不丢状态**，重新上架、库存仍 `< pushBelow` 的规格不再推，只有补货到 `≥pushBelow` 才重置（见上面第 1 条）。
+
+### 即时推送与每日汇总
+
+- **即时推送**（`scanLowStockAlerts`，任务名 `lowStockScan`）：每 60 秒心跳一次，按上面的转移规则推送变化，休业日照常（邮寄单在休业期间也照常进来）。
+- **每日汇总**（`pushDailyLowStockSummary`，任务名 `lowStockDaily`）：应发时刻 = 当天营业时段最早的 `start` 减 30 分钟；休业中（`isHolidayNow`）不推，且不消耗 `dailySentOn`（次日/取消休业后恢复照推）；当天没有任何售罄/紧张单位也记「今天已处理」但不发；取代旧的 12 小时推送。`POST /api/admin/system/run-scheduler` 的 `forceLowStockDaily`（非生产）绕过 `dailySentOn` 与应发时刻两道门，**不绕过休业门**。
+- 两条推送都是 fire-and-forget，通道未配置（`ORDER_NOTIFY_WECOM_WEBHOOK`/`ORDER_NOTIFY_PUSHPLUS_TOKEN` 都为空）时仍照常计数与写状态，只是不投递。
+
+### 后台页面
+
+- 新页签「商品管理 → 库存预警」（`GET /api/admin/products/low-stock`）：按商品分组列出所有紧张/售罄单位，可直接改库存（`PUT /api/admin/products/:id/stock`，见 3.3 节），筛选：全部/售罄/紧张（互斥三选一）+ 同城/邮寄（可单选、再点取消）。
+- 「商品管理」页签条与顶栏入口角标（`pending-count.lowStockCount`）；商品列表按规格标「N 个规格售罄/紧张」（`GET /api/admin/products` 新增的 `stockAlert` 字段），不再是旧的「商品总库存 ≤5 才标红」。
+- 后台登录时那条一次性 toast（「有 N 个商品库存不足」）已删除，改由页签/侧栏角标常驻提示。
+- 上下架、商品列表快改库存后不整页刷新——`PUT /:id`、`POST /` 的响应都带 `stockAlert`（见 3.3 节），前端直接把响应里的这几个字段局部合并进列表项（`utils/stock-alert.ts` 的 `mergeProductPatch`），标签/变色立即跟着变。
+
+### 并发一致性（2026-09-24 修订 2；锁序分析修订 3 改正）
+
+`PUT /api/admin/products/:id/stock` 有规格分支采用「锁读旧值 + 相对增量」而不是「改一个规格 → aggregate 全部规格 → 绝对覆盖商品总库存」——后者在 MySQL REPEATABLE-READ 隔离级别下会用事务开始时的快照覆盖并发下单/取消回滚已经写入的其它规格库存，造成丢更新。改法与取消/退款回滚同一套锁序（规格行 → 商品行）；下单事务因插入 `order_items` 的外键会先给商品行加 S 锁，**同一规格的单笔订单也会与这个接口互锁**（不只是「多规格订单」），命中死锁时自动重试最多 5 次（`P2034`）。详见 3.3 节 `PUT /:id/stock` 的「并发语义」小节；e2e 覆盖见 `scripts/e2e.d/74-low-stock.sh` 的 74.11（含外键 S 锁形态 e/f 两步）。
+
+### 已知限制（记录，不在本批范围）
+
+- 既有 `PUT /api/admin/products/:id` 带 `stock` 但不带 `skus` 打在多规格商品上时，仍会用调用方传入的整数直接覆盖 `product.stock`（例如前端 `Products.tsx` 用当前列表算出的总和），不经过锁读+增量这条路径——本批之前就是这样，不属于本次改动引入的问题。
+- 首次上线部署后，第一次心跳会把当时所有已在架且售罄/紧张的规格各推一条「库存告急」（不是「无历史基线不推」）；店主已确认接受这个一次性提醒。之后转为纯变化推送。

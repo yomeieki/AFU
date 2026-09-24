@@ -17,6 +17,7 @@ import { confirmDialog } from '../components/ui/ConfirmDialog'
 import { fmtDateTime } from '../utils/time'
 import { readChannel } from '../navigation'
 import { moveItem, moveAdjacent } from '../utils/reorder'
+import { stockAlertLabel, mergeProductPatch } from '../utils/stock-alert'
 
 const emptyForm = {
   categoryId: 0,
@@ -299,11 +300,13 @@ export default function Products() {
   }
 
   // 上下架一键开关（可逆高频操作，不弹确认；局部更新不整页刷新）
+  // R2-3（修订 2）：连 stockAlert 一起从响应里合并回去——下架后标签/变色要立刻消失，
+  // 上架后（若仍售罄）要立刻回来，不能等 30 秒轮询的 pending-count 才刷新
   const handleToggleStatus = async (p: Product) => {
     const next = p.status === 'ON_SHELF' ? 'OFF_SHELF' : 'ON_SHELF'
     try {
-      await updateProduct(p.id, { status: next })
-      setList((ls) => ls.map((it) => (it.id === p.id ? { ...it, status: next } : it)))
+      const res = await updateProduct(p.id, { status: next })
+      setList((ls) => mergeProductPatch(ls, p.id, { status: next, stockAlert: res.data.data.stockAlert }))
       toast.success(next === 'ON_SHELF' ? `「${p.name}」已上架` : `「${p.name}」已下架`)
     } catch {
       toast.error('操作失败')
@@ -315,7 +318,7 @@ export default function Products() {
   const [stockValue, setStockValue] = useState(0)
   const openStockModal = (p: Product) => {
     if ((p.skus?.length ?? 0) > 0) {
-      toast.info('多规格商品请在「编辑」中修改各规格库存')
+      toast.info('多规格商品请在「编辑」或「库存预警」页改各规格库存')
       return
     }
     setStockModal(p)
@@ -325,8 +328,8 @@ export default function Products() {
     if (!stockModal) return
     const v = Math.max(0, Math.floor(stockValue))
     try {
-      await updateProduct(stockModal.id, { stock: v })
-      setList((ls) => ls.map((it) => (it.id === stockModal.id ? { ...it, stock: v } : it)))
+      const res = await updateProduct(stockModal.id, { stock: v })
+      setList((ls) => mergeProductPatch(ls, stockModal.id, { stock: v, stockAlert: res.data.data.stockAlert }))
       toast.success('库存已更新')
       setStockModal(null)
     } catch {
@@ -569,6 +572,15 @@ export default function Products() {
                             {p.skus!.length} 规格
                           </span>
                         )}
+                        {stockAlertLabel(p.stockAlert ?? { out: 0, low: 0 }, (p.skus?.length ?? 0) > 0) && (
+                          <span
+                            className={`ml-1.5 px-1.5 py-0.5 rounded text-xs ${
+                              (p.stockAlert?.out ?? 0) > 0 ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {stockAlertLabel(p.stockAlert ?? { out: 0, low: 0 }, (p.skus?.length ?? 0) > 0)}
+                          </span>
+                        )}
                       </p>
                       <button
                         onClick={() => handleToggleStatus(p)}
@@ -593,7 +605,11 @@ export default function Products() {
                       <button
                         onClick={() => openStockModal(p)}
                         className={`underline decoration-dotted underline-offset-2 ${
-                          p.status === 'ON_SHELF' && p.stock <= 5 ? 'text-red-500 font-semibold' : ''
+                          (p.stockAlert?.out ?? 0) > 0
+                            ? 'text-red-500 font-semibold'
+                            : (p.stockAlert?.low ?? 0) > 0
+                              ? 'text-amber-600 font-semibold'
+                              : ''
                         }`}
                       >
                         库存 {p.stock}
@@ -683,6 +699,15 @@ export default function Products() {
                     {p.skus!.length} 规格
                   </span>
                 )}
+                {stockAlertLabel(p.stockAlert ?? { out: 0, low: 0 }, (p.skus?.length ?? 0) > 0) && (
+                  <span
+                    className={`ml-1.5 px-1.5 py-0.5 rounded text-xs ${
+                      (p.stockAlert?.out ?? 0) > 0 ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'
+                    }`}
+                  >
+                    {stockAlertLabel(p.stockAlert ?? { out: 0, low: 0 }, (p.skus?.length ?? 0) > 0)}
+                  </span>
+                )}
               </td>
               <td className="px-4 py-3 text-gray-500">{p.category?.name}</td>
               <td className="px-4 py-3 text-right font-semibold text-brand-600">
@@ -700,7 +725,11 @@ export default function Products() {
                 <button
                   onClick={() => openStockModal(p)}
                   className={`hover:text-brand-600 underline decoration-dotted underline-offset-2 ${
-                    p.status === 'ON_SHELF' && p.stock <= 5 ? 'text-red-500 font-semibold' : 'text-gray-700'
+                    (p.stockAlert?.out ?? 0) > 0
+                      ? 'text-red-500 font-semibold'
+                      : (p.stockAlert?.low ?? 0) > 0
+                        ? 'text-amber-600 font-semibold'
+                        : 'text-gray-700'
                   }`}
                   title={(p.skus?.length ?? 0) > 0 ? '多规格商品在编辑中改库存' : '点击修改库存'}
                 >
