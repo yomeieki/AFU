@@ -4,7 +4,7 @@ import { DELIVERY_RANK, TERMINAL, PROVIDER_STATUS_MAP, DELIVERY_STATUS_LABEL } f
 import { isCircuitTripped, tripCircuit, resetCircuit, getCircuitState } from '../src/services/delivery/circuit'
 import { trunc, makeCallbackDedupeKey, adminEventKey } from '../src/services/delivery/events'
 import { ProviderError } from '../src/services/delivery/types'
-import { shouldKillGhost, shouldAutoVoidCancelIntent } from '../src/services/delivery/cancel-intent'
+import { shouldKillGhost, shouldAutoVoidCancelIntent, ghostNoIdShouldAlert } from '../src/services/delivery/cancel-intent'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -100,6 +100,18 @@ t('shouldAutoVoidCancelIntent：缺 taskId 有 orderId → true', () => {
 })
 t('shouldAutoVoidCancelIntent：两个 id 都齐全 → false（该走执行分支，不该被自动结束）', () => {
   assert.strictEqual(shouldAutoVoidCancelIntent('T1', 'O1'), false)
+})
+
+// 验收 31（R15-2）：killGhostDelivery 缺 orderId 分支该不该告警——只在骑手确认在动
+// （rank>=20：100/210/230/310）时才升级为告警；rank=0（仅「已呼叫待抢单」，并呼噪声）
+// 与 rank=100（已送达终态，shouldKillGhost 早已挡在外面，不会传到这里）都不告警。
+t('ghostNoIdShouldAlert：rank 0/20/30/40/50/100 期望 false/true/true/true/true/false', () => {
+  assert.strictEqual(ghostNoIdShouldAlert(0), false)
+  assert.strictEqual(ghostNoIdShouldAlert(20), true)
+  assert.strictEqual(ghostNoIdShouldAlert(30), true)
+  assert.strictEqual(ghostNoIdShouldAlert(40), true)
+  assert.strictEqual(ghostNoIdShouldAlert(50), true)
+  assert.strictEqual(ghostNoIdShouldAlert(100), false)
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)
