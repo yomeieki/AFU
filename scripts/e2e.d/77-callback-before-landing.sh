@@ -283,6 +283,17 @@ echo "-- ⑩ 自动升级 precancel 失败要告警留痕；provider_order_id �
 # 沿用 shard 50 的隔离手法：把它们的 call_strategy 挪出 SOLO/MANUAL 候选范围。
 s77_only() { sql "UPDATE deliveries SET call_strategy='ALL' WHERE status='CALLING' AND delivery_no <> '$1'"; }
 s77_alert_count_for_key() { s77_alerts | jq --arg k "$1" '[.data[] | select((.key|startswith($k)) and (.suppressed|not))] | length'; }
+# 验收 30（R17a）：notifySystemAlert 同键 5 分钟抑制是「发送」层面的限频，环形缓冲仍然会把
+# 被抑制的那次调用记下来（suppressed:true）——只统计未抑制记录数，会把「代码仍然误调用了
+# notifySystemAlert，只是恰好撞在抑制窗口里」和「代码压根没调用」看成同一个 0，假阳性地
+# 判定"没有再告警"。要能看出"成功后仍误告警"，必须连 suppressed 的记录也一并计入。
+s77_alert_count_for_key_all() { s77_alerts | jq --arg k "$1" '[.data[] | select(.key|startswith($k))] | length'; }
+# ⑰/⑱ 用的 key 是 `<前缀>:<deliveryId>`——deliveryId 是自增整数，prefix startswith 在同一次
+# 全量跑（同库几千条断言、id 跨度很大）里可能撞上「id=4 的前缀恰好匹配 id=42/419 的 key」这种
+# 假阳性，必须整串相等匹配，不能用前缀匹配。
+s77_alert_count_for_key_exact() { s77_alerts | jq --arg k "$1" '[.data[] | select((.key==$k) and (.suppressed|not))] | length'; }
+s77_alert_count_for_key_exact_all() { s77_alerts | jq --arg k "$1" '[.data[] | select(.key==$k)] | length'; }
+s77_alert_title_for_key_exact() { s77_alerts | jq -r --arg k "$1" '[.data[] | select(.key==$k)] | last | .title // empty'; }
 s77_event_count_like() { sql "SELECT COUNT(*) FROM delivery_events WHERE delivery_id=(SELECT id FROM deliveries WHERE delivery_no='$1') AND status_desc LIKE '$2'"; }
 req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c '.callStrategy = {"mode":"SOLO_LOWEST","escalateAfterMin":3}' <<<"$S77_ORIG")" >/dev/null
 
@@ -303,12 +314,17 @@ assert_eq "⑩a 告警记录数 0→1" "$(s77_alert_count_for_key "dlv-escalate-
 s77_has_alert_key "kd100-config:30001" && ok "⑩a 命中 kd100-config:30001 告警" || fail "⑩a 未命中配置类告警" "$(s77_alerts)"
 assert_eq "⑩a SCHEDULER 事件'预估取消费失败'记录数=1" "$(s77_event_count_like "$S77_DNO10" '%预估取消费失败%')" "1"
 # 反例：这次让 precancel 真的成功（fee=0）——告警/事件记录数不该再涨，证明上面两条不是「不管发生什么都会变成 1」的假阳性
+# 验收 30（R17a）：对照轮前先 alerts/reset 并各自取一次基线，再用「含 suppressed 的全部记录」
+# 计数方式比较——这样即使成功之后代码仍误调用了 notifySystemAlert（哪怕被 5 分钟抑制吃掉），
+# 这里也能看出「多了一条记录」，不会被"未抑制计数掩盖"假阳性放过。
+s77_alerts_reset
+S77_EVT10_BASE=$(s77_event_count_like "$S77_DNO10" '%预估取消费失败%')
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok"}}' >/dev/null
 sched '{"escalateAfterMin":0.01}' >/dev/null
-assert_eq "⑩a 反例：precancel 改成功后告警记录数仍为 1" "$(s77_alert_count_for_key "dlv-escalate-precancel:")" "1"
-assert_eq "⑩a 反例：SCHEDULER 事件记录数仍为 1" "$(s77_event_count_like "$S77_DNO10" '%预估取消费失败%')" "1"
+assert_eq "⑩a 反例：precancel 改成功后 dlv-escalate-precancel: 告警记录数（含 suppressed）仍为 0" "$(s77_alert_count_for_key_all "dlv-escalate-precancel:")" "0"
+assert_eq "⑩a 反例：SCHEDULER 事件'预估取消费失败'记录数相对基线不增" "$(s77_event_count_like "$S77_DNO10" '%预估取消费失败%')" "$S77_EVT10_BASE"
 
 echo "   -- ⑩b 缺 orderId 的行：候选过滤应该让它完全没被碰——cancel_intent_at 不会被误写、也不会有 dlv-escalate: 告警 --"
 req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok"}}' >/dev/null
@@ -509,6 +525,75 @@ R=$(sql "SELECT CONCAT(status,'|',cancel_fee) FROM deliveries WHERE delivery_no=
 assert_eq "⑯c 意图路径：CANCELLED，cancel_fee 补记为 250" "$R" "CANCELLED|250"
 assert_eq "⑯c 有含'补记'的事件" "$(s77_event_count_like "$S77_DNO16C" '%补记%')" "1"
 s77_has_alert_key "dlv-cancel-lost:" && fail "⑯c 不该有告警" "$(s77_alerts)" || ok "⑯c 无告警"
+
+echo "-- ⑰ R15-1：VOIDED_NOID 自动结束需人工核实告警恰一次；纯 VOIDED 不告警（验收 27） --"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok"}}' >/dev/null
+S77_OID17=$(mk_local_paid)
+req POST "/api/admin/local/orders/$S77_OID17/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$S77_OID17/call" "$AT")
+S77_DNO17=$(jq -r .data.deliveryNo <<<"$R")
+sql "UPDATE deliveries SET provider_order_id=NULL WHERE delivery_no='$S77_DNO17'"
+S77_ID17=$(sql "SELECT id FROM deliveries WHERE delivery_no='$S77_DNO17'")
+S77_T17=$(sql "SELECT provider_task_id FROM deliveries WHERE delivery_no='$S77_DNO17'")
+req POST "/api/admin/local/orders/$S77_OID17/delivery/cancel" "$AT" '{"reason":"店员要求取消"}' >/dev/null
+s77_alerts_reset
+sched '{"cancelIntentVoidMin":0}' >/dev/null
+R=$(sql "SELECT CONCAT(status,'|',error_code) FROM deliveries WHERE delivery_no='$S77_DNO17'")
+assert_eq "⑰taskId-only 自动结束：status=FAILED error_code=VOIDED_NOID" "$R" "FAILED|VOIDED_NOID"
+assert_eq "⑰dlv-void-noid: 告警恰 1 次" "$(s77_alert_count_for_key_exact "dlv-void-noid:$S77_ID17")" "1"
+assert_eq "⑰告警标题含'需人工核实'" "$(s77_alert_title_for_key_exact "dlv-void-noid:$S77_ID17")" "配送单已结束但快递100 侧可能仍有真实单，需人工核实"
+R=$(s77_alerts | jq -r --arg k "dlv-void-noid:$S77_ID17" --arg t "$S77_T17" '[.data[] | select(.key==$k)] | last | (.lines // []) | any(contains($t))')
+assert_eq "⑰告警正文含 taskId=$S77_T17" "$R" "true"
+sched '{"cancelIntentVoidMin":0}' >/dev/null   # 行已终态，不会再被 processCancelIntents 选中，计数应保持不变
+assert_eq "⑰再跑一轮调度，计数仍为 1" "$(s77_alert_count_for_key_exact "dlv-void-noid:$S77_ID17")" "1"
+echo "   -- ⑰反例：两个 id 都缺（纯 VOIDED）的意图单，同法结束 → dlv-void-noid: 计数 0，error_code=VOIDED --"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok"}}' >/dev/null
+S77_OID17B=$(mk_local_paid)
+req POST "/api/admin/local/orders/$S77_OID17B/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$S77_OID17B/call" "$AT")
+S77_DNO17B=$(jq -r .data.deliveryNo <<<"$R")
+sql "UPDATE deliveries SET provider_task_id=NULL, provider_order_id=NULL WHERE delivery_no='$S77_DNO17B'"
+S77_ID17B=$(sql "SELECT id FROM deliveries WHERE delivery_no='$S77_DNO17B'")
+req POST "/api/admin/local/orders/$S77_OID17B/delivery/cancel" "$AT" '{"reason":"店员要求取消"}' >/dev/null
+s77_alerts_reset
+sched '{"cancelIntentVoidMin":0}' >/dev/null
+R=$(sql "SELECT CONCAT(status,'|',error_code) FROM deliveries WHERE delivery_no='$S77_DNO17B'")
+assert_eq "⑰反例纯 VOIDED：status=FAILED error_code=VOIDED" "$R" "FAILED|VOIDED"
+assert_eq "⑰反例 dlv-void-noid: 告警计数为 0" "$(s77_alert_count_for_key_exact_all "dlv-void-noid:$S77_ID17B")" "0"
+
+echo "-- ⑱ R15-2：已结束行缺 orderId 的在途回调按 rank 决定是否告警（验收 28） --"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok"}}' >/dev/null
+S77_OID18=$(mk_local_paid)
+req POST "/api/admin/local/orders/$S77_OID18/accept" "$AT" >/dev/null
+R=$(req POST "/api/admin/local/orders/$S77_OID18/call" "$AT")
+S77_DNO18=$(jq -r .data.deliveryNo <<<"$R")
+sql "UPDATE deliveries SET status='FAILED', provider_task_id=NULL, provider_order_id=NULL, active_order_id=NULL, error_code='VOIDED' WHERE delivery_no='$S77_DNO18'"
+S77_ID18=$(sql "SELECT id FROM deliveries WHERE delivery_no='$S77_DNO18'")
+S77_T18="T77-$S77_TS-18"
+s77_alerts_reset
+S77_CC_BEFORE18=$(s77_calls_count cancelOrder)
+s77_cb "$S77_DNO18" "$S77_T18" 0 "已呼叫待抢单" "2026-09-24 12:18:00" "" >/dev/null   # rank10：不带 orderId，低于门槛
+sleep 0.5
+assert_eq "⑱status=0（rank10）不告警：kd-cb-ghost-noid: 计数 0" "$(s77_alert_count_for_key_exact_all "kd-cb-ghost-noid:$S77_ID18")" "0"
+assert_eq "⑱GHOSTWAIT 事件 1（首次留痕）" "$(sql "SELECT COUNT(*) FROM delivery_events WHERE delivery_id=$S77_ID18 AND dedupe_key LIKE 'GHOSTWAIT:%'")" "1"
+s77_cb "$S77_DNO18" "$S77_T18" 100 "骑手已接单" "2026-09-24 12:18:05" "" "李骑手" "13900002222" >/dev/null   # rank20：不带 orderId，带骑手信息
+sleep 0.5
+assert_eq "⑱status=100（rank20）命中告警：kd-cb-ghost-noid: 计数 1" "$(s77_alert_count_for_key_exact "kd-cb-ghost-noid:$S77_ID18")" "1"
+assert_eq "⑱告警标题含'骑手在途'" "$(s77_alert_title_for_key_exact "kd-cb-ghost-noid:$S77_ID18")" "已结束的配送单有骑手在途，但缺 orderId 无法自动撤销"
+R=$(s77_alerts | jq -r --arg k "kd-cb-ghost-noid:$S77_ID18" --arg t "$S77_T18" '[.data[] | select(.key==$k)] | last | (.lines // []) | (any(contains($t)) and any(contains("orderId=缺")))')
+assert_eq "⑱告警正文含 taskId 与 orderId=缺" "$R" "true"
+s77_cb "$S77_DNO18" "$S77_T18" 310 "配送中" "2026-09-24 12:18:10" "" >/dev/null   # rank50：紧接着不带 orderId，5 分钟抑制内不应再新增未抑制告警
+sleep 0.5
+assert_eq "⑱紧接 status=310：kd-cb-ghost-noid: 计数仍 1（5 分钟抑制）" "$(s77_alert_count_for_key_exact "kd-cb-ghost-noid:$S77_ID18")" "1"
+assert_eq "⑱GHOSTWAIT 事件数变为 2（低 rank 一条 + 首次达到告警门槛一条，后续同门槛去重）" "$(sql "SELECT COUNT(*) FROM delivery_events WHERE delivery_id=$S77_ID18 AND dedupe_key LIKE 'GHOSTWAIT:%'")" "2"
+assert_eq "⑱全程未外呼 cancelOrder" "$(s77_calls_count cancelOrder)" "$S77_CC_BEFORE18"
+assert_eq "⑱ghost_cancel_at 仍 NULL" "$(sql "SELECT IF(ghost_cancel_at IS NULL,'NULL','SET') FROM deliveries WHERE delivery_no='$S77_DNO18'")" "NULL"
+S77_O18="O77-$S77_TS-18"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"ok","cancelFeeFen":200}}' >/dev/null
+s77_cb "$S77_DNO18" "$S77_T18" 230 "骑手已到店" "2026-09-24 12:18:15" "$S77_O18" >/dev/null   # 这次带 orderId：应真正抢占并外呼
+sleep 1
+assert_eq "⑱补全 orderId 后 cancelOrder 恰新增 1 次" "$(($(s77_calls_count cancelOrder) - S77_CC_BEFORE18))" "1"
+assert_eq "⑱cancel_fee 记账 +200" "$(sql "SELECT cancel_fee FROM deliveries WHERE delivery_no='$S77_DNO18'")" "200"
 
 echo "-- ⑫ 无回退：恢复设置、重置 mock/alerts、造出的在途单收尾 --"
 req PUT /api/admin/settings/local-delivery "$AT" "$S77_ORIG" >/dev/null
