@@ -383,9 +383,10 @@ export default function Users() {
                   <p className="text-xs text-gray-400 mt-0.5">
                     最近下单 {fmtDate(u.latestOrder?.createdAt, '-')} · 注册 {fmtDate(u.createdAt)}
                   </p>
-                  {/* 号码来自订单收货人快照而非微信绑定号时，必须标出来源，不然店主会当成本人手机号 */}
+                  {/* 号码来自订单收货人快照而非微信绑定号时，必须标出来源，不然店主会当成本人手机号。
+                      日期不重复放：上一行「最近下单」已经是同一个值（修订 2） */}
                   {phoneInfo?.source === 'order' && u.latestOrder && (
-                    <p className="text-xs text-gray-400">最近一单收货人 · {fmtDate(u.latestOrder.createdAt)}</p>
+                    <p className="text-xs text-gray-400">最近一单收货人</p>
                   )}
                   <p className="text-xs text-gray-500 mt-1">
                     积分 <span className="text-gray-800 font-medium">{u.pointsBalance}</span> · 可用券{' '}
@@ -424,8 +425,9 @@ export default function Users() {
                 {phoneInfo ? (
                   <>
                     <div className="whitespace-nowrap">{phoneInfo.phone}</div>
+                    {/* 日期不重复放：「最近下单」列已经是同一个值（修订 2，把 1024 行高从 77 压回 ≤62） */}
                     {phoneInfo.source === 'order' && u.latestOrder && (
-                      <div className="text-xs text-gray-400">最近一单收货人 · {fmtDate(u.latestOrder.createdAt)}</div>
+                      <div className="text-xs text-gray-400 whitespace-nowrap">最近一单收货人</div>
                     )}
                   </>
                 ) : '-'}
