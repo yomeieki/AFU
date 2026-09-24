@@ -265,6 +265,33 @@ else
   sql "DELETE FROM order_items WHERE product_name='e2e-fk-lock';"
 fi
 
+# 裁决 + 修订 4：e 形态（订单会话先持 S(products)、1.5s 后才碰 sku）会与 PUT 互锁触发死锁，
+# 重试用全新事务重新一致性读，天然掩盖了「去掉 FOR UPDATE」这个改坏点，测不出它的必要性。
+# g 形态让并发方（同取消/退款回滚同形：先锁 sku A 再锁 products，同一规格）先锁住 sku 行、
+# 全程持锁到 COMMIT——PUT 的快照在对方持锁期间建立，UPDATE sku 被 X(A) 挡住直到对方提交，
+# PUT 全程不持任何锁，没有死锁、没有重试，随后用快照里的旧值算 delta，才是「FOR UPDATE
+# 防快照陈旧」这条防线的确定性复现（不依赖毫秒级时序，本机两次实测一致）。
+echo "-- 74.11-g 同一规格的取消回滚 vs 改库存（快照陈旧的确定性复现，裁决+修订 4） --"
+p74_reset
+p74_sql_bg "BEGIN; UPDATE product_skus SET stock=stock+1 WHERE id=$P74_A; UPDATE products SET stock=stock+1, sales_count=sales_count-1 WHERE id=$P74_PID; SELECT SLEEP(2); COMMIT;"
+sleep 0.7
+P74_T0=$(p74_now_ms)
+R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":5}")
+P74_T1=$(p74_now_ms)
+assert_eq "74.11-g code 0" "$(code "$R")" "0"
+assert_eq "74.11-g data.stock=5" "$(jq -r .data.stock <<<"$R")" "5"
+assert_eq "74.11-g data.productStock=25" "$(jq -r .data.productStock <<<"$R")" "25"
+wait
+P74_G_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
+P74_G_SS=$(sql "SELECT COALESCE(SUM(stock),0) FROM product_skus WHERE product_id=$P74_PID;")
+assert_eq "74.11-g products.stock == SUM(sku)" "$P74_G_PS" "$P74_G_SS"
+assert_eq "74.11-g products.stock=25" "$P74_G_PS" "25"
+assert_eq "74.11-g A=5" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "5"
+assert_eq "74.11-g B=10" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")" "10"
+assert_eq "74.11-g C=10" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_C;")" "10"
+P74_ELAPSED=$((P74_T1 - P74_T0))
+[[ "$P74_ELAPSED" -ge 700 ]] && ok "74.11-g PUT 耗时 ${P74_ELAPSED}ms ≥700（确实等过锁，不是巧合绿）" || fail "74.11-g PUT 耗时 ${P74_ELAPSED}ms < 700，怀疑没有真正并发" "$P74_ELAPSED"
+
 echo "-- 74.11-d 无规格商品：绝对值编辑语义（无 sum 不变量，不做锁读+增量）；R4：改真并发，PUT 要真等过锁 --"
 p74_stock "$Q74_PID" '{"stock":10}' >/dev/null   # 先把 Q 钉成 10
 p74_sql_bg "BEGIN; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$Q74_PID AND stock>=1; SELECT SLEEP(2); COMMIT;"
