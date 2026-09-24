@@ -28,10 +28,28 @@ import { ProviderError } from './types'
 import { TERMINAL } from './state'
 import { recordDeliveryEvent, adminEventKey, trunc } from './events'
 import { notifySystemAlert } from '../notify'
-import { finalizeCancel } from './orchestrator'
+import { notifyLocalDeliveryAlert } from '../order-notify'
+import { finalizeCancel, patchRacedCancelFee } from './orchestrator'
 
 export const CANCEL_INTENT_MAX_ATTEMPTS = 5
 export const CANCEL_INTENT_VOID_MIN = 5
+
+/**
+ * P22（复核 R7）：意图单收尾（自动取消成功 / 自动结束）时，如果顾客早就在等取消申请
+ * 被处理（`order.cancelRequestedAt` 非空），店员的「处理顾客取消申请」弹窗在收尾之前会
+ * 卡在意图等待态、退款也会被 `refund.ts` 的 42221（有在途配送单）拦下——这条通知告诉店员
+ * 「现在可以回去点「去处理」退款了」。不自动退款、不放宽 42221，只是把「该去看一眼了」
+ * 这件事从「店员得自己想起来刷新」变成主动推一下。
+ */
+export async function notifyIntentDoneIfRefundPending(orderId: number): Promise<void> {
+  const o = await prisma.order.findUnique({ where: { id: orderId }, select: { orderNo: true, cancelRequestedAt: true } })
+  if (!o || !o.cancelRequestedAt) return
+  notifyLocalDeliveryAlert('配送已结束，可处理顾客的取消申请', [
+    `订单 ${o.orderNo}`,
+    '配送单已取消/结束，退款不再被在途配送单拦截',
+    '请到工作台点「去处理」退款',
+  ], { key: `dlv-intent-done-refund:${orderId}` })
+}
 
 type DeliveryLike = {
   id: number; orderId: number; orderNo: string; deliveryNo: string
@@ -67,8 +85,13 @@ export async function recordCancelIntent(d: DeliveryLike, input: { operator: str
  * P16：意图非空、非终态、taskId 与 orderId 都非空时，自动执行真取消。不先 precancel（店主
  * 已决定「取消费一律认了」，省一次外呼）；直接 cancelOrder，取消费从响应记账。
  *
- * 原子抢占：`cancelIntentAttempts` 读到的值作为 where 条件，命中 0 行即退出——回调认领、
- * orchestrator 落库、每分钟兜底任务三个触发点可能同时命中同一行，只有一个真的外呼。
+ * 原子抢占 + 在途租约（复核 R2）：`cancelIntentAttempts` 读到的值作为 where 条件只能挡住
+ * 「同时读到同一个 attempts 值」的并发触发；挡不住「第一次外呼还没返回、第二个触发点这时候
+ * 进来，读到的已经是抢占后的新 attempts 值」——那种情况下第二个触发点会认为"没人抢"而再抢一次，
+ * 造成重复外呼（复核实测：回调 0 认领单号触发一次，紧接着回调 100/兜底调度触发第二次，
+ * 第一次外呼还没返回，两次都抢占成功）。加 `cancelIntentLockedAt` 租约：抢占条件在原有基础上
+ * 追加"未加锁或加锁已超过 60 秒"（cancelOrder 超时上限 8 秒，60 秒是进程崩溃的兜底），
+ * `finally` 无论成功失败都释放锁。
  */
 export async function executeCancelIntent(deliveryId: number): Promise<void> {
   const d = await prisma.delivery.findUnique({ where: { id: deliveryId } })
@@ -77,25 +100,40 @@ export async function executeCancelIntent(deliveryId: number): Promise<void> {
   if (TERMINAL.includes(d.status as typeof TERMINAL[number])) return
   if (!d.providerTaskId || !d.providerOrderId) return
   const seized = await prisma.delivery.updateMany({
-    where: { id: d.id, cancelIntentAt: { not: null }, status: { notIn: [...TERMINAL] }, cancelIntentAttempts: d.cancelIntentAttempts },
-    data: { cancelIntentAttempts: { increment: 1 } },
+    where: {
+      id: d.id, cancelIntentAt: { not: null }, status: { notIn: [...TERMINAL] }, cancelIntentAttempts: d.cancelIntentAttempts,
+      OR: [{ cancelIntentLockedAt: null }, { cancelIntentLockedAt: { lt: new Date(Date.now() - 60_000) } }],
+    },
+    data: { cancelIntentAttempts: { increment: 1 }, cancelIntentLockedAt: new Date() },
   })
-  if (seized.count === 0) return   // 别人已经抢到这一次（同一轮的另一个触发点，或并发的兜底任务）
+  if (seized.count === 0) return   // 别人已经抢到这一次（同一轮的另一个触发点，或并发的兜底任务），或租约未到期
   try {
     const { cancelFeeFen } = await getDeliveryProvider().cancelOrder({
       taskId: d.providerTaskId, orderId: d.providerOrderId, reason: d.cancelIntentReason ?? '商家取消',
     })
-    await prisma.$transaction(async (tx) => {
+    const cancelled = await prisma.$transaction(async (tx) => {
       // 重读：外呼这几百毫秒里配送单可能已经终态化（回调抢先到达把它 CANCELLED/DELIVERED 了）——
       // finalizeCancel 内部的 updateMany 本身也有 status notIn TERMINAL 护栏，这里提前判断只是
       // 避免对已终态的行调用 rollbackOrderAfterCancel/清 readyAt 这类无意义的写。
       const fresh = await tx.delivery.findUnique({ where: { id: d.id } })
-      if (!fresh || TERMINAL.includes(fresh.status as typeof TERMINAL[number])) return
-      await finalizeCancel(
+      if (!fresh) return false
+      if (TERMINAL.includes(fresh.status as typeof TERMINAL[number])) {
+        // R1：我方这次 cancel 外呼期间，运力方为同一次取消推来的 720 回调先到，行已经被
+        // callback.ts 终态化成 CANCELLED（cancelFee 默认 0）——把响应带回来的取消费补记上，
+        // 不能让它平白丢掉。其它终态（理论上不该发生：DELIVERED/FAILED）什么都不做，
+        // 钱的去向留给 R11（建议，未处理）里提到的收尾失败场景一并核对。
+        if (fresh.status === 'CANCELLED') await patchRacedCancelFee(tx, fresh, cancelFeeFen, d.cancelIntentBy ?? 'system', 'ADMIN')
+        return false
+      }
+      const r = await finalizeCancel(
         tx, fresh, cancelFeeFen, d.cancelIntentReason ?? '商家取消', d.cancelIntentBy ?? 'system', 'ADMIN',
         (feeYuan) => `已自动向快递100 取消（取消费 ¥${feeYuan}，已记账）`,
       )
+      return r.moved === 1
     })
+    // P22（R7）：真的把配送单终态化成 CANCELLED 了才通知——顾客若早就申请了取消，
+    // 现在退款不会再被 42221 拦下，店员该回去点「去处理」了。
+    if (cancelled) void notifyIntentDoneIfRefundPending(d.orderId)
   } catch (e) {
     const msg = e instanceof ProviderError ? `${e.kind}:${e.code} ${e.message}` : (e as Error).message
     await prisma.delivery.updateMany({ where: { id: d.id }, data: { cancelIntentLastError: trunc(msg, 255) } })
@@ -114,6 +152,10 @@ export async function executeCancelIntent(deliveryId: number): Promise<void> {
         ], { key: `dlv-cancel-intent-failed:${d.id}` })
       }
     }
+  } finally {
+    // 租约无论成败都要释放——成功时行多半已终态（释放与否不再影响谁），失败时必须放行，
+    // 不然下一次重试（兜底调度或回调）永远读到"未过期的锁"，5 次重试机制直接失效。
+    await prisma.delivery.updateMany({ where: { id: d.id }, data: { cancelIntentLockedAt: null } })
   }
 }
 
@@ -132,6 +174,16 @@ export async function executeCancelIntent(deliveryId: number): Promise<void> {
  *  - 任何 status + rank===100（520 已送达）→ false（撤不了，只能告「已送达，请核对费用」）
  *  - side（515/510/720，非 rank 类型）→ false（旁路态不构成「幽灵活单」；照旧留痕即可）
  */
+/**
+ * 复核 R3 + 验收 24：P17(b) 自动结束分支该不该收这一行——方案原文是「任一 id 为空」，
+ * 旧代码只判断了 providerTaskId，导致「有 taskId 无 orderId」的行永久卡住。tasks.ts 的
+ * processCancelIntents 直接调用这个函数决定 where 条件里的分支，selftest 断言的就是它本身
+ * （不是复刻一份逻辑）——删掉 `!providerOrderId` 那一半，这条断言会先变红。
+ */
+export function shouldAutoVoidCancelIntent(providerTaskId: string | null, providerOrderId: string | null): boolean {
+  return !providerTaskId || !providerOrderId
+}
+
 export function shouldKillGhost(
   status: string,
   providerTaskId: string | null,
@@ -148,12 +200,28 @@ export function shouldKillGhost(
  * P19：已结束的配送单仍收到在途回调（幽灵活单）→ 自动向运力方撤销。原子抢占（ghostCancelAt）
  * 保证同批多条回调只有一个真的外呼；调用方（callback.ts）已在同一次回调事务里把 taskId/
  * orderId 按列认领到这张行上（P3），这里直接读行上的值即可，不需要调用方再传一遍。
+ *
+ * 复核 R4：顺序改成「先读行、两 id 都齐全才抢占」——旧版先无条件抢占 `ghostCancelAt`，
+ * 缺 orderId 的那一条回调（常见：720 之外的旁路状态、或运力方这次回调本就没带 orderId）
+ * 会把占位烧掉，之后带着完整 id 的回调再来时 `seized.count===0`（占位已被烧）直接放弃，
+ * 全程不外呼也不告警，幽灵活单永远撤不掉。现在缺 id 时不抢占，只留一条 `GHOSTWAIT:` 事件
+ * （按 deliveryId+status 去重，同一状态下重复的缺 id 回调不会连续刷事件），等下一条带全 id
+ * 的回调再来才真正抢占。
  */
 export async function killGhostDelivery(deliveryId: number): Promise<void> {
+  const d = await prisma.delivery.findUnique({ where: { id: deliveryId } })
+  if (!d) return
+  if (!d.providerTaskId || !d.providerOrderId) {
+    try {
+      await recordDeliveryEvent(prisma, {
+        deliveryId, dedupeKey: `GHOSTWAIT:${deliveryId}:${d.status}`.slice(0, 64), source: 'CALLBACK',
+        statusDesc: `已结束配送单收到在途回调，但 taskId/orderId 尚不齐全（taskId=${d.providerTaskId ?? '缺'} orderId=${d.providerOrderId ?? '缺'}），暂不撤销，等下一条回调带齐后自动处理`,
+      })
+    } catch { /* 留痕失败不升级 */ }
+    return
+  }
   const seized = await prisma.delivery.updateMany({ where: { id: deliveryId, ghostCancelAt: null }, data: { ghostCancelAt: new Date() } })
   if (seized.count === 0) return   // 同批多条回调，另一条已经抢到
-  const d = await prisma.delivery.findUnique({ where: { id: deliveryId } })
-  if (!d || !d.providerTaskId || !d.providerOrderId) return   // 没有 id 没法真的去撤，上面的事件已经留痕
   try {
     const { cancelFeeFen } = await getDeliveryProvider().cancelOrder({
       taskId: d.providerTaskId, orderId: d.providerOrderId, reason: '已结束配送单收到在途回调，自动撤销',

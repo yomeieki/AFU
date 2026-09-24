@@ -564,9 +564,16 @@ export async function finalizeCancel(
   operator: string,
   source: 'ADMIN' | 'SCHEDULER',
   descBuilder?: (feeYuan: string) => string,
-): Promise<{ moved: number }> {
+): Promise<{ moved: number; terminalStatus?: string }> {
   const moved = await tx.delivery.updateMany({ where: { id: d.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(reason, 255) ?? '商家取消', cancelFee: cancelFeeFen ?? 0 } })
-  if (moved.count === 0) return { moved: 0 }
+  if (moved.count === 0) {
+    // 复核 R1：moved===0 不一定是「钱丢了」——若我方发起的 cancel 外呼期间，运力方为这次
+    // 取消推来的 720 回调先一步把行终态化成 CANCELLED（cancelFee 仍是默认 0，720 分支不写它），
+    // 调用方应当把 cancelFeeFen 补记到这一行，而不是当成「未知路径抢先终态化」去告警+抛错。
+    // 这里只回读状态，真正的补记逻辑在 patchRacedCancelFee（调用方按 terminalStatus 决定要不要调）。
+    const fresh = await tx.delivery.findUnique({ where: { id: d.id }, select: { status: true } })
+    return { moved: 0, terminalStatus: fresh?.status }
+  }
   const { rolled, wasShipped } = await rollbackOrderAfterCancel(tx, d.orderId)
   const rollbackStuck = wasShipped && rolled === 0
   if (rollbackStuck) {
@@ -585,6 +592,39 @@ export async function finalizeCancel(
   const baseDesc = descBuilder ? descBuilder(feeYuan) : `商家取消（取消费 ${feeYuan} 元）`
   await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `${baseDesc}${rollbackStuck ? '【订单未回退，请核对】' : ''}${unreadied && unreadied.count > 0 ? '【已撤回「已备好」，到点不再自动呼叫】' : ''}`, operator })
   return { moved: 1 }
+}
+
+/**
+ * 复核 R1：我方发起的 cancel 外呼（8 秒内）期间，运力方为这次取消推来的 720 回调可能先一步
+ * 到达，把行终态化成 CANCELLED——720 分支不写 cancelFee（默认 0）。此时 cancelOrder 响应带回
+ * 来的真实取消费不能再走 finalizeCancel（它的 updateMany 要求 status notIn TERMINAL，必然
+ * 落空），但也不能就此告警丢弃：这是「唯一允许补写已终态行」的例外，只补 cancelFee 这一列
+ * （`where cancelFee:0` 保证幂等，不会覆盖已经补过的值），不碰 status/cancelReason/cancelledAt。
+ *
+ * 调用方只在 finalizeCancel 返回 `terminalStatus==='CANCELLED'` 时才调用本函数；其它终态
+ * （DELIVERED/FAILED）钱真的对不上账，仍按原「取消已扣费但未记账」告警+抛错处理（见 R1
+ * 反例：520 先到时不该走这条补记通道）。
+ */
+export async function patchRacedCancelFee(
+  tx: Prisma.TransactionClient,
+  d: { id: number; orderId: number; orderNo: string; deliveryNo: string },
+  cancelFeeFen: number | null,
+  operator: string,
+  source: 'ADMIN' | 'SCHEDULER',
+): Promise<{ patched: boolean }> {
+  const patched = await tx.delivery.updateMany({ where: { id: d.id, status: 'CANCELLED', cancelFee: 0 }, data: { cancelFee: cancelFeeFen ?? 0 } })
+  if (patched.count === 0) return { patched: false }
+  const feeYuan = ((cancelFeeFen ?? 0) / 100).toFixed(2)
+  await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source, statusDesc: `取消费 ¥${feeYuan}（运力方 720 回调先到，补记）`, operator })
+  // ADMIN 来源清 readyAt：720 分支自己不清（它不知道这是不是「店员主动取消」触发的），
+  // 这里补一次，与 finalizeCancel 正常路径的语义保持一致。
+  if (source === 'ADMIN') {
+    await tx.order.updateMany({
+      where: { id: d.orderId, deliveryType: 'LOCAL', scheduledAt: { not: null }, status: 'PREPARING', readyAt: { not: null } },
+      data: { readyAt: null },
+    })
+  }
+  return { patched: true }
 }
 
 export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string; source?: 'ADMIN' | 'SCHEDULER' }): Promise<{ cancelFeeFen: number | null; pending?: true }> {
@@ -608,6 +648,11 @@ export async function cancelDelivery(input: { orderId: number; operator: string;
   const result = await prisma.$transaction(async (tx) => {
     const r = await finalizeCancel(tx, d, cancelFeeFen, input.reason, input.operator, source)
     if (r.moved === 0) {
+      // R1：行已经被 720 回调抢先终态化成 CANCELLED——补记取消费，不当成「丢了」处理
+      if (r.terminalStatus === 'CANCELLED') {
+        const p = await patchRacedCancelFee(tx, d, cancelFeeFen, input.operator, source)
+        if (p.patched) return r
+      }
       // 外呼（取消费的扣费）在事务外已经发生；这里写入没命中，说明配送单在 8 秒外呼期间
       // 被别的路径抢先终态化（例如店员双击、或回调抢先到达）。钱已经真花给运力方了，
       // 本地却没有任何记录能对上账——照 addTip 对同样处境的先例，先告警再抛，且告诉店员
