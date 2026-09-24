@@ -297,3 +297,163 @@ docs/superpowers/previews/**
 - 后台人工检查：`cd apps/admin && VITE_PROXY_TARGET=http://localhost:3145 npm run dev -- --port 5145 --strictPort`（不要改 `.claude/launch.json`，在禁止清单里）。375 宽用浏览器工具的 mobile 预设截图。
 - 给一个用户造 25+ 张单：写在 scratchpad 的临时 shell 循环（复用 e2e 的 `req/u75_order` 写法：登录 → 建地址 → 循环加购+下单+支付），不进仓库。
 - 收尾：只 kill 自己记下的 API/admin dev PID；私有库可留着不删。
+
+---
+
+## 修订 1（2026-09-24，M 级复核 R1/R2 阻断项；R3/R4/R5/R7 顺手纳入；R6/R8 判定）
+
+【工序】规划 【模型】Fable 5.1 【等级】M（维持——修订不触及 §2.2 第 2 条：仍零迁移、只读查询、不碰支付/退款写路径）
+
+复核对象 HEAD `cec0678`。以下行号按 `cec0678`。
+
+### R1-0 亲自核实（§3.2）
+
+| 项 | 核实方式 | 结果 |
+|---|---|---|
+| R1 无过期保护 | 读 `apps/admin/src/pages/Users.tsx:195-205`（`loadUserOrders` 的 `.then` 无条件 `setOrdersTotal`/`setUserOrders`）、`:224-243`（重开 effect 的 `.then` 无条件 `setOrdersModal(row)`）、`:206-213`（`openOrders` 不作废在途请求）、`:535`（加载更多用 `ordersModal.id` 发请求但结果不校验） | **成立**。三条乱序路径（a 加载更多晚到、b `getUser` 晚到、c 首页晚到）都会把别人的结果写进当前弹窗；c 在 BASE 已存在，本批把「加载更多」加进来后 a 的后果更重（`ordersTotal` 被改写、列表混入他人订单）。 |
+| R2 布局回退 | 本机起 `food_shop_uo`（4 个有单用户，1 人 25 单三种渠道）+ admin dev，浏览器 1024/1280/1440 实测 DOM；再把 `Users.tsx` 临时换成 BASE 版同法测量后原样恢复（`git checkout --`，`cmp` 与 HEAD 一致） | **成立**。HEAD：1024 → 表头 `th` 高 **84**（三行）、状态胶囊高 **38**（「正/常」两行）、行高 85；1280 → `th` 64（两行）、胶囊 38、行高 77；1440 → `th` 44、胶囊 38（仍折）。BASE：1024 → `th` 64、胶囊 38、行高 77（BASE 在 1024 本来就折）；**1280 → `th` 44、胶囊 18、行高 61（单行）**。即 1280 从单行退成两行、1024 从两行退成三行。我的数据下 1024 表宽 = 容器宽（976，按钮完整可见，右缘 −16px）；复核者的数据下表宽 999 > 961 把「券记录」裁掉——两种数据形态都算回退，修法必须两种都覆盖。弹窗（1280）：渠道标签 `span` 高 **39**（两行），订单号后被挤到下一行；状态胶囊 20（正常）。 |
+| R3 错误一律「用户不存在」 | `Users.tsx:238-241` `.catch` 不分错误码 | 成立，纳入 |
+| R4 排序无 id 兜底 / 追加不去重 | `apps/server/src/routes/admin/users.ts:249` `orderBy: { createdAt: 'desc' }`；`Users.tsx:200` `[...prev, ...list]` 无去重 | 成立，纳入 |
+| R5 `StatusBadge` 未传 `deliveryType` | `Users.tsx:498,:522` | 成立，纳入（`StatusBadge.tsx:30-35` 只有传 `PICKUP` 才显示「待取餐/已取餐」） |
+| R7 格式 | `utils/time.ts:78` `fmtMonthDayTime` 是 `M-DD HH:mm`；方案与预览写的 `MM-DD` 是规划笔误 | 成立，纳入（改成日期，见 R1-7） |
+| R8 截图证据 | `docs/superpowers/notes/2026-09-24-admin-users-orders-acceptance/` 16 张 PNG，浏览器工具截图天然没有地址栏 | 成立，改验收方式（见 R1-8） |
+
+### R1-1 [R1 阻断] 订单弹窗的请求过期保护——纯状态机 + 函数式更新
+
+**做法**：把弹窗的全部状态收进一个对象，所有网络响应都带着「发出时的会话号 `seq`」回来，通过纯函数合并；`seq` 不等于当前会话号的响应**原样返回旧 state**（同一引用），React 不重渲。会话号由组件里一个 `useRef` 计数器生成（每次打开/关闭/按 URL 重开都 `+1`），纯函数只比较数字，不依赖 React。
+
+新文件 `apps/admin/src/utils/user-orders-session.ts`（纯逻辑，不 import `.tsx`）：
+
+- `interface OrdersSession<U, O extends { id: number }> { seq: number; user: U | null; list: O[]; total: number; page: number }`；`user === null` = 弹窗不渲染（关闭或「按 URL 重开、用户行还没回来」）。
+- `initialSession`：`{ seq: 0, user: null, list: [], total: 0, page: 0 }`。
+- `openSession(s, seq, user: U | null)`：返回 `{ seq, user, list: [], total: 0, page: 0 }`（`user` 传 `null` 表示按 URL 重开、等 `getUser`）。
+- `closeSession(s, seq)`：返回 `{ seq, user: null, list: [], total: 0, page: 0 }`。
+- `applyUserLoaded(s, { seq, user })`：`seq !== s.seq` → 返回 `s`；否则 `{ ...s, user }`。
+- `applyOrdersPage(s, { seq, page, list, total })`：`seq !== s.seq` → 返回 `s`；`page === 1` → `list` 整体替换；否则追加并**按 `id` 去重**（已存在的跳过，保持原顺序）；`total`、`page` 以响应为准。
+- `nextSeq` 不放这里——组件用 `useRef(0)`，`const seq = ++seqRef.current`。
+
+组件（`Users.tsx`）改法：
+
+- `const [session, setSession] = useState<OrdersSession<AdminUser, UserOrder>>(initialSession)`，`ordersModal` 即 `session.user`，`userOrders/ordersTotal/ordersPage` 即 `session.list/total/page`。原来的 `ordersLoading`/`ordersMoreLoading`/`ordersFailed` 三个瞬时标记**也并进 `OrdersSession`**（`loading: 'idle' | 'first' | 'more'`、`failed: boolean`），由 `openSession`（置 `loading:'first'`）、加载更多的发起（`beginMore(s, seq)` 置 `'more'`）、`applyOrdersPage`（置 `'idle'`）、`applyOrdersError(s, { seq, page })`（`page === 1` → `failed: true`，否则只复位 `loading`）统一处理——全部经纯函数判 `seq`。不要把它们留成独立 state 再在 `.then` 里靠「updater 是否同步执行」判断有没有被丢弃，React 18 不保证 updater 同步跑。
+- 行内「订单」按钮：`const seq = ++seqRef.current; setSession(s => openSession(s, seq, u)); 写 URL; loadUserOrders(u.id, 1, seq)`。
+- 关闭：`const seq = ++seqRef.current; setSession(s => closeSession(s, seq)); 清 URL`。
+- 重开 effect（依赖 `ordersUserId`）：`null` → 若 `session.user` 非空则按关闭处理；否则若 `session.user?.id === ordersUserId` 直接返回；否则 `const seq = ++seqRef.current; setSession(s => openSession(s, seq, null)); getUser(id).then(row => { setSession(s => applyUserLoaded(s, { seq, user: row })); loadUserOrders(id, 1, seq) }).catch(按 R1-3 分流)`。
+- `loadUserOrders(userId, page, seq)`：响应 `.then(res => setSession(s => applyOrdersPage(s, { seq, page, list, total })))`，`.catch(() => setSession(s => applyOrdersError(s, { seq, page })))`。「加载更多」按钮传当前 `session.seq`。
+- 行点击/详情跳转逻辑不变。
+
+**测试** `apps/admin/src/utils/user-orders-session.test.ts`（每条都要写成「调用序列 → 断言」，用 `assert.equal(next, prev)` 断言「被丢弃 = 同一引用」）：
+
+- a）加载更多晚到：`open(A, seq1)` → `page(seq1, p1, [a1..a20], 25)` → 关闭 `close(seq2)` → `open(B, seq3)` → `page(seq3, p1, [b1], 1)` → **`page(seq1, p2, [a21..a25], 25)` → 返回同一引用；`list` 仍 `[b1]`、`total` 仍 1**。
+- b）`getUser` 晚到：`open(null, seq1)`（按 URL 重开 7）→ `open(B, seq2)`（点了 B 的按钮）→ **`applyUserLoaded({ seq: 1, user: 7 })` → 同一引用，`user` 仍是 B**。
+- c）首页晚到（BASE 既有）：`open(A, seq1)` → `open(B, seq2)` → **`page(seq1, p1, A 列表)` → 丢弃** → `page(seq2, p1, B 列表)` → 应用。
+- d）关闭后晚到：`open(A, seq1)` → `close(seq2)` → `page(seq1, p1, …)` → 丢弃，`user` 仍 `null`、`list` 仍 `[]`。
+- e）追加去重：`page(seq, p1, [1,2,3], 5)` → `page(seq, p2, [3,4,5], 5)` → `list` id 为 `[1,2,3,4,5]`（3 只出现一次，顺序不变），`page = 2`。
+- f）错误：`open(A, seq1)` → `applyOrdersError({ seq: 1, page: 1 })` → `failed = true`；`applyOrdersError({ seq: 0, page: 2 })` → 同一引用。
+
+**改坏验证**（执行者在报告里给出原始输出）：把 `applyOrdersPage`/`applyUserLoaded` 里的 `if (seq !== s.seq) return s` 临时删掉跑一次 `npm test --workspace=apps/admin` → a/b/c/d 必红；恢复后必绿。
+
+**人工检查**（进 R1-8 的截图清单）：浏览器 DevTools 把网络节流到 3G（或用「阻止请求 → 放行」的方式）复现复核者的 a) 场景——A 弹窗点「加载更多」未返回时关掉、开 B——B 弹窗标题仍是 B 的「共 N 单」、行数 = B 的单数、没有 A 的订单号。
+
+### R1-2 [R2 阻断] 列合并方案（1024/1280/1440 单行；375 不动；不删信息、不横向裁切）
+
+目标列（≥md 表格，共 **9** 列，`columns={9}`）：
+
+| # | 表头 | 单元格内容 | 说明 |
+|---|---|---|---|
+| 1 | 用户 | 头像 + 显示名（不变） | |
+| 2 | 手机号 | 第一行号码（`whitespace-nowrap`）；第二行原有 `text-xs`「最近一单收货人 · 2026-09-24」（允许它自己换行，这是本来就有的两行结构） | 不变 |
+| 3 | 订单数 | 数字（`whitespace-nowrap`） | |
+| 4 | 累计消费（可点排序，同现状） | `¥1,086.40`（`whitespace-nowrap`） | 表头按钮 `whitespace-nowrap` |
+| 5 | 最近下单 | `YYYY-MM-DD`（见 R1-7），`whitespace-nowrap` | |
+| 6 | **积分/券**（新合并列） | 第一行积分数字；第二行 `text-xs text-gray-500`「可用券 N」 | 原「积分」「可用券」两列合一，信息不丢 |
+| 7 | 状态 | 胶囊加 `whitespace-nowrap` | |
+| 8 | **登录/注册**（新合并列） | 第一行 `fmtDateTime(lastLoginAt, '-')`；第二行 `text-xs text-gray-500`「注册 YYYY-MM-DD」 | 原「最近登录」「注册时间」两列合一 |
+| 9 | 操作 | 四个按钮不变；容器改成 `flex flex-wrap justify-end gap-x-3 gap-y-1`，并在 `<xl`（1024–1279）限制宽度让它自然折成 2×2（例如 `max-w-[7.5rem] xl:max-w-none ml-auto`），`≥xl` 单行 | 按钮全部可见可点；不引入横向滚动 |
+
+其它硬要求：所有 `th` 加 `whitespace-nowrap`；两列合并后手机卡片（<md）**不变**（卡片本来就分行显示这些信息）。宽度预算（1024 容器 961–976）：用户 ~96 + 手机号 ~122 + 订单数 ~60 + 累计消费 ~102 + 最近下单 ~107 + 积分/券 ~92 + 状态 ~72 + 登录/注册 ~144 + 操作(2×2) ~130 ≈ 925 ≤ 961；1280（容器 1232）操作单行 222 时 ≈ 1017 ≤ 1232。若实测超预算，先缩 `px-4 → px-3`（仅 `lg:` 以下），再上报。
+
+弹窗（≥md 表格）：订单号 `span` 与渠道标签都加 `whitespace-nowrap`，且两者放在同一个 `inline-flex items-center gap-1.5` 容器里（保证同一行）；「下单时间」列 `whitespace-nowrap`；「商品」列是唯一允许换行的列。<md 卡片不变。
+
+**验收（DOM 实测，三档各跑一次，输出 JSON 原文贴进报告并存 `measurements.md`）**：在 `/users`（默认筛选，≥4 行且含「最近一单收货人」小字的行）运行：
+
+```js
+(() => { const t=document.querySelector('table'); const card=t.closest('.overflow-hidden'); const cr=card.getBoundingClientRect();
+  const rows=[...t.querySelectorAll('tbody tr')]; const ths=[...t.querySelectorAll('thead th')];
+  const badge=r=>[...r.querySelectorAll('span')].find(s=>/^(正常|禁用)$/.test(s.innerText.trim()));
+  return { vw: innerWidth, tableW: Math.round(t.getBoundingClientRect().width), containerW: Math.round(cr.width),
+    thH: ths.map(th=>Math.round(th.getBoundingClientRect().height)),
+    rowH: rows.map(r=>Math.round(r.getBoundingClientRect().height)),
+    badgeH: rows.map(r=>Math.round(badge(r).getBoundingClientRect().height)),
+    btns: rows.map(r=>[...r.querySelectorAll('td:last-child button')].map(b=>({t:b.innerText, h:Math.round(b.getBoundingClientRect().height), over:Math.round(b.getBoundingClientRect().right-cr.right)}))),
+    scrollX: document.documentElement.scrollWidth - innerWidth } })()
+```
+
+判定（三档都要满足）：`tableW ≤ containerW`；每个 `thH ≤ 44`（单行）；每个 `badgeH ≤ 20`；每个按钮 `h ≤ 24` 且 `over ≤ 0`；`scrollX ≤ 0`；`rowH`：1280/1440 每行 ≤ 62（与 BASE 1280 的 61 同级），1024 每行 ≤ 70（操作 2×2 允许多一行按钮）。**与 BASE 对照**：BASE 1280 = `th 44 / 胶囊 18 / 行 61`，修后 1280 不得劣于它；BASE 1024 = `th 64 / 胶囊 38 / 行 77`，修后 1024 必须优于它（`th ≤ 44`、胶囊 ≤ 20）。
+
+弹窗在 1280 打开 25 单用户后运行：
+
+```js
+(() => { const h=[...document.querySelectorAll('h3')].find(h=>h.innerText.includes('的订单')); const modal=h.closest('.bg-white'); const mt=modal.querySelector('table');
+  const rows=[...mt.querySelectorAll('tbody tr')];
+  return { modalW: Math.round(modal.clientWidth), tableW: Math.round(mt.getBoundingClientRect().width),
+    tag: rows.map(r=>{const no=r.querySelector('td:first-child span.font-mono'); const tg=r.querySelector('td:first-child span.rounded'); return {h:Math.round(tg.getBoundingClientRect().height), dTop:Math.round(tg.getBoundingClientRect().top-no.getBoundingClientRect().top)}}),
+    rowH: rows.map(r=>Math.round(r.getBoundingClientRect().height)) } })()
+```
+
+判定：`tableW ≤ modalW`；每个 `tag.h ≤ 20` 且 `|dTop| ≤ 4`（与订单号同一行）。375：`document.documentElement.scrollWidth ≤ 375`，卡片仍显示「累计 ¥x」与「最近下单」。
+
+### R1-3 [R3] 按 URL 重开时的错误分流
+
+`getUser` 的 `.catch(err)`：`err.response?.data?.code === 40401`（或 HTTP 404）→ `toast.error('用户不存在')` + 清 `orders` 参数 + `closeSession`；其它（网络错误、5xx、超时）→ `toast.error('用户加载失败，请刷新重试')`，**保留** `orders` 参数、`closeSession`（弹窗不开，刷新会重试）。两种都必须过 `seq` 校验（`seq !== seqRef.current` 直接返回，不弹 toast）。人工检查：地址栏 `orders=99999999` → 「用户不存在」且参数被清；把 API 停掉后刷新带 `orders=<有效 id>` 的地址 → 「用户加载失败」且参数仍在。
+
+### R1-4 [R4] 订单列表排序兜底 + 追加去重
+
+- 服务端 `users.ts:249`：`orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]`（与 `latestOrderByUserIds` 的窗口排序同序）。
+- 前端去重已由 R1-1 的 `applyOrdersPage` 覆盖（测试 e）。弹窗打开期间新下的单会把分页整体后移，可能重复一行——去重后不再出现重复 key；漏行（同毫秒两单）由 id 兜底消除。
+
+### R1-5 [R5] 自取单状态文案
+
+`Users.tsx:498,:522` 改为 `<StatusBadge status={o.status} deliveryType={o.deliveryType} />`。人工检查：25 单用户弹窗里 `PICKUP` 单的「已发货」显示为「待取餐」（或「已取餐」）。
+
+### R1-6 [R6 规划缺口] 积分明细/券记录弹窗返回后不重开——本批不做，留后
+
+判定：**不做**。理由：店主原话与确认范围只要求「订单弹窗」重开；流水/券记录里的单号链接是次要路径（「查这一单为什么给了这些分/用了哪张券」），点进详情通常是一次性核对；把两个弹窗（含流水页码、券页签）也入 URL 会把刚定下的 `orders=` 参数契约扩成 `orders|ledger|coupons + 页码 + 页签` 三套互斥参数，本批再改会拖大复核面。留后条目（交编排者登记）：新增 `ledger=<id>&lp=<page>`、`coupons=<id>&ct=<tab>`，三者互斥，重开逻辑复用 R1-1 的会话状态机（给每个弹窗各一份 `seq`）。当前行为（返回后弹窗关闭、列表筛选保留）在 `docs/staff-guide.md` 的那段里加半句说明「从积分明细/券记录点单号进详情，返回后需重新点开明细」。
+
+### R1-7 [R7] 「最近下单」格式改为 `YYYY-MM-DD`
+
+表格与手机卡片都改用 `fmtDate(u.latestOrder?.createdAt, '-')`（`utils/time.ts:64`，同一行「注册时间」已是这个格式），不显示时分。理由：这一列回答的是「多久没来了」，跨年必须看得出年份；`M-DD HH:mm` 是工作台「今天前后几天」的紧凑格式，不适合客户名单；日期比 `YYYY-MM-DD HH:mm` 省 ~40px，1024 的宽度预算靠它。方案正文与预览里的 `MM-DD HH:mm` 以本条为准；e2e 与服务端不受影响。
+
+### R1-8 [R8] 截图证据方式
+
+- 截图目录允许放一份 `measurements.md`（本节两个 DOM 脚本在 1024/1280/1440 的 JSON 原文、375 的 `scrollWidth`、每张 PNG 对应的 `location.href`——用 `javascript_tool` 取 `location.href` 记录，浏览器截图没有地址栏不算缺陷）。
+- 重新截取全部 PNG（旧的 16 张删除重拍，文件名沿用方案验收 8 的清单，另加 `desk-1024-list.png`、`desk-1280-list.png`、`desk-modal-race.png`（R1-1 人工检查）、`desk-refresh-apidown.png`（R1-3））。同名文件字节相同视为未重拍。
+
+### 验收增补（在原验收 1–10 之上追加；原 3 的用例清单加一行）
+
+11. 【单测】`npm test --workspace=apps/admin` 必须含 `src/utils/user-orders-session.test.ts` 的 a–f 六条；改坏验证（删掉 `seq` 校验）a/b/c/d 必红，输出贴报告。
+12. 【服务端类型】原验收 1 重跑（`orderBy` 数组形式）。
+13. 【DOM 实测】R1-2 两个脚本在 1024/1280/1440 的输出满足判定；375 `scrollWidth ≤ 375`；输出存 `measurements.md`。
+14. 【人工】R1-1（乱序复现修复）、R1-3（两种错误分流）、R1-5（自取文案）各一张截图 + `location.href`。
+15. 【e2e】原验收 5/7 重跑（服务端只改了 `orderBy`，75 段与 §48 增补应原样绿）。
+16. 【文档】`docs/api.md` `GET /admin/users/:id/orders` 一句补「按 createdAt desc, id desc」；`docs/staff-guide.md` 那段补 R1-6 的半句与「最近下单显示日期」。
+
+### 授权范围增减
+
+新增：
+
+```
+apps/admin/src/utils/user-orders-session.ts
+apps/admin/src/utils/user-orders-session.test.ts
+```
+
+原有 `docs/superpowers/notes/2026-09-24-admin-users-orders-acceptance/**` 的「只放 PNG」放宽为「PNG + `measurements.md`」。其余授权范围与禁止修改**不变**（`components/ui/StatusBadge.tsx`、`utils/time.ts` 仍不动——R1-5/R1-7 只改调用处）。
+
+### 上报条件增补
+
+- R1-2 按上表合并后任一档仍 `tableW > containerW` 或 `th`/胶囊仍折行，且缩 `px-3` 也不够——停下上报，不得自行删列或改成横向滚动。
+- 实现 R1-1 时发现必须把 `Modal`/`Table` 组件改成受控时序（如加 `key` 强制重挂）才能收口——上报，不得改 `components/ui/Table.tsx`。
+- `applyOrdersPage` 的去重导致 e2e 75 段「`pageSize=2&page=3` 返回 2 行」的契约需要改——上报（契约是服务端的，去重只在前端）。
+
+### 待用户决定
+
+无。
