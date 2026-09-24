@@ -109,7 +109,7 @@
    - `src/utils/order-list.test.ts` 追加：`CHANNEL_TONE_CLASS` 三个键 `local/pickup/express` 都是非空字符串且分别含 `orange`/`teal`/`blue`；`userOrderChannel('LOCAL')` → `{ label: '同城', cls: CHANNEL_TONE_CLASS.local }`，`'PICKUP'` → 自取/pickup，`'EXPRESS'` → 邮寄/express，未知值按 LOCAL 处理（与 `channelTag` 的兜底一致）。
    - `src/utils/money.test.ts`：`fmtYuanGrouped(0)` → `'¥0.00'`；`108640` → `'¥1,086.40'`；`123456789` → `'¥1,234,567.89'`；`5` → `'¥0.05'`；`-5` → `'-¥0.05'`。
 4. 【后台构建（含时区闸门）】`npm run build --workspace=apps/admin` → 依次通过 `check-admin-timezone.mjs`、`tsc`、`vite build`，exit 0。
-5. 【e2e 新分片 + §48 增补】新增 `scripts/e2e.d/75-user-spend-and-orders.sh`（75 是当前下一个空号；合并时若已被占用，改成下一个空号并在「偏离方案」写明），并在 `scripts/e2e.sh` §48 追加两条断言（见第 6 条）。分片**不能单跑**（依赖 `e2e.sh` 的 helper），验收是第 7 条全量跑里这一段全绿。分片必须覆盖下面的**金额口径构造**（变量一律 `U75_` 前缀；`PID` 用 e2e 主体的 `$PID`，下单走 `EXPRESS`；每张单 1 件同一商品，同一分钟内建，实付相等——用 `assert_eq "前置：各单实付相等"` 钉住，不相等就是前置失败，报告里要能看出来）：
+5. 【e2e 新分片 + §48 增补】新增 `scripts/e2e.d/76-user-spend-and-orders.sh`（75 是当前下一个空号；合并时若已被占用，改成下一个空号并在「偏离方案」写明），并在 `scripts/e2e.sh` §48 追加两条断言（见第 6 条）。分片**不能单跑**（依赖 `e2e.sh` 的 helper），验收是第 7 条全量跑里这一段全绿。分片必须覆盖下面的**金额口径构造**（变量一律 `U75_` 前缀；`PID` 用 e2e 主体的 `$PID`，下单走 `EXPRESS`；每张单 1 件同一商品，同一分钟内建，实付相等——用 `assert_eq "前置：各单实付相等"` 钉住，不相等就是前置失败，报告里要能看出来）：
 
    | 用户 | 单 | 操作顺序 | `actual`（分） | `refunded` | 计入累计 |
    |---|---|---|---|---|---|
@@ -187,7 +187,7 @@
    - 单元格：`fmtYuanGrouped(u.spendFen)`；`fmtMonthDayTime(u.latestOrder?.createdAt, '-')`。
    - 手机卡片第二行改成 `手机号 · 订单 N · 累计 ¥x`，下一行 `最近下单 MM-DD HH:mm · 注册 YYYY-MM-DD`（预览结构）；筛选条加一个 `md:hidden` 的开关「按累计消费排序」（`checkbox` 或胶囊按钮），与表头按钮驱动同一个 `sort` 参数。
 8. **`apps/admin/src/pages/OrderDetail.tsx`**：只改 `:99` 一行（用 `backLabelFor`）。不动其余逻辑。
-9. **e2e**：新分片 `scripts/e2e.d/75-user-spend-and-orders.sh`（结构参照 `70-user-list-lookup.sh`：自带 `u75_enc/u75_addr/u75_order` helper，别依赖 70 里定义的函数；每条断言给中文描述），`scripts/e2e.sh` §48 加两行（验收 6）。
+9. **e2e**：新分片 `scripts/e2e.d/76-user-spend-and-orders.sh`（结构参照 `70-user-list-lookup.sh`：自带 `u75_enc/u75_addr/u75_order` helper，别依赖 70 里定义的函数；每条断言给中文描述），`scripts/e2e.sh` §48 加两行（验收 6）。
 10. **文档**：`docs/api.md` §3.6 与附录两张表、`docs/staff-guide.md:404-406`（验收 10）。
 11. **顺序建议**：1 → 2 → 3（配测试）→ 9（先把契约钉住，跑 e2e 看服务端）→ 4/5/6/7/8 → 10 → 全量验收。每完成一层跑一次对应闸门。
 
@@ -209,7 +209,7 @@ apps/admin/src/utils/money.ts
 apps/admin/src/utils/money.test.ts
 apps/admin/src/components/orders/OrderListTable.tsx
 apps/admin/src/components/ui/Modal.tsx
-scripts/e2e.d/75-user-spend-and-orders.sh
+scripts/e2e.d/76-user-spend-and-orders.sh
 scripts/e2e.sh
 docs/api.md
 docs/staff-guide.md
@@ -486,3 +486,8 @@ apps/admin/src/utils/user-orders-session.test.ts
 - 既有单测/e2e 不受影响（只改两处展示文案）。
 
 授权范围、禁止修改、上报条件：不变。待用户决定：无。
+
+
+## 交付备注（编排者，2026-09-24）
+
+e2e 分片由 `75-user-spend-and-orders.sh` 改名为 `76-user-spend-and-orders.sh`：同日另一会话的下单死锁修复（分支 `claude/lucid-greider-1bcf47`）也新增了 `75-order-deadlock.sh`，避免编号冲突。脚本内容未改。
