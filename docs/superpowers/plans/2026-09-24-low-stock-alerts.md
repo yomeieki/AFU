@@ -83,16 +83,16 @@
    - b. `GET /api/admin/orders/pending-count` → `lowStockCount` 为整数、`lowStockThreshold` 等于当前设置；
    - c. `GET /api/admin/products/low-stock` → `{ settings, counts:{ total, out, low, byChannel:{EXPRESS:{out,low},LOCAL:{out,low}} }, groups:[...] }`，`groups[].units[]` 只含 `level ∈ {'OUT','LOW'}`；
    - d. `PUT /api/admin/products/:id/stock` 见 e2e 分片（验收 7）。
-7. 【e2e】新分片 `scripts/e2e.d/73-low-stock.sh`，并跑**干净库全量** `TZ=Asia/Shanghai DB_NAME=<本批库> BASE=http://localhost:<port> bash scripts/e2e.sh`（≈10 分钟，后台跑；配方见 §环境）→ 末行 `失败 0`；出现红时对照已知偶发清单判定，偶发以外的红即失败。分片 73 必须覆盖并全绿：
-   - 73.0 设置：`PUT /admin/settings/low-stock {lowThreshold:3,pushBelow:2}` → code 0；非法 `{3,5}` → 40001。
-   - 73.1 造数：`POST /admin/products`（`categoryId=$LCAT`，`specDimensions:[{name:'辣度',values:['微辣','中辣','白味']}]`，`skus` 三条 stock 10）与一个无规格邮寄商品（`$ECAT`，stock 10）；记 `P73`、三个 `skuId`、`Q73`。然后 `sched '{}'` 一次**冲刷**（把别的分段留下的售罄单位先推掉，不断言数值）。
-   - 73.2 改库存接口：`PUT /admin/products/$P73/stock {skuId:A, stock:1}` → `code 0`、`data.stock=1`、`data.productStock=21`；`sql "SELECT stock FROM products WHERE id=$P73"` = 21；`PUT {stock:1}`（不带 skuId）打在多规格商品上 → 40001；`PUT {skuId:A, stock:1}` 打在 `$Q73` 上 → 40001；`PUT {skuId:<别的商品的 sku>, stock:1}` 打在 `$P73` → 40401；`PUT {stock:-1}` → 40001。
-   - 73.3 列表与角标：`GET /admin/products/low-stock` 里 `P73` 组有 A 且 `level='LOW'`；`GET /admin/orders/pending-count` → `lowStockCount ≥ 1`、`lowStockThreshold=3`；`GET /admin/products?keyword=<P73 名>` → `.data.list[0].stockAlert == {out:0,low:1}`。
-   - 73.4 推送去重（断言 `sched` 返回的 `.data.lowStockScan`，用 `num()` 兜底）：A=1 → `sched` = 1；再 `sched` = 0；A=0 → 1；A=1 → 0；A=0 → 0；A=5 → 0；A=0 → 1（直接跌到 0 只推一条）；B=1 且 C=0 同时 → 2。
-   - 73.5 只统计在架：`PUT /admin/products/$P73 {status:'OFF_SHELF'}` → `low-stock` 不含 `P73`、`?keyword=` 列表 `stockAlert == {0,0}`；`sched` = 0；重新 `ON_SHELF` → `sched` = 2（B、C 作为新事件再推；A 此时为 0 也再推 → 实际是 3，**执行者按实际实现的语义写死期望并在注释里说明**）。
-   - 73.6 无规格商品：`PUT /admin/products/$Q73/stock {stock:0}` → `code 0`、`productStock=0`；`low-stock` 里 `Q73` 组 `hasSkus=false`、单位 `skuId=null`、`level='OUT'`；`?keyword=` 列表 `stockAlert == {1,0}`。
-   - 73.7 每日汇总：`sched '{"forceLowStockDaily":true}'` → `.data.lowStockDaily ≥ 1`；紧接着 `sched '{}'` → `.data.lowStockDaily == 0`（当天已发）；再 `sched '{"forceLowStockDaily":true}'` → `≥ 1`（force 绕过日切）。
-   - 73.8 收尾：两个商品 `DELETE`；`PUT /admin/settings/low-stock` 复位为 `{3,2}`；再 `sched '{}'` 一次让状态里的 P73/Q73 键被清掉。
+7. 【e2e】新分片 `scripts/e2e.d/74-low-stock.sh`，并跑**干净库全量** `TZ=Asia/Shanghai DB_NAME=<本批库> BASE=http://localhost:<port> bash scripts/e2e.sh`（≈10 分钟，后台跑；配方见 §环境）→ 末行 `失败 0`；出现红时对照已知偶发清单判定，偶发以外的红即失败。分片 74 必须覆盖并全绿：
+   - 74.0 设置：`PUT /admin/settings/low-stock {lowThreshold:3,pushBelow:2}` → code 0；非法 `{3,5}` → 40001。
+   - 74.1 造数：`POST /admin/products`（`categoryId=$LCAT`，`specDimensions:[{name:'辣度',values:['微辣','中辣','白味']}]`，`skus` 三条 stock 10）与一个无规格邮寄商品（`$ECAT`，stock 10）；记 `P74`、三个 `skuId`、`Q74`。然后 `sched '{}'` 一次**冲刷**（把别的分段留下的售罄单位先推掉，不断言数值）。
+   - 74.2 改库存接口：`PUT /admin/products/$P74/stock {skuId:A, stock:1}` → `code 0`、`data.stock=1`、`data.productStock=21`；`sql "SELECT stock FROM products WHERE id=$P74"` = 21；`PUT {stock:1}`（不带 skuId）打在多规格商品上 → 40001；`PUT {skuId:A, stock:1}` 打在 `$Q74` 上 → 40001；`PUT {skuId:<别的商品的 sku>, stock:1}` 打在 `$P74` → 40401；`PUT {stock:-1}` → 40001。
+   - 74.3 列表与角标：`GET /admin/products/low-stock` 里 `P74` 组有 A 且 `level='LOW'`；`GET /admin/orders/pending-count` → `lowStockCount ≥ 1`、`lowStockThreshold=3`；`GET /admin/products?keyword=<P74 名>` → `.data.list[0].stockAlert == {out:0,low:1}`。
+   - 74.4 推送去重（断言 `sched` 返回的 `.data.lowStockScan`，用 `num()` 兜底）：A=1 → `sched` = 1；再 `sched` = 0；A=0 → 1；A=1 → 0；A=0 → 0；A=5 → 0；A=0 → 1（直接跌到 0 只推一条）；B=1 且 C=0 同时 → 2。
+   - 74.5 只统计在架：`PUT /admin/products/$P74 {status:'OFF_SHELF'}` → `low-stock` 不含 `P74`、`?keyword=` 列表 `stockAlert == {0,0}`；`sched` = 0；重新 `ON_SHELF` → `sched` = 2（B、C 作为新事件再推；A 此时为 0 也再推 → 实际是 3，**执行者按实际实现的语义写死期望并在注释里说明**）。
+   - 74.6 无规格商品：`PUT /admin/products/$Q74/stock {stock:0}` → `code 0`、`productStock=0`；`low-stock` 里 `Q74` 组 `hasSkus=false`、单位 `skuId=null`、`level='OUT'`；`?keyword=` 列表 `stockAlert == {1,0}`。
+   - 74.7 每日汇总：`sched '{"forceLowStockDaily":true}'` → `.data.lowStockDaily ≥ 1`；紧接着 `sched '{}'` → `.data.lowStockDaily == 0`（当天已发）；再 `sched '{"forceLowStockDaily":true}'` → `≥ 1`（force 绕过日切）。
+   - 74.8 收尾：两个商品 `DELETE`；`PUT /admin/settings/low-stock` 复位为 `{3,2}`；再 `sched '{}'` 一次让状态里的 P74/Q74 键被清掉。
    - 既有分段 `e2e.sh:162-165`（§10 pending-count 字段）、`:325-339`（§20b 把库存钉到 5 再复位 50）、`:794-814`（§23a 默认 stock=0）**不改**，须仍绿。
 8. 【范围】`git diff --stat BASE -- apps/miniapp apps/server/prisma apps/server/src/routes/orders.ts apps/server/src/routes/cart.ts apps/server/src/utils/order-stock.ts apps/server/src/services/refund.ts apps/server/src/services/refund-reconcile.ts apps/server/src/services/wechat-pay.ts apps/server/src/services/notify.ts apps/server/src/services/local-settings.ts apps/server/src/services/member scripts/e2e.sh scripts/deploy.sh` → 空。`git diff BASE -- apps/server/src/routes/admin/orders.ts` 只落在 `pending-count` 处理函数（BASE `:227-275`）与顶部 import 两处。
 9. 【人工检查·后台页面】本地起 API + admin dev（`.claude/launch.json` `admin`，代理到本批 API 端口），用 SQL/接口把几个规格钉成 0 与 1–3，截图存 `docs/superpowers/notes/2026-09-24-low-stock-acceptance/`（只放 PNG，文件名带 `375-` / `desk-` 前缀）：
@@ -130,7 +130,7 @@
    （预计涉及：新页面、新 util、新测试）
 11. **商品列表** `pages/Products.tsx`：`:596` 与 `:703` 两处把 `p.stock <= 5` 的判定换成 `const alert = p.stockAlert ?? {out:0,low:0}`：库存数字 `alert.out>0 ? 'text-red-500 font-semibold' : alert.low>0 ? 'text-amber-600 font-semibold' : ...`；商品名旁（手机 `:567` 附近的「N 规格」标签后、电脑名称单元格）渲染 `stockAlertLabel(alert, hasSkus)` 非空时的小胶囊（售罄红底 / 仅紧张琥珀底）。`:313-318` 的 toast 文案改为「多规格商品请在「编辑」或「库存预警」页改各规格库存」。（预计涉及：`pages/Products.tsx`）
 12. **文档** `docs/api.md`：§3.3 增 `GET /api/admin/products/low-stock`、`PUT /api/admin/products/:id/stock` 两小节与 `GET /api/admin/products` 的 `stockAlert` 字段说明；附录 A「管理端」表补 `GET/PUT /api/admin/settings/low-stock` 与 `pending-count.lowStockCount` 新口径（「在架商品的售罄+紧张**规格**数，门槛可改」）；`run-scheduler` 行补 `forceLowStockDaily`；在附录 M 之后新加「附录 N：库存预警（2026-09-24）」写清档位、去重规则、每日汇总时刻、`Setting(key=low_stock / low_stock_alert_state)` 两个 key。（预计涉及：`docs/api.md`）
-13. **测试** 新建 `apps/server/scripts/selftest-low-stock.ts`（照 `selftest-product-sort.ts` 的 `t()` 计数风格；末行 `console.log(\`全部通过 ${pass}\`)` 且失败时 `process.exitCode=1`）、`scripts/e2e.d/73-low-stock.sh`（照 `62-pickup.sh` 的 `p62_put` 写法封装 `p73_stock`、`p73_sched`；全部数值断言经 `num()`；所有变量带 `P73_`/`Q73_` 前缀；**不得使用 `R1`/`R2` 变量名**，见 `e2e.sh:141-146` 注释）、`apps/admin/src/utils/stock-alert.test.ts`；改 `apps/admin/src/navigation.test.ts:35`。
+13. **测试** 新建 `apps/server/scripts/selftest-low-stock.ts`（照 `selftest-product-sort.ts` 的 `t()` 计数风格；末行 `console.log(\`全部通过 ${pass}\`)` 且失败时 `process.exitCode=1`）、`scripts/e2e.d/74-low-stock.sh`（照 `62-pickup.sh` 的 `p62_put` 写法封装 `p74_stock`、`p74_sched`；全部数值断言经 `num()`；所有变量带 `P74_`/`Q74_` 前缀；**不得使用 `R1`/`R2` 变量名**，见 `e2e.sh:141-146` 注释）、`apps/admin/src/utils/stock-alert.test.ts`；改 `apps/admin/src/navigation.test.ts:35`。
 14. **验证与交付**：按验收 1–10 逐条跑并附原始输出；e2e 用 §环境 的干净库配方；截图存 notes 目录；交付报告按协议 §4 格式。
 
 ## 授权范围
@@ -159,7 +159,7 @@ apps/admin/src/pages/Products.tsx
 apps/admin/src/pages/LowStock.tsx
 apps/admin/src/utils/stock-alert.ts
 apps/admin/src/utils/stock-alert.test.ts
-scripts/e2e.d/73-low-stock.sh
+scripts/e2e.d/74-low-stock.sh
 docs/api.md
 docs/superpowers/notes/2026-09-24-low-stock-*
 docs/superpowers/notes/2026-09-24-low-stock-acceptance/**
@@ -207,7 +207,7 @@ apps/admin/src/components/ui/**
 apps/admin/src/components/UnsavedSettings.tsx
 scripts/e2e.sh
 scripts/e2e.d/[0-6]*.sh
-scripts/e2e.d/7[0-2]*.sh
+scripts/e2e.d/7[0-3]*.sh
 scripts/deploy.sh
 scripts/check-*.mjs
 .claude/**
@@ -223,7 +223,7 @@ apps/*/package.json
 - `settings` 表 `value` 是 `TEXT`，状态 JSON 理论上够用；若实测单位数使状态 JSON 超过 60KB（不可能，生产 277 规格 ≈ 8KB）或 `prisma.setting.upsert` 在心跳里报错——上报。
 - 基线检查（验收 1、3、4、5 的既有部分）在改动前就红——上报，不得顺手修。
 - 干净库全量 e2e 出现已知偶发清单之外的红，且不能确定与本批相关——上报，附完整输出。
-- 发现 `runSchedulerTick` 的 `running` 守卫让 73 分片的精确条数断言在**未禁用心跳**的环境下不稳定——按 `.claude/launch.json` 的 `SCHEDULER_DISABLED=true` 跑，不得放宽断言；若禁用后仍不稳定，上报。
+- 发现 `runSchedulerTick` 的 `running` 守卫让 74 分片的精确条数断言在**未禁用心跳**的环境下不稳定——按 `.claude/launch.json` 的 `SCHEDULER_DISABLED=true` 跑，不得放宽断言；若禁用后仍不稳定，上报。
 - 后台任何一处需要新增依赖或改 `package.json`——上报。
 - 发现 `BusinessCenter` 加角标后「推广运营」五页签在 375 宽横滑（现在是 344/344 卡满，见 `BusinessCenter.tsx` 注释）——本批只给商品管理传 `badges`，其它中心不传就不受影响；若仍横滑，上报截图。
 
@@ -231,11 +231,79 @@ apps/*/package.json
 
 - ① **后台登录时那条一次性 toast**（`usePendingOrders.ts:90-93`「有 N 个商品库存不足」）：本批默认**删除**，由页签/侧栏角标常驻替代。理由：店主已决定让同城三道菜的 100 克规格保持上架且库存为 0，那条 toast 会在每次登录时永远弹「有 12 个规格售罄」。若店主要保留，改文案为「有 N 个规格售罄或库存紧张（≤T），请到「商品管理 → 库存预警」处理」即可，其余不变。
 - ② **每日汇总在休业日（`holiday`）与「今天没有任何售罄/紧张」时的行为**：本批按「休业日照常按营业时间推（店主可能正要补货）；没有任何单位时不推」执行。若店主希望休业日不推，多一条 `isHolidayOn(localSettings, today)` 判断即可，不影响其它。
-- ③ **重新上架的售罄规格会再推一次**（下架时状态被丢弃，上架视为新事件，验收 73.5 钉住此行为）。若店主觉得「下架再上架不该再吵」，改为保留状态、只在 `stock ≥ pushBelow` 时删；影响只在这一处判断与 73.5 的期望值。
+- ③ **重新上架的售罄规格会再推一次**（下架时状态被丢弃，上架视为新事件，验收 74.5 钉住此行为）。若店主觉得「下架再上架不该再吵」，改为保留状态、只在 `stock ≥ pushBelow` 时删；影响只在这一处判断与 74.5 的期望值。
 
 ## 环境（给执行者）
 
 - 本机 JST，服务端自测/e2e 必须 `TZ=Asia/Shanghai`；`grep` 是 ugrep 别名用 `command grep`；无 `timeout` 命令；worktree 不 `npm install`、不 `prisma generate`（本批零迁移，主仓 client 即可）；不裸 `git stash`；不 ssh/scp 生产机；不合并不部署。
 - 干净库配方（记忆 `e2e-fresh-db-recipe`）：`docker exec -i food-shop-mysql mysql -uroot -pfoodshop_root_password -e "DROP DATABASE IF EXISTS food_shop_lowstock; CREATE DATABASE food_shop_lowstock CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL ON food_shop_lowstock.* TO 'foodshop_user'@'%'; FLUSH PRIVILEGES;"` → `cd apps/server && DATABASE_URL="mysql://foodshop_user:foodshop_password@localhost:3306/food_shop_lowstock" npx prisma migrate deploy && DATABASE_URL=… npx prisma db seed` → 起 API（`PORT=<空闲端口，别用 3000/3100/3106> WECHAT_LOGIN_MOCK=true WECHAT_PAY_MOCK=true WECHAT_QRCODE_MOCK=true LOCAL_DELIVERY_PROVIDER_MOCK=true EXPRESS_PROVIDER_MOCK=true PRINTER_PROVIDER_MOCK=true SCHEDULER_DISABLED=true JWT_SECRET=<≥16 位> ADMIN_JWT_SECRET=<≥16 位> DATABASE_URL=… npx ts-node-dev --transpile-only src/app.ts`）→ `TZ=Asia/Shanghai BASE=http://localhost:<port> DB_NAME=food_shop_lowstock bash scripts/e2e.sh`。已知偶发：`e2e.d/42` B4-1 并发领券、`e2e.d/45` 打印机 4 条依赖顺序。
-- 跑 e2e 时本机 `.env` 若配了 `ORDER_NOTIFY_WECOM_WEBHOOK`/`PUSHPLUS`，73 分片会真的往群里推几条测试内容——跑之前把这两个变量置空（`ORDER_NOTIFY_WECOM_WEBHOOK= ORDER_NOTIFY_PUSHPLUS_TOKEN=` 前缀），`lowStockScan` 计数不依赖通道是否配置。
+- 跑 e2e 时本机 `.env` 若配了 `ORDER_NOTIFY_WECOM_WEBHOOK`/`PUSHPLUS`，74 分片会真的往群里推几条测试内容——跑之前把这两个变量置空（`ORDER_NOTIFY_WECOM_WEBHOOK= ORDER_NOTIFY_PUSHPLUS_TOKEN=` 前缀），`lowStockScan` 计数不依赖通道是否配置。
 - 后台人工检查：`.claude/launch.json` 的 `admin` 配置代理到 3100；本批 API 若用别的端口，临时用 `VITE_PROXY_TARGET=http://localhost:<port> npm run dev --workspace=apps/admin -- --port <空闲>`，不要改 launch.json（禁止清单）。
+
+---
+
+## 修订 1（2026-09-24，店主答复三条 + 分片编号冲突）
+
+以下条目**覆盖**正文中对应内容；正文其余部分不变。正文里已把 e2e 分片从 73 统一改为 **74**（含验收 7、授权范围、禁止清单 `scripts/e2e.d/7[0-3]*.sh`）。
+
+### R1-1 登录 toast：删除（同默认）
+
+正文实现方向 9 照做：删 `usePendingOrders.ts:90-93` 与 `lowStockNotifiedRef`（`:50`）。正文「待用户决定 ①」关闭。
+
+### R1-2 休业日：每日汇总不推；即时推送照常
+
+- **休业判定复用既有口径**：`isHolidayOn(s, dateStr)`（`apps/server/src/services/local-settings.ts:829-832`：`holiday.until === null` → 无限期休业；否则 `dateStr <= until`）与 `isHolidayNow(s, now)`（`:833-835`，内部就是 `isHolidayOn(s, shanghaiDateStr(now))`）。**不另写一套**。
+- `shouldSendDaily` 的签名改为 `shouldSendDaily(state, localSettings, now)`（正文 2-f 的 `businessHours` 参数换成整份 `LocalDeliverySettings`，内部取 `businessHours` 与 `holiday`）：`isHolidayNow(localSettings, now)` 为真 → `false`，**且不写 `dailySentOn`**（休业中每次心跳只是跳过；当天中途取消休业会在下一次心跳补发一次，这是「次日恢复照推」的自然推论，不是 bug）。
+- `pushDailyLowStockSummary(now, force)` 的 `force` 只绕过 `dailySentOn` 与应发时刻两道门，**不绕过休业门**——否则 e2e 无法验证休业日不推。
+- **即时推送在休业日照常**。理由：`local-settings.ts:786` 注释写明休业只停外送与自取，邮寄单在休业期间照常进来；后台改库存也照常；卖空仍要马上知道。不另问店主。
+- 正文「待用户决定 ②」关闭。
+
+### R1-3 下架不清状态；只有补货到 ≥ pushBelow 才重置；状态随删除清理
+
+覆盖正文 §0.3「去重状态」最后一条与实现方向 2 的 `listOnShelfUnits`/`diffAlertTransitions`：
+
+- **单位集合分两层**：扫描时查**所有未删商品**（`deletedAt = null`，不限 `status`）及其 sku，展平成单位并带 `onShelf: boolean`（`status === 'ON_SHELF'`）。页面 `lowStockOverview`、`countLowStockUnits`、`productAlertSummary` 仍只算 `onShelf` 的（口径不变）。
+- `diffAlertTransitions(prev, units, s)` 规则改为：
+  1. 单位 `stock ≥ pushBelow` → 删状态（**唯一的重置条件**，不看在架与否）；
+  2. 单位 `!onShelf` 且 `stock < pushBelow` → 不推、状态**原样保留**（有就留着，没有也不新建）；
+  3. 单位 `onShelf`：按正文规则推 / 记（LOW/OUT 转移不变）；
+  4. `prev` 里有、`units` 里没有的 key（sku 被删、商品软删/硬删）→ 删状态。
+- **状态大小上界** = 现存单位数（生产 ≈ 277 个 sku + 无规格商品数），每条 ≈ 20 字节，`settings.value` 是 `TEXT`（64KB）绰绰有余；`listOnShelfUnits` 改名 `listStockUnits` 并在注释里写明「查全部未删商品是为了按现存单位裁剪状态」。
+- 正文「待用户决定 ③」关闭。
+
+### R1-4 e2e 分片编号：74；加载方式核实
+
+- `scripts/e2e.sh:2008` `for f in "$(dirname "$0")"/e2e.d/*.sh; do [[ -f "$f" ]] && source "$f"; done`：按文件名字典序逐个 `source`，每个分片自己造数、自己收尾；`73-local-address-dedup.sh`（另一批，已在其分支方案 `:96/:144` 占用）先于 `74-low-stock.sh` 跑。两者共用的只有 `$AT/$LCAT/$ECAT/sched()/num()/sql()` 这些正文里已列的公共 helper；74 开头的「冲刷」一轮（正文 74.1）本来就是为了把**任何**前序分片留下的售罄单位先推掉，因此 74 不依赖 73 是否存在、也不依赖 73 留下什么。反向：74 收尾会删除自己造的两个商品并复位设置，73 在它之前跑，不受影响。
+- 分片内所有变量前缀 `P74_`/`Q74_`；helper 名 `p74_stock`、`p74_sched`、`p74_local_put`（照 `62-pickup.sh:6` 的 `p62_put` 写法，用于改 `holiday`）。
+
+### 验收修订
+
+- **验收 2-d 追加**（`diffAlertTransitions`）：
+  - 单位 `onShelf=false`、`stock=0`、prev=OUT → 不推、状态仍 OUT；
+  - 单位 `onShelf=false`、`stock=0`、prev 无 → 不推、状态仍无；
+  - 单位 `onShelf=false`、`stock=5`、prev=OUT → 状态删除；
+  - 单位从 `units` 消失（删除）、prev=OUT → 状态删除；
+  - 同一轮：A 在架 0（prev OUT）、B 下架 0（prev OUT）、C 被删（prev LOW）→ 0 条 push，`nextLevels` 只剩 A、B。
+- **验收 2-f 改为**：`shouldSendDaily(state, localSettings, now)`：`dailySentOn === 今天` → false；`now < due` → false；`now ≥ due` 且未发 → true；`businessHours=[]` → false；`holiday={until:null}` → false；`holiday={until:'2026-09-23'}`、`now=2026-09-24 09:40 上海` → true（休业已过）；`holiday={until:'2026-09-24'}` 同一 now → false。
+- **验收 7 的 74.5 改为**：`PUT /admin/products/$P74 {status:'OFF_SHELF'}`（此时 A=0、B=1、C=0，状态里三者已是 OUT/LOW/OUT）→ `low-stock` 不含 `P74`、`?keyword=` 列表 `stockAlert == {0,0}`、`pending-count.lowStockCount` 比下架前少 3；`sched` = 0；`PUT {status:'ON_SHELF'}` → `sched` = **0**（下架再上架不再推）。随后：下架 → `PUT /stock {skuId:A, stock:5}` → 上架 → `sched` = 0（补货到 ≥2 只重置不推）→ `PUT {skuId:A, stock:0}` → `sched` = **1**（重置后再卖空会推）。
+- **验收 7 新增 74.9 休业**：`p74_local_put '.holiday={until:null,reason:"e2e休业"}'` → `sched '{"forceLowStockDaily":true}'` → `.data.lowStockDaily == 0`（休业不推，force 也不推）；此时把 B 从 1 改到 0 → `sched` → `.data.lowStockScan == 1`（休业日即时推送照常）；`p74_local_put '.holiday=null'` → `sched '{"forceLowStockDaily":true}'` → `≥ 1`（恢复照推）。该段放在 74.7 之前，且结束时 `holiday` 必须复位为 `null`（`62-pickup.sh:11` 也依赖它为空）。
+- **验收 7 新增 74.10 删除清理**：先 `sql "SELECT value FROM settings WHERE setting_key='low_stock_alert_state'"` 含 `sku:<A 的 id>`；`DELETE /admin/products/$P74` 后 `sched '{}'` → 同一条 SQL 不再含 `sku:<A>`、`sku:<B>`、`sku:<C>`；`DELETE $Q74` 后同理不含 `product:<Q74>`。此段并入正文 74.8 收尾。
+- **验收 10（人工·推送）追加**：后台「营业时间」页把休业设为「今天起不限期」，把营业时间第一段 `start` 改成「当前 + 29 分钟」，等两次心跳：**不**收到汇总；取消休业 → 下一次心跳收到汇总。
+- **验收 8（范围）**：`scripts/e2e.d/7[0-3]*.sh` 加入 `git diff --stat` 必须为空的清单。
+
+### 授权范围修订
+
+- `scripts/e2e.d/73-low-stock.sh` → **`scripts/e2e.d/74-low-stock.sh`**（正文已改）。
+- 其余授权文件不变；`services/low-stock.ts` 允许 `import { isHolidayNow, shanghaiDateStr, getLocalSettings, type LocalDeliverySettings } from './local-settings'`（只 import，`local-settings.ts` 仍在禁止清单）。
+
+### 禁止修改修订
+
+- `scripts/e2e.d/7[0-2]*.sh` → **`scripts/e2e.d/7[0-3]*.sh`**（正文已改；`73-local-address-dedup.sh` 若已合入本分支基线，同样不得动）。
+
+### 上报条件追加
+
+- 若合并时发现 `73-local-address-dedup.sh` 与 74 之间存在共享变量名或对同一商品/设置的先后依赖（例如 73 改了 `holiday` 或 `low_stock` 设置未复位）——上报，不得在 74 里「顺手复位」对方的状态。
+
+### 待用户决定
+
+- 无（三条已答复；休业日即时推送照常按 R1-2 的理由自行定，不再问）。
