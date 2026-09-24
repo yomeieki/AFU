@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stockAlertLabel, filterLowStockGroups, countLowStock, unitLabel, mergeProductPatch } from './stock-alert.ts'
+import { stockAlertLabel, filterLowStockGroups, countLowStock, unitLabel, mergeProductPatch, parseStockInput } from './stock-alert.ts'
 import type { LowStockGroup, Product } from '../types'
 
 function product(overrides: Partial<Product> = {}): Product {
@@ -172,4 +172,29 @@ test('mergeProductPatch：不改其它 id 的项', () => {
   assert.equal(next[0].stock, 99)
   assert.equal(next[1].stock, 20)
   assert.equal(next[1], list[1], '未命中的项应是同一引用（未被重新构造）')
+})
+
+// parseStockInput（复核 R1：库存预警页数字框清空后点「保存」会把 stock 当成 0 提交，
+// 规格对顾客变售罄、下一次心跳还会推「已售罄」——空串/空白/负数/小数/非数字都必须判为无效）
+test('parseStockInput：空串 → null（无效）', () => {
+  assert.equal(parseStockInput(''), null)
+})
+test('parseStockInput：空白（含全空格）→ null（无效）', () => {
+  assert.equal(parseStockInput(' '), null)
+  assert.equal(parseStockInput('   '), null)
+})
+test('parseStockInput："0" → 0（合法，售罄本来就是合法库存值）', () => {
+  assert.equal(parseStockInput('0'), 0)
+})
+test('parseStockInput："-1" → null（负数无效）', () => {
+  assert.equal(parseStockInput('-1'), null)
+})
+test('parseStockInput："1.5" → null（小数无效）', () => {
+  assert.equal(parseStockInput('1.5'), null)
+})
+test('parseStockInput："abc" → null（非数字无效）', () => {
+  assert.equal(parseStockInput('abc'), null)
+})
+test('parseStockInput：" 5 "（首尾空白）→ 5（trim 后合法）', () => {
+  assert.equal(parseStockInput(' 5 '), 5)
 })

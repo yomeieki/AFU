@@ -6,7 +6,7 @@ import Button from '../components/ui/Button'
 import Table from '../components/ui/Table'
 import { toast } from '../components/ui/Toast'
 import { useUnsavedSettings } from '../components/UnsavedSettings'
-import { filterLowStockGroups, countLowStock, unitLabel } from '../utils/stock-alert'
+import { filterLowStockGroups, countLowStock, unitLabel, parseStockInput } from '../utils/stock-alert'
 import type { Channel, LowStockGroup, LowStockOverview, LowStockUnit } from '../types'
 
 // 短渠道标签：CHANNEL_LABEL 的「同城配送/全国邮寄」在筛选胶囊/分组小标签里太长
@@ -92,8 +92,8 @@ export default function LowStock() {
 
   const saveUnit = async (g: LowStockGroup, u: LowStockUnit) => {
     const raw = edits[u.key] ?? String(u.stock)
-    const v = Number(raw)
-    if (!Number.isInteger(v) || v < 0) {
+    const v = parseStockInput(raw)
+    if (v === null) {
       toast.error('请输入不小于 0 的整数')
       return
     }
@@ -223,7 +223,8 @@ export default function LowStock() {
                 <div className="divide-y divide-gray-100">
                   {g.units.map((u) => {
                     const val = edits[u.key] ?? String(u.stock)
-                    const changed = val !== String(u.stock)
+                    const parsedVal = parseStockInput(val)
+                    const changed = parsedVal !== null && parsedVal !== u.stock
                     return (
                       <div key={u.key} className="flex items-center gap-2 px-3 py-2 text-sm">
                         <span className="flex-1 min-w-0 truncate text-gray-700">{u.specText ?? '—'}</span>
@@ -252,7 +253,8 @@ export default function LowStock() {
       >
         {rows.map((r) => {
           const val = edits[r.unit.key] ?? String(r.unit.stock)
-          const changed = val !== String(r.unit.stock)
+          const parsedVal = parseStockInput(val)
+          const changed = parsedVal !== null && parsedVal !== r.unit.stock
           return (
             <tr key={r.unit.key}>
               <td className="px-4 py-3 align-top">

@@ -46,6 +46,19 @@ export function unitLabel(stock: number): string {
 }
 
 /**
+ * 解析库存预警页数字输入框的原始字符串（复核 R1）：清空/纯空白/负数/小数/非数字一律判为
+ * 无效（`null`），只有 trim 后是不带符号的非负整数才合法。用于两处：①保存前的最终校验，
+ * ②「是否已改动」的按钮 disabled 判定——清空输入框绝不能被当成「改成了 0」，否则会把一个
+ * 有库存的规格错误地推成「已售罄」并触发下一次心跳的即时推送。
+ */
+export function parseStockInput(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) return null
+  const n = Number(trimmed)
+  return Number.isInteger(n) && n >= 0 ? n : null
+}
+
+/**
  * 局部更新列表里的一项（2026-09-24 修订 2，R2-3）：上下架/改库存后不整页刷新，
  * 直接把接口响应里的 patch（可能含 status/stock/stockAlert 等任意子集）合并进去。
  * `patch` 里没带的字段（包括没带 stockAlert）保持原值不变——这就是普通对象展开的语义，
