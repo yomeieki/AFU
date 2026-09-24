@@ -74,7 +74,7 @@ async function loadOrders() {
   })
 }
 
-function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null } | null, b: BookingRow | null, pk: { prepStartAt: string; slotLabel: string } | null = null, sc: ReturnType<typeof scheduleView> = null): Record<string, unknown> {
+function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provider?: string; courierName: string | null; courierMobile: string | null; providerDistanceM: number | null; pickedUpAt?: Date | null; cancelIntentAt?: Date | null } | null, b: BookingRow | null, pk: { prepStartAt: string; slotLabel: string } | null = null, sc: ReturnType<typeof scheduleView> = null): Record<string, unknown> {
   const units = o.items.reduce((n, it) => n + it.quantity, 0)
   return {
     orderId: o.id, orderNo: o.orderNo, channel: o.deliveryType, status: o.status,
@@ -109,7 +109,8 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
           // 给前端原始时刻而不是算好的秒数——卡片每秒重渲染，服务端算的数一到前端就过时了。
           acceptedAt: o.acceptedAt?.toISOString() ?? null,
           // provider 给「已完成」列用：SELF 要显示「自送 店员小李」而不是「骑手 店员小李」
-          delivery: d ? { status: d.status, provider: d.provider ?? null, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile } : null,
+          // cancelIntentAt（P18）：意图单卡片要换一句「取消处理中」文案、隐藏操作按钮
+          delivery: d ? { status: d.status, provider: d.provider ?? null, statusLabel: DELIVERY_STATUS_LABEL[d.status] ?? d.status, courierName: d.courierName, courierMobile: d.courierMobile, cancelIntentAt: d.cancelIntentAt?.toISOString() ?? null } : null,
           // 预约送达（2026-09-21）：非预约单或计算不出（缺距离）为 null，见 scheduleView
           schedule: sc,
         }
@@ -160,7 +161,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     const [orders, settings, expressSettings] = await Promise.all([loadOrders(), getLocalSettings(), getExpressSettings()])
     const localIds = orders.filter((o) => o.deliveryType === 'LOCAL').map((o) => o.id)
     const actives = localIds.length
-      ? await prisma.delivery.findMany({ where: { activeOrderId: { in: localIds } }, select: { activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, pickedUpAt: true } })
+      ? await prisma.delivery.findMany({ where: { activeOrderId: { in: localIds } }, select: { activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true } })
       : []
     const byOrder = new Map(actives.map((d) => [d.activeOrderId!, d]))
     // 已完成的单按 activeOrderId 是查不到的——送达时那个字段被清空了（唯一索引要腾给下一单）。
@@ -171,7 +172,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       const finished = await prisma.delivery.findMany({
         where: { orderId: { in: doneLocalIds } },
         orderBy: { id: 'asc' },  // 一单可能有多张（取消重呼、改自送），升序遍历后留下的就是最后一张
-        select: { orderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, pickedUpAt: true },
+        select: { orderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true },
       })
       for (const d of finished) byOrder.set(d.orderId, { ...d, activeOrderId: d.orderId })
     }
@@ -200,7 +201,10 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       if (o.status === 'PAID') cols.pending.push(toCard(o, o.paidAt, d, bookingByOrder.get(o.id) ?? null, pk, sc))
       else if (o.status === 'PREPARING') {
         const b = bookingByOrder.get(o.id) ?? null
-        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt, d, null, null, sc))
+        // P8：等待锚点 calledAt ?? createdAt——P1/P2 竞态窗口里 calledAt 可能一度为空
+        // （回调抢先推进了状态，orchestrator 还没来得及补上 calledAt），落回占位创建时间，
+        // 不让这张卡片的等待时长显示成 NaN/纪元时间。
+        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt ?? d.createdAt, d, null, null, sc))
         else if (o.deliveryType === 'EXPRESS' && b && b.activeOrderId === o.id) cols.waitingCourier.push(toCard(o, b.bookedAt ?? b.createdAt, null, b, null))
         else cols.preparing.push(toCard(o, o.acceptedAt, d, b, pk, sc))
       }

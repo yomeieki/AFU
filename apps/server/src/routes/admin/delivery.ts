@@ -33,6 +33,9 @@ const ADMIN_DELIVERY_SELECT = {
   lastCallbackAt: true,
   callTimeoutRemindedAt: true, acceptedStuckRemindedAt: true, deliveringRemindedAt: true, unknownRemindedAt: true,
   operator: true, createdAt: true, updatedAt: true,
+  // P18：取消意图七列——抽屉要显示「店员 HH:mm 要求取消」与按钮矩阵的隐藏判断
+  cancelIntentAt: true, cancelIntentBy: true, cancelIntentReason: true, cancelIntentAttempts: true,
+  cancelIntentLastError: true, cancelIntentAlertedAt: true, ghostCancelAt: true,
 } satisfies Prisma.DeliverySelect
 
 async function doAccept(id: number) {
