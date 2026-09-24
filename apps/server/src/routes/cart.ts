@@ -124,8 +124,22 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       added = newQty - existing.quantity
       cart = await prisma.cart.update({ where: { id: existing.id }, data: { quantity: newQty } })
     } else {
-      cart = await prisma.cart.create({
-        data: { userId, productId, skuId: skuId ?? null, quantity, isSelected: 1 },
+      // 锁序对齐（2026-09-24，L 级复核 R1 成立，店主选项 A）：`INSERT carts` 的外键校验
+      // 顺序是 users S → products S → product_skus S（`SHOW CREATE TABLE carts` 的二级索引
+      // 插入顺序），与下单/回滚/改库存的全局锁序 L1(sku)→L2(product)→L3(user) 两处反向——
+      // 加购是顾客的常规高频路径，不是后台低频操作，放任它靠 withDeadlockRetry 兜底会让
+      // 「加购 vs 下单」在晚高峰热菜上变成常规重试甚至偶发穿透。这里在插入前按 L1→L2→L3
+      // 顺序先拿三把共享锁（S，互不阻塞其它加购），插入时的外键 S 锁被已持有的 S 锁覆盖，
+      // 与下单/回滚/改库存的 X 锁只会排队、不会成环（探针 R1-c 已证）。不包
+      // `withDeadlockRetry`：它的日志文案固定是「下单遇死锁」，会污染下单侧的计数，而
+      // 对齐锁序后加购本身没有已知的环，不需要重试。
+      cart = await prisma.$transaction(async (tx) => {
+        if (skuId) await tx.$queryRaw`SELECT id FROM product_skus WHERE id = ${skuId} FOR SHARE`
+        await tx.$queryRaw`SELECT id FROM products WHERE id = ${productId} FOR SHARE`
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR SHARE`
+        return tx.cart.create({
+          data: { userId, productId, skuId: skuId ?? null, quantity, isSelected: 1 },
+        })
       })
     }
 

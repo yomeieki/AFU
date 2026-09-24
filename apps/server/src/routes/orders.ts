@@ -10,6 +10,7 @@ import { validatePayConfig, createJsapiOrder, generatePayParams, closeOrder } fr
 import { config } from '../config'
 import { notifyOrderPaid, notifyRefundRequest, notifyAfterSaleRequest, notifyCancelRequest } from '../services/order-notify'
 import { rollbackOrderStock } from '../utils/order-stock'
+import { withDeadlockRetry } from '../utils/deadlock-retry'
 import { payLimiter } from '../middlewares/rate-limit'
 import { AFTER_SALE_REASONS, AFTER_SALE_REASON_LABEL, AfterSaleReason, payExpireAtOf } from '../utils/constants'
 import { initiateRefund, remainingRefundable } from '../services/refund'
@@ -559,7 +560,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       pointsCost: g.pointsCost,
     }))
 
-    // 5. 事务：创建订单 + 减库存 + 增销量 + 落实优惠 + 清购物车
+    // 5. 事务：减库存 + 创建订单 + 落实优惠 + 清购物车
     //
     // ⚠️ 显式 timeout：Prisma 交互式事务默认 5 秒。M2 往这个事务里又加了券核销、consumePoints
     // （1 次 findMany + 最多 2 轮 × N 次 updateMany + user.update + ledger.create）、GIFT 行
@@ -569,7 +570,83 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     // 计数器那一行的锁会被这整笔交易持有，下单就被串行化了）。
     const orderNo = await allocateOrderNo()
 
-    const order = await prisma.$transaction(async (tx) => {
+    // ⚠️ 锁序（2026-09-24 起）：L1(product_skus 按 id 升序) → L2(products 按 id 升序) →
+    // L3(users，仅 pointsUsed>0) → 插 orders/order_items。
+    // 扣减挪到 `order.create` **之前**：`INSERT order_items` 因外键
+    // `order_items_product_id_fkey` 会给 products 行加 S 锁；旧顺序是先插行再扣库存，
+    // 两笔同商品并发订单各持这把 S 锁、又都要把它升级为 X 锁（product.update decrement），
+    // 必然互相死锁（50001，顾客直接看到失败，无重试）。改成先扣库存（UPDATE 直接拿 X 锁）
+    // 再插行，外键校验要的 S 锁被自己已持有的 X 锁覆盖，不再需要额外的锁定读。
+    // 与 `utils/order-stock.ts` 的回滚、`admin/products.ts` 的 PUT /:id/stock 同一锁序，
+    // 全局说明见 docs/superpowers/plans/2026-09-24-order-deadlock.md §0.4。
+    const order = await withDeadlockRetry('orders', () => prisma.$transaction(async (tx) => {
+      // 原子减库存（updateMany 带 stock >= quantity 条件，防超卖）。
+      // 赠品行一并遍历——它扣真实库存、加真实销量，与付费行走同一段逻辑（spec §5.3）。
+      const stockLines = [
+        ...lines.map((l) => ({ productId: l.productId, skuId: l.skuId, quantity: l.quantity, label: l.sku ? `${l.product.name}（${l.sku.specText}）` : l.product.name })),
+        ...giftLines.map((g) => ({ productId: g.productId, skuId: g.skuId, quantity: g.quantity, label: g.specText ? `${g.productName}（${g.specText}）` : g.productName })),
+      ]
+
+      // L1：按 skuId 聚合（付费行与赠品行可能指向同一 sku，先求和再一条 UPDATE 判库存）、
+      // 升序逐条扣减。
+      const skuAgg = new Map<number, { quantity: number; label: string }>()
+      for (const line of stockLines) {
+        if (line.skuId == null) continue
+        const cur = skuAgg.get(line.skuId)
+        if (cur) cur.quantity += line.quantity
+        else skuAgg.set(line.skuId, { quantity: line.quantity, label: line.label })
+      }
+      for (const skuId of [...skuAgg.keys()].sort((a, b) => a - b)) {
+        const { quantity, label } = skuAgg.get(skuId)!
+        const skuUpdated = await tx.productSku.updateMany({
+          where: { id: skuId, stock: { gte: quantity } },
+          data: { stock: { decrement: quantity } },
+        })
+        if (skuUpdated.count === 0) {
+          throw new AppError(42201, `${label} 库存不足，请刷新重试`)
+        }
+      }
+
+      // L2：按 productId 聚合、升序逐条扣减 + 加销量。有 sku 的行库存权威性已由上面的
+      // sku 更新条件判过，这里不再带条件（与原逻辑一致）；没有 sku 的商品本身就是库存
+      // 权威，仍要条件更新防超卖。一个 productId 下的行不会混有 sku/无 sku（商品要么
+      // 整体有规格要么整体没有），`hasNoSpecLine` 只是按行取值，不存在冲突覆盖。
+      const productAgg = new Map<number, { quantity: number; label: string; hasNoSpecLine: boolean }>()
+      for (const line of stockLines) {
+        const cur = productAgg.get(line.productId)
+        if (cur) {
+          cur.quantity += line.quantity
+          if (line.skuId == null) cur.hasNoSpecLine = true
+        } else {
+          productAgg.set(line.productId, { quantity: line.quantity, label: line.label, hasNoSpecLine: line.skuId == null })
+        }
+      }
+      for (const productId of [...productAgg.keys()].sort((a, b) => a - b)) {
+        const { quantity, label, hasNoSpecLine } = productAgg.get(productId)!
+        if (hasNoSpecLine) {
+          const updated = await tx.product.updateMany({
+            where: { id: productId, stock: { gte: quantity } },
+            data: { stock: { decrement: quantity }, salesCount: { increment: quantity } },
+          })
+          if (updated.count === 0) {
+            throw new AppError(42201, `${label} 库存不足，请刷新重试`)
+          }
+        } else {
+          await tx.product.update({
+            where: { id: productId },
+            data: { stock: { decrement: quantity }, salesCount: { increment: quantity } },
+          })
+        }
+      }
+
+      // L3：users 行没有「先 UPDATE」的自然位置——consumePoints 在下面 order.create 之后
+      // 且需要 orderId 才能建积分账本行——用锁定读顶替：与 L1/L2 同一批拿锁，避免
+      // `INSERT orders` 的外键 S 锁与 consumePoints 里 `user.update` 的 X 锁形成同一种
+      // S→X 升级式死锁（同一用户两笔并发下单且都带积分时，见方案 §0.1 第 3 组探针）。
+      if (pointsUsed > 0) {
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`
+      }
+
       const newOrder = await tx.order.create({
         data: {
           orderNo,
@@ -603,49 +680,19 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         },
       })
 
-      // 原子减库存（updateMany 带 stock >= quantity 条件，防超卖）。
-      // 赠品行一并遍历——它扣真实库存、加真实销量，与付费行走同一段逻辑（spec §5.3）。
-      const stockLines = [
-        ...lines.map((l) => ({ productId: l.productId, skuId: l.skuId, quantity: l.quantity, label: l.sku ? `${l.product.name}（${l.sku.specText}）` : l.product.name })),
-        ...giftLines.map((g) => ({ productId: g.productId, skuId: g.skuId, quantity: g.quantity, label: g.specText ? `${g.productName}（${g.specText}）` : g.productName })),
-      ]
-      for (const line of stockLines) {
-        if (line.skuId) {
-          const skuUpdated = await tx.productSku.updateMany({
-            where: { id: line.skuId, stock: { gte: line.quantity } },
-            data: { stock: { decrement: line.quantity } },
-          })
-          if (skuUpdated.count === 0) {
-            throw new AppError(42201, `${line.label} 库存不足，请刷新重试`)
-          }
-          await tx.product.update({
-            where: { id: line.productId },
-            data: { stock: { decrement: line.quantity }, salesCount: { increment: line.quantity } },
-          })
-        } else {
-          const updated = await tx.product.updateMany({
-            where: { id: line.productId, stock: { gte: line.quantity } },
-            data: { stock: { decrement: line.quantity }, salesCount: { increment: line.quantity } },
-          })
-          if (updated.count === 0) {
-            throw new AppError(42201, `${line.label} 库存不足，请刷新重试`)
-          }
-        }
-      }
-
       // 券核销 / 积分扣减 / 赠品名额——三步都用条件更新判 count，是并发防线。
-      // 放在库存扣减之后：库存是最可能失败的一步，先做能让大多数冲突更早回滚。
       await applyOrderBenefits(tx, { orderId: newOrder.id, userId, coupon, giftLines, pointsUsed })
 
       if (cartItemIds) {
         await tx.cart.deleteMany({ where: { id: { in: cartItemIds }, userId } })
       }
       return newOrder
-    }, { timeout: 15000 }).catch(async (e) => {
+    }, { timeout: 15000 })).catch(async (e) => {
       // 并发重试：两次提交几乎同时到达，前置查询都落空，唯一索引让其中一个的事务整体回滚
       // （库存、券、积分一起回滚，不会出现「扣了库存但没建单」）。输的那一边把赢家原样返回。
       // 只吞 (user_id, client_request_id) 这一个索引的冲突——别的 P2002（比如 orderNo 撞车）
-      // 是真问题，必须继续往上抛。
+      // 是真问题，必须继续往上抛。这个分支在 `withDeadlockRetry` 之外：P2002 不是死锁
+      // （isDeadlockError 对它恒为 false），不会被重试消耗，第一次撞上就直接落到这里。
       if (
         clientRequestId &&
         e instanceof Prisma.PrismaClientKnownRequestError &&

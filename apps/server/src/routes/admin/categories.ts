@@ -101,8 +101,13 @@ router.post('/:id/product-order', async (req: Request, res: Response, next: Next
       if (!isSameSet) {
         throw new AppError(40001, '商品列表与该分类当前商品不一致，请刷新后重试')
       }
-      for (let i = 0; i < ids.length; i++) {
-        await tx.product.update({ where: { id: ids[i] }, data: { sortOrder: i } })
+      // 锁序（2026-09-24，L 级复核 R4 成立，店主选项 A）：按请求体原始顺序逐个 update 会让
+      // 本接口与「多商品订单按 productId 升序扣库存」（routes/orders.ts）反向，两者并发同一
+      // 批商品时有成环风险（同源于全局锁序 L2）。这里按商品 id 升序处理，`sortOrder` 仍取
+      // 该 id 在请求体里的原始下标——语义不变，只改加锁顺序（店员拖拽排序是低频操作，不加
+      // 重试，与整包编辑商品同类留后项一致：靠下单侧的重试兜底）。
+      for (const [i, pid] of [...ids.entries()].sort((a, b) => a[1] - b[1])) {
+        await tx.product.update({ where: { id: pid }, data: { sortOrder: i } })
       }
     })
 

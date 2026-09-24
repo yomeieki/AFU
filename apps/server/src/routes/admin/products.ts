@@ -321,21 +321,27 @@ router.get('/low-stock', async (_req: Request, res: Response, next: NextFunction
 //   2. 把这一个 sku 写成店员实点的绝对值；
 //   3. product.stock 只按 `delta = 新值 − 旧值` 相对增量，不去动其它 sku 贡献的部分。
 // 锁序与事实（2026-09-24 修订 3，L 级复核 R2：下面这段锁序分析原先漏了外键 S 锁，
-// 「单行事务之间不会成环」的说法与事实不符，已改正）：
-//   1. 下单事务的锁序（`routes/orders.ts`：`order.create({ items: { create } })` 在扣减
-//      循环之前）：`INSERT order_items` 因外键 `order_items_product_id_fkey` 先取得
-//      **products 行的 S 锁** → 扣 sku 行 X 锁 → 扣 products 行 X 锁（S→X 升级）。
+// 「单行事务之间不会成环」的说法与事实不符，已改正；2026-09-24 再修订：下单事务的锁序
+// 已改，第 1/3/5/6 点按新事实更新，见 docs/superpowers/plans/2026-09-24-order-deadlock.md）：
+//   1. 下单事务的锁序（`routes/orders.ts`，2026-09-24 起）：扣 sku 行 X 锁（`updateMany`，
+//      按 skuId 升序）→ 扣 products 行 X 锁（按 productId 升序）→（`pointsUsed>0` 时
+//      `FOR UPDATE users`）→ `INSERT orders/order_items`。插行时外键
+//      `order_items_product_id_fkey` 要的 products 行 S 锁被自己已经持有的 X 锁覆盖，
+//      不再单独产生锁竞争（旧版本先插行再扣库存，S→X 升级与本接口互锁，已修复）。
 //   2. 这个接口：sku 行 X 锁（`FOR UPDATE`）→ products 行 X 锁。
-//   3. 成环条件：订单行与改库存是**同一规格**——改库存持 X(sku) 等 X(products)，被订单的
-//      S(products) 挡住；订单接着要 X(sku)，被改库存挡住 → 环。**单行订单也会成环**，
-//      不是只有跨规格的订单才会。**不同规格不成环**：订单的 S→X 升级只等其它事务已授予
-//      的冲突锁，改库存那个等待中的 X 请求不挡它；改库存等订单提交后再拿到 products 行。
-//   4. 取消/退款回滚（`utils/order-stock.ts`）没有外键插入，锁序 sku → products，与改库存
-//      只在「多行回滚跨到改库存那一规格」时成环。
-//   5. 牺牲者：InnoDB 选 undo 量小的一方，实测恒为改库存事务（订单事务已插入
-//      `orders`/`order_items`），顾客下单不受影响；改库存捕获 P2034 重试，重试时重新
-//      `FOR UPDATE` 读到订单提交后的新值，delta 仍正确。
-//   6. 既有的「两笔多行订单以不同顺序扣同一商品」死锁不在本批，`orders.ts` 不动。
+//   3. 与下单事务**同一锁序**（sku 先于 products），两者之间不再成环：下单不会在持有
+//      products 行 S 锁的同时去等 sku 行 X 锁，因为它现在先锁 sku 再锁 products。
+//      74.11-c/e 用 raw SQL 会话手工模拟「先插 order_items 再改库存」的旧形态，测的是
+//      **本接口自身**在并发写入冲突下能否靠 P2034 重试兜住，这个场景与下单事务是否先插
+//      行无关，改法之后仍然是有效测试，不需要改。
+//   4. 取消/退款回滚（`utils/order-stock.ts`）没有外键插入，锁序同样是 sku（按 id 升序）
+//      → products（按 id 升序），与本接口同向。
+//   5. 牺牲者：两个事务现在走同一全局锁序，谁在等谁完全由到达顺序决定，不再固定是某一方；
+//      本接口靠 P2034 重试兜底（`STOCK_UPDATE_MAX_ATTEMPTS=5`），重试时重新 `FOR UPDATE`
+//      读到对方提交后的新值，delta 仍正确。
+//   6. 「两笔多行订单以不同顺序扣同一商品」的死锁已在本批解决：`orders.ts` 把本单涉及的
+//      全部 sku 按 skuId 升序聚合扣减、全部商品按 productId 升序聚合扣减，不再逐行按
+//      购物车/直购顺序交替加锁；`order-stock.ts` 的回滚同样先聚合排序。
 const stockUpdateSchema = z.object({
   skuId: z.number().int().positive().nullable().optional(),
   stock: z.number().int().min(0).max(999999),
