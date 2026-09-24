@@ -443,11 +443,11 @@ OS=A 重跑                      同上，retries: 1                            
 
 再用**真实 `POST /api/orders`**（不是 SLEEP 会话）与同一规格的 `PUT` 并发：60 轮同时发、40 轮 PUT 延后 20 ms、40 轮延后 50 ms、40 轮延后 100 ms → 订单 180/180 成功、PUT 180/180 成功、**重试 0 次**、每轮结束 `product == SUM`。复核者的 26/120 是饱和压测（2 单 + 2 改库存同时打）下的数字；真实单笔下单事务里「插 order_items → 扣 sku」之间只有微秒级窗口，所以低延迟形态几乎撞不上。
 
-**R2 成立**：`products.ts:325-330` 的「两个单行事务之间不会互相等待成环」与 `docs/api.md:792`「一张跨两个规格的订单…仍可能互锁」都漏了外键 S 锁，说法与事实不符；结果正确、重试有效。生产 MySQL 参数（编排者只读核实：`innodb_deadlock_detect=1`、`innodb_lock_wait_timeout=50`、REPEATABLE-READ、8.0.46）与本机一致，死锁由检测器即时打断、不会走 50 秒等待。
+**R2 成立**：`products.ts:324-326` 的「两个单行事务之间不会互相等待成环」与 `docs/api.md:792`「一张跨两个规格的订单…仍可能互锁」都漏了外键 S 锁，说法与事实不符；结果正确、重试有效。生产 MySQL 参数（编排者只读核实：`innodb_deadlock_detect=1`、`innodb_lock_wait_timeout=50`、REPEATABLE-READ、8.0.46）与本机一致，死锁由检测器即时打断、不会走 50 秒等待。
 
 ### R3-1 锁序分析改正（注释 + 文档；只改文字）
 
-`apps/server/src/routes/admin/products.ts:314-330` 那段注释、`docs/api.md:791-792`（3.3 节「并发语义」）与 `:2316`（附录 N）统一改成下面的事实，不得再出现「单行事务之间不会成环」「只有跨两个规格的订单才会互锁」：
+`apps/server/src/routes/admin/products.ts:316-328` 那段注释、`docs/api.md:791-792`（3.3 节「并发语义」）与 `:2316`（附录 N）统一改成下面的事实，不得再出现「单行事务之间不会成环」「只有跨两个规格的订单才会互锁」：
 
 1. **下单事务的锁序**（`routes/orders.ts`：`order.create({ items: { create } })` 在扣减循环之前）：`INSERT order_items` 因外键 `order_items_product_id_fkey`（`prisma/migrations/20260509073712_init/migration.sql:252`）先取得 **products 行的 S 锁** → 扣 sku 行 X 锁 → 扣 products 行 X 锁（S→X 升级）。
 2. **改库存接口**：sku 行 X 锁（`FOR UPDATE`）→ products 行 X 锁。
@@ -458,7 +458,7 @@ OS=A 重跑                      同上，retries: 1                            
 
 ### R3-2 重试上限 3 → 5
 
-`products.ts:339` `STOCK_UPDATE_MAX_ATTEMPTS = 3` 改为 `5`，退避仍 `50 × attempt` ms（最长累计等待 50+100+150+200 = 500 ms，远小于任何前端超时）。理由：按复核饱和压测的每次尝试死锁率 p ≈ 26/120 ≈ 0.22 估算，3 次连败 ≈ 1.0%、5 次连败 ≈ 0.05%；真实下单形态本机 180 轮 0 次；改库存是店员低频手工操作，多两次尝试没有代价，却把饱和场景的失败率压到可忽略。日志文案里的 `/3` 随常量变（模板字符串已引用常量，`:376` 一带核对）。改坏验证不变：去掉重试 → 74.11-c/e 现形。
+`products.ts:344` `STOCK_UPDATE_MAX_ATTEMPTS = 3` 改为 `5`，退避仍 `50 × attempt` ms（最长累计等待 50+100+150+200 = 500 ms，远小于任何前端超时）。理由：按复核饱和压测的每次尝试死锁率 p ≈ 26/120 ≈ 0.22 估算，3 次连败 ≈ 1.0%、5 次连败 ≈ 0.05%；真实下单形态本机 180 轮 0 次；改库存是店员低频手工操作，多两次尝试没有代价，却把饱和场景的失败率压到可忽略。日志文案里的 `/3` 随常量变（模板字符串已引用常量，`:379` 核对）。改坏验证不变：去掉重试 → 74.11-c/e 现形。
 
 ### R3-3 验收增补（`scripts/e2e.d/74-low-stock.sh`）
 
@@ -486,7 +486,7 @@ OS=A 重跑                      同上，retries: 1                            
 ### 授权范围增减
 
 - 无新增文件：`apps/server/src/routes/admin/products.ts`（注释 + 一个常量）、`docs/api.md`（两处 + 附录 N 第 4 条）、`scripts/e2e.d/74-low-stock.sh`（已授权）。
-- `products.ts` 限定：本修订只允许改 `:314-330` 注释块与 `STOCK_UPDATE_MAX_ATTEMPTS` 的值；事务体不动。
+- `products.ts` 限定：本修订只允许改 `:316-328` 注释块与 `STOCK_UPDATE_MAX_ATTEMPTS` 的值；事务体不动。
 - 禁止清单不变；`routes/orders.ts` 不动（复核 R3 的订单互锁登记独立批次）。
 
 ### 上报条件增补
