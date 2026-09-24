@@ -498,3 +498,41 @@ OS=A 重跑                      同上，retries: 1                            
 ### 待用户决定
 
 - 无。
+
+---
+
+## 裁决 + 修订 4（2026-09-24，执行者上报：修订 3 的改坏验证「去掉 `FOR UPDATE` → 74.11-e 必红」得不到红）
+
+【工序】裁决 【模型】Fable 5.1 【等级】L
+
+### 上报-1：成立（规划缺口——改坏验证选错了形态，不是代码问题）
+
+**推演**（`routes/admin/products.ts:366-380`，HEAD `5b3f674`）：事务体第一条 `findFirst(product)` 是一致性读，REPEATABLE-READ 下**从这一刻建立整个事务的快照**；去掉 `FOR UPDATE` 后第三条 `SELECT stock FROM product_skus` 变成普通一致性读，读的是这份快照里的旧值 `old₀`；随后 `UPDATE sku = new` 是当前读（会等别人的 X 锁），`product.stock += new − old₀`。只要**别的事务在「快照建立」与「PUT 拿到 sku 行 X 锁」之间提交了对同一 sku 的改动**（真实值已变成 `old₁`），delta 就少算 `old₁ − old₀`，`product.stock ≠ SUM`。
+
+**为什么 74.11-e 抓不到**：e 形态的订单会话先持 S(products)（外键），1.5 秒后才碰 sku A；PUT 在 0.7 秒时快照、改 sku A（拿到 X(A)）、等 X(products) → 订单会话再要 X(A) → **死锁**，InnoDB 把 PUT 杀掉；重试是**新事务、新快照**，此时订单已提交，普通读也读到新值 → 绿。执行者结论「死锁重试盖住了陈旧快照」正确；其第二种纯净竞态（autocommit 成对语句、无停顿）窗口只有毫秒级，30 轮撞不上，也正确。
+
+**能否确定性复现**：能，不需要在代码里插停顿。让并发方**先锁 sku A 再锁 products 并持锁**（即 `utils/order-stock.ts:19-30` 取消/退款回滚的形态，同一规格）：PUT 的快照在会话持锁期间建立，`UPDATE sku` 被 X(A) 挡住直到会话提交，PUT **不持任何锁**所以**没有死锁、没有重试**，随后用快照旧值算 delta。本机用 `5b3f674` 起两套服务（3143 = 原代码；3144 = 去掉 `FOR UPDATE` 的副本，同一库 `food_shop_ls_rule`），A/B/C=10、product=30，后台会话 `BEGIN; UPDATE product_skus SET stock=stock+1 WHERE id=A; UPDATE products SET stock=stock+1 …; SELECT SLEEP(2); COMMIT;`，0.7 秒时 `PUT A=5`：
+
+```
+有 FOR UPDATE（3143）：resp productStock=25  elapsed=1358ms  after: product=25 SUM=25 skus=A:5,B:10,C:10   ✔（两次一致）
+去掉 FOR UPDATE（3144）：resp productStock=26  elapsed=1365ms  after: product=26 SUM=25 skus=A:5,B:10,C:10   ✘（两次一致：delta 用了快照里的 10 而不是真实的 11）
+对照·e 形态打 3144：product=25 SUM=25，server 日志「遇死锁，重试」×2                                        ← 证实被重试掩盖
+```
+
+`elapsed ≈ 1.36 s` 同时证明 PUT 确实在 sku 行锁上等过、且没有走死锁路径（日志无重试）。
+
+### 修订 4：替换改坏验证的形态（不放宽任何不变量断言）
+
+- **删除**修订 3 里「去掉 `FOR UPDATE` → 74.11-e 必红」这一条（e 步本身保留：它钉的是外键 S 锁 + 重试路径）。
+- **新增 74.11-g「同一规格的取消回滚 vs 改库存」**（放在 f 之后）：复位 A=B=C=10、product=30；后台会话 `BEGIN; UPDATE product_skus SET stock=stock+1 WHERE id=$P74_A; UPDATE products SET stock=stock+1, sales_count=sales_count-1 WHERE id=$P74_PID; SELECT SLEEP(2); COMMIT;`；0.7 秒后 `p74_stock $P74_PID {skuId:$P74_A, stock:5}` → `code 0`、`data.stock=5`、**`data.productStock=25`**；`wait` 后 `products.stock=25`、`SUM(sku)=25`、A=5、B=10、C=10；PUT 耗时 ≥ 700 ms（与 a–f 同款断言）。这一步与 74.11-b 的区别只在「同一规格」——b 打的是另一规格 B，抓不到快照陈旧。
+- **改坏验证（替换）**：把 `FOR UPDATE` 去掉 → **74.11-g 必红**：`data.productStock=26`、`products.stock=26 ≠ SUM 25`（本机两次复现一致、确定性，不依赖毫秒级时序）；a–f 仍可能全绿（e 被重试掩盖），这不是矛盾，执行者报告里注明即可。其余改坏验证（回退成 aggregate → a/b 红；去掉重试 → c/e 现形）不变。
+- `docs/api.md` 3.3 节「并发语义」补一句：`FOR UPDATE` 防的是**快照陈旧**（对方先锁规格行、后提交的场景，如取消/退款回滚），死锁重试防的是**锁序成环**（对方先持商品行 S 锁的下单场景）——两道防线各管一类交错，缺一不可；e2e 见 74.11-g 与 74.11-e。
+- 授权范围：不变（`74-low-stock.sh`、`docs/api.md`）。既有断言放开：**无**。
+
+### 上报条件增补
+
+- 74.11-g 若在原代码上出现 `productStock ≠ 25`（意味着 `FOR UPDATE` 没生效，例如 `$queryRaw` 被改成了非锁定形态或事务没串起来）——阻断，上报。
+
+### 待用户决定
+
+- 无。
