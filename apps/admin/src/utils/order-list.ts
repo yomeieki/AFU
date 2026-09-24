@@ -26,6 +26,29 @@ export function channelTag(deliveryType: string): { label: '外送' | '自取' |
 }
 
 /**
+ * 渠道配色——原是 `components/orders/OrderListTable.tsx` 里的模块私有 `CHANNEL_TONE`，
+ * 2026-09-24 提升为这里的导出常量，供用户管理订单弹窗复用。**全仓库只此一份**：
+ * 同城=橙、邮寄=蓝、自取=青，与订单列表、详情页、工作台三处既有语义一致（详情页那份
+ * `DetailHero.CHANNEL_TONE` 键是大写的 deliveryType，与这里的小写 tone 键不是同一张表，
+ * 两处不合并——合并需要改 DetailHero 的调用点，不在本批授权范围内）。
+ */
+export const CHANNEL_TONE_CLASS: Record<'local' | 'pickup' | 'express', string> = {
+  local: 'bg-orange-50 text-orange-700',
+  pickup: 'bg-teal-50 text-teal-700',
+  express: 'bg-blue-50 text-blue-700',
+}
+
+/**
+ * 用户管理订单弹窗里的渠道小标签：文案与 `channelTag` 不同（这里店主要的是「同城/自取/邮寄」，
+ * 不是「外送/自取/邮寄」——「同城」与订单列表页的渠道筛选 tab 文案对齐），颜色复用同一张表。
+ */
+export function userOrderChannel(deliveryType: string): { label: '同城' | '自取' | '邮寄'; cls: string } {
+  const { tone } = channelTag(deliveryType)
+  const label = tone === 'pickup' ? '自取' : tone === 'express' ? '邮寄' : '同城'
+  return { label, cls: CHANNEL_TONE_CLASS[tone] }
+}
+
+/**
  * 配送单状态的人话。**刻意与 `components/ui/StatusBadge.tsx` 的 `STATUS_MAP` 里配送单那一段
  * 重复**：本文件是纯逻辑（`node --test` 直接跑，闸门 A14 不许它 import 任何 `.tsx`），没法复用
  * 那张表。改配送单状态文案时两处都要改——目前状态集合（快递100 回调）已经稳定多年没变过。

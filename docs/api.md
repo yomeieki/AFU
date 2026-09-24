@@ -933,6 +933,7 @@
 - page, pageSize
 - keyword：匹配昵称、微信绑定手机号（users.phone，目前实际总是空），或**该用户任一订单**的收货人姓名/收货人手机号（子串匹配，天然支持只输尾号）
 - hasOrders：只认字面量 `1`——只列「下过单的」（orders 表任一状态 ≥1 条，与 orderCount 列同一口径）。不传或传其他值都不过滤，默认返回全部用户（后台前端默认勾选「只看下过单的」发 `hasOrders=1`，但接口本身不预设这个过滤，调用方不传就是不过滤）
+- sort（2026-09-24 新增）：只认字面量 `spend`——按 `spendFen` 降序（并列按 `createdAt desc, id desc`）。不传或传其他值都退回默认序（`createdAt desc`）
 
 **Response:**
 ```json
@@ -950,6 +951,7 @@
         "orderCount": 5,
         "pointsBalance": 120,
         "availableCoupons": 2,
+        "spendFen": 15800,
         "lastLoginAt": "2024-01-01T10:00:00Z",
         "createdAt": "2024-01-01T10:00:00Z",
         "latestOrder": {
@@ -968,11 +970,36 @@
 
 `latestOrder`：该用户 createdAt 最新的一张订单快照，**不排除任何状态**（含 PENDING_PAYMENT、CANCELLED、isTest），没下过单则为 `null`。这是订单收货人信息，不代表用户本人改过昵称或绑定过这个手机号——users.phone/nickname/avatarUrl 目前只在极少数场景被写入，`latestOrder` 是后台前端用来兜底展示「这串号码最近打给谁用过」的依据，不是身份认证结果。
 
+`spendFen`（2026-09-24 新增，分）：累计消费 = Σ(actual_amount − refunded_amount)，只算 `paid_at` 非空且 `isTest=false` 的订单——未付款（`PENDING_PAYMENT`）、未付款取消（`CANCELLED`）、测试单一律不计入；部分退款按「实付 − 已实退」算，退款在途（`REFUNDING` 等）期间不扣，退成功那一刻才扣，与经营概览「实收 − 退款」同口径。**与 `orderCount`/`latestOrder` 不同口径**（那两个含任何状态、含测试单）——同一行出现「订单数 3 / 累计消费 ¥0.00」（全是测试单或全未付款）是正常现象。
+
+---
+
+#### GET /api/admin/users/:id（2026-09-24 新增）
+
+单个用户，响应形状与 `GET /admin/users` 列表里的一行完全相同（含 `orderCount`/`availableCoupons`/`latestOrder`/`spendFen`）。用户不存在 → `40401`；`:id` 非正整数 → `40001`。
+
+用途：用户管理页「订单」弹窗按地址栏的 `orders=<userId>` 参数重开时用——不从列表当页里找，因为列表按 `createdAt desc` 分页，弹窗打开、详情页停留期间若有新用户注册，会把目标用户挤到下一页。
+
 ---
 
 #### GET /api/admin/users/:id/orders
 
-查看指定用户的订单列表（参数同订单列表）。
+查看指定用户的订单列表，分页（`page`/`pageSize`，`pageSize` 上限 50），按 `createdAt desc` 排序。每行字段：
+
+```json
+{
+  "id": 1,
+  "orderNo": "ORD202409010001",
+  "status": "PAID",
+  "actualAmount": 9200,
+  "discountAmount": 0,
+  "deliveryType": "EXPRESS",
+  "createdAt": "2024-09-01T10:00:00Z",
+  "items": [{ "productName": "凉拌牛肉", "quantity": 1, "isGift": false }]
+}
+```
+
+`deliveryType`（2026-09-24 新增）：`LOCAL`/`PICKUP`/`EXPRESS`，用户管理订单弹窗用来渲染渠道小标签。
 
 ---
 
@@ -1430,8 +1457,9 @@ Body：`{ latE6, lngE6 }`（探测点坐标）。门店尚未设置坐标 → `4
 | `GET /admin/settings/member` | 读会员设置 |
 | `PUT /admin/settings/member` | 写会员设置（**整包覆盖**，先 GET 拿完整对象再传回） |
 | `GET /admin/users` | 列表多两列：`pointsBalance`、`availableCoupons`（按**时间**判：`UNUSED && expiresAt > now`） |
-| `GET /admin/users/:id/points-ledger?page=&pageSize=` | 该用户积分流水，`pageSize` 上限 50 |
-| `GET /admin/users/:id/coupons?status=` | 该用户全部券。管理端**可以**读 `issuedBy`/`remark` |
+| `GET /admin/users/:id` | 2026-09-24 新增：单个用户，响应形状同列表一行（含 `spendFen`） |
+| `GET /admin/users/:id/points-ledger?page=&pageSize=` | 该用户积分流水，`pageSize` 上限 50；`orderId`（2026-09-24 新增）是 `refType='ORDER'` 行对应的数字 `Order.id` |
+| `GET /admin/users/:id/coupons?status=` | 该用户全部券。管理端**可以**读 `issuedBy`/`remark`；`sourceRefOrderId`（2026-09-24 新增）是 `sourceRef` 单号对应的 `Order.id` |
 | `POST /admin/users/:id/coupons` | 定向发券 `{ templateId, remark, orderNo? }`。只认 `source='ADMIN'` 模板；`remark` 必填；限流 30 次/分钟**按管理员名**计数 |
 
 **`POST /admin/system/run-scheduler`** 的会员相关 override 键：`settleMissedPointsAfterMin`
@@ -1640,9 +1668,10 @@ M1 只有账本与只读端点；M2 把券与赠品接进了 `POST /orders`。**
 
 | 端点 | 说明 |
 |---|---|
-| `GET /admin/users` | 每行新增 `pointsBalance` 与 `availableCoupons` |
-| `GET /admin/users/:id/points-ledger?page=&pageSize=` | 积分流水，分页倒序，`pageSize` 上限 50 |
-| `GET /admin/users/:id/coupons?status=` | 该用户全部券（含已用/已过期） |
+| `GET /admin/users` | 每行新增 `pointsBalance` 与 `availableCoupons`；2026-09-24 起再加 `spendFen`，支持 `sort=spend` |
+| `GET /admin/users/:id` | 2026-09-24 新增：单个用户，响应形状同列表一行 |
+| `GET /admin/users/:id/points-ledger?page=&pageSize=` | 积分流水，分页倒序，`pageSize` 上限 50；2026-09-24 起每行加数字 `orderId` |
+| `GET /admin/users/:id/coupons?status=` | 该用户全部券（含已用/已过期）；2026-09-24 起每行加 `sourceRefOrderId` |
 | `POST /admin/users/:id/coupons` | 定向发券（赔偿券）。`{ templateId, remark, orderNo? }` |
 
 用户不存在一律 `40401`，`:id` 非正整数 `40001`。

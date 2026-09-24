@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Search, Users as UsersIcon } from 'lucide-react'
-import { getUsers, getUserOrders, getUserPointsLedger, getUserCoupons } from '../api/admin'
+import { useLocation, useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { Search, Users as UsersIcon, ChevronRight, ArrowDown, Copy } from 'lucide-react'
+import { getUsers, getUser, getUserOrders, getUserPointsLedger, getUserCoupons } from '../api/admin'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Table from '../components/ui/Table'
@@ -10,9 +11,15 @@ import Spinner from '../components/ui/Spinner'
 import EmptyState from '../components/ui/EmptyState'
 import { toast } from '../components/ui/Toast'
 import IssueCouponModal from '../components/IssueCouponModal'
+import { copyText } from '../components/orders/copyText'
 import type { AdminUser, UserOrder, PointsLedgerRow, UserCouponRow } from '../types'
-import { fmtDate, fmtDateTime } from '../utils/time'
+import { fmtDate, fmtDateTime, fmtMonthDayTime } from '../utils/time'
 import { userDisplayName, userPhoneInfo } from '../utils/user-label'
+import { fmtYuanGrouped } from '../utils/money'
+import { itemsSummary, userOrderChannel } from '../utils/order-list'
+import { readUsersQuery, writeUsersQuery } from '../utils/users-query'
+import { orderDetailPath } from '../navigation'
+import { isModifiedLinkClick } from '../utils/link-click'
 
 const userLabel = userDisplayName
 const yuan = (fen: number) => (fen / 100).toFixed(2)
@@ -47,23 +54,54 @@ function filterCoupons(list: UserCouponRow[], tab: CouponTab): UserCouponRow[] {
   return list.filter((c) => c.status === 'UNUSED' && !expired(c))
 }
 
+/** 订单号 + 复制按钮，可选带跳详情的链接。流水「关联」列与券记录「使用订单」列共用 */
+function OrderRefCell({ text, orderId, from }: { text: string; orderId: number | null; from: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {orderId ? (
+        <Link to={orderDetailPath(orderId)} state={{ from }} className="font-mono text-blue-500 hover:text-blue-700">
+          {text}
+        </Link>
+      ) : (
+        <span className="font-mono text-gray-700">{text}</span>
+      )}
+      <button
+        type="button"
+        onClick={() => copyText(text)}
+        className="text-gray-400 hover:text-gray-600"
+        aria-label="复制订单号"
+        title="复制订单号"
+      >
+        <Copy className="w-3.5 h-3.5" />
+      </button>
+    </span>
+  )
+}
+
 export default function Users() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { kw, hasOrders, page, sort, ordersUserId } = readUsersQuery(searchParams)
+  const pageSize = 20
+
+  // 关键词输入框是一份「草稿」，点「搜索」才写进 URL（kw）——避免打字过程中反复触发列表刷新
+  const [keywordDraft, setKeywordDraft] = useState(kw)
+  useEffect(() => { setKeywordDraft(kw) }, [kw])
+
   const [list, setList] = useState<AdminUser[]>([])
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const pageSize = 20
-  const [keyword, setKeyword] = useState('')
-  // 「只看下过单的」默认勾上——店主找人多半是为了对一张订单，压根没下过单的行只会添乱。
-  // 与「订单数」列同一口径（orders: some {}，任一状态都算），见 utils/order-actions 同款注释风格。
-  const [hasOrders, setHasOrders] = useState(true)
   const [loading, setLoading] = useState(true)
-
-  // 用户订单弹窗
-  const [ordersModal, setOrdersModal] = useState<AdminUser | null>(null)
-  const [userOrders, setUserOrders] = useState<UserOrder[]>([])
-  const [ordersLoading, setOrdersLoading] = useState(false)
   // 没有 catch 的话接口一挂就渲染「暂无用户 / 暂无订单」，店主会当成真的没有
   const [loadFailed, setLoadFailed] = useState(false)
+
+  // 用户订单弹窗（打开来源：行内按钮，或 URL 的 orders=<id> 在挂载/返回/刷新时自动重开）
+  const [ordersModal, setOrdersModal] = useState<AdminUser | null>(null)
+  const [userOrders, setUserOrders] = useState<UserOrder[]>([])
+  const [ordersPage, setOrdersPage] = useState(1)
+  const [ordersTotal, setOrdersTotal] = useState(0)
+  const [ordersLoading, setOrdersLoading] = useState(false)
+  const [ordersMoreLoading, setOrdersMoreLoading] = useState(false)
   const [ordersFailed, setOrdersFailed] = useState(false)
 
   // 发券
@@ -84,10 +122,10 @@ export default function Users() {
   const [couponsLoading, setCouponsLoading] = useState(false)
   const [couponsFailed, setCouponsFailed] = useState(false)
 
-  const load = (p = page) => {
+  const load = () => {
     setLoading(true)
     setLoadFailed(false)
-    getUsers({ page: p, pageSize, keyword: keyword || undefined, hasOrders: hasOrders ? 1 : undefined })
+    getUsers({ page, pageSize, keyword: kw || undefined, hasOrders: hasOrders ? 1 : undefined, sort: sort === 'spend' ? 'spend' : undefined })
       .then((res) => {
         setList(res.data.data.list)
         setTotal(res.data.data.total)
@@ -96,21 +134,26 @@ export default function Users() {
       .finally(() => setLoading(false))
   }
 
-  // hasOrders 进依赖：勾选状态一变就自动重载，不用每个改状态的地方都记得手动 load()。
-  useEffect(() => { load() }, [page, hasOrders]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 四个筛选/排序维度全在 URL 里，任一变化都重新拉取
+  useEffect(() => { load() }, [kw, hasOrders, page, sort]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
-    setPage(1)
-    load(1)
+    setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { kw: keywordDraft.trim(), page: 1 }), { replace: true })
   }
 
-  // 勾选/取消「只看下过单的」：先回第 1 页再改状态——顺序反过来的话，若当前停在第 3 页，
-  // setHasOrders 触发的 effect 会先用旧页码打一次接口，页码没变时接口没变、只是浪费一次请求，
-  // 但更糟的是 setPage(1) 和 setHasOrders 都各自触发 effect 依赖变化，React 会合并成一次渲染
-  // 只跑一次 effect——保险起见仍然两个都设，靠依赖数组去重，不手动再多调一次 load()。
   const handleHasOrdersChange = (checked: boolean) => {
-    setHasOrders(checked)
-    setPage(1)
+    setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { hasOrders: checked, page: 1 }), { replace: true })
+  }
+
+  const handleSortToggle = () => {
+    setSearchParams(
+      (prev) => writeUsersQuery(new URLSearchParams(prev), { sort: sort === 'spend' ? 'created' : 'spend', page: 1 }),
+      { replace: true }
+    )
+  }
+
+  const handlePageChange = (p: number) => {
+    setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { page: p }), { replace: true })
   }
 
   const loadLedger = (user: AdminUser, p: number) => {
@@ -148,15 +191,63 @@ export default function Users() {
     loadCoupons(user)
   }
 
+  // ── 用户订单弹窗 ──────────────────────────────────────────────────────────
+  const loadUserOrders = (userId: number, p: number) => {
+    if (p === 1) { setOrdersLoading(true); setOrdersFailed(false) } else { setOrdersMoreLoading(true) }
+    getUserOrders(userId, { page: p, pageSize: 20 })
+      .then((res) => {
+        setOrdersPage(p)
+        setOrdersTotal(res.data.data.total)
+        setUserOrders((prev) => (p === 1 ? res.data.data.list : [...prev, ...res.data.data.list]))
+      })
+      .catch(() => { if (p === 1) setOrdersFailed(true); else toast.error('加载更多失败，请重试') })
+      .finally(() => { if (p === 1) setOrdersLoading(false); else setOrdersMoreLoading(false) })
+  }
+
   const openOrders = (user: AdminUser) => {
     setOrdersModal(user)
-    setOrdersLoading(true)
-    setOrdersFailed(false)
     setUserOrders([])
-    getUserOrders(user.id, { page: 1, pageSize: 20 })
-      .then((res) => setUserOrders(res.data.data.list))
-      .catch(() => setOrdersFailed(true))
-      .finally(() => setOrdersLoading(false))
+    setOrdersTotal(0)
+    setOrdersPage(1)
+    setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { ordersUserId: user.id }), { replace: true })
+    loadUserOrders(user.id, 1)
+  }
+
+  const closeOrders = () => {
+    setOrdersModal(null)
+    setUserOrders([])
+    setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { ordersUserId: null }), { replace: true })
+  }
+
+  // URL 的 orders=<id> 在挂载、浏览器「返回」、刷新时都会变化（或就是初始值）——据此自动重开弹窗；
+  // 弹窗已经是这个用户时不重复请求（行内按钮点击已经 setOrdersModal 过）。
+  useEffect(() => {
+    if (ordersUserId === null) {
+      if (ordersModal) setOrdersModal(null)
+      return
+    }
+    if (ordersModal?.id === ordersUserId) return
+    getUser(ordersUserId)
+      .then((row) => {
+        setOrdersModal(row)
+        setUserOrders([])
+        setOrdersTotal(0)
+        setOrdersPage(1)
+        loadUserOrders(ordersUserId, 1)
+      })
+      .catch(() => {
+        toast.error('用户不存在')
+        setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { ordersUserId: null }), { replace: true })
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordersUserId])
+
+  const handleOrderRowClick = (e: React.MouseEvent, o: UserOrder) => {
+    if (isModifiedLinkClick(e)) {
+      window.open(orderDetailPath(o.id), '_blank', 'noopener')
+      return
+    }
+    navigate(orderDetailPath(o.id), { state: { from: location.pathname + location.search } })
   }
 
   return (
@@ -167,8 +258,8 @@ export default function Users() {
         <div>
           <label className="block text-xs text-gray-500 mb-1">关键词</label>
           <input
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
+            value={keywordDraft}
+            onChange={(e) => setKeywordDraft(e.target.value)}
             placeholder="搜收货人姓名/手机号（可只输尾号）"
             className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-56"
           />
@@ -186,6 +277,16 @@ export default function Users() {
           />
           只看下过单的
         </label>
+        {/* 手机端没有表头可点，用一个开关驱动同一个 sort 参数 */}
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 pb-1.5 cursor-pointer select-none md:hidden">
+          <input
+            type="checkbox"
+            checked={sort === 'spend'}
+            onChange={handleSortToggle}
+            className="rounded border-gray-300"
+          />
+          按累计消费排序
+        </label>
       </div>
 
       <div className="bg-white rounded-lg shadow-card overflow-hidden">
@@ -196,7 +297,7 @@ export default function Users() {
           </div>
         ) : (
         <Table
-          columns={9}
+          columns={11}
           loading={loading}
           isEmpty={list.length === 0}
           emptyText={hasOrders ? '暂无下过单的用户，可取消勾选「只看下过单的」再看看' : '暂无用户'}
@@ -205,6 +306,18 @@ export default function Users() {
               <th className="text-left px-4 py-3">用户</th>
               <th className="text-left px-4 py-3">手机号</th>
               <th className="text-right px-4 py-3">订单数</th>
+              <th className="text-right px-4 py-3">
+                <button
+                  type="button"
+                  onClick={handleSortToggle}
+                  aria-sort={sort === 'spend' ? 'descending' : 'none'}
+                  className={`inline-flex items-center gap-1 ${sort === 'spend' ? 'font-semibold text-gray-800' : ''}`}
+                >
+                  累计消费
+                  {sort === 'spend' && <ArrowDown className="w-3.5 h-3.5" />}
+                </button>
+              </th>
+              <th className="text-right px-4 py-3">最近下单</th>
               <th className="text-right px-4 py-3">积分</th>
               <th className="text-right px-4 py-3">可用券</th>
               <th className="text-right px-4 py-3">状态</th>
@@ -235,7 +348,10 @@ export default function Users() {
                     </span>
                   </div>
                   <p className="text-xs text-gray-500 mt-1.5">
-                    {phoneInfo ? phoneInfo.phone : '无手机号'}　订单 {u.orderCount}　注册 {fmtDate(u.createdAt)}
+                    {phoneInfo ? phoneInfo.phone : '无手机号'} · 订单 {u.orderCount} · 累计 {fmtYuanGrouped(u.spendFen)}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    最近下单 {fmtMonthDayTime(u.latestOrder?.createdAt, '-')} · 注册 {fmtDate(u.createdAt)}
                   </p>
                   {/* 号码来自订单收货人快照而非微信绑定号时，必须标出来源，不然店主会当成本人手机号 */}
                   {phoneInfo?.source === 'order' && u.latestOrder && (
@@ -285,6 +401,8 @@ export default function Users() {
                 ) : '-'}
               </td>
               <td className="px-4 py-3 text-right text-gray-800">{u.orderCount}</td>
+              <td className="px-4 py-3 text-right text-gray-800">{fmtYuanGrouped(u.spendFen)}</td>
+              <td className="px-4 py-3 text-right text-gray-500">{fmtMonthDayTime(u.latestOrder?.createdAt, '-')}</td>
               <td className="px-4 py-3 text-right text-gray-800">{u.pointsBalance}</td>
               <td className="px-4 py-3 text-right text-gray-800">{u.availableCoupons}</td>
               <td className="px-4 py-3 text-right">
@@ -311,17 +429,24 @@ export default function Users() {
           })}
         </Table>
         )}
-        {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={setPage} />}
+        {!loading && !loadFailed && <Pagination page={page} total={total} pageSize={pageSize} onChange={handlePageChange} />}
       </div>
 
       {/* 用户订单弹窗 */}
       {ordersModal && (
         <Modal
-          title={`${userLabel(ordersModal)} 的订单`}
+          title={
+            <>
+              {userLabel(ordersModal)} 的订单
+              {!ordersLoading && !ordersFailed && (
+                <span className="ml-2 text-sm font-normal text-gray-400">共 {ordersTotal} 单</span>
+              )}
+            </>
+          }
           width="lg"
-          onClose={() => setOrdersModal(null)}
+          onClose={closeOrders}
           footer={
-            <Button variant="secondary" onClick={() => setOrdersModal(null)}>
+            <Button variant="secondary" onClick={closeOrders}>
               关闭
             </Button>
           }
@@ -333,13 +458,13 @@ export default function Users() {
           ) : ordersFailed ? (
             <div className="py-6 flex flex-col items-center gap-3 text-sm text-red-600">
               <span>订单加载失败，当前显示的不是真实数据</span>
-              <Button size="sm" variant="secondary" onClick={() => openOrders(ordersModal)}>重试</Button>
+              <Button size="sm" variant="secondary" onClick={() => loadUserOrders(ordersModal.id, 1)}>重试</Button>
             </div>
           ) : userOrders.length === 0 ? (
             <EmptyState icon={UsersIcon} text="暂无订单" />
           ) : (
             <div className="max-h-[60vh] overflow-y-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm hidden md:table">
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
                     <th className="text-left px-3 py-2">订单号</th>
@@ -347,28 +472,71 @@ export default function Users() {
                     <th className="text-right px-3 py-2">金额</th>
                     <th className="text-right px-3 py-2">状态</th>
                     <th className="text-right px-3 py-2">下单时间</th>
+                    <th className="px-2 py-2" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {userOrders.map((o) => (
-                    <tr key={o.id}>
-                      <td className="px-3 py-2 font-mono text-gray-700">{o.orderNo}</td>
-                      <td className="px-3 py-2 text-gray-600">
-                        {o.items.map((it) => `${it.productName}×${it.quantity}`).join('、')}
-                      </td>
-                      <td className="px-3 py-2 text-right font-semibold text-brand-600">
-                        ¥{(o.actualAmount / 100).toFixed(2)}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <StatusBadge status={o.status} />
-                      </td>
-                      <td className="px-3 py-2 text-right text-gray-500">
-                        {fmtDateTime(o.createdAt)}
-                      </td>
-                    </tr>
-                  ))}
+                  {userOrders.map((o) => {
+                    const ch = userOrderChannel(o.deliveryType)
+                    return (
+                      <tr
+                        key={o.id}
+                        onClick={(e) => handleOrderRowClick(e, o)}
+                        className="cursor-pointer hover:bg-brand-50"
+                      >
+                        <td className="px-3 py-2">
+                          <span className="font-mono text-gray-700">{o.orderNo}</span>
+                          <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded ${ch.cls}`}>{ch.label}</span>
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {itemsSummary(o.items)}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-brand-600">
+                          ¥{(o.actualAmount / 100).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <StatusBadge status={o.status} />
+                        </td>
+                        <td className="px-3 py-2 text-right text-gray-500">
+                          {fmtDateTime(o.createdAt)}
+                        </td>
+                        <td className="px-2 py-2 text-gray-300"><ChevronRight className="w-4 h-4" /></td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
+              <div className="md:hidden divide-y divide-gray-100">
+                {userOrders.map((o) => {
+                  const ch = userOrderChannel(o.deliveryType)
+                  return (
+                    <div
+                      key={o.id}
+                      onClick={(e) => handleOrderRowClick(e, o)}
+                      className="py-3 flex items-center justify-between gap-2 cursor-pointer active:bg-gray-50"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-base font-semibold text-brand-600">¥{(o.actualAmount / 100).toFixed(2)}</span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${ch.cls}`}>{ch.label}</span>
+                          <StatusBadge status={o.status} />
+                        </div>
+                        <p className="text-xs text-gray-500 truncate mt-1">
+                          {itemsSummary(o.items)} · {fmtMonthDayTime(o.createdAt)}
+                        </p>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-gray-300 shrink-0" />
+                    </div>
+                  )
+                })}
+              </div>
+              {userOrders.length < ordersTotal && (
+                <div className="pt-3 text-center">
+                  <Button size="sm" variant="secondary" disabled={ordersMoreLoading} onClick={() => loadUserOrders(ordersModal.id, ordersPage + 1)}>
+                    {ordersMoreLoading ? '加载中...' : '加载更多'}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </Modal>
@@ -431,20 +599,7 @@ export default function Users() {
                         <td className="px-3 py-2 text-right text-gray-800">{r.balanceAfter}</td>
                         <td className="px-3 py-2">
                           {r.orderNo ? (
-                            <button
-                              type="button"
-                              className="font-mono text-blue-500 hover:text-blue-700"
-                              title="点击复制订单号"
-                              onClick={() => {
-                                // clipboard API 在 http:// 下不可用（后台常经 IP 直连），失败要说清楚而不是静默
-                                navigator.clipboard
-                                  ?.writeText(r.orderNo!)
-                                  .then(() => toast.success('已复制订单号'))
-                                  .catch(() => toast.error('复制失败，请手动选中'))
-                              }}
-                            >
-                              {r.orderNo}
-                            </button>
+                            <OrderRefCell text={r.orderNo} orderId={r.orderId} from={location.pathname + location.search} />
                           ) : (
                             <span className="text-gray-400">{r.refType} #{r.refId}</span>
                           )}
@@ -524,6 +679,9 @@ export default function Users() {
                     // 只看 status 会把「还没被定时任务扫到的过期券」显示成未使用
                     const expired = c.status !== 'USED' && new Date(c.expiresAt).getTime() <= Date.now()
                     const badge = COUPON_STATUS[expired ? 'EXPIRED' : c.status] ?? { text: c.status, cls: 'bg-gray-100 text-gray-500' }
+                    // 显示值：优先核销单号，其次赔偿针对的单号；对应 id 分别取 orderId / sourceRefOrderId
+                    const refText = c.orderNo ?? c.sourceRef ?? null
+                    const refOrderId = c.orderNo ? c.orderId : c.sourceRefOrderId
                     return (
                       <tr key={c.id}>
                         <td className="px-3 py-2 text-gray-800">
@@ -543,7 +701,11 @@ export default function Users() {
                         <td className="px-3 py-2 text-right text-gray-500">
                           {fmtDate(c.expiresAt)}
                         </td>
-                        <td className="px-3 py-2 font-mono text-gray-600">{c.orderNo ?? c.sourceRef ?? '-'}</td>
+                        <td className="px-3 py-2 font-mono text-gray-600">
+                          {refText ? (
+                            <OrderRefCell text={refText} orderId={refOrderId} from={location.pathname + location.search} />
+                          ) : '-'}
+                        </td>
                       </tr>
                     )
                   })}

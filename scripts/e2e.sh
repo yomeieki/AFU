@@ -2335,6 +2335,7 @@ assert_eq "流水：GIFT 的中文标签是「随单赠品」" "$M3_GIFT_LBL" "�
 M3_LEDGER_ORDER=$(jq -c --arg oid "$M2_ORF" '[.data.list[] | select(.refType=="ORDER" and .refId==$oid)] | .[0] // {}' <<<"$M3_LEDGER_ALL")
 assert_eq "流水：ORDER 行补出了真实订单号" \
   "$(jq -r '.orderNo // "MISSING"' <<<"$M3_LEDGER_ORDER")" "$(sql "SELECT order_no FROM orders WHERE id=$M2_ORF;")"
+assert_eq "流水：ORDER 行带数字 orderId = Order.id" "$(jq -r '.orderId' <<<"$M3_LEDGER_ORDER")" "$M2_ORF"
 assert_eq "流水：用户不存在 → 40401" "$(code "$(req GET "/api/admin/users/99999999/points-ledger" "$AT")")" "40401"
 
 echo "-- 定向发券 --"
@@ -2377,6 +2378,7 @@ M3_ADMIN_VIEW=$(jq -c --argjson cid "$M3_NEWC" '.data[] | select(.id == $cid)' <
 assert_eq "券记录：能查到刚发的那张" "$([[ -n "$M3_ADMIN_VIEW" ]] && echo yes || echo no)" "yes"
 assert_eq "券记录：管理端看得到 issuedBy" "$(jq -r '.issuedBy' <<<"$M3_ADMIN_VIEW")" "$ADMIN_USER"
 assert_eq "券记录：管理端看得到 remark" "$(jq -r '.remark' <<<"$M3_ADMIN_VIEW")" "e2e少发补偿"
+assert_eq "券记录：sourceRef 对应的 sourceRefOrderId = Order.id" "$(jq -r '.sourceRefOrderId' <<<"$M3_ADMIN_VIEW")" "$M2_ORF"
 assert_eq "券记录：status= 过滤生效（只回 UNUSED）" \
   "$(req GET "/api/admin/users/$M2_UID/coupons?status=UNUSED" "$AT" | jq -r '[.data[] | select(.status != "UNUSED")] | length')" "0"
 # 越权字段白名单：顾客端拿得到这张券，但**拿不到** issuedBy/remark。

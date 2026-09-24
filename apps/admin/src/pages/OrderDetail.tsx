@@ -17,7 +17,7 @@ import DetailExpress from '../components/orders/detail/DetailExpress'
 import DetailRefunds from '../components/orders/detail/DetailRefunds'
 import DetailAfterSales from '../components/orders/detail/DetailAfterSales'
 import DetailActions from '../components/orders/detail/DetailActions'
-import { backTargetFor, channelLabel, timelineNodes, withLatestRefund } from '../utils/order-detail'
+import { backTargetFor, backLabelFor, channelLabel, timelineNodes, withLatestRefund } from '../utils/order-detail'
 import type { DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView, ExpressTrack, OrderDetail as OrderDetailData } from '../types'
 
 type LocalData = { delivery: DeliveryInfo | null; events: DeliveryEventInfo[]; costFen: number } | null
@@ -96,7 +96,7 @@ export default function OrderDetail() {
   useEffect(() => { load() }, [orderId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const backTo = (location.state as { from?: string } | null)?.from ?? (order ? backTargetFor(order.deliveryType) : '/orders/express')
-  const backLabel = backTo.startsWith('/orders/local') ? '返回同城订单' : '返回全国邮寄'
+  const backLabel = backLabelFor(backTo)
 
   if (notFound) {
     return (
