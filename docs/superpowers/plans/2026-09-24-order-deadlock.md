@@ -202,3 +202,119 @@ package.json / apps/*/package.json / 任何 lock 文件
 - `routes/admin/products.ts:404-490` 整包编辑商品的 sku 锁序按请求体顺序、无重试：与多规格并发下单反序时可成环，下单侧有重试兜住、后台侧会得到 50001；改法是 sku 按 id 升序处理 + 复用 `deadlock-retry.ts`。
 - `products.ts` 的 `isDeadlockRetry`/循环与新 `deadlock-retry.ts` 重复，下一批统一。
 - 同一用户并发下单**带积分**的 S→X 形态（§0.1 第 3 组探针）本批用 `FOR UPDATE users` 结构性堵住，但没有 e2e 用例（需造积分与赠品数据，成本高于收益）；若将来加，形态是「同用户、两笔各带 1 份赠品、并发提交」。
+
+---
+
+## 修订 1（2026-09-24，L 级复核第 1 轮 R1–R6 裁决；HEAD ac2f800）
+
+【工序】裁决 【模型】Fable 5.1 【等级】L
+
+### R0 亲自核实（§3.2；全部在 `food_shop_dl` 用两条 mysql 会话 / node 探针复现，探针行已删、行值已核对回原值）
+
+| 探针 | 形态 | 结果 |
+|---|---|---|
+| R1-a | A：`UPDATE product_skus`→SLEEP 2s→`UPDATE products`；B（0.5s 后）：`INSERT carts(user_id,product_id,sku_id)` | **A `ERROR 1213`**，B done |
+| R1-b | A 反过来 `UPDATE products`→SLEEP→`UPDATE product_skus`；B 同上 | A done，B done（不成环） |
+| R1-c | B 改成事务 `FOR SHARE sku → FOR SHARE products → INSERT carts → COMMIT`；A 同 R1-a | A done，B done（**对齐后不成环**） |
+| R2 | node/Prisma：`productSku.updateMany`→sleep 1s→`$queryRaw SELECT … users FOR UPDATE`；mysql 会话先真改 users 行 3 次再等 sku | 两次都 `class= PrismaClientKnownRequestError code= P2010 meta= {"code":"1213",…} isP2034= false` |
+| scan_logs | A：`X(products)`→SLEEP→`X(users)`，B：`INSERT scan_logs` → 都 done；A：`X(users)`→SLEEP→`X(products)` → **A 1213** | `scan_logs` 外键校验顺序 = products S → users S（与 L2→L3 同向，安全） |
+| carts DDL | `SHOW CREATE TABLE carts`：二级索引顺序 `(user_id,product_id,sku_id)` 唯一键 → `product_id` fkey → `sku_id` fkey | 外键校验按二级索引插入顺序：users S → products S → product_skus S，与 L1→L2→L3 **两处反向**（sku/products 反、users 早于 products） |
+| R4 | `git show 1dbe010:…/categories.ts:103-106`：`for i … tx.product.update({ where:{ id: ids[i] } })` 按请求体顺序 | 属实 |
+| R5 | `git diff 1dbe010`：`orders.ts:13` 新 import、`:563` 注释；BASE `products.ts:338` 是第 6 点 | 属实 |
+| R6 | `stress-order-deadlock.sh:47` `PUT /settings/shipping`，无还原；`GET /api/admin/settings/shipping` 存在（`settings.ts:35`，返回 `{fee,freeThreshold,minOrderAmount}`，与 PUT 的 schema 同形） | 属实 |
+| 执行者 e2e 的 1 次「下单遇死锁」 | `exec/server-dlk-fixed.log:289-291`：紧跟 74.11 的两条「改库存遇死锁」之后、`categories.delete`（e2e.sh §11 清理）之前，区间覆盖 74.11→75 全部 | 来源**未决**（无 INNODB STATUS），但与 R1 机制一致：75.c/d 里 20 个用户并发 `POST /api/cart` 与他人下单同一 sku |
+
+### R1：成立（规划缺口）
+依据：R1-a/R1-c 探针 + carts DDL；复核者 HTTP 复现（`cart-vs-order.sh`：修复后 NORD=1 NCART=40 ROUNDS=30 → 订单 30/30、加购 1200/1200 成功、`下单遇死锁` +34；BASE 同参数 → 加购 196×50001）。
+处理：加购是**每个顾客的常规路径**，不是后台低频操作，让它每次都靠死锁重试兜住，晚高峰热菜会出现「每单先死锁一次再成功」，重试 5 次穿透率不可忽略；正确做法是把加购的锁序对齐到 L1→L2→L3。这需要改 `routes/cart.ts`（现授权外）→ **待用户决定 #2**，两个选项的实现与验收都写在下面，执行者按用户选定的选项做；选项 A 为推荐。
+
+- **选项 A（推荐）：对齐加购锁序**（授权范围 + `apps/server/src/routes/cart.ts`，只允许改 `POST /` 的新建分支 `:126-129` 及其注释）。把 `prisma.cart.create` 换成一个交互式事务，事务内**先**按全局锁序拿共享锁再插行：
+  ```ts
+  cart = await prisma.$transaction(async (tx) => {
+    if (skuId) await tx.$queryRaw`SELECT id FROM product_skus WHERE id = ${skuId} FOR SHARE`
+    await tx.$queryRaw`SELECT id FROM products WHERE id = ${productId} FOR SHARE`
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR SHARE`
+    return tx.cart.create({ data: { userId, productId, skuId: skuId ?? null, quantity, isSelected: 1 } })
+  })
+  ```
+  三把都是 S 锁：加购之间互不阻塞；与下单/回滚/改库存的 X 锁只会**排队**不会成环（R1-c 探针）。合并分支 `cart.update`（`:125`）只改 quantity、不碰外键列，不锁父行，**不动**。不包 `withDeadlockRetry`（它的日志文案固定是「下单遇死锁」，会污染计数；对齐后加购也没有已知的环）。
+- **选项 B：不改 cart.ts，承认「加购 vs 下单」是重试常规路径**。代码不动；验收把 c/d/h 的「下单遇死锁 == 0」换成「50001 == 0 且 `grep -c '下单遇死锁，重试 [3-5]/5'` == 0」（任何一单都不需要第 3 次尝试），a/b/e/f/g 维持 == 0；`docs/api.md` 并发语义小节写明「与加购并发时下单事务会作为牺牲者重试一次，属正常路径」。这不是更强的判据——它是在 BASE 的 carts 外键校验顺序下**唯一为真的不变量**；原方案的 c/d「== 0」在这个顺序下本来就不成立，是规划缺口。
+
+两个选项共同的验收增补（写进 `stress-order-deadlock.sh` 与 e2e 75）：
+- 新参数 `NCART`（默认 0）：另起 NCART 个用户，每轮与 NORD 个下单并发地对**同一 sku** `POST /api/cart` 后立刻 `DELETE /api/cart/:id`（复核者 `cart-vs-order.sh` 的形态）；输出 `== carts result codes ==`，非 0 即红。
+- 场景 **h** `NORD=10 NCART=10 ROUNDS=10` → 100 订单 success、100 加购 success、`RESULT 50001=0 invariant_bad=0`；e2e 75 加 75.h。
+- 选项 A 下 h 的服务端日志 `grep -c '下单遇死锁'` **== 0**（a–h 全部 == 0，比原方案多覆盖一个场景，**严格更强**）；**改坏 K5**：去掉 cart.ts 的三句 `FOR SHARE`，跑 `NORD=2 NCART=40 ROUNDS=30` → `下单遇死锁` **> 0**（复核者同形态实测 +34），订单/加购仍全成功（重试兜住）。
+- 选项 B 下 h：`50001 == 0`、`grep -c '下单遇死锁，重试 [3-5]/5' == 0`，并把 `grep -c '下单遇死锁'` 的实际值贴进回报。
+
+### R2：成立（需改）
+依据：R2 探针两次都 `P2010 / meta.code "1213"`，`isDeadlockError` 恒 false → 不重试 → 50001。`products.ts:375` 的 `FOR UPDATE` 是那个事务的**第一把锁**，持锁为零时不可能被选为牺牲者，所以本缺陷只影响 `orders.ts` 的 `FOR UPDATE users`（它前面已持 sku/products 的 X 锁）。
+处理（授权内，`apps/server/src/utils/deadlock-retry.ts`）：`isDeadlockError` 改为
+```ts
+if (!(e instanceof Prisma.PrismaClientKnownRequestError)) return false
+if (e.code === 'P2034') return true
+return e.code === 'P2010' && String((e.meta as { code?: unknown } | undefined)?.code ?? '') === '1213'
+```
+注释写明 P2010 是 `$queryRaw/$executeRaw` 的错误包装、`meta.code` 是 MySQL 错误号字符串。不换掉 raw `FOR UPDATE`（Prisma 没有等价的锁定读；用 `user.update` 伪写会多写一行 `updated_at`）。
+验收增补（执行者在 scratchpad 写一个 node 探针，形态照复核者 `raw-victim.js`：`withDeadlockRetry('orders', () => prisma.$transaction(tx => { productSku.updateMany(增量 0) → sleep 1s → $queryRaw FOR UPDATE users → throw 'ROLLBACK-ON-PURPOSE' }))`，并发一条 mysql 会话 `BEGIN; UPDATE users 真改 3 次; SLEEP(0.3); UPDATE product_skus 同一行; COMMIT`，脚本用 `NODE_PATH=<worktree>/node_modules`、`DATABASE_URL` 指向本批库）：
+- 修复后 → 探针输出 `attempts=2`、最终错误是 `ROLLBACK-ON-PURPOSE`（第 2 次尝试走到了 throw），服务端无关；日志（stdout）出现一次「下单遇死锁，重试 1/5」。
+- 改坏 K6（把 P2010 分支去掉）→ `attempts=1`、`code=P2010`。
+把两次输出贴进回报。若探针两次都没打出死锁（牺牲者选到了 mysql 会话），按上面「mysql 会话多改几行」的做法加大对方 undo 再跑，不得改成断言宽松。
+
+### R3：成立（随 R1 改文字）
+依据：`docs/api.md:391` 「预期在本接口自身的并发场景下不会触发」被 R1 否定；`:794` 「本接口自身与另一次本接口调用之间…触发普通锁等待/死锁」——两次 PUT 都是 X(sku_i)→X(P)，同向只排队，「/死锁」三个字不成立。
+处理：`:391` 按用户选的选项改写（A：「与加购、取消/退款回滚、改库存并发时只排队不成环，重试兜的是整包编辑商品等未对齐路径」；B：「与加购并发时本事务会作为牺牲者重试，属正常路径，重试不超过 2 次」）；`:794` 「普通锁等待/死锁」→「普通锁等待（同向，不成环）」；附录 N `:2317` 同步一句。
+
+### R4：成立（规划缺口）
+依据：`categories.ts:103-106` 按请求体顺序逐个 `product.update`，与多商品订单的 products 升序反向；§0.2 把它记成「只 X(products)」漏了多行。
+处理：**待用户决定 #3**。选项 A：扩授权 `apps/server/src/routes/admin/categories.ts`（只允许改 `:103-106`），改成按商品 id 升序更新：`[...ids.entries()].sort((a, b) => a[1] - b[1])` 后逐个 `update({ where: { id }, data: { sortOrder: i } })`（`sortOrder` 仍取该 id 在请求体里的下标，语义不变）；验收：`scripts/e2e.d/65-product-sort.sh`（4 处 `product-order` 断言）全绿即可，不另做并发验收（店员拖拽排序是低频操作）。选项 B：登记留后，订单侧由重试兜住、店员侧维持 BASE 既有的 50001 风险。推荐 A（三行改动、有既有 e2e 覆盖）。
+
+### R5：成立（追认）
+依据：见 R0。`orders.ts:13` 的 import 与 `:563` 那行步骤注释是完成第 2 步的必要改动，原方案「只动 :570-661」写得过窄；`products.ts` 第 6 点在 BASE `:338`，原方案「:314-337」少数了一行。
+处理：授权范围改为 `orders.ts` 的 `:13`（import 行）与 `:560-707`（改后行号；即「// 5. 事务」注释起到 `.catch` 结束、`success(...)` 之前）、`products.ts:314-338`（注释）。已提交的改动**不需要回退或重做**。
+
+### R6：成立（建议级，采纳）
+处理：`stress-order-deadlock.sh` 开头 `S_ORIG=$(req GET /api/admin/settings/shipping "$AT" | jq -c .data)`，结束（含 `exit 1` 的路径，用 `trap`）`req PUT /api/admin/settings/shipping "$AT" "$S_ORIG"`；e2e 内前后值相同，无影响。
+
+### 全仓核查：对 products / product_skus / users 有外键的子表插入，与多行 products 更新（复核者要求的第 3 项）
+
+`information_schema.KEY_COLUMN_USAGE`（`food_shop_dlr`）里引用这三张表的外键只有 9 条；外键校验顺序 = 该表二级索引的插入顺序（carts/scan_logs 两组探针印证）。
+
+| 子表 / 路径 | 校验/加锁顺序 | 与 L1→L2→L3 关系 | 处理 |
+|---|---|---|---|
+| `carts` 插入（`routes/cart.ts:127`） | users S → products S → product_skus S | **反向两处** | **本批**（R1 选项 A）或承认重试（选项 B） |
+| `order_items` 插入（下单） | orders S（自己的新行）→ products S | 已持 X，覆盖 | 已修 |
+| `orders` 插入（下单） | users S | pointsUsed>0 时已持 X；否则只 S | 已修 |
+| `scan_logs` 插入（`routes/scan-logs.ts:32`，单条语句、不在事务里） | products S → users S | 同向（L2→L3）；单条插入持锁为零时才等，不会成环 | 无需处理（探针已证） |
+| `addresses` 插入（`routes/addresses.ts:62`） | users S | 单父表、单条语句 | 无需处理 |
+| `points_ledgers` 插入 | users S | 全部在已持 X(users) 之后（`consumePoints`/`releaseOrderBenefits`/`deductPointsOnRefund`）；**例外** `settlePoints`（`points.ts:274`）先插账本行（users S）再 `user.update`（`:286`，S→X 自升级）——两笔同用户的结算并发会互锁；对方（下单/取消）等待中的 X 请求不挡它（74.11-f 印证的规则），所以只在「结算 vs 结算」成环 | **留后**：`services/**` 禁改；`pointsSettledAt=null` 会被兜底扫描重扫，自愈 |
+| `user_coupons` 插入（`coupons.ts:60`） | coupon_templates S → users S | 事务首句 `FOR UPDATE templates`；无人持 X(users) 再要 templates | 无需处理 |
+| `product_images` / `product_skus` 插入（`admin/products.ts:428,458`，整包编辑） | products S（先于本事务后面的 sku X、products X） | **本事务自身 S→X 升级** + sku 按请求体顺序 | **留后**（已登记；BASE 同样存在；正确改法：事务首句按 sku id 升序 `FOR UPDATE` 全部 sku 再 `FOR UPDATE` 商品行，然后才动图片/规格） |
+| `categories.ts:103-106` 多行 `product.update` | 请求体顺序 | 与多商品订单可反向 | **本批**（R4 选项 A）或留后 |
+| `product-channel.ts:68`、`admin/products.ts:261`、`admin/orders.ts:703` 的 `updateMany({ id: { in } })` | 单条 UPDATE，InnoDB 按主键升序扫描加锁 | 同向 | 无需处理 |
+| `auth.ts:56,64` `user.update(lastLoginAt)` | 单条语句 X(users) | 持锁为零、只会短暂阻塞别人 | 无需处理 |
+| `assertNoUnpaidAndPurgeCarts` / `cart.deleteMany` / `tx.cart.deleteMany`（下单末尾） | 子表删除不锁父行 | — | 无需处理 |
+
+结论：本批需要处理的只有 carts（R1）与分类排序（R4）；其余要么同向、要么是单条语句、要么已登记留后且有自愈/兜底。
+
+### 验收修订（在原「验收标准」之上；不放宽任何既有判据）
+- 第 4 条：场景表增 **h**（见 R1）；`SUMMARY` 增 `carts=<n>`。
+- 第 5 条：选项 A → a–h **全部** `下单遇死锁 == 0`、`P2034 == 0`、`P2010 == 0`；选项 B → a/b/e/f/g == 0，c/d/h 按 R1 选项 B 的判据。
+- 第 6 条：增 K5（R1 选项 A 时）、K6（R2）。
+- 第 7 条：e2e 75 增 75.h；选项 A 下 e2e 全程服务端日志 `grep -c '下单遇死锁' == 0`（第 8 条同步）。
+- 新增第 11 条【R2 探针】：见 R2 的两次输出。
+- 新增第 12 条【R4 选项 A 时】：`grep '65\.' <e2e 日志>` 全 ✔。
+- 第 9 条追加：`grep -c '普通锁等待/死锁' docs/api.md` → 0。
+
+### 授权范围增减
+- 增：`apps/server/src/routes/cart.ts`（仅 `POST /` 新建分支 `:126-129` 及注释；**用户选 R1-A 才生效**）；`apps/server/src/routes/admin/categories.ts`（仅 `:103-106`；**用户选 R4-A 才生效**）。
+- 改：`apps/server/src/routes/orders.ts` 允许 `:13` 与 `:560-707`；`apps/server/src/routes/admin/products.ts` 允许 `:314-338` 注释。
+- 禁止修改清单相应放开上述行；其余不变。`scripts/e2e.d/74-low-stock.sh` 仍一条不改。
+
+### 上报条件增补
+- 选项 A 实施后场景 h 或 K5 的 `下单遇死锁` 计数不符合预期（h ≠ 0 或 K5 = 0）。
+- R2 探针无法在 3 次内让 node 侧成为牺牲者。
+- 选项 A 让 e2e 里任何加购断言（`api/cart` 相关，含 §5/§6/§62/§63 等既有段）变红。
+
+### 待用户决定（本修订新增；#1 维持原样）
+2. **R1 加购锁序**：A 扩授权改 `routes/cart.ts` 新建分支（推荐；加购多 3 条共享锁定读、一层事务，顾客无感；下单不再与加购互锁，「下单遇死锁 == 0」对全部场景成立）／ B 不改，承认加购与下单互锁靠重试消化（验收按 R1-B 判据；晚高峰热菜每单可能先死锁一次）。
+3. **R4 分类排序锁序**：A 扩授权改 `admin/categories.ts:103-106` 按 id 升序（推荐；三行，e2e 65 覆盖）／ B 留后（店员拖拽时偶发 50001，与 BASE 相同）。
