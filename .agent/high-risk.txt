@@ -1,0 +1,33 @@
+# 高风险路径（协议 §2.2 第 1 条；glob，* 可跨目录；# 起注释）
+# food-shop 版：钱、对外产生真实费用、认证、数据迁移、部署——碰到任一条即 L 级
+# 2026-09-24 由 food SaaS 同名文件按本仓库结构改写
+# —— 支付 / 退款 / 会员资产 / 价格计算 ——
+apps/server/src/services/wechat-pay*.ts
+apps/server/src/services/refund*.ts
+apps/server/src/services/member/*
+apps/server/src/services/packing-fee.ts
+apps/server/src/services/promotion.ts
+apps/server/src/routes/wechat-notify.ts
+apps/server/src/routes/orders.ts
+apps/server/src/routes/admin/after-sales.ts
+# —— 对外产生真实费用：快递100 同城呼叫/取消费/小费、上门取件预约 ——
+apps/server/src/services/delivery/*
+apps/server/src/services/express-quote*.ts
+apps/server/src/routes/kd-callback.ts
+apps/server/src/routes/kd-express-callback.ts
+# —— 认证 / 中间件 / 配置 ——
+apps/server/src/routes/auth.ts
+apps/server/src/routes/admin/auth.ts
+apps/server/src/middlewares/*
+apps/server/src/config.ts
+# —— 数据结构与迁移 ——
+apps/server/prisma/schema.prisma
+apps/server/prisma/migrations/*
+# —— 部署与密钥 ——
+scripts/deploy.sh
+scripts/set-env.sh
+scripts/import-secrets.sh
+.env.example
+# —— 协议自身 ——
+.agent/*
+.claude/agents/*
