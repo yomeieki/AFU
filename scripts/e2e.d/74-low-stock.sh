@@ -8,6 +8,13 @@ p74_stock() { req PUT "/api/admin/products/$1/stock" "$AT" "$2"; }
 # 不是空数组）——这里单独用 curl -G --data-urlencode 走查询参数编码（同 e2e.sh:211 处理
 # 「E2E测试」姓名搜索的写法），避免把与本功能无关的编码问题混进断言。
 p74_kw() { curl -s -G "$BASE/api/admin/products" --data-urlencode "keyword=$1" -H "Authorization: Bearer $AT"; }
+# R2-2（修订 2）：并发一致性测试用——后台 mysql 会话（子 shell 里跑，不阻塞主脚本）与复位。
+p74_sql_bg() { ( sql "$1" >/dev/null 2>&1 ) & }
+p74_reset() {
+  p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":10}" >/dev/null
+  p74_stock "$P74_PID" "{\"skuId\":$P74_B,\"stock\":10}" >/dev/null
+  p74_stock "$P74_PID" "{\"skuId\":$P74_C,\"stock\":10}" >/dev/null
+}
 
 echo "-- 74.0 设置 --"
 R=$(req PUT /api/admin/settings/low-stock "$AT" '{"lowThreshold":3,"pushBelow":2}')
@@ -109,7 +116,22 @@ assert_eq "low-stock 里 Q74 level=OUT" "$(jq -r ".data.groups[] | select(.produ
 R=$(p74_kw "E2E库存预警邮寄商品")
 assert_eq "keyword 列表 Q74 stockAlert={1,0}" "$(jq -c '.data.list[0].stockAlert' <<<"$R")" '{"out":1,"low":0}'
 
+echo "-- 74.12 PUT /:id 与 POST / 响应下发 stockAlert（R2-3） --"
+# 此时（承接 74.5 收尾）P74：A=0(OUT) B=1(LOW) C=0(OUT)；Q74=0(OUT)
+R=$(req PUT "/api/admin/products/$P74_PID" "$AT" '{"status":"OFF_SHELF"}')
+assert_eq "PUT /:id 下架响应 stockAlert={0,0}" "$(jq -c '.data.stockAlert' <<<"$R")" '{"out":0,"low":0}'
+R=$(req PUT "/api/admin/products/$P74_PID" "$AT" '{"status":"ON_SHELF"}')
+assert_eq "PUT /:id 上架响应 stockAlert={2,1}（A/C 售罄、B 紧张）" "$(jq -c '.data.stockAlert' <<<"$R")" '{"out":2,"low":1}'
+R=$(req PUT "/api/admin/products/$Q74_PID" "$AT" '{"stock":50}')
+assert_eq "PUT /:id 改库存到 50 响应 stockAlert={0,0}" "$(jq -c '.data.stockAlert' <<<"$R")" '{"out":0,"low":0}'
+R=$(req PUT "/api/admin/products/$Q74_PID" "$AT" '{"stock":0}')
+assert_eq "PUT /:id 改回 0 响应 stockAlert={1,0}" "$(jq -c '.data.stockAlert' <<<"$R")" '{"out":1,"low":0}'
+
 echo "-- 74.9 休业：每日汇总不推、即时推送照常 --"
+# R2-4（修订 2，R6）：先把营业时段钉成全天 00:00-23:59，应发时刻=前一天 23:30，
+# 任何跑分片的钟点都已过——不然本机上午 08:30 之前跑，「当天已发」这道门根本证明不了。
+P74_BH_ORIG=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data.businessHours)
+p74_local_put '.businessHours=[{start:"00:00",end:"23:59"}]' >/dev/null
 p74_local_put '.holiday={until:null,reason:"e2e休业"}' >/dev/null
 R=$(sched '{"forceLowStockDaily":true}')
 assert_eq "休业中 force 每日汇总仍 0" "$(num "$(jq -r .data.lowStockDaily <<<"$R")")" "0"
@@ -128,6 +150,65 @@ R=$(sched '{"forceLowStockDaily":true}')
 P74_LSD1=$(num "$(jq -r .data.lowStockDaily <<<"$R")")
 [[ "$P74_LSD1" -ge 1 ]] && ok "force 绕过日切，仍 ≥1 ($P74_LSD1)" || fail "force 未绕过日切" "$R"
 
+echo "-- 74.11 并发一致性（R1：锁读旧值 + 相对增量 + 死锁重试，L 级复核阻断项） --"
+p74_reset
+R=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
+assert_eq "74.11 复位后 product=30" "$R" "30"
+
+echo "-- 74.11-a 下单事务扣减 B 期间 PUT 改 A --"
+p74_sql_bg "BEGIN; UPDATE product_skus SET stock=stock-1 WHERE id=$P74_B AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; SELECT SLEEP(2); COMMIT;"
+sleep 0.7
+R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":5}")
+assert_eq "74.11-a code 0" "$(code "$R")" "0"
+assert_eq "74.11-a data.stock=5" "$(jq -r .data.stock <<<"$R")" "5"
+assert_eq "74.11-a data.productStock=24" "$(jq -r .data.productStock <<<"$R")" "24"
+wait
+P74_A_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
+P74_A_SS=$(sql "SELECT COALESCE(SUM(stock),0) FROM product_skus WHERE product_id=$P74_PID;")
+assert_eq "74.11-a products.stock == SUM(sku)" "$P74_A_PS" "$P74_A_SS"
+assert_eq "74.11-a products.stock=24" "$P74_A_PS" "24"
+assert_eq "74.11-a A=5" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "5"
+assert_eq "74.11-a B=9" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")" "9"
+
+echo "-- 74.11-b 取消回滚 B+1 期间 PUT 改 A --"
+p74_reset
+p74_stock "$P74_PID" "{\"skuId\":$P74_B,\"stock\":0}" >/dev/null   # 先把 B 钉成 0（此时 product=20）
+p74_sql_bg "BEGIN; UPDATE product_skus SET stock=stock+1 WHERE id=$P74_B; UPDATE products SET stock=stock+1, sales_count=sales_count-1 WHERE id=$P74_PID; SELECT SLEEP(2); COMMIT;"
+sleep 0.7
+R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":0}")
+assert_eq "74.11-b code 0" "$(code "$R")" "0"
+wait
+P74_B_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
+P74_B_SS=$(sql "SELECT COALESCE(SUM(stock),0) FROM product_skus WHERE product_id=$P74_PID;")
+assert_eq "74.11-b products.stock == SUM(sku)" "$P74_B_PS" "$P74_B_SS"
+assert_eq "74.11-b products.stock=11" "$P74_B_PS" "11"
+assert_eq "74.11-b A=0" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "0"
+assert_eq "74.11-b B=1" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")" "1"
+
+echo "-- 74.11-c 两行订单（先 B 后 A）与 PUT 改 A 互锁 → InnoDB 死锁检测 → PUT 重试后成功 --"
+p74_reset
+p74_sql_bg "BEGIN; UPDATE product_skus SET stock=stock-1 WHERE id=$P74_B AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; SELECT SLEEP(1.5); UPDATE product_skus SET stock=stock-1 WHERE id=$P74_A AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; COMMIT;"
+sleep 0.7
+R=$(p74_stock "$P74_PID" "{\"skuId\":$P74_A,\"stock\":5}")
+assert_eq "74.11-c code 0（P2034 重试后成功，不是 5xx）" "$(code "$R")" "0"
+wait
+P74_C_PS=$(sql "SELECT stock FROM products WHERE id=$P74_PID;")
+P74_C_SS=$(sql "SELECT COALESCE(SUM(stock),0) FROM product_skus WHERE product_id=$P74_PID;")
+assert_eq "74.11-c products.stock == SUM(sku)" "$P74_C_PS" "$P74_C_SS"
+assert_eq "74.11-c A=5" "$(sql "SELECT stock FROM product_skus WHERE id=$P74_A;")" "5"
+P74_C_B=$(sql "SELECT stock FROM product_skus WHERE id=$P74_B;")
+[[ "$P74_C_B" == "9" || "$P74_C_B" == "10" ]] && ok "74.11-c B∈{9,10}（实际 $P74_C_B，取决于死锁牺牲者是订单会话还是 PUT）" || fail "74.11-c B 值异常" "$P74_C_B"
+
+echo "-- 74.11-d 无规格商品：绝对值编辑语义（无 sum 不变量，不做锁读+增量） --"
+p74_stock "$Q74_PID" '{"stock":10}' >/dev/null   # 先把 Q 钉成 10
+p74_sql_bg "UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$Q74_PID AND stock>=1;"
+sleep 0.7
+R=$(p74_stock "$Q74_PID" '{"stock":7}')
+assert_eq "74.11-d code 0" "$(code "$R")" "0"
+assert_eq "74.11-d productStock=7" "$(jq -r .data.productStock <<<"$R")" "7"
+wait
+assert_eq "74.11-d products.stock=7（绝对值语义）" "$(sql "SELECT stock FROM products WHERE id=$Q74_PID;")" "7"
+
 echo "-- 74.8/74.10 收尾：删除清理 + 复位设置 --"
 R=$(sql "SELECT value FROM settings WHERE setting_key='low_stock_alert_state';")
 [[ "$R" == *"sku:$P74_A"* ]] && ok "删除前状态含 sku:$P74_A" || fail "删除前状态应含 sku:$P74_A" "$R"
@@ -139,4 +220,5 @@ R=$(sql "SELECT value FROM settings WHERE setting_key='low_stock_alert_state';")
 [[ "$R" != *"sku:$P74_A"* && "$R" != *"sku:$P74_B"* && "$R" != *"sku:$P74_C"* ]] && ok "删除 P74 后状态不再含它的三个 sku" || fail "删除后状态仍含 P74 的 sku" "$R"
 [[ "$R" != *"product:$Q74_PID"* ]] && ok "删除 Q74 后状态不再含 product:$Q74_PID" || fail "删除后状态仍含 Q74" "$R"
 req PUT /api/admin/settings/low-stock "$AT" '{"lowThreshold":3,"pushBelow":2}' >/dev/null
+p74_local_put ".businessHours=$P74_BH_ORIG" >/dev/null
 sched '{}' >/dev/null

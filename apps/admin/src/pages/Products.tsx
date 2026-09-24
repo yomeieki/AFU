@@ -17,7 +17,7 @@ import { confirmDialog } from '../components/ui/ConfirmDialog'
 import { fmtDateTime } from '../utils/time'
 import { readChannel } from '../navigation'
 import { moveItem, moveAdjacent } from '../utils/reorder'
-import { stockAlertLabel } from '../utils/stock-alert'
+import { stockAlertLabel, mergeProductPatch } from '../utils/stock-alert'
 
 const emptyForm = {
   categoryId: 0,
@@ -300,11 +300,13 @@ export default function Products() {
   }
 
   // 上下架一键开关（可逆高频操作，不弹确认；局部更新不整页刷新）
+  // R2-3（修订 2）：连 stockAlert 一起从响应里合并回去——下架后标签/变色要立刻消失，
+  // 上架后（若仍售罄）要立刻回来，不能等 30 秒轮询的 pending-count 才刷新
   const handleToggleStatus = async (p: Product) => {
     const next = p.status === 'ON_SHELF' ? 'OFF_SHELF' : 'ON_SHELF'
     try {
-      await updateProduct(p.id, { status: next })
-      setList((ls) => ls.map((it) => (it.id === p.id ? { ...it, status: next } : it)))
+      const res = await updateProduct(p.id, { status: next })
+      setList((ls) => mergeProductPatch(ls, p.id, { status: next, stockAlert: res.data.data.stockAlert }))
       toast.success(next === 'ON_SHELF' ? `「${p.name}」已上架` : `「${p.name}」已下架`)
     } catch {
       toast.error('操作失败')
@@ -326,8 +328,8 @@ export default function Products() {
     if (!stockModal) return
     const v = Math.max(0, Math.floor(stockValue))
     try {
-      await updateProduct(stockModal.id, { stock: v })
-      setList((ls) => ls.map((it) => (it.id === stockModal.id ? { ...it, stock: v } : it)))
+      const res = await updateProduct(stockModal.id, { stock: v })
+      setList((ls) => mergeProductPatch(ls, stockModal.id, { stock: v, stockAlert: res.data.data.stockAlert }))
       toast.success('库存已更新')
       setStockModal(null)
     } catch {

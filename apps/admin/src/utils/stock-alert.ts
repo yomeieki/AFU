@@ -1,4 +1,4 @@
-import type { LowStockGroup, Channel } from '../types'
+import type { LowStockGroup, Channel, Product } from '../types'
 
 /**
  * 商品列表「N 个规格售罄/紧张」标签（2026-09-24）。无规格商品最多算 1 个单位，
@@ -43,4 +43,14 @@ export function countLowStock(groups: LowStockGroup[]): { total: number; out: nu
 /** 单个库存单位的展示文案 */
 export function unitLabel(stock: number): string {
   return stock <= 0 ? '售罄' : `剩 ${stock} 份`
+}
+
+/**
+ * 局部更新列表里的一项（2026-09-24 修订 2，R2-3）：上下架/改库存后不整页刷新，
+ * 直接把接口响应里的 patch（可能含 status/stock/stockAlert 等任意子集）合并进去。
+ * `patch` 里没带的字段（包括没带 stockAlert）保持原值不变——这就是普通对象展开的语义，
+ * 不需要为「没带」和「显式传 undefined」区分特殊逻辑。
+ */
+export function mergeProductPatch(list: Product[], id: number, patch: Partial<Product>): Product[] {
+  return list.map((p) => (p.id === id ? { ...p, ...patch } : p))
 }

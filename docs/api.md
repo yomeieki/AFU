@@ -708,11 +708,13 @@
 }
 ```
 
+响应（与 `PUT /:id` 一样）增 `stockAlert: { out, low }`（2026-09-24 修订 2）：与列表同一口径、同一门槛来源现算，前端局部合并列表项时不用自己再算一遍，也不受角标轮询门槛陈旧的影响。
+
 ---
 
 #### PUT /api/admin/products/:id
 
-编辑商品（字段同新增）。
+编辑商品（字段同新增）。响应同样带 `stockAlert`（见上）。
 
 ---
 
@@ -785,6 +787,10 @@
 - `stock` 非负整数、≤999999，否则 `40001`
 
 **Response:** `{ "code": 0, "data": { "productId": 9, "skuId": 6, "stock": 1, "productStock": 176 } }`（`productStock` 是有规格商品按 sku 汇总后回写的商品总库存；无规格商品时等于 `stock`）。
+
+**并发语义（2026-09-24 修订 2）：**
+- **有规格**：事务内先 `SELECT ... FOR UPDATE` 锁定读该规格行的当前真实值（不是 REPEATABLE-READ 快照），把这个规格写成传入的绝对值，再用 `delta = 新值 − 旧值` 对 `product.stock` 做**相对增量**——不会覆盖并发下单扣减/取消回滚对其它规格的改动。锁序固定为「规格行 → 商品行」，与下单扣减（`routes/orders.ts`）、取消/退款回滚（`utils/order-stock.ts`）同序；一张跨两个规格的订单与这个接口之间仍可能互锁，命中时由 MySQL 立即探测为死锁（1213 → Prisma `P2034`），接口对此**自动重试最多 3 次**（每次间隔 50ms×次数），重试期间对调用方透明，第 3 次仍失败才对外抛错。
+- **无规格**：`UPDATE products SET stock = ?` 直接写绝对值——无规格商品没有「规格库存之和」这条不变量，并发下单的扣减会被店员这次编辑的实点数覆盖，语义与既有 `PUT /:id { stock }` 一致。
 
 ---
 
@@ -2303,3 +2309,13 @@ actualAmount   = subtotal − pickupDiscount − promoDiscount − couponDiscoun
 - 新页签「商品管理 → 库存预警」（`GET /api/admin/products/low-stock`）：按商品分组列出所有紧张/售罄单位，可直接改库存（`PUT /api/admin/products/:id/stock`，见 3.3 节），筛选：全部/售罄/紧张（互斥三选一）+ 同城/邮寄（可单选、再点取消）。
 - 「商品管理」页签条与顶栏入口角标（`pending-count.lowStockCount`）；商品列表按规格标「N 个规格售罄/紧张」（`GET /api/admin/products` 新增的 `stockAlert` 字段），不再是旧的「商品总库存 ≤5 才标红」。
 - 后台登录时那条一次性 toast（「有 N 个商品库存不足」）已删除，改由页签/侧栏角标常驻提示。
+- 上下架、商品列表快改库存后不整页刷新——`PUT /:id`、`POST /` 的响应都带 `stockAlert`（见 3.3 节），前端直接把响应里的这几个字段局部合并进列表项（`utils/stock-alert.ts` 的 `mergeProductPatch`），标签/变色立即跟着变。
+
+### 并发一致性（2026-09-24 修订 2）
+
+`PUT /api/admin/products/:id/stock` 有规格分支采用「锁读旧值 + 相对增量」而不是「改一个规格 → aggregate 全部规格 → 绝对覆盖商品总库存」——后者在 MySQL REPEATABLE-READ 隔离级别下会用事务开始时的快照覆盖并发下单/取消回滚已经写入的其它规格库存，造成丢更新。改法与并发下单同一套锁序（规格行 → 商品行），命中与「多规格订单」的死锁时自动重试最多 3 次（`P2034`）。详见 3.3 节 `PUT /:id/stock` 的「并发语义」小节；e2e 覆盖见 `scripts/e2e.d/74-low-stock.sh` 的 74.11。
+
+### 已知限制（记录，不在本批范围）
+
+- 既有 `PUT /api/admin/products/:id` 带 `stock` 但不带 `skus` 打在多规格商品上时，仍会用调用方传入的整数直接覆盖 `product.stock`（例如前端 `Products.tsx` 用当前列表算出的总和），不经过锁读+增量这条路径——本批之前就是这样，不属于本次改动引入的问题。
+- 首次上线部署后，第一次心跳会把当时所有已在架且售罄/紧张的规格各推一条「库存告急」（不是「无历史基线不推」）；店主已确认接受这个一次性提醒。之后转为纯变化推送。

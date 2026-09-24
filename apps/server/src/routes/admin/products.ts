@@ -238,7 +238,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       },
       include: skuInclude,
     })
-    success(res, product)
+    // R2-3（修订 2）：与列表同一口径下发 stockAlert，前端局部合并时不必自己算、
+    // 也不受 pending-count 30 秒轮询门槛陈旧的影响
+    success(res, { ...product, stockAlert: productAlertSummary(product, await getLowStockSettings()) })
   } catch (e) {
     next(e)
   }
@@ -310,33 +312,77 @@ router.get('/low-stock', async (_req: Request, res: Response, next: NextFunction
 })
 
 // PUT /api/admin/products/:id/stock — 库存预警页/商品列表库存快改（按规格或无规格商品本身）
+//
+// R1（2026-09-24 修订 2，L 级复核阻断）：有规格分支不能再「改 sku → aggregate 全部 sku →
+// 绝对覆盖 product.stock」——REPEATABLE-READ 下 aggregate 读到的是事务开始时的快照，读不到
+// 并发下单扣减/取消回滚已提交或在途的其它 sku 行，绝对覆盖会把它们的改动冲掉（复核实测
+// product=15 而 SUM=14 一类的丢更新）。改为「锁读旧值 + 相对增量」：
+//   1. `SELECT ... FOR UPDATE` 锁住并读到这一刻的真实旧值（不是快照）；
+//   2. 把这一个 sku 写成店员实点的绝对值；
+//   3. product.stock 只按 `delta = 新值 − 旧值` 相对增量，不去动其它 sku 贡献的部分。
+// 锁序 sku → product，与 routes/orders.ts:612-623（下单扣减）、utils/order-stock.ts:19-30
+// （取消/退款回滚）同序，两个「单行」事务之间不会互相等待成环。唯一会成环的是
+// 「一张跨两个 sku 的订单」与「这个改库存请求」互锁——这与既有的「两笔多行订单以不同
+// 顺序扣同一商品」是同一类死锁，InnoDB 会立即探测到并选一方做牺牲者（MySQL 1213 →
+// Prisma P2034），所以这里对 P2034 做有限重试；无规格分支没有 sum 不变量，维持绝对值写入
+// （与既有 `PUT /:id {stock}` 的编辑语义一致）。
 const stockUpdateSchema = z.object({
   skuId: z.number().int().positive().nullable().optional(),
   stock: z.number().int().min(0).max(999999),
 })
 
+type StockUpdateResult = { productId: number; skuId: number | null; stock: number; productStock: number }
+
+function isDeadlockRetry(e: unknown): boolean {
+  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2034'
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+const STOCK_UPDATE_MAX_ATTEMPTS = 3
+
 router.put('/:id/stock', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = Number(req.params.id)
     const { skuId, stock } = stockUpdateSchema.parse(req.body)
-    const result = await prisma.$transaction(async (tx) => {
-      const product = await tx.product.findFirst({ where: { id, deletedAt: null } })
-      if (!product) throw new AppError(40401, '商品不存在', 404)
-      const skuCount = await tx.productSku.count({ where: { productId: id } })
-      if (skuId != null) {
-        if (skuCount === 0) throw new AppError(40001, '该商品没有规格，请直接改库存', 400)
-        const sku = await tx.productSku.findFirst({ where: { id: skuId, productId: id } })
-        if (!sku) throw new AppError(40401, '规格不存在', 404)
-        await tx.productSku.update({ where: { id: skuId }, data: { stock } })
-        const agg = await tx.productSku.aggregate({ where: { productId: id }, _sum: { stock: true } })
-        const productStock = agg._sum.stock ?? 0
-        await tx.product.update({ where: { id }, data: { stock: productStock } })
-        return { productId: id, skuId, stock, productStock }
+
+    let result: StockUpdateResult | null = null
+    for (let attempt = 1; attempt <= STOCK_UPDATE_MAX_ATTEMPTS; attempt++) {
+      try {
+        result = await prisma.$transaction(async (tx) => {
+          const product = await tx.product.findFirst({ where: { id, deletedAt: null } })
+          if (!product) throw new AppError(40401, '商品不存在', 404)
+          const skuCount = await tx.productSku.count({ where: { productId: id } })
+          if (skuId != null) {
+            if (skuCount === 0) throw new AppError(40001, '该商品没有规格，请直接改库存', 400)
+            // 锁定读：拿到的是这一刻的真实值，不是事务开始时的一致性快照
+            const locked = await tx.$queryRaw<
+              { id: number; stock: number }[]
+            >`SELECT id, stock FROM product_skus WHERE id = ${skuId} AND product_id = ${id} FOR UPDATE`
+            if (locked.length === 0) throw new AppError(40401, '规格不存在', 404)
+            const prevStock = locked[0].stock
+            await tx.productSku.update({ where: { id: skuId }, data: { stock } })
+            const delta = stock - prevStock
+            const updated = await tx.product.update({ where: { id }, data: { stock: { increment: delta } } })
+            return { productId: id, skuId, stock, productStock: updated.stock }
+          }
+          if (skuCount > 0) throw new AppError(40001, '多规格商品请按规格改库存', 400)
+          // 无规格商品没有 sum 不变量：维持绝对值写入，语义同既有 PUT /:id {stock}
+          const updated = await tx.product.update({ where: { id }, data: { stock } })
+          return { productId: id, skuId: null, stock, productStock: updated.stock }
+        })
+        break
+      } catch (e) {
+        if (isDeadlockRetry(e) && attempt < STOCK_UPDATE_MAX_ATTEMPTS) {
+          console.warn(`[products] 改库存遇死锁，重试 ${attempt}/${STOCK_UPDATE_MAX_ATTEMPTS}`)
+          await sleep(50 * attempt)
+          continue
+        }
+        throw e
       }
-      if (skuCount > 0) throw new AppError(40001, '多规格商品请按规格改库存', 400)
-      await tx.product.update({ where: { id }, data: { stock } })
-      return { productId: id, skuId: null, stock, productStock: stock }
-    })
+    }
     success(res, result)
   } catch (e) {
     next(e)
@@ -426,7 +472,9 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
         include: skuInclude,
       })
     })
-    success(res, product)
+    // R2-3（修订 2）：局部更新（上下架/改库存走这个整包 PUT 的调用方也会经过这里）响应
+    // 补 stockAlert，前端不必整页刷新就能拿到最新值
+    success(res, { ...product, stockAlert: productAlertSummary(product, await getLowStockSettings()) })
   } catch (e) {
     next(e)
   }

@@ -1,7 +1,41 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stockAlertLabel, filterLowStockGroups, countLowStock, unitLabel } from './stock-alert.ts'
-import type { LowStockGroup } from '../types'
+import { stockAlertLabel, filterLowStockGroups, countLowStock, unitLabel, mergeProductPatch } from './stock-alert.ts'
+import type { LowStockGroup, Product } from '../types'
+
+function product(overrides: Partial<Product> = {}): Product {
+  return {
+    id: 1,
+    categoryId: 1,
+    name: '测试商品',
+    subtitle: null,
+    coverImage: null,
+    price: 100,
+    originalPrice: null,
+    stock: 10,
+    unit: '份',
+    weight: null,
+    shelfLife: null,
+    storageMethod: null,
+    deliveryInfo: null,
+    description: null,
+    status: 'ON_SHELF',
+    deliveryType: 'EXPRESS',
+    channel: 'EXPRESS',
+    netWeightG: null,
+    packingFeeFen: null,
+    isRecommended: 0,
+    salesCount: 0,
+    sortOrder: 0,
+    qrScene: null,
+    qrCodeUrl: null,
+    qrGeneratedAt: null,
+    deletedAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    stockAlert: { out: 0, low: 0 },
+    ...overrides,
+  }
+}
 
 test('stockAlertLabel：有规格', () => {
   assert.equal(stockAlertLabel({ out: 1, low: 0 }, true), '1 个规格售罄')
@@ -117,4 +151,25 @@ test('unitLabel：0 → 售罄，否则「剩 N 份」', () => {
   assert.equal(unitLabel(0), '售罄')
   assert.equal(unitLabel(1), '剩 1 份')
   assert.equal(unitLabel(5), '剩 5 份')
+})
+
+// mergeProductPatch（2026-09-24 修订 2，R2-3）
+test('mergeProductPatch：合并 status 与 stockAlert', () => {
+  const list = [product({ id: 1, status: 'ON_SHELF', stockAlert: { out: 1, low: 0 } })]
+  const next = mergeProductPatch(list, 1, { status: 'OFF_SHELF', stockAlert: { out: 0, low: 0 } })
+  assert.equal(next[0].status, 'OFF_SHELF')
+  assert.deepEqual(next[0].stockAlert, { out: 0, low: 0 })
+})
+test('mergeProductPatch：patch 不带 stockAlert 时保留原值', () => {
+  const list = [product({ id: 1, stock: 10, stockAlert: { out: 1, low: 0 } })]
+  const next = mergeProductPatch(list, 1, { stock: 50 })
+  assert.equal(next[0].stock, 50)
+  assert.deepEqual(next[0].stockAlert, { out: 1, low: 0 })
+})
+test('mergeProductPatch：不改其它 id 的项', () => {
+  const list = [product({ id: 1, stock: 10 }), product({ id: 2, stock: 20 })]
+  const next = mergeProductPatch(list, 1, { stock: 99 })
+  assert.equal(next[0].stock, 99)
+  assert.equal(next[1].stock, 20)
+  assert.equal(next[1], list[1], '未命中的项应是同一引用（未被重新构造）')
 })
