@@ -4,7 +4,7 @@
  */
 import assert from 'assert'
 import crypto from 'crypto'
-import { _sign, _mapReturnCode, _buildOrderParam, kd100Provider } from '../src/services/delivery/kd100'
+import { _sign, _mapReturnCode, _buildOrderParam, _buildPrecancelParam, _buildCancelParam, _buildAddfeeParam, kd100Provider } from '../src/services/delivery/kd100'
 import { signKd100 } from '../src/services/delivery/kd100-client'
 
 let pass = 0
@@ -66,6 +66,44 @@ t('signKd100 = MD5(param+t+key+secret)，含多字节 utf8；_sign 与之一致'
   assert.strictEqual(s, md5U('{"x":"中文"}' + '1725400000000' + 'K' + 'S'))
   assert.strictEqual(_sign('{"x":"中文"}', '1725400000000', 'K', 'S'), s)
 })
+// P4（2026-09-24）：precancel/cancel/addfee 生产实测漏传 orderId（precancel 返 30001「orderId不能为空」）
+t('_buildPrecancelParam 含 taskId+orderId+cancelMsgType', () => {
+  const p = _buildPrecancelParam('T1', 'O1')
+  assert.strictEqual(p.taskId, 'T1'); assert.strictEqual(p.orderId, 'O1'); assert.strictEqual(p.cancelMsgType, 8)
+})
+t('_buildCancelParam 含 taskId+orderId+cancelMsgType+cancelMsg（原因截断到 60）', () => {
+  const p = _buildCancelParam('T1', 'O1', '原'.repeat(100))
+  assert.strictEqual(p.taskId, 'T1'); assert.strictEqual(p.orderId, 'O1'); assert.strictEqual(p.cancelMsgType, 8)
+  assert.strictEqual((p.cancelMsg as string).length, 60)
+  const p2 = _buildCancelParam('T1', 'O1', undefined as unknown as string)
+  assert.strictEqual(p2.cancelMsg, '商家取消')   // 缺省原因兜底（trunc(null/undefined) 才返回 null）
+})
+t('_buildAddfeeParam 含 taskId+orderId+tips（元，两位小数）', () => {
+  const p = _buildAddfeeParam('T1', 'O1', 350)
+  assert.strictEqual(p.taskId, 'T1'); assert.strictEqual(p.orderId, 'O1'); assert.strictEqual(p.tips, '3.50')
+})
+// P3：回调解析 providerOrderId 与 cancelReason（此前从不解析，720 撤单原因、非 UNKNOWN 行认领全都无从谈起）
+t('回调解析 providerOrderId 与 cancelReason', () => {
+  const salt = 'abc123'
+  const param = JSON.stringify({ orderId: 'KDORDER-1', taskId: 'T1', status: '720', statusDesc: '骑手取消', cancelReason: '骑手原因取消', updateTime: '2026-09-24 10:00:00' })
+  const r = kd100Provider.verifyAndParseCallback({ taskId: 'T1', param, sign: md5U(param + salt) }, salt)
+  assert.ok(r.ok)
+  if (r.ok) {
+    assert.strictEqual(r.payload.providerOrderId, 'KDORDER-1')
+    assert.strictEqual(r.payload.cancelReason, '骑手原因取消')
+  }
+})
+t('回调缺 orderId/cancelReason 时两者为 null（不是 undefined/空串）', () => {
+  const salt = 'abc123'
+  const param = JSON.stringify({ taskId: 'T1', status: '100', statusDesc: '骑手已接单', updateTime: '2026-09-24 10:00:00' })
+  const r = kd100Provider.verifyAndParseCallback({ taskId: 'T1', param, sign: md5U(param + salt) }, salt)
+  assert.ok(r.ok)
+  if (r.ok) {
+    assert.strictEqual(r.payload.providerOrderId, null)
+    assert.strictEqual(r.payload.cancelReason, null)
+  }
+})
+
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)
 
 if (process.argv.includes('--integration')) {

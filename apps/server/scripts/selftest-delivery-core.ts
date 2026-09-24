@@ -4,6 +4,7 @@ import { DELIVERY_RANK, TERMINAL, PROVIDER_STATUS_MAP, DELIVERY_STATUS_LABEL } f
 import { isCircuitTripped, tripCircuit, resetCircuit, getCircuitState } from '../src/services/delivery/circuit'
 import { trunc, makeCallbackDedupeKey, adminEventKey } from '../src/services/delivery/events'
 import { ProviderError } from '../src/services/delivery/types'
+import { shouldKillGhost } from '../src/services/delivery/cancel-intent'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -59,6 +60,31 @@ t('adminEventKey 唯一且 ≤64', () => {
 t('ProviderError 保留 kind/code/name', () => {
   const e = new ProviderError('BALANCE', '30004', '余额不足')
   assert.strictEqual(e.kind, 'BALANCE'); assert.strictEqual(e.code, '30004'); assert.strictEqual(e.name, 'ProviderError')
+})
+// P19：shouldKillGhost 判定表（已结束配送单该不该对这条回调自动向运力方撤销）
+t('shouldKillGhost：FAILED + rank<100 → true', () => {
+  assert.strictEqual(shouldKillGhost('FAILED', null, { type: 'rank', rank: 20 }), true)
+  assert.strictEqual(shouldKillGhost('FAILED', 'T1', { type: 'rank', rank: 50 }), true)
+})
+t('shouldKillGhost：CANCELLED 且无 taskId + rank<100 → true', () => {
+  assert.strictEqual(shouldKillGhost('CANCELLED', null, { type: 'rank', rank: 30 }), true)
+})
+t('shouldKillGhost：CANCELLED 有 taskId → false（我方主动取消过，尾随回调预期之内）', () => {
+  assert.strictEqual(shouldKillGhost('CANCELLED', 'T1', { type: 'rank', rank: 30 }), false)
+})
+t('shouldKillGhost：任何 status + 520（rank=100）→ false（已送达，撤不了）', () => {
+  assert.strictEqual(shouldKillGhost('FAILED', null, { type: 'rank', rank: 100 }), false)
+  assert.strictEqual(shouldKillGhost('CANCELLED', null, { type: 'rank', rank: 100 }), false)
+})
+t('shouldKillGhost：side（515/510/720 旁路态）→ false', () => {
+  assert.strictEqual(shouldKillGhost('FAILED', null, { type: 'side' }), false)
+  assert.strictEqual(shouldKillGhost('CANCELLED', null, { type: 'side' }), false)
+})
+t('shouldKillGhost：DELIVERED → false（终态但不是"已结束等回调"的那两种）', () => {
+  assert.strictEqual(shouldKillGhost('DELIVERED', null, { type: 'rank', rank: 50 }), false)
+})
+t('shouldKillGhost：mapped 未定义（未知状态）→ false', () => {
+  assert.strictEqual(shouldKillGhost('FAILED', null, undefined), false)
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)
