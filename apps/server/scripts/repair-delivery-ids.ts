@@ -145,12 +145,21 @@ async function computePlan(deliveryNo: string): Promise<Plan | null> {
   }
 }
 
+// 与 apps/server/src/services/delivery/state.ts 的 TERMINAL 同一份值：这个脚本用 `new
+// PrismaClient()` 独立跑（不经过 app 的 utils/prisma），没有理由为一个常量去拉整个 app 的
+// import 链，直接内联同步一份，注意两边改动要同步。
+const TERMINAL_STATUSES = ['DELIVERED', 'CANCELLED', 'FAILED']
+
 async function runScan(): Promise<void> {
   const rows = await prisma.delivery.findMany({
     where: { OR: [{ providerTaskId: null }, { providerOrderId: null }] },
-    select: { id: true, deliveryNo: true, providerTaskId: true, providerOrderId: true },
+    select: { id: true, deliveryNo: true, status: true, activeOrderId: true, providerTaskId: true, providerOrderId: true },
   })
-  const out: { deliveryNo: string; hasCallbackWithTaskId: boolean }[] = []
+  // P24（复核 R3 衍生）：活跃行（还占着 activeOrderId、非终态）比已终态行更急——活跃行意味着
+  // 店员这一刻可能正卡在「有 taskId 无 orderId」的取消意图死循环里；已终态行多半是历史遗留，
+  // 缺 orderId 顶多影响 actualFee 对账，不影响当下操作。分两组让人一眼看出该先处理哪批。
+  const active: { deliveryNo: string; status: string; hasCallbackWithTaskId: true }[] = []
+  const ended: { deliveryNo: string; status: string; hasCallbackWithTaskId: true }[] = []
   for (const r of rows) {
     const ev = await prisma.deliveryEvent.findFirst({
       where: { deliveryId: r.id, source: 'CALLBACK' },
@@ -158,10 +167,13 @@ async function runScan(): Promise<void> {
     })
     if (!ev) continue
     const hasTaskId = !!outerTaskId(ev.rawPayload) || !!parseParam(ev.rawPayload)?.taskId
-    if (hasTaskId) out.push({ deliveryNo: r.deliveryNo, hasCallbackWithTaskId: true })
+    if (!hasTaskId) continue
+    const entry = { deliveryNo: r.deliveryNo, status: r.status, hasCallbackWithTaskId: true as const }
+    if (r.activeOrderId !== null && !TERMINAL_STATUSES.includes(r.status)) active.push(entry)
+    else ended.push(entry)
   }
-  console.log(JSON.stringify(out, null, 2))
-  console.log(`共 ${out.length} 条缺 taskId/orderId 且有含 taskId 回调原文的行`)
+  console.log(JSON.stringify({ 活跃行: active, 已终态行: ended }, null, 2))
+  console.log(`活跃行 ${active.length} 条，已终态行 ${ended.length} 条，合计 ${active.length + ended.length} 条缺 taskId/orderId 且有含 taskId 回调原文的行`)
 }
 
 async function main(): Promise<void> {
