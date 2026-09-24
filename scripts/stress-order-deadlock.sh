@@ -19,24 +19,31 @@
 #   STOCK(1000) 每个 sku 的初始库存；故意设小可以验证「成功或 42201，绝不超卖」（场景 f）
 #   SAMEUSER(0) 1=NORD 个并发槽全部用同一个已登录用户（不传 clientRequestId，仍是 NORD
 #               笔不同订单）——验证同一用户并发下单、不带积分时不受影响（场景 g）
+#   NCART(0)    另起 NCART 个用户，每轮与 NORD 个下单并发地对同一 sku（sku A）
+#               POST /api/cart 后立刻 DELETE /api/cart/:id（场景 h，L 级复核 R1：验证加购
+#               与下单锁序已对齐、不再互相死锁）
 #   OUT         输出目录，默认 mktemp -d
 #
-# 7 个标准场景（见方案验收标准第 4 条）：
-#   a NORD=30 ROUNDS=3                → 90 success
-#   b NORD=2  ROUNDS=60                → 120 success
-#   c NORD=20 ROUNDS=2 MULTI=1         → 40 success
-#   d NORD=20 ROUNDS=2 MULTI=2         → 40 success
-#   e NORD=20 ROUNDS=2 NPUT=10         → 40 success，puts 全 0
-#   f NORD=30 ROUNDS=1 STOCK=5         → 15 success + 15×42201，sku 终值全 0 不为负
-#   g NORD=20 ROUNDS=2 SAMEUSER=1      → 40 success
+# 8 个标准场景（见方案验收标准第 4 条 + 修订 1）：
+#   a NORD=30 ROUNDS=3                     → 90 success
+#   b NORD=2  ROUNDS=60                     → 120 success
+#   c NORD=20 ROUNDS=2 MULTI=1              → 40 success
+#   d NORD=20 ROUNDS=2 MULTI=2              → 40 success
+#   e NORD=20 ROUNDS=2 NPUT=10              → 40 success，puts 全 0
+#   f NORD=30 ROUNDS=1 STOCK=5              → 15 success + 15×42201，sku 终值全 0 不为负
+#   g NORD=20 ROUNDS=2 SAMEUSER=1           → 40 success
+#   h NORD=10 ROUNDS=10 NCART=10            → 100 订单 success、100 加购 success
+# a–h 全部要求服务端日志 `grep -c '下单遇死锁' == 0`（R1 选项 A：加购锁序已对齐，不应
+# 再靠重试兜住）。
 #
 # 退出码：0=全部符合预期（RESULT 50001=0 invariant_bad=0 且无非 {0,42201} 的响应码、
-# 落库订单数与成功响应数一致）；1=任一不符（含改坏验证矩阵里故意打红的场景）。
+# 落库订单数与成功响应数一致、NCART>0 时加购全部成功）；1=任一不符（含改坏验证矩阵里
+# 故意打红的场景）。
 set -u
 SP=$(cd "$(dirname "$0")" && pwd)
 BASE=${BASE:-http://localhost:3100}; DB_NAME=${DB_NAME:-food_shop_sc}
 ADMIN_USER=${ADMIN_USER:-admin}; ADMIN_PASS=${ADMIN_PASS:-admin123456}
-ROUNDS=${ROUNDS:-3}; NORD=${NORD:-30}; NPUT=${NPUT:-0}; MULTI=${MULTI:-0}; STOCK=${STOCK:-1000}; SAMEUSER=${SAMEUSER:-0}
+ROUNDS=${ROUNDS:-3}; NORD=${NORD:-30}; NPUT=${NPUT:-0}; MULTI=${MULTI:-0}; STOCK=${STOCK:-1000}; SAMEUSER=${SAMEUSER:-0}; NCART=${NCART:-0}
 OUT=${OUT:-$(mktemp -d)}; mkdir -p "$OUT"
 
 Q() { docker exec -i food-shop-mysql mysql --default-character-set=utf8mb4 -N -ufoodshop_user -pfoodshop_password "$DB_NAME" -e "$1" 2>/dev/null; }
@@ -44,6 +51,13 @@ req() { curl -s -X "$1" "$BASE$2" -H 'Content-Type: application/json' ${3:+-H "A
 
 AT=$(req POST /api/admin/login "" "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" | jq -r '.data.token // empty')
 [[ -n "$AT" ]] || { echo "admin 登录失败"; exit 1; }
+
+# R6（L 级复核，建议级采纳）：脚本会把运费改成 0 元起送/包邮，方便造单，但从没改回去过——
+# 干净库跑没问题，若在已有数据的库上跑就会永久改动店铺的运费设置。开工前存一份原值，
+# 用 trap 保证无论正常结束还是任何 exit 1 路径都会还原，不需要每个 exit 点各写一遍。
+S_ORIG=$(req GET /api/admin/settings/shipping "$AT" | jq -c .data)
+restore_shipping() { [[ -n "${S_ORIG:-}" && "$S_ORIG" != "null" ]] && req PUT /api/admin/settings/shipping "$AT" "$S_ORIG" >/dev/null; }
+trap restore_shipping EXIT
 req PUT /api/admin/settings/shipping "$AT" '{"fee":0,"freeThreshold":0,"minOrderAmount":0}' >/dev/null
 
 CAT=$(Q "SELECT id FROM categories WHERE channel='EXPRESS' ORDER BY id LIMIT 1"); CAT=${CAT:-1}
@@ -51,7 +65,7 @@ mk() { req POST /api/admin/products "$AT" "{\"categoryId\":$CAT,\"name\":\"DL并
 R=$(mk P); P=$(jq -r .data.id <<<"$R"); A=$(jq -r '.data.skus[0].id' <<<"$R"); B=$(jq -r '.data.skus[1].id' <<<"$R"); C=$(jq -r '.data.skus[2].id' <<<"$R")
 R=$(mk Q); P2=$(jq -r .data.id <<<"$R"); A2=$(jq -r '.data.skus[0].id' <<<"$R")
 [[ "$P" =~ ^[0-9]+$ && "$P2" =~ ^[0-9]+$ ]] || { echo "建商品失败: $R"; exit 1; }
-echo "product P=$P skus A=$A B=$B C=$C ; Q=$P2 skuA=$A2 ; MULTI=$MULTI NORD=$NORD ROUNDS=$ROUNDS NPUT=$NPUT STOCK=$STOCK SAMEUSER=$SAMEUSER"
+echo "product P=$P skus A=$A B=$B C=$C ; Q=$P2 skuA=$A2 ; MULTI=$MULTI NORD=$NORD ROUNDS=$ROUNDS NPUT=$NPUT STOCK=$STOCK SAMEUSER=$SAMEUSER NCART=$NCART"
 
 declare -a UTS ADDRS
 # ⚠️ mock 登录（routes/auth.ts）用 `code.slice(0, 8)` 派生 openid——只要 code 前 8 个字符
@@ -76,7 +90,19 @@ else
   done
 fi
 
-: > $OUT/orders.txt; : > $OUT/puts.txt; : > $OUT/debug.txt
+# NCART（场景 h，R1）：另一批只加购/不下单的用户，用独立 RUNTAG2 避免与上面 NORD 用户的
+# 8 字符 openid 前缀撞车（两个 24 位随机数各自独立，撞车概率可忽略；即使撞了也只是复用
+# 同一个真实用户，不影响脚本自身正确性）。加购目标固定为 sku A——与场景 e 的 NPUT 目标
+# 及 i%3==1 的直购订单共享同一行，制造真实的「加购 vs 下单」并发。
+declare -a CUTS
+if [[ "$NCART" -gt 0 ]]; then
+  RUNTAG2=$(printf '%06x' $(( (RANDOM * 32768 + RANDOM) % 16777216 )))
+  for k in $(seq 1 $NCART); do
+    CUTS[$k]=$(req POST /api/auth/wechat-login "" "{\"code\":\"${RUNTAG2}$(printf '%02d' $k)\"}" | jq -r .data.token)
+  done
+fi
+
+: > $OUT/orders.txt; : > $OUT/puts.txt; : > $OUT/debug.txt; : > $OUT/carts.txt
 # MULTI 模式先清空该用户购物车——上一轮若有失败订单残留购物车项，这一轮加购会把行加在
 # 已有行旁边，cartItemIds 引用的行数与预期不符（基线里出现的「40001 购物车商品不存在」
 # 正是这类残留导致）。
@@ -112,17 +138,36 @@ for r in $(seq 1 $ROUNDS); do
   for ((j=1;j<=NPUT;j++)); do
     ( v=$((500 + RANDOM % 400)); o=$(req PUT /api/admin/products/$P/stock "$AT" "{\"skuId\":$A,\"stock\":$v}"); echo "$(jq -r '.code' <<<"$o") $(jq -r '.message' <<<"$o")" >> $OUT/puts.txt ) &
   done
+  for ((k=1;k<=NCART;k++)); do
+    (
+      ct=${CUTS[$k]}
+      o=$(req POST /api/cart "$ct" "{\"productId\":$P,\"skuId\":$A,\"quantity\":1}")
+      cc=$(jq -r '.code' <<<"$o"); cid=$(jq -r '.data.id // empty' <<<"$o")
+      cd="skip"
+      if [[ -n "$cid" ]]; then
+        d=$(req DELETE "/api/cart/$cid" "$ct")
+        cd=$(jq -r '.code' <<<"$d")
+      fi
+      echo "$cc $cd" >> $OUT/carts.txt
+    ) &
+  done
   wait
 done
 
 echo "== orders result codes =="; sort $OUT/orders.txt | uniq -c
 [[ "$NPUT" -gt 0 ]] && { echo "== puts result codes =="; sort $OUT/puts.txt | uniq -c; }
+[[ "$NCART" -gt 0 ]] && { echo "== carts result codes =="; sort $OUT/carts.txt | uniq -c; }
 
 N50001=$(grep -c '^50001 ' $OUT/orders.txt); NOK=$(grep -c '^0 ' $OUT/orders.txt); N42201=$(grep -c '^42201 ' $OUT/orders.txt)
 TOTAL=$(wc -l < $OUT/orders.txt | tr -d ' ')
 NOTHER=$((TOTAL - N50001 - NOK - N42201))
 NPUTOTHER=0
 [[ "$NPUT" -gt 0 ]] && NPUTOTHER=$(grep -vc '^0 ' $OUT/puts.txt)
+NCARTOK=0; NCARTOTHER=0
+if [[ "$NCART" -gt 0 ]]; then
+  NCARTOK=$(grep -c '^0 0$' $OUT/carts.txt)
+  NCARTOTHER=$(grep -vc '^0 0$' $OUT/carts.txt)
+fi
 
 BAD=0
 for PP in $P $P2; do
@@ -143,8 +188,9 @@ NORDERS=$(Q "SELECT COUNT(*) FROM orders o WHERE EXISTS (SELECT 1 FROM order_ite
 echo "orders_in_db=$NORDERS success_responses=$NOK"
 [[ "$NORDERS" == "$NOK" ]] || { echo "  ✗ 成功响应数与落库订单数不一致"; BAD=1; }
 [[ "$NPUTOTHER" -gt 0 ]] && { echo "  ✗ 后台改库存出现非 0 响应码（$NPUTOTHER 次）"; BAD=1; }
+[[ "$NCARTOTHER" -gt 0 ]] && { echo "  ✗ 加购/删购出现非 0 响应码（$NCARTOTHER 次）"; BAD=1; }
 [[ -s $OUT/debug.txt ]] && head -3 $OUT/debug.txt
 echo "RESULT 50001=$N50001 invariant_bad=$BAD"
-echo "SUMMARY success=$NOK e42201=$N42201 other=$NOTHER"
+echo "SUMMARY success=$NOK e42201=$N42201 other=$NOTHER carts=$NCARTOK"
 [[ "$NOTHER" -gt 0 || "$N50001" -gt 0 || "$BAD" == "1" || "$NORDERS" != "$NOK" ]] && exit 1
 exit 0

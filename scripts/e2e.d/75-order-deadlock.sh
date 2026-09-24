@@ -1,12 +1,12 @@
-echo "== 75. 同商品并发下单死锁——固定锁序 + 整事务重试（2026-09-24） =="
+echo "== 75. 同商品并发下单死锁——固定锁序 + 整事务重试（2026-09-24，修订 1 增 75.h） =="
 # 复用 e2e.sh 的 req/code/ok/fail/assert_eq；$AT/$BASE/$DB_NAME。变量一律 S75_ 前缀。
 # 放在 74 之后（不依赖 74：74 收尾已把 low-stock 相关设置复位，本段自建全部商品/用户/
 # 地址，与其它分片除了共用同一个后端/DB 之外互不相干）。跑的是
-# scripts/stress-order-deadlock.sh 里方案验收标准第 4 条的 7 个标准场景，NORD/ROUNDS
-# 都沿用方案原值（不为了缩短耗时而调小），实测本机合计约 1 分钟量级，在验收要求的
-# ≤3 分钟预算内。压测脚本本身会在结尾做不变量校验（products.stock == SUM(sku)、
-# sales_count == 已下单件数、成功响应数 == 落库订单数、sku 不超卖），这里只需要断言
-# 它的 RESULT/退出码/（f 场景）SUMMARY。
+# scripts/stress-order-deadlock.sh 里方案验收标准第 4 条 + 修订 1 的 8 个标准场景，
+# NORD/ROUNDS 都沿用方案原值（不为了缩短耗时而调小），实测本机合计约 1 分钟量级，在
+# 验收要求的 ≤3 分钟预算内。压测脚本本身会在结尾做不变量校验（products.stock ==
+# SUM(sku)、sales_count == 已下单件数、成功响应数 == 落库订单数、sku 不超卖、NCART>0
+# 时加购全部成功），这里只需要断言它的 RESULT/退出码/SUMMARY。
 S75_PIDS=""
 S75_STRESS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/stress-order-deadlock.sh"
 
@@ -54,6 +54,11 @@ assert_eq "75.f e42201=15" "$(grep -m1 '^SUMMARY ' <<<"$S75_LAST_OUT" | sed -E '
 echo "-- 75.g NORD=20 ROUNDS=2 SAMEUSER=1（同一用户并发、不带积分）→ 40 success --"
 s75_run g NORD=20 ROUNDS=2 SAMEUSER=1
 assert_eq "75.g success=40" "$(grep -m1 '^SUMMARY ' <<<"$S75_LAST_OUT" | sed -E 's/.*success=([0-9]+).*/\1/')" "40"
+
+echo "-- 75.h NORD=10 ROUNDS=10 NCART=10（下单与加购并发，L 级复核 R1）→ 100 订单 + 100 加购 success --"
+s75_run h NORD=10 ROUNDS=10 NCART=10
+assert_eq "75.h success=100" "$(grep -m1 '^SUMMARY ' <<<"$S75_LAST_OUT" | sed -E 's/.*success=([0-9]+).*/\1/')" "100"
+assert_eq "75.h carts=100" "$(grep -m1 '^SUMMARY ' <<<"$S75_LAST_OUT" | sed -E 's/.*carts=([0-9]+).*/\1/')" "100"
 
 echo "-- 75.收尾：软删本段创建的全部商品 --"
 S75_DELFAIL=0
