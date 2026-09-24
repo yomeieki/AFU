@@ -64,7 +64,14 @@ async function localBlock(r: Range) {
   const deliveryFen = delivered.reduce((s, d) => s + (fee(d) ?? 0), 0)
   const unpricedCount = delivered.filter((d) => fee(d) == null).length
   const tipFen = deliveries.reduce((s, d) => s + d.tipFee, 0)
-  const cancelFen = deliveries.filter((d) => d.status === 'CANCELLED').reduce((s, d) => s + d.cancelFee, 0)
+  // 复核 R8：cancelFee 不能只汇总 status==='CANCELLED' 的行——幽灵活单自动撤销
+  // （killGhostDelivery）与 R1 的 720 竞态补记（patchRacedCancelFee）都会把真实扣费写到
+  // FAILED/VOIDED 行上（那笔单被判定已结束，状态不会再改回 CANCELLED），只看 CANCELLED
+  // 会把这部分真实支出漏掉。cancelFee 这一列本身只有真实扣费路径才非 0（720 回调本身不写它，
+  // 见 callback.ts 的 CANCELLED 分支），所以改成对全部行无条件求和，与
+  // routes/admin/delivery.ts 的单笔 costFen 口径（那里 cancelFee 同样是无条件累加）保持一致——
+  // 两处口径不一致，门店总览与单笔详情会对不上账。
+  const cancelFen = deliveries.reduce((s, d) => s + d.cancelFee, 0)
   const riderTotalFen = deliveryFen + tipFen + cancelFen
   const freight = { customerPaidFen, deliveryFen, tipFen, cancelFen, riderTotalFen, netFen: customerPaidFen - riderTotalFen, unpricedCount }
 
