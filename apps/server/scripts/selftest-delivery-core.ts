@@ -4,7 +4,7 @@ import { DELIVERY_RANK, TERMINAL, PROVIDER_STATUS_MAP, DELIVERY_STATUS_LABEL } f
 import { isCircuitTripped, tripCircuit, resetCircuit, getCircuitState } from '../src/services/delivery/circuit'
 import { trunc, makeCallbackDedupeKey, adminEventKey } from '../src/services/delivery/events'
 import { ProviderError } from '../src/services/delivery/types'
-import { shouldKillGhost } from '../src/services/delivery/cancel-intent'
+import { shouldKillGhost, shouldAutoVoidCancelIntent } from '../src/services/delivery/cancel-intent'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -85,6 +85,21 @@ t('shouldKillGhost：DELIVERED → false（终态但不是"已结束等回调"�
 })
 t('shouldKillGhost：mapped 未定义（未知状态）→ false', () => {
   assert.strictEqual(shouldKillGhost('FAILED', null, undefined), false)
+})
+// 复核 R3 + 验收 24：tasks.ts 的 processCancelIntents 直接调用这个函数决定要不要进入
+// P17(b) 自动结束分支——方案原文「任一 id 为空」，旧代码只判断 providerTaskId 一半，
+// 「有 taskId 无 orderId」的行会永久卡在取消意图里出不来。
+t('shouldAutoVoidCancelIntent：两个 id 都缺 → true', () => {
+  assert.strictEqual(shouldAutoVoidCancelIntent(null, null), true)
+})
+t('shouldAutoVoidCancelIntent：有 taskId 缺 orderId → true（R3 修复点：旧代码这里是 false）', () => {
+  assert.strictEqual(shouldAutoVoidCancelIntent('T1', null), true)
+})
+t('shouldAutoVoidCancelIntent：缺 taskId 有 orderId → true', () => {
+  assert.strictEqual(shouldAutoVoidCancelIntent(null, 'O1'), true)
+})
+t('shouldAutoVoidCancelIntent：两个 id 都齐全 → false（该走执行分支，不该被自动结束）', () => {
+  assert.strictEqual(shouldAutoVoidCancelIntent('T1', 'O1'), false)
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)
