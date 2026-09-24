@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Search, Users as UsersIcon, ChevronRight, ArrowDown, Copy } from 'lucide-react'
 import { getUsers, getUser, getUserOrders, getUserPointsLedger, getUserCoupons } from '../api/admin'
@@ -20,6 +20,10 @@ import { itemsSummary, userOrderChannel } from '../utils/order-list'
 import { readUsersQuery, writeUsersQuery } from '../utils/users-query'
 import { orderDetailPath } from '../navigation'
 import { isModifiedLinkClick } from '../utils/link-click'
+import {
+  initialSession, openSession, closeSession, applyUserLoaded, applyOrdersPage, beginMore, applyOrdersError,
+  type OrdersSession,
+} from '../utils/user-orders-session'
 
 const userLabel = userDisplayName
 const yuan = (fen: number) => (fen / 100).toFixed(2)
@@ -95,14 +99,14 @@ export default function Users() {
   // 没有 catch 的话接口一挂就渲染「暂无用户 / 暂无订单」，店主会当成真的没有
   const [loadFailed, setLoadFailed] = useState(false)
 
-  // 用户订单弹窗（打开来源：行内按钮，或 URL 的 orders=<id> 在挂载/返回/刷新时自动重开）
-  const [ordersModal, setOrdersModal] = useState<AdminUser | null>(null)
-  const [userOrders, setUserOrders] = useState<UserOrder[]>([])
-  const [ordersPage, setOrdersPage] = useState(1)
-  const [ordersTotal, setOrdersTotal] = useState(0)
-  const [ordersLoading, setOrdersLoading] = useState(false)
-  const [ordersMoreLoading, setOrdersMoreLoading] = useState(false)
-  const [ordersFailed, setOrdersFailed] = useState(false)
+  // 用户订单弹窗（打开来源：行内按钮，或 URL 的 orders=<id> 在挂载/返回/刷新时自动重开）。
+  // 全部状态收进一个纯状态机对象（utils/user-orders-session.ts），每次打开/关闭/按 URL
+  // 重开都领一个新的会话号 seq；迟到的网络响应带着发出时的 seq 回来，seq 不匹配就原样
+  // 丢弃（同一引用，不重渲）——见 2026-09-24 复核 R1：弱网下 A 的「加载更多」结果会被
+  // 追加进 B 的弹窗、按 URL 重开时会被切成别的用户。
+  const [session, setSession] = useState<OrdersSession<AdminUser, UserOrder>>(initialSession)
+  const seqRef = useRef(0)
+  const ordersModal = session.user
 
   // 发券
   const [issueFor, setIssueFor] = useState<AdminUser | null>(null)
@@ -191,53 +195,78 @@ export default function Users() {
     loadCoupons(user)
   }
 
-  // ── 用户订单弹窗 ──────────────────────────────────────────────────────────
-  const loadUserOrders = (userId: number, p: number) => {
-    if (p === 1) { setOrdersLoading(true); setOrdersFailed(false) } else { setOrdersMoreLoading(true) }
+  // ── 用户订单弹窗（会话号保护，见上方 session 注释） ─────────────────────────
+  const loadUserOrders = (userId: number, p: number, seq: number) => {
     getUserOrders(userId, { page: p, pageSize: 20 })
       .then((res) => {
-        setOrdersPage(p)
-        setOrdersTotal(res.data.data.total)
-        setUserOrders((prev) => (p === 1 ? res.data.data.list : [...prev, ...res.data.data.list]))
+        setSession((s) => applyOrdersPage(s, { seq, page: p, list: res.data.data.list, total: res.data.data.total }))
       })
-      .catch(() => { if (p === 1) setOrdersFailed(true); else toast.error('加载更多失败，请重试') })
-      .finally(() => { if (p === 1) setOrdersLoading(false); else setOrdersMoreLoading(false) })
+      .catch(() => {
+        setSession((s) => applyOrdersError(s, { seq, page: p }))
+        // 这次请求已经过期（弹窗换人/关闭）就不用再烦店主——seqRef 是当前最新会话号
+        if (p > 1 && seqRef.current === seq) toast.error('加载更多失败，请重试')
+      })
   }
 
   const openOrders = (user: AdminUser) => {
-    setOrdersModal(user)
-    setUserOrders([])
-    setOrdersTotal(0)
-    setOrdersPage(1)
+    const seq = ++seqRef.current
+    setSession((s) => openSession(s, seq, user))
     setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { ordersUserId: user.id }), { replace: true })
-    loadUserOrders(user.id, 1)
+    loadUserOrders(user.id, 1, seq)
   }
 
   const closeOrders = () => {
-    setOrdersModal(null)
-    setUserOrders([])
+    const seq = ++seqRef.current
+    setSession((s) => closeSession(s, seq))
     setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { ordersUserId: null }), { replace: true })
   }
 
+  const retryOrders = () => {
+    if (!session.user) return
+    const seq = session.seq
+    setSession((s) => openSession(s, seq, s.user))
+    loadUserOrders(session.user.id, 1, seq)
+  }
+
+  const loadMoreOrders = () => {
+    if (!session.user) return
+    const seq = session.seq
+    setSession((s) => beginMore(s, seq))
+    loadUserOrders(session.user.id, session.page + 1, seq)
+  }
+
   // URL 的 orders=<id> 在挂载、浏览器「返回」、刷新时都会变化（或就是初始值）——据此自动重开弹窗；
-  // 弹窗已经是这个用户时不重复请求（行内按钮点击已经 setOrdersModal 过）。
+  // 弹窗已经是这个用户时不重复请求（行内按钮点击已经 openSession 过）。
   useEffect(() => {
     if (ordersUserId === null) {
-      if (ordersModal) setOrdersModal(null)
+      if (session.user) {
+        const seq = ++seqRef.current
+        setSession((s) => closeSession(s, seq))
+      }
       return
     }
-    if (ordersModal?.id === ordersUserId) return
+    if (session.user?.id === ordersUserId) return
+    const seq = ++seqRef.current
+    setSession((s) => openSession(s, seq, null))
     getUser(ordersUserId)
       .then((row) => {
-        setOrdersModal(row)
-        setUserOrders([])
-        setOrdersTotal(0)
-        setOrdersPage(1)
-        loadUserOrders(ordersUserId, 1)
+        setSession((s) => applyUserLoaded(s, { seq, user: row }))
+        loadUserOrders(ordersUserId, 1, seq)
       })
-      .catch(() => {
-        toast.error('用户不存在')
-        setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { ordersUserId: null }), { replace: true })
+      .catch((err: unknown) => {
+        // 这次 getUser 已经过期（弹窗又被别的操作换掉）——不弹 toast、不动 session/URL
+        if (seqRef.current !== seq) return
+        const status = (err as { response?: { status?: number; data?: { code?: number } } })?.response?.status
+        const code = (err as { response?: { data?: { code?: number } } })?.response?.data?.code
+        setSession((s) => closeSession(s, seq))
+        if (status === 404 || code === 40401) {
+          // 用户确实不存在：清掉地址栏的 orders 参数，不然刷新会再报一次
+          toast.error('用户不存在')
+          setSearchParams((prev) => writeUsersQuery(new URLSearchParams(prev), { ordersUserId: null }), { replace: true })
+        } else {
+          // 网络错误/5xx/超时：保留 orders 参数，刷新页面会重试
+          toast.error('用户加载失败，请刷新重试')
+        }
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ordersUserId])
@@ -297,33 +326,34 @@ export default function Users() {
           </div>
         ) : (
         <Table
-          columns={11}
+          columns={9}
           loading={loading}
           isEmpty={list.length === 0}
           emptyText={hasOrders ? '暂无下过单的用户，可取消勾选「只看下过单的」再看看' : '暂无用户'}
           head={
             <tr>
-              <th className="text-left px-4 py-3">用户</th>
-              <th className="text-left px-4 py-3">手机号</th>
-              <th className="text-right px-4 py-3">订单数</th>
-              <th className="text-right px-4 py-3">
+              <th className="text-left px-3 xl:px-4 py-3 whitespace-nowrap">用户</th>
+              <th className="text-left px-3 xl:px-4 py-3 whitespace-nowrap">手机号</th>
+              <th className="text-right px-3 xl:px-4 py-3 whitespace-nowrap">订单数</th>
+              <th className="text-right px-3 xl:px-4 py-3 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={handleSortToggle}
                   aria-sort={sort === 'spend' ? 'descending' : 'none'}
-                  className={`inline-flex items-center gap-1 ${sort === 'spend' ? 'font-semibold text-gray-800' : ''}`}
+                  className={`inline-flex items-center gap-1 whitespace-nowrap ${sort === 'spend' ? 'font-semibold text-gray-800' : ''}`}
                 >
                   累计消费
                   {sort === 'spend' && <ArrowDown className="w-3.5 h-3.5" />}
                 </button>
               </th>
-              <th className="text-right px-4 py-3">最近下单</th>
-              <th className="text-right px-4 py-3">积分</th>
-              <th className="text-right px-4 py-3">可用券</th>
-              <th className="text-right px-4 py-3">状态</th>
-              <th className="text-right px-4 py-3">最近登录</th>
-              <th className="text-right px-4 py-3">注册时间</th>
-              <th className="text-right px-4 py-3">操作</th>
+              <th className="text-right px-3 xl:px-4 py-3 whitespace-nowrap">最近下单</th>
+              {/* 「积分」「可用券」合并——2026-09-24 复核 R2：1280 原本单行的表头在加了
+                  累计消费/最近下单两列后被挤成两行，1024 更是三行。信息不丢，挤进同一列两行显示。 */}
+              <th className="text-right px-3 xl:px-4 py-3 whitespace-nowrap">积分/券</th>
+              <th className="text-right px-3 xl:px-4 py-3 whitespace-nowrap">状态</th>
+              {/* 「最近登录」「注册时间」合并，同上原因 */}
+              <th className="text-right px-3 xl:px-4 py-3 whitespace-nowrap">登录/注册</th>
+              <th className="text-right px-3 xl:px-4 py-3 whitespace-nowrap">操作</th>
             </tr>
           }
           mobileCards={
@@ -351,7 +381,7 @@ export default function Users() {
                     {phoneInfo ? phoneInfo.phone : '无手机号'} · 订单 {u.orderCount} · 累计 {fmtYuanGrouped(u.spendFen)}
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    最近下单 {fmtMonthDayTime(u.latestOrder?.createdAt, '-')} · 注册 {fmtDate(u.createdAt)}
+                    最近下单 {fmtDate(u.latestOrder?.createdAt, '-')} · 注册 {fmtDate(u.createdAt)}
                   </p>
                   {/* 号码来自订单收货人快照而非微信绑定号时，必须标出来源，不然店主会当成本人手机号 */}
                   {phoneInfo?.source === 'order' && u.latestOrder && (
@@ -378,7 +408,7 @@ export default function Users() {
             const phoneInfo = userPhoneInfo(u)
             return (
             <tr key={u.id} className="hover:bg-gray-50">
-              <td className="px-4 py-3">
+              <td className="px-3 xl:px-4 py-3">
                 <div className="flex items-center gap-2">
                   {u.avatarUrl ? (
                     <img src={u.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover" />
@@ -390,38 +420,44 @@ export default function Users() {
                   <span className="text-gray-800">{userLabel(u)}</span>
                 </div>
               </td>
-              <td className="px-4 py-3 text-gray-600">
+              <td className="px-3 xl:px-4 py-3 text-gray-600">
                 {phoneInfo ? (
                   <>
-                    <div>{phoneInfo.phone}</div>
+                    <div className="whitespace-nowrap">{phoneInfo.phone}</div>
                     {phoneInfo.source === 'order' && u.latestOrder && (
                       <div className="text-xs text-gray-400">最近一单收货人 · {fmtDate(u.latestOrder.createdAt)}</div>
                     )}
                   </>
                 ) : '-'}
               </td>
-              <td className="px-4 py-3 text-right text-gray-800">{u.orderCount}</td>
-              <td className="px-4 py-3 text-right text-gray-800">{fmtYuanGrouped(u.spendFen)}</td>
-              <td className="px-4 py-3 text-right text-gray-500">{fmtMonthDayTime(u.latestOrder?.createdAt, '-')}</td>
-              <td className="px-4 py-3 text-right text-gray-800">{u.pointsBalance}</td>
-              <td className="px-4 py-3 text-right text-gray-800">{u.availableCoupons}</td>
-              <td className="px-4 py-3 text-right">
-                <span className={`px-2 py-0.5 rounded-full text-xs ${u.status === 1 ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+              <td className="px-3 xl:px-4 py-3 text-right text-gray-800 whitespace-nowrap">{u.orderCount}</td>
+              <td className="px-3 xl:px-4 py-3 text-right text-gray-800 whitespace-nowrap">{fmtYuanGrouped(u.spendFen)}</td>
+              {/* 2026-09-24 R1-7：改成 YYYY-MM-DD（不带时分）——这一列回答的是「多久没来了」，
+                  M-DD HH:mm 是工作台的紧凑格式，跨年看不出年份，也不适合客户名单 */}
+              <td className="px-3 xl:px-4 py-3 text-right text-gray-500 whitespace-nowrap">{fmtDate(u.latestOrder?.createdAt, '-')}</td>
+              <td className="px-3 xl:px-4 py-3 text-right text-gray-800 whitespace-nowrap">
+                <div>{u.pointsBalance}</div>
+                <div className="text-xs text-gray-500">可用券 {u.availableCoupons}</div>
+              </td>
+              <td className="px-3 xl:px-4 py-3 text-right whitespace-nowrap">
+                <span className={`px-2 py-0.5 rounded-full text-xs whitespace-nowrap ${u.status === 1 ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
                   {u.status === 1 ? '正常' : '禁用'}
                 </span>
               </td>
-              <td className="px-4 py-3 text-right text-gray-500">
-                {fmtDateTime(u.lastLoginAt, '-')}
+              <td className="px-3 xl:px-4 py-3 text-right text-gray-500 whitespace-nowrap">
+                <div>{fmtDateTime(u.lastLoginAt, '-')}</div>
+                <div className="text-xs text-gray-500">注册 {fmtDate(u.createdAt)}</div>
               </td>
-              <td className="px-4 py-3 text-right text-gray-500">
-                {fmtDate(u.createdAt)}
-              </td>
-              <td className="px-4 py-3 text-right">
-                <div className="flex justify-end gap-3 whitespace-nowrap">
-                  <button onClick={() => openOrders(u)} className="text-blue-500 hover:text-blue-700">订单</button>
-                  <button onClick={() => setIssueFor(u)} className="text-brand-600 hover:text-brand-700">发券</button>
-                  <button onClick={() => openLedger(u)} className="text-blue-500 hover:text-blue-700">积分明细</button>
-                  <button onClick={() => openCoupons(u)} className="text-blue-500 hover:text-blue-700">券记录</button>
+              {/* <xl 时垂直内边距缩到 py-2：2×2 两行按钮（44px）+ py-3(24px) 会把行高顶到 77
+                  （超过 1024 档 ≤70 的预算），py-2(16px) 收进预算；≥xl 单行按钮矮，恢复 py-3 */}
+              <td className="px-3 xl:px-4 py-2 xl:py-3 text-right">
+                {/* <xl（1024–1279）用 2 列 grid 让四个按钮严格折成 2×2（grid 按行主序自动放置，
+                    不像 flex-wrap 那样受各按钮实际宽度影响换行点）；≥xl 改单行 */}
+                <div className="grid grid-cols-2 xl:flex xl:flex-nowrap xl:justify-end gap-x-2 xl:gap-x-3 gap-y-1 justify-items-end ml-auto w-fit">
+                  <button onClick={() => openOrders(u)} className="text-blue-500 hover:text-blue-700 whitespace-nowrap">订单</button>
+                  <button onClick={() => setIssueFor(u)} className="text-brand-600 hover:text-brand-700 whitespace-nowrap">发券</button>
+                  <button onClick={() => openLedger(u)} className="text-blue-500 hover:text-blue-700 whitespace-nowrap">积分明细</button>
+                  <button onClick={() => openCoupons(u)} className="text-blue-500 hover:text-blue-700 whitespace-nowrap">券记录</button>
                 </div>
               </td>
             </tr>
@@ -438,8 +474,8 @@ export default function Users() {
           title={
             <>
               {userLabel(ordersModal)} 的订单
-              {!ordersLoading && !ordersFailed && (
-                <span className="ml-2 text-sm font-normal text-gray-400">共 {ordersTotal} 单</span>
+              {session.loading !== 'first' && !session.failed && (
+                <span className="ml-2 text-sm font-normal text-gray-400">共 {session.total} 单</span>
               )}
             </>
           }
@@ -451,16 +487,16 @@ export default function Users() {
             </Button>
           }
         >
-          {ordersLoading ? (
+          {session.loading === 'first' ? (
             <p className="flex items-center gap-2 text-sm text-gray-500">
               <Spinner /> 加载中...
             </p>
-          ) : ordersFailed ? (
+          ) : session.failed ? (
             <div className="py-6 flex flex-col items-center gap-3 text-sm text-red-600">
               <span>订单加载失败，当前显示的不是真实数据</span>
-              <Button size="sm" variant="secondary" onClick={() => loadUserOrders(ordersModal.id, 1)}>重试</Button>
+              <Button size="sm" variant="secondary" onClick={retryOrders}>重试</Button>
             </div>
-          ) : userOrders.length === 0 ? (
+          ) : session.list.length === 0 ? (
             <EmptyState icon={UsersIcon} text="暂无订单" />
           ) : (
             <div className="max-h-[60vh] overflow-y-auto">
@@ -471,12 +507,12 @@ export default function Users() {
                     <th className="text-left px-3 py-2">商品</th>
                     <th className="text-right px-3 py-2">金额</th>
                     <th className="text-right px-3 py-2">状态</th>
-                    <th className="text-right px-3 py-2">下单时间</th>
+                    <th className="text-right px-3 py-2 whitespace-nowrap">下单时间</th>
                     <th className="px-2 py-2" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {userOrders.map((o) => {
+                  {session.list.map((o) => {
                     const ch = userOrderChannel(o.deliveryType)
                     return (
                       <tr
@@ -484,9 +520,11 @@ export default function Users() {
                         onClick={(e) => handleOrderRowClick(e, o)}
                         className="cursor-pointer hover:bg-brand-50"
                       >
-                        <td className="px-3 py-2">
-                          <span className="font-mono text-gray-700">{o.orderNo}</span>
-                          <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded ${ch.cls}`}>{ch.label}</span>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="font-mono text-gray-700">{o.orderNo}</span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap ${ch.cls}`}>{ch.label}</span>
+                          </span>
                         </td>
                         <td className="px-3 py-2 text-gray-600">
                           {itemsSummary(o.items)}
@@ -495,9 +533,9 @@ export default function Users() {
                           ¥{(o.actualAmount / 100).toFixed(2)}
                         </td>
                         <td className="px-3 py-2 text-right">
-                          <StatusBadge status={o.status} />
+                          <StatusBadge status={o.status} deliveryType={o.deliveryType} />
                         </td>
-                        <td className="px-3 py-2 text-right text-gray-500">
+                        <td className="px-3 py-2 text-right text-gray-500 whitespace-nowrap">
                           {fmtDateTime(o.createdAt)}
                         </td>
                         <td className="px-2 py-2 text-gray-300"><ChevronRight className="w-4 h-4" /></td>
@@ -507,7 +545,7 @@ export default function Users() {
                 </tbody>
               </table>
               <div className="md:hidden divide-y divide-gray-100">
-                {userOrders.map((o) => {
+                {session.list.map((o) => {
                   const ch = userOrderChannel(o.deliveryType)
                   return (
                     <div
@@ -519,7 +557,7 @@ export default function Users() {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-base font-semibold text-brand-600">¥{(o.actualAmount / 100).toFixed(2)}</span>
                           <span className={`text-xs px-1.5 py-0.5 rounded ${ch.cls}`}>{ch.label}</span>
-                          <StatusBadge status={o.status} />
+                          <StatusBadge status={o.status} deliveryType={o.deliveryType} />
                         </div>
                         <p className="text-xs text-gray-500 truncate mt-1">
                           {itemsSummary(o.items)} · {fmtMonthDayTime(o.createdAt)}
@@ -530,10 +568,10 @@ export default function Users() {
                   )
                 })}
               </div>
-              {userOrders.length < ordersTotal && (
+              {session.list.length < session.total && (
                 <div className="pt-3 text-center">
-                  <Button size="sm" variant="secondary" disabled={ordersMoreLoading} onClick={() => loadUserOrders(ordersModal.id, ordersPage + 1)}>
-                    {ordersMoreLoading ? '加载中...' : '加载更多'}
+                  <Button size="sm" variant="secondary" disabled={session.loading === 'more'} onClick={loadMoreOrders}>
+                    {session.loading === 'more' ? '加载中...' : '加载更多'}
                   </Button>
                 </div>
               )}

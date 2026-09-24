@@ -984,7 +984,7 @@
 
 #### GET /api/admin/users/:id/orders
 
-查看指定用户的订单列表，分页（`page`/`pageSize`，`pageSize` 上限 50），按 `createdAt desc` 排序。每行字段：
+查看指定用户的订单列表，分页（`page`/`pageSize`，`pageSize` 上限 50），按 `createdAt desc, id desc` 排序（2026-09-24 修订 1 起加 `id` 兜底：同一毫秒建的两单排序不稳定会导致前端「加载更多」翻页漏行）。每行字段：
 
 ```json
 {

@@ -246,7 +246,10 @@ router.get('/:id/orders', async (req: Request, res: Response, next: NextFunction
           deliveryType: true,
           items: { select: { productName: true, quantity: true, isGift: true } },
         },
-        orderBy: { createdAt: 'desc' },
+        // 2026-09-24 复核 R4：只按 createdAt 排序，同一毫秒建的两单顺序不稳定，翻页会漏
+        // 行/重行——前端「加载更多」按 id 去重能兜住重复，但兜不住漏行。加 id 兜底与
+        // latestOrderByUserIds 的窗口排序同序（createdAt desc, id desc）。
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
