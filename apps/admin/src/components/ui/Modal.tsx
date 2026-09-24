@@ -4,7 +4,8 @@ import { X } from 'lucide-react'
 type Width = 'sm' | 'md' | 'lg'
 
 interface ModalProps {
-  title: string
+  /** 通常是字符串；用户订单弹窗需要「标题 + 小号「共 N 单」」两种字号混排，放宽成 ReactNode */
+  title: ReactNode
   onClose: () => void
   children: ReactNode
   footer?: ReactNode

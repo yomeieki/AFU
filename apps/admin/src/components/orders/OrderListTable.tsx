@@ -5,18 +5,12 @@ import Button from '../ui/Button'
 import StatusBadge from '../ui/StatusBadge'
 import { AFTER_SALE_STATUS_LABEL } from '../../types'
 import { fmtListTime } from '../../utils/time'
-import { itemsSummary, channelTag, deliveryColumn } from '../../utils/order-list'
+import { itemsSummary, channelTag, deliveryColumn, CHANNEL_TONE_CLASS } from '../../utils/order-list'
 import { copyText } from './copyText'
 import type { Order } from '../../types'
 
 function yuan(fen: number) {
   return (fen / 100).toFixed(2)
-}
-
-const CHANNEL_TONE: Record<string, string> = {
-  local: 'bg-orange-50 text-orange-700',
-  pickup: 'bg-teal-50 text-teal-700',
-  express: 'bg-blue-50 text-blue-700',
 }
 
 interface Props {
@@ -99,7 +93,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <StatusBadge status={o.status} deliveryType={o.deliveryType} />
                   {afterSaleTag(o)}
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${CHANNEL_TONE[tag.tone]}`}>{tag.label}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${CHANNEL_TONE_CLASS[tag.tone]}`}>{tag.label}</span>
                   <span className="font-mono text-xs text-gray-500 truncate">{o.orderNo}</span>
                   {o.remark && <span className="text-[10px] text-orange-600 bg-orange-50 rounded px-1 shrink-0" title={o.remark}>备注</span>}
                   <span className="ml-auto text-xs text-gray-400 shrink-0">{fmtListTime(o.createdAt, now)}</span>
@@ -139,7 +133,7 @@ export default function OrderListTable({ list, loading, loadFailed, emptyText, n
                   {o.remark && <span className="ml-1.5 text-[10px] text-orange-600 bg-orange-50 rounded px-1 whitespace-nowrap" title={o.remark}>备注</span>}
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5">
-                  <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 ${CHANNEL_TONE[tag.tone]}`}>{tag.label}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 ${CHANNEL_TONE_CLASS[tag.tone]}`}>{tag.label}</span>
                   <span className="text-xs text-gray-400 whitespace-nowrap shrink-0">{fmtListTime(o.createdAt, now)}</span>
                 </div>
               </td>

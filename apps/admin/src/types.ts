@@ -408,6 +408,12 @@ export interface AdminUser {
    * 是该用户**最近一单**（不排除任何状态）的收货人快照，供店主锁定顾客用。没下过单则为 null。
    */
   latestOrder: { orderNo: string; receiverName: string; receiverPhone: string; status: OrderStatus; createdAt: string } | null
+  /**
+   * 2026-09-24：累计消费（分）—— Σ(actual_amount − refunded_amount)，只算 `paid_at` 非空
+   * 且非测试单的订单；未付款/已取消/测试单不计。与 `orderCount`/`latestOrder` 不同口径
+   * （那两个含任何状态、含测试单），同一行「订单数 3 / 累计消费 ¥0.00」对测试账号是正常现象。
+   */
+  spendFen: number
 }
 
 export interface UserOrder {
@@ -416,6 +422,8 @@ export interface UserOrder {
   status: OrderStatus
   actualAmount: number
   createdAt: string
+  /** 2026-09-24：订单弹窗渠道小标签用 */
+  deliveryType: string
   items: { productName: string; quantity: number }[]
 }
 
@@ -973,6 +981,11 @@ export interface UserCouponRow {
   orderId: number | null
   /** 核销在哪一单，服务端联查补上 */
   orderNo: string | null
+  /**
+   * 2026-09-24：`sourceRef`（赔偿针对的单号）对应的 `Order.id`，服务端按单号联查补上；
+   * 联查没命中（订单已不存在）或 `sourceRef` 本就为空 → null。用于「使用订单」列可点进详情。
+   */
+  sourceRefOrderId: number | null
   createdAt: string
 }
 
@@ -1052,6 +1065,8 @@ export interface PointsLedgerRow {
   refId: string
   /** refType='ORDER' 时服务端联查补上，其余为 null */
   orderNo: string | null
+  /** 2026-09-24：`refType==='ORDER'` 且联查命中时为该 `Order.id`（数字），其余 null */
+  orderId: number | null
   remark: string | null
   /** 入账行才有意义：这批分什么时候过期 */
   expiresAt: string | null

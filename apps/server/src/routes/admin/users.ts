@@ -9,6 +9,7 @@ import { issueCoupon } from '../../services/member/coupons'
 // 中文标签只有一份（services/member/points.ts）。这里曾经另建过一份，
 // 两份当场就不一致（REDEEM 一边「积分兑换」一边「兑换券」）——别再复制。
 import { LEDGER_TYPE_LABEL } from '../../services/member/points'
+import { REAL_ORDERS } from '../../utils/stats-scope'
 
 const router = Router()
 
@@ -67,8 +68,77 @@ async function latestOrderByUserIds(userIds: number[]): Promise<Map<number, Late
   return new Map(rows.map(({ userId, ...o }) => [userId, o]))
 }
 
+/**
+ * 累计消费（分）批量计算——唯一实现，列表默认排序路径、`sort=spend` 排序路径、`GET /:id`
+ * 三处共用。口径（2026-09-24 店主确认，精确化见规划 §0.2 第 1 条）：
+ *   Σ(actual_amount − refunded_amount)，只算 paid_at 非空 且非测试单的订单。
+ * - 用 paid_at 而不是 status：付款成功那一刻两条路径（mock 支付、微信回调）都写 paidAt 且
+ *   永不清空，之后状态无论怎么走（备餐/发货/完成/退款中/已退款）都仍是「付过款的单」；
+ *   未付款（PENDING_PAYMENT）与未付款取消（CANCELLED）paid_at 恒为 NULL，天然不算。
+ * - 减去 refunded_amount 而不是看 Refund 状态：它只在退款 SUCCESS 时累加（services/refund.ts
+ *   finalizeRefundSuccess），是「实退」；退款在途（REFUNDING/PENDING/PROCESSING/ABNORMAL）
+ *   期间不扣，退成功那一刻才扣——与经营概览「实收 − 退款」同口径（utils/stats-scope.ts）。
+ * - 必须 spread REAL_ORDERS：这是金额统计，排除测试单是仓库硬规则。orderCount/latestOrder
+ *   不受影响，本函数不碰它们。
+ */
+async function spendByUserIds(userIds: number[]): Promise<Map<number, number>> {
+  if (userIds.length === 0) return new Map()
+  const rows = await prisma.order.groupBy({
+    by: ['userId'],
+    where: { userId: { in: userIds }, paidAt: { not: null }, ...REAL_ORDERS },
+    _sum: { actualAmount: true, refundedAmount: true },
+  })
+  return new Map(rows.map((r) => [r.userId, (r._sum.actualAmount ?? 0) - (r._sum.refundedAmount ?? 0)]))
+}
 
-// GET /api/admin/users — 用户列表（分页 + 昵称/手机号/订单收货人搜索 + 只看下过单的）
+/** 列表 / `GET /:id` 共用的 select——两处必须是同一个形状，否则重开弹窗时字段对不齐 */
+const USER_LIST_SELECT = {
+  id: true,
+  openid: true,
+  nickname: true,
+  avatarUrl: true,
+  phone: true,
+  status: true,
+  lastLoginAt: true,
+  createdAt: true,
+  pointsBalance: true,
+  _count: { select: { orders: true } },
+} satisfies Prisma.UserSelect
+
+type UserListRow = Prisma.UserGetPayload<{ select: typeof USER_LIST_SELECT }>
+
+/**
+ * 把一批用户行「装饰」成列表/详情共用的响应形状：券数、最近一单、累计消费。
+ * 三个批量查询 + 组装，列表默认路径、`sort=spend` 路径、`GET /:id` 三处共用。
+ * `spendPrecomputed` 供 `sort=spend` 路径传入已经算过的 Map，避免重复查询。
+ */
+async function decorateUsers(list: UserListRow[], spendPrecomputed?: Map<number, number>) {
+  const ids = list.map((u) => u.id)
+
+  // 可用券数 = UNUSED 且未到期。**按时间判**而不是只看 status：
+  // 过期是定时任务批量翻的，任务没跑到之前那些券还挂着 UNUSED，只看 status 会多算。
+  // 一次 groupBy 把本页所有用户数完；在 map 里逐用户 count() 就是每页 20 条 SQL。
+  const counts = ids.length
+    ? await prisma.userCoupon.groupBy({
+        by: ['userId'],
+        where: { userId: { in: ids }, status: 'UNUSED', expiresAt: { gt: new Date() } },
+        _count: { _all: true },
+      })
+    : []
+  const couponsByUser = new Map(counts.map((c) => [c.userId, c._count._all]))
+  const latestOrderByUser = await latestOrderByUserIds(ids)
+  const spendByUser = spendPrecomputed ?? (await spendByUserIds(ids))
+
+  return list.map(({ _count, ...u }) => ({
+    ...u,
+    orderCount: _count.orders,
+    availableCoupons: couponsByUser.get(u.id) ?? 0,
+    latestOrder: latestOrderByUser.get(u.id) ?? null,
+    spendFen: spendByUser.get(u.id) ?? 0,
+  }))
+}
+
+// GET /api/admin/users — 用户列表（分页 + 昵称/手机号/订单收货人搜索 + 只看下过单的 + 排序）
 //
 // users.phone/nickname/avatarUrl 从登录起就没被写入过（登录只建 openid 行，见 routes/auth.ts），
 // 所以「手机号」列长期全是「-」，店主没法用它锁定顾客。真正有值的是订单快照
@@ -83,6 +153,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const keyword = (req.query.keyword as string | undefined)?.trim()
     // 只认字面量 '1'；不传或传别的值都不过滤，保持 §48 e2e 的既有假设（默认列出全部用户）。
     const hasOrders = req.query.hasOrders === '1'
+    // 只认字面量 'spend'；不传或传别的值都退回默认序，与 hasOrders 同一风格。
+    const sortBySpend = req.query.sort === 'spend'
 
     const where = {
       ...(keyword
@@ -98,53 +170,57 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       ...(hasOrders ? { orders: { some: {} } } : {}),
     }
 
-    const [list, total] = await prisma.$transaction([
-      prisma.user.findMany({
-        where,
-        select: {
-          id: true,
-          openid: true,
-          nickname: true,
-          avatarUrl: true,
-          phone: true,
-          status: true,
-          lastLoginAt: true,
-          createdAt: true,
-          pointsBalance: true,
-          _count: { select: { orders: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-      prisma.user.count({ where }),
-    ])
+    if (!sortBySpend) {
+      // 默认路径：与改造前一字不改，只是把「装饰」逻辑抽给 decorateUsers 共用。
+      const [list, total] = await prisma.$transaction([
+        prisma.user.findMany({
+          where,
+          select: USER_LIST_SELECT,
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        prisma.user.count({ where }),
+      ])
+      paginate(res, await decorateUsers(list), total, page, pageSize)
+      return
+    }
 
-    // 可用券数 = UNUSED 且未到期。**按时间判**而不是只看 status：
-    // 过期是定时任务批量翻的，任务没跑到之前那些券还挂着 UNUSED，只看 status 会多算。
-    // 一次 groupBy 把本页所有用户数完；在 map 里逐用户 count() 就是每页 20 条 SQL。
-    const counts = list.length
-      ? await prisma.userCoupon.groupBy({
-          by: ['userId'],
-          where: { userId: { in: list.map((u) => u.id) }, status: 'UNUSED', expiresAt: { gt: new Date() } },
-          _count: { _all: true },
-        })
+    // sort=spend 路径（规划 §0.3）：where 只在 Prisma 里表达一次，不在原生 SQL 里复制一份
+    // （复制就会和 keyword 的三路 OR、hasOrders 的语义分叉）。
+    // 1) 命中的全部用户，只取两列排序要用的
+    const matched = await prisma.user.findMany({ where, select: { id: true, createdAt: true } })
+    // 2) 批量算累计消费
+    const spendByUser = await spendByUserIds(matched.map((u) => u.id))
+    // 3) Node 内排序：spend desc → createdAt desc → id desc（与默认序同向，保证稳定）
+    const sorted = matched
+      .map((u) => ({ ...u, spend: spendByUser.get(u.id) ?? 0 }))
+      .sort((a, b) => b.spend - a.spend || b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id)
+    const total = sorted.length
+    const pageIds = sorted.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize).map((u) => u.id)
+    // 4) 按本页 id 回取完整行，再按第 3 步的顺序回排（Map，不 find）
+    const rows = pageIds.length
+      ? await prisma.user.findMany({ where: { id: { in: pageIds } }, select: USER_LIST_SELECT })
       : []
-    const couponsByUser = new Map(counts.map((c) => [c.userId, c._count._all]))
-    const latestOrderByUser = await latestOrderByUserIds(list.map((u) => u.id))
+    const rowById = new Map(rows.map((r) => [r.id, r]))
+    const orderedRows = pageIds.map((id) => rowById.get(id)!).filter(Boolean)
 
-    paginate(
-      res,
-      list.map(({ _count, ...u }) => ({
-        ...u,
-        orderCount: _count.orders,
-        availableCoupons: couponsByUser.get(u.id) ?? 0,
-        latestOrder: latestOrderByUser.get(u.id) ?? null,
-      })),
-      total,
-      page,
-      pageSize
-    )
+    paginate(res, await decorateUsers(orderedRows, spendByUser), total, page, pageSize)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// GET /api/admin/users/:id — 单个用户（与列表同一行形状），用于订单弹窗按 URL 重开时定位用户：
+// 不从列表里找是因为列表按 createdAt desc 分页，详情页停留期间新注册用户会把目标用户挤到下一页。
+router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = await requireUser(req)
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: USER_LIST_SELECT })
+    // requireUser 已确认存在，这里理论必命中；仍防御一次并发删除的极端情形
+    if (!u) throw new AppError(40401, '用户不存在', 404)
+    const [row] = await decorateUsers([u])
+    success(res, row)
   } catch (e) {
     next(e)
   }
@@ -167,9 +243,13 @@ router.get('/:id/orders', async (req: Request, res: Response, next: NextFunction
           actualAmount: true,
           discountAmount: true,
           createdAt: true,
+          deliveryType: true,
           items: { select: { productName: true, quantity: true, isGift: true } },
         },
-        orderBy: { createdAt: 'desc' },
+        // 2026-09-24 复核 R4：只按 createdAt 排序，同一毫秒建的两单顺序不稳定，翻页会漏
+        // 行/重行——前端「加载更多」按 id 去重能兜住重复，但兜不住漏行。加 id 兜底与
+        // latestOrderByUserIds 的窗口排序同序（createdAt desc, id desc）。
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -217,11 +297,17 @@ router.get('/:id/points-ledger', async (req: Request, res: Response, next: NextF
 
     paginate(
       res,
-      list.map((r) => ({
-        ...r,
-        typeLabel: LEDGER_TYPE_LABEL[r.type] ?? r.type,
-        orderNo: r.refType === 'ORDER' ? (orderNoById.get(Number(r.refId)) ?? null) : null,
-      })),
+      list.map((r) => {
+        const refOrderId = r.refType === 'ORDER' ? Number(r.refId) : NaN
+        // 联查没命中 = 订单已不存在，不能拿 Number(refId) 硬凑一个跳过去 404
+        const hit = Number.isInteger(refOrderId) && orderNoById.has(refOrderId)
+        return {
+          ...r,
+          typeLabel: LEDGER_TYPE_LABEL[r.type] ?? r.type,
+          orderNo: hit ? (orderNoById.get(refOrderId) ?? null) : null,
+          orderId: hit ? refOrderId : null,
+        }
+      }),
       total,
       page,
       pageSize
@@ -250,14 +336,29 @@ router.get('/:id/coupons', async (req: Request, res: Response, next: NextFunctio
       orderBy: { id: 'desc' },
     })
 
-    // 券上只有 orderId（核销时写入），店主要看的是单号——与流水那边同样的联查
+    // 券上只有 orderId（核销时写入），店主要看的是单号——与流水那边同样的联查。
+    // sourceRef（赔偿针对的单号，字符串）没有对应 id，这里再按 orderNo 联查一次补上
+    // sourceRefOrderId：两次联查各自查各自的键（一个按 id，一个按 orderNo），不逐行查。
     const orderIds = [...new Set(list.map((c) => c.orderId).filter((v): v is number => v !== null))]
     const orders = orderIds.length
       ? await prisma.order.findMany({ where: { id: { in: orderIds } }, select: { id: true, orderNo: true } })
       : []
     const orderNoById = new Map(orders.map((o) => [o.id, o.orderNo]))
 
-    success(res, list.map((c) => ({ ...c, orderNo: c.orderId !== null ? (orderNoById.get(c.orderId) ?? null) : null })))
+    const sourceRefs = [...new Set(list.map((c) => c.sourceRef).filter((v): v is string => Boolean(v)))]
+    const sourceOrders = sourceRefs.length
+      ? await prisma.order.findMany({ where: { orderNo: { in: sourceRefs } }, select: { id: true, orderNo: true } })
+      : []
+    const orderIdByNo = new Map(sourceOrders.map((o) => [o.orderNo, o.id]))
+
+    success(
+      res,
+      list.map((c) => ({
+        ...c,
+        orderNo: c.orderId !== null ? (orderNoById.get(c.orderId) ?? null) : null,
+        sourceRefOrderId: c.sourceRef ? (orderIdByNo.get(c.sourceRef) ?? null) : null,
+      }))
+    )
   } catch (e) {
     next(e)
   }

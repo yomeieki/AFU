@@ -192,8 +192,13 @@ export const cancelOrder = (id: number) =>
   client.put<ApiResponse<Order>>(`/admin/orders/${id}/status`, { status: 'CANCELLED' })
 
 // Users
-export const getUsers = (params?: { page?: number; pageSize?: number; keyword?: string; hasOrders?: 1 }) =>
+export const getUsers = (params?: { page?: number; pageSize?: number; keyword?: string; hasOrders?: 1; sort?: 'spend' }) =>
   client.get<ApiResponse<PaginatedData<AdminUser>>>('/admin/users', { params })
+
+// 2026-09-24：订单弹窗按 URL 的 orders=<id> 重开时用——不从列表当页里找（列表按 createdAt
+// desc 分页，详情页停留期间新注册用户会把目标用户挤到下一页）
+export const getUser = (userId: number) =>
+  client.get<ApiResponse<AdminUser>>(`/admin/users/${userId}`).then((r) => r.data.data)
 
 export const getUserOrders = (userId: number, params?: { page?: number; pageSize?: number }) =>
   client.get<ApiResponse<PaginatedData<UserOrder>>>(`/admin/users/${userId}/orders`, { params })

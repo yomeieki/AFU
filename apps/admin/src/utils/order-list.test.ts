@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { showWorkbenchLink, itemsSummary, channelTag, deliveryColumn } from './order-list.ts'
+import { showWorkbenchLink, itemsSummary, channelTag, deliveryColumn, CHANNEL_TONE_CLASS, userOrderChannel } from './order-list.ts'
 
 // 2026-09-18 12:00 Asia/Shanghai = 2026-09-18T04:00:00Z
 const NOW = new Date('2026-09-18T04:00:00Z')
@@ -117,6 +117,28 @@ test('deliveryColumn：EXPRESS 未发货', () => {
     NOW
   )
   assert.deepEqual(r, ['未发货', ''])
+})
+
+test('CHANNEL_TONE_CLASS：三个键都是非空字符串，且分别含对应颜色词', () => {
+  assert.ok(CHANNEL_TONE_CLASS.local.length > 0 && CHANNEL_TONE_CLASS.local.includes('orange'))
+  assert.ok(CHANNEL_TONE_CLASS.pickup.length > 0 && CHANNEL_TONE_CLASS.pickup.includes('teal'))
+  assert.ok(CHANNEL_TONE_CLASS.express.length > 0 && CHANNEL_TONE_CLASS.express.includes('blue'))
+})
+
+test('userOrderChannel：LOCAL → 同城/local 配色', () => {
+  assert.deepEqual(userOrderChannel('LOCAL'), { label: '同城', cls: CHANNEL_TONE_CLASS.local })
+})
+
+test('userOrderChannel：PICKUP → 自取/pickup 配色', () => {
+  assert.deepEqual(userOrderChannel('PICKUP'), { label: '自取', cls: CHANNEL_TONE_CLASS.pickup })
+})
+
+test('userOrderChannel：EXPRESS → 邮寄/express 配色', () => {
+  assert.deepEqual(userOrderChannel('EXPRESS'), { label: '邮寄', cls: CHANNEL_TONE_CLASS.express })
+})
+
+test('userOrderChannel：未知值按 LOCAL 处理（与 channelTag 的兜底一致）', () => {
+  assert.deepEqual(userOrderChannel('WHATEVER'), { label: '同城', cls: CHANNEL_TONE_CLASS.local })
 })
 
 test('deliveryColumn：EXPRESS 已发货', () => {

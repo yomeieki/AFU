@@ -37,6 +37,20 @@ export function channelLabel(deliveryType: string): '同城外送' | '到店自�
   return '同城外送'
 }
 
+/**
+ * 详情页「返回」按钮的文案，按 `backTo`（来自 `location.state.from`，落不到时是
+ * `backTargetFor` 算出的默认地址）判断跳回的是哪个列表页。
+ *
+ * 只认三种前缀，顺序即优先级：`/users`（用户管理弹窗进来的）→「返回用户管理」；
+ * `/orders/local`（含同城/自取两个渠道 tab）→「返回同城订单」；其余（`/orders/express`
+ * 及任何认不出的地址，含没有 state 时退回的默认值）→「返回全国邮寄」。
+ */
+export function backLabelFor(backTo: string): string {
+  if (backTo.startsWith('/users')) return '返回用户管理'
+  if (backTo.startsWith('/orders/local')) return '返回同城订单'
+  return '返回全国邮寄'
+}
+
 export interface MoneyRow {
   key: string
   label: string

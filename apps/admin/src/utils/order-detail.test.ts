@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { moneyRows, refundedLineFlags, timelineNodes, backTargetFor, channelLabel, withLatestRefund } from './order-detail.ts'
+import { moneyRows, refundedLineFlags, timelineNodes, backTargetFor, channelLabel, withLatestRefund, backLabelFor } from './order-detail.ts'
 import type { RefundStatus } from '../types.ts'
 
 const refundFixture = (status: RefundStatus, createdAt: string) => ({
@@ -190,4 +190,20 @@ test('timelineNodes：自取单不出现「已完成」而出现「已取走」'
   const nodes = timelineNodes({ ...baseOrder, deliveryType: 'PICKUP', status: 'COMPLETED' }, {})
   assert.ok(!nodes.some((n) => n.label === '已完成'))
   assert.ok(nodes.some((n) => n.label === '已取走'))
+})
+
+test('backLabelFor：/users 开头（含查询参数）→ 返回用户管理', () => {
+  assert.equal(backLabelFor('/users?kw=x&orders=5'), '返回用户管理')
+})
+
+test('backLabelFor：/orders/local 开头 → 返回同城订单', () => {
+  assert.equal(backLabelFor('/orders/local?status=PAID'), '返回同城订单')
+})
+
+test('backLabelFor：/orders/express → 返回全国邮寄', () => {
+  assert.equal(backLabelFor('/orders/express'), '返回全国邮寄')
+})
+
+test('backLabelFor：认不出的地址 → 退回全国邮寄', () => {
+  assert.equal(backLabelFor('/somewhere'), '返回全国邮寄')
 })
