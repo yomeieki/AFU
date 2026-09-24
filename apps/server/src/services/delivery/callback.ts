@@ -13,6 +13,7 @@ import { notifyLocalDeliveryAlert } from '../order-notify'
 import { sendDeliverSubscribeMessage } from '../subscribe-message'
 import { rollbackOrderAfterCancel } from './orchestrator'
 import { settlePoints } from '../member/points'
+import { executeCancelIntent, killGhostDelivery, shouldKillGhost } from './cancel-intent'
 
 const updateTimeIsoOf = (p: { providerUpdateTime: Date | null }) => p.providerUpdateTime ? p.providerUpdateTime.toISOString() : null
 
@@ -155,10 +156,20 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
       const ev = await recordDeliveryEvent(tx, { deliveryId: delivery.id, dedupeKey, source: 'CALLBACK', providerStatus: providerStatusNum, statusDesc: p.statusDesc, courierName: p.courierName, courierMobile: p.courierMobile, providerUpdateTime: updateTimeIso, rawPayload: body })
       if (ev.duplicate) return
       await tx.delivery.updateMany({ where: { id: delivery.id }, data: { lastCallbackAt: new Date() } })
-      // UNKNOWN 认领：下单超时的占位单，第一个到达的回调即认领 taskId（ghost 消解，spec §5.4）
-      if (delivery.status === 'UNKNOWN' && !delivery.providerTaskId && p.taskId) {
+      // P3：回调是唯一事实来源，taskId/orderId 按列认领——不再局限于 UNKNOWN 占位单。
+      // P1/P2 的「回调先到」竞态会让占位行来不及在 orchestrator 那头落库，这两列只能靠
+      // 回调自己焊回去；`where providerTaskId:null` 保证绝不覆盖已经写下的值（含并呼时
+      // 已经认领过的行），也不会把一条陌生 taskId 错栽到已有 taskId 的行上。
+      if (p.taskId) {
         await tx.delivery.updateMany({ where: { id: delivery.id, providerTaskId: null }, data: { providerTaskId: p.taskId } })
       }
+      if (p.providerOrderId) {
+        await tx.delivery.updateMany({ where: { id: delivery.id, providerOrderId: null }, data: { providerOrderId: p.providerOrderId } })
+      }
+      // P16：这次回调若刚认领上 taskId/orderId，或这张行本就带着未执行的取消意图，事务提交后
+      // 都该试一次自动取消——executeCancelIntent 内部自己判断前置条件是否满足，不满足就是
+      // 一次廉价的 no-op（一次 findUnique），不需要在这里精确判断「是不是本次刚认领的」。
+      after.push(() => void executeCancelIntent(delivery.id))
       if (!mapped) {
         after.push(() => notifySystemAlert('快递100 未知回调状态', [`deliveryNo=${deliveryNo} status=${p.providerStatus}`, p.statusDesc ?? ''], { key: `kd-cb-unknown:${p.providerStatus}` }))
         return
@@ -183,24 +194,32 @@ export async function handleKdCallback(deliveryNo: string, body: Record<string, 
           moved = r2.count
         }
       } else if (mapped.status === 'CANCELLED') {
-        const r = await tx.delivery.updateMany({ where: { id: delivery.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(p.statusDesc, 255) ?? '运力方取消', ...courierData } })
+        // P3：720 回调的撤单原因优先用 param.cancelReason（下游真实返回时才有），statusDesc 兜底
+        const r = await tx.delivery.updateMany({ where: { id: delivery.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(p.cancelReason ?? p.statusDesc, 255) ?? '运力方取消', ...courierData } })
         moved = r.count
       } else {   // REASSIGNING / ABNORMAL：旁路态不写 rank、不释放
         const r = await tx.delivery.updateMany({ where: { id: delivery.id, status: { notIn: [...TERMINAL] } }, data: { status: mapped.status, ...courierData } })
         moved = r.count
       }
       if (moved === 0) {
-        // moved===0 盖住两件性质完全不同的事：良性的迟到/乱序包，以及「运力方仍有一张活单，
-        // 而我们已经把它一笔勾销」。后者恰恰是文件头写的「回调是唯一事实来源」最该抓住的信号：
-        // 本地行是 FAILED（从未在运力方那头取消过——不是我们主动 cancel，也不是运力方推的 720），
-        // 而回调却说 rank>=20（真有骑手接了单/取货/送达），说明误作废后又被重呼，第二个骑手来了。
-        // 不对 CANCELLED 告警：那是我们主动取消，尾随回调本就预期之内。
-        if (delivery.status === 'FAILED' && mapped.type === 'rank' && mapped.rank >= 20) {
-          after.push(() => notifySystemAlert('已作废的配送单收到运力方在途回调', [
-            `deliveryNo=${deliveryNo}（订单 ${delivery.orderNo}）`,
-            `回调状态=${p.providerStatus}（${p.statusDesc ?? ''}），说明运力方那头其实仍有一张活单`,
-            '本地已判定作废（人工作废/落库失败释放等），大概率已重呼产生第二个骑手，请立即人工核对',
-          ], { key: `kd-cb-ghost-active:${delivery.id}` }))
+        // moved===0 盖住两件性质完全不同的事：良性的迟到/乱序包，以及「已结束的配送单，
+        // 运力方那头其实仍有一张活单」（幽灵活单，P19）。用 delivery.status/providerTaskId
+        // ——**回调到达前**读到的快照——判定「已结束」，不能用本次事务里刚认领的值：
+        // 一张 FAILED 无 id 的行，本次回调恰恰是它第一次带来 taskId，若拿认领后的值判断，
+        // 「已结束」这件事本身反而会被这次回调自己的认领动作掩盖掉。
+        if (shouldKillGhost(delivery.status, delivery.providerTaskId, mapped)) {
+          after.push(() => void killGhostDelivery(delivery.id))
+          return
+        }
+        const endedWithoutRealCancel = delivery.status === 'FAILED' || (delivery.status === 'CANCELLED' && !delivery.providerTaskId)
+        if (endedWithoutRealCancel && mapped.type === 'rank' && mapped.rank >= 100) {
+          // 520 已送达：撤不了（骑手真把货送到了），只能告诉人去核对账目/订单状态
+          after.push(() => notifySystemAlert('已结束的配送单实际已送达', [
+            `deliveryNo=${deliveryNo}（订单 ${delivery.orderNo}，本地 ${delivery.status}）`,
+            `回调状态=${p.providerStatus}（${p.statusDesc ?? ''}），骑手已把货送到，但本地判定该单已结束`,
+            '请核对费用与订单状态',
+          ], { key: `kd-cb-ghost-delivered:${delivery.id}` }))
+          return
         }
         return   // 乱序迟到包：事件已留痕，不动状态、不联动订单
       }

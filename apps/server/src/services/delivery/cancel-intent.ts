@@ -1,0 +1,177 @@
+/**
+ * 取消意图（P15-P20，2026-09-24）。
+ *
+ * 背景：店员多数没有快递100 企业账号，配送单缺 taskId/orderId 时既没法去后台核实，
+ * 本地也没法外呼取消（precancel/cancel 都要 taskId+orderId，见 kd100.ts 生产实测 30001）。
+ * 旧实现（P5 缺陷）在这种情况下直接本地伪造取消（不外呼，直接 CANCELLED）——若运力方那头
+ * 其实真有一张活单，就会造出「本地已取消、运力方仍在途」的幽灵活单（P7/P19 要收拾的烂摊子）。
+ *
+ * 新流程（店主 D2 决定，原话「一律自动取消，扣费认了」）：
+ *  1. 店员点取消 → 只记意图（recordCancelIntent），不外呼、不改状态、不释放 activeOrderId；
+ *  2. 单号一到（回调认领 / 落库补录）→ 自动执行真取消（executeCancelIntent），取消费自动
+ *     接受并记账，不再问店员一次；
+ *  3. 5 分钟仍无回调无单号 → 自动结束为 FAILED/VOIDED（processCancelIntents，tasks.ts），
+ *     释放 activeOrderId 让店员能立即重呼/自送；
+ *  4. 结束之后若仍收到在途回调（幽灵活单）→ killGhostDelivery 自动向运力方撤销，只有撤销
+ *     失败才告警，成功只留痕记账。
+ *
+ * ⚠️ 与 orchestrator.ts 存在双向 import（本文件用它的 finalizeCancel/rollbackOrderAfterCancel，
+ * 它反过来在 callRider 的竞态回填与 cancelDelivery 里用本文件的 recordCancelIntent/
+ * executeCancelIntent/killGhostDelivery）。两边都只在函数体内引用对方的导出（从不在模块顶层
+ * 求值时调用），tsc 编译到 commonjs 时具名 import 落地成「按模块命名空间对象取属性」而不是
+ * 解构成局部常量，所以哪个文件先被 require 都不影响运行期结果——晚绑定，等两边都加载完、
+ * 函数真被调用时，属性早已就位。
+ */
+import prisma from '../../utils/prisma'
+import { getDeliveryProvider } from './provider'
+import { ProviderError } from './types'
+import { TERMINAL } from './state'
+import { recordDeliveryEvent, adminEventKey, trunc } from './events'
+import { notifySystemAlert } from '../notify'
+import { finalizeCancel } from './orchestrator'
+
+export const CANCEL_INTENT_MAX_ATTEMPTS = 5
+export const CANCEL_INTENT_VOID_MIN = 5
+
+type DeliveryLike = {
+  id: number; orderId: number; orderNo: string; deliveryNo: string
+  status: string; cancelIntentAt: Date | null
+}
+
+/**
+ * P15：店员对缺 taskId/orderId 的非终态配送单点「取消」——只记意图，不外呼、不改状态、
+ * 不释放 activeOrderId。幂等：`cancelIntentAt` 已非空（店员重复点击/多标签页）直接返回同样
+ * 的 `pending:true`，不重复留痕、不重复外呼。
+ */
+export async function recordCancelIntent(d: DeliveryLike, input: { operator: string; reason?: string }): Promise<{ cancelFeeFen: null; pending: true }> {
+  if (d.cancelIntentAt) return { cancelFeeFen: null, pending: true }
+  const moved = await prisma.delivery.updateMany({
+    where: { id: d.id, status: { notIn: [...TERMINAL] }, cancelIntentAt: null },
+    data: { cancelIntentAt: new Date(), cancelIntentBy: trunc(input.operator, 64), cancelIntentReason: trunc(input.reason, 255) ?? '商家取消' },
+  })
+  if (moved.count === 0) return { cancelFeeFen: null, pending: true }   // 并发点击/回调抢先，同样幂等
+  await recordDeliveryEvent(prisma, {
+    deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', operator: input.operator,
+    statusDesc: '店员要求取消（缺快递100 单号），等运力方确认后自动取消；5 分钟无回应自动结束',
+  })
+  // 预约单同现有 ADMIN 取消清 readyAt（orchestrator.finalizeCancel 对「真取消」做的同一件事，
+  // 这里独立复刻一次——记意图阶段配送单还没有终态化，走不到 finalizeCancel）
+  await prisma.order.updateMany({
+    where: { id: d.orderId, deliveryType: 'LOCAL', scheduledAt: { not: null }, status: 'PREPARING', readyAt: { not: null } },
+    data: { readyAt: null },
+  })
+  return { cancelFeeFen: null, pending: true }
+}
+
+/**
+ * P16：意图非空、非终态、taskId 与 orderId 都非空时，自动执行真取消。不先 precancel（店主
+ * 已决定「取消费一律认了」，省一次外呼）；直接 cancelOrder，取消费从响应记账。
+ *
+ * 原子抢占：`cancelIntentAttempts` 读到的值作为 where 条件，命中 0 行即退出——回调认领、
+ * orchestrator 落库、每分钟兜底任务三个触发点可能同时命中同一行，只有一个真的外呼。
+ */
+export async function executeCancelIntent(deliveryId: number): Promise<void> {
+  const d = await prisma.delivery.findUnique({ where: { id: deliveryId } })
+  if (!d) return
+  if (!d.cancelIntentAt) return
+  if (TERMINAL.includes(d.status as typeof TERMINAL[number])) return
+  if (!d.providerTaskId || !d.providerOrderId) return
+  const seized = await prisma.delivery.updateMany({
+    where: { id: d.id, cancelIntentAt: { not: null }, status: { notIn: [...TERMINAL] }, cancelIntentAttempts: d.cancelIntentAttempts },
+    data: { cancelIntentAttempts: { increment: 1 } },
+  })
+  if (seized.count === 0) return   // 别人已经抢到这一次（同一轮的另一个触发点，或并发的兜底任务）
+  try {
+    const { cancelFeeFen } = await getDeliveryProvider().cancelOrder({
+      taskId: d.providerTaskId, orderId: d.providerOrderId, reason: d.cancelIntentReason ?? '商家取消',
+    })
+    await prisma.$transaction(async (tx) => {
+      // 重读：外呼这几百毫秒里配送单可能已经终态化（回调抢先到达把它 CANCELLED/DELIVERED 了）——
+      // finalizeCancel 内部的 updateMany 本身也有 status notIn TERMINAL 护栏，这里提前判断只是
+      // 避免对已终态的行调用 rollbackOrderAfterCancel/清 readyAt 这类无意义的写。
+      const fresh = await tx.delivery.findUnique({ where: { id: d.id } })
+      if (!fresh || TERMINAL.includes(fresh.status as typeof TERMINAL[number])) return
+      await finalizeCancel(
+        tx, fresh, cancelFeeFen, d.cancelIntentReason ?? '商家取消', d.cancelIntentBy ?? 'system', 'ADMIN',
+        (feeYuan) => `已自动向快递100 取消（取消费 ¥${feeYuan}，已记账）`,
+      )
+    })
+  } catch (e) {
+    const msg = e instanceof ProviderError ? `${e.kind}:${e.code} ${e.message}` : (e as Error).message
+    await prisma.delivery.updateMany({ where: { id: d.id }, data: { cancelIntentLastError: trunc(msg, 255) } })
+    const after = await prisma.delivery.findUnique({
+      where: { id: d.id },
+      select: { cancelIntentAttempts: true, cancelIntentAlertedAt: true, orderNo: true, deliveryNo: true, providerTaskId: true, providerOrderId: true },
+    })
+    if (after && after.cancelIntentAttempts >= CANCEL_INTENT_MAX_ATTEMPTS && !after.cancelIntentAlertedAt) {
+      // 「只发一次」用 cancelIntentAlertedAt 本身做条件写去重，与全仓其它提醒任务同一范式
+      const marked = await prisma.delivery.updateMany({ where: { id: d.id, cancelIntentAlertedAt: null }, data: { cancelIntentAlertedAt: new Date() } })
+      if (marked.count > 0) {
+        notifySystemAlert('配送单自动取消失败，需人工处理', [
+          `配送单 ${after.deliveryNo}（订单 ${after.orderNo}）`,
+          `店员要求取消，系统已 ${CANCEL_INTENT_MAX_ATTEMPTS} 次向快递100 取消失败，最后错误：${msg}`,
+          `taskId=${after.providerTaskId ?? ''} orderId=${after.providerOrderId ?? ''}；骑手可能仍在途，请管理员登录快递100 企业后台取消该单——后台取消后系统会收到 720 回调自动收尾，不必再在工作台操作`,
+        ], { key: `dlv-cancel-intent-failed:${d.id}` })
+      }
+    }
+  }
+}
+
+/**
+ * P17：`processCancelIntents` 每分钟扫描调用，条件写细节见 tasks.ts。这里只是
+ * `executeCancelIntent` 的批量入口，供调度任务复用同一条真取消路径，避免另写一份。
+ */
+
+/**
+ * 验收标准 13 要求的纯函数：已结束（FAILED/CANCELLED 且无 taskId）的配送单还该不该在收到
+ * 这条回调时自动向运力方撤销。selftest-delivery-core.ts 直接断言这张表，不经数据库。
+ *
+ *  - FAILED + rank<100 → true（多半是 P17 自动结束后单号才姗姗来迟，或人工作废后被重呼）
+ *  - CANCELLED 且无 taskId + rank<100 → true（SELF 之外理论上不该发生，防御性兜底）
+ *  - CANCELLED 有 taskId → false（我方主动 cancel 过，尾随的迟到回调预期之内，静默留痕即可）
+ *  - 任何 status + rank===100（520 已送达）→ false（撤不了，只能告「已送达，请核对费用」）
+ *  - side（515/510/720，非 rank 类型）→ false（旁路态不构成「幽灵活单」；照旧留痕即可）
+ */
+export function shouldKillGhost(
+  status: string,
+  providerTaskId: string | null,
+  mapped: { type: 'rank'; rank: number } | { type: 'side' } | undefined,
+): boolean {
+  if (!mapped || mapped.type !== 'rank') return false
+  if (mapped.rank >= 100) return false
+  if (status === 'FAILED') return true
+  if (status === 'CANCELLED' && !providerTaskId) return true
+  return false
+}
+
+/**
+ * P19：已结束的配送单仍收到在途回调（幽灵活单）→ 自动向运力方撤销。原子抢占（ghostCancelAt）
+ * 保证同批多条回调只有一个真的外呼；调用方（callback.ts）已在同一次回调事务里把 taskId/
+ * orderId 按列认领到这张行上（P3），这里直接读行上的值即可，不需要调用方再传一遍。
+ */
+export async function killGhostDelivery(deliveryId: number): Promise<void> {
+  const seized = await prisma.delivery.updateMany({ where: { id: deliveryId, ghostCancelAt: null }, data: { ghostCancelAt: new Date() } })
+  if (seized.count === 0) return   // 同批多条回调，另一条已经抢到
+  const d = await prisma.delivery.findUnique({ where: { id: deliveryId } })
+  if (!d || !d.providerTaskId || !d.providerOrderId) return   // 没有 id 没法真的去撤，上面的事件已经留痕
+  try {
+    const { cancelFeeFen } = await getDeliveryProvider().cancelOrder({
+      taskId: d.providerTaskId, orderId: d.providerOrderId, reason: '已结束配送单收到在途回调，自动撤销',
+    })
+    const fee = cancelFeeFen ?? 0
+    await prisma.$transaction(async (tx) => {
+      await tx.delivery.updateMany({ where: { id: d.id }, data: { cancelFee: { increment: fee } } })
+      await recordDeliveryEvent(tx, {
+        deliveryId: d.id, dedupeKey: adminEventKey(), source: 'CALLBACK', operator: 'system',
+        statusDesc: `已结束配送单仍有在途回调，已自动向快递100 撤销（取消费 ¥${(fee / 100).toFixed(2)}，已记账）`,
+      })
+    })
+  } catch (e) {
+    const msg = e instanceof ProviderError ? `${e.kind}:${e.code} ${e.message}` : (e as Error).message
+    notifySystemAlert('已结束的配送单仍有在途回调，自动撤销失败', [
+      `配送单 ${d.deliveryNo}（订单 ${d.orderNo}，本地 ${d.status}）`,
+      `系统凭 taskId=${d.providerTaskId} orderId=${d.providerOrderId} 自动撤销失败：${msg}`,
+      '骑手可能到店/二次配送，请管理员在快递100 后台取消',
+    ], { key: `kd-cb-ghost-active:${d.id}` })
+  }
+}

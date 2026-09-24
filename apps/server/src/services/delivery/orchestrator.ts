@@ -20,6 +20,11 @@ import { notifyLocalDeliveryAlert } from '../order-notify'
 import { TERMINAL, providerLabel } from './state'
 import { ACTIVE_REFUND_STATUSES } from '../refund'
 import { settlePoints } from '../member/points'
+// P15-P20：取消意图与幽灵活单自动撤销。cancel-intent.ts 反过来也 import 本文件的
+// finalizeCancel/rollbackOrderAfterCancel——这是一处有意的循环依赖，两边都只在**函数体内**
+// （运行期，不在模块顶层求值）引用对方，commonjs + tsc 的具名 import 落地成按命名空间对象
+// 属性访问（不是解构常量），所以两边加载顺序不论谁先谁后都能正确拿到对方晚绑定的导出。
+import { recordCancelIntent, executeCancelIntent, killGhostDelivery } from './cancel-intent'
 
 export async function getActiveDelivery(orderId: number) {
   return prisma.delivery.findFirst({ where: { activeOrderId: orderId } })
@@ -327,6 +332,11 @@ export async function callRider(input: CallRiderInput) {
   }
 
   if (result) {
+    // P1 竞态回填在事务里只做 DB 写入，实际的告警/executeCancelIntent 触发要等事务确认提交后
+    // 才能发生（事务回滚的话这些副作用不该发生）——用这三个外层变量把 tx 内算出的结论带出来。
+    const after0Push: (() => void)[] = []
+    let after0FailedId: number | null = null
+    let after0Status: string | null = null
     try {
       await prisma.$transaction(async (tx) => {
         // 回填「接单并呼叫」路径上系统性落空的快照（:76 注释）：kickOffQuote 的查价是
@@ -350,11 +360,42 @@ export async function callRider(input: CallRiderInput) {
             ? { quoteSnapshot: quoteBackfill.quoteSnapshot as Prisma.InputJsonValue, quotedAt: quoteBackfill.quotedAt }
             : {}),
         } })
+        let raceStatus: string | null = null
         if (landed.count === 0) {
-          // where 里的 status:'PENDING' 本身已经保护了不变量（不会覆盖占位被挪去的其它状态），
-          // 但结果就此静默丢弃：运力方已经真的下了单，本地却谁都不知道。今天只有 10 分钟陈旧
-          // PENDING 清扫能抢走这一行，实践中够不到；一旦够到，必须有人去核对，不能悄悄过去。
-          notifySystemAlert('呼叫骑手成功但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, `taskId=${result!.taskId ?? ''}`, '请到快递100 后台核对，必要时人工登记'], { key: `kd100-landing-race:${orderId}` })
+          // P1（2026-09-24）：回调可能已先一步把占位行推离 PENDING（见 kd100.ts 生产实测：
+          // 回调 0/100 常在下单同步响应返回之前就到达）。此前这里直接丢弃整个结果并告警，
+          // taskId/orderId/calledAt/quotedFee/distance/orderFees 全部石沉大海，骑手位置/取消/
+          // 加小费从此全废。改为照 express-booking 的范式逐列回填（只填当前为空的列，绝不
+          // 覆盖回调已经写下的更新值），回填后重读该行的真实状态再决定要不要告警。
+          const cur = await tx.delivery.findUnique({ where: { id: deliveryId }, select: { providerTaskId: true } })
+          if (cur?.providerTaskId && cur.providerTaskId !== trunc(result!.taskId, 64)) {
+            notifySystemAlert('快递100 taskId 不一致', [`订单 ${order.orderNo}（${deliveryNo}）`, `本地已有 taskId=${cur.providerTaskId}，本次下单响应 taskId=${result!.taskId ?? ''}`, '请到快递100 后台核对'], { key: `kd100-taskid-mismatch:${orderId}` })
+          }
+          await tx.delivery.updateMany({ where: { id: deliveryId, providerTaskId: null }, data: { providerTaskId: trunc(result!.taskId, 64) } })
+          await tx.delivery.updateMany({ where: { id: deliveryId, providerOrderId: null }, data: { providerOrderId: trunc(result!.providerOrderId, 64) } })
+          await tx.delivery.updateMany({ where: { id: deliveryId, calledAt: null }, data: { calledAt: new Date() } })
+          await tx.delivery.updateMany({ where: { id: deliveryId, quotedFee: null }, data: { quotedFee: result!.quotedFeeFen } })
+          await tx.delivery.updateMany({ where: { id: deliveryId, providerDistanceM: null }, data: { providerDistanceM: result!.distanceM } })
+          await tx.delivery.updateMany({ where: { id: deliveryId, orderFees: { equals: Prisma.DbNull } }, data: { orderFees: result!.quotes as unknown as Prisma.InputJsonValue } })
+          if (quoteBackfill?.quoteSnapshot) {
+            await tx.delivery.updateMany({ where: { id: deliveryId, quoteSnapshot: { equals: Prisma.DbNull } }, data: { quoteSnapshot: quoteBackfill.quoteSnapshot as Prisma.InputJsonValue, quotedAt: quoteBackfill.quotedAt } })
+          }
+          const after = await tx.delivery.findUnique({ where: { id: deliveryId } })
+          after0Status = after?.status ?? null
+          const eventDesc = `${callEventDesc(callStrategy, calledProviders, lowest, s.callStrategy.escalateAfterMin, s.callStrategy.cheapestN, chosen)}（回调先到，已补录）`
+          await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: eventDesc, operator })
+          if (after && TERMINAL.includes(after.status as typeof TERMINAL[number])) {
+            if (after.status === 'DELIVERED') {
+              after0Push.push(() => notifySystemAlert('呼叫结果补录到已终态配送单，请核对', [`订单 ${order.orderNo}（${deliveryNo}）`, `补录时该单已是 ${after.status}`], { key: `kd100-landing-race:${orderId}` }))
+            } else if (after.status === 'FAILED') {
+              // 多半是取消意图 5 分钟无回应已自动结束（P17），单号这才姗姗来迟——交给
+              // 幽灵自动撤销处理，不在这里告警（CANCELLED 同理，只留痕，上面事件已经写了）
+              after0FailedId = deliveryId
+            }
+          } else if (after?.cancelIntentAt) {
+            // 非终态但已经记过取消意图（店员点了取消、单号才经这条落库路径补上）：立刻执行
+            after0Push.push(() => void executeCancelIntent(deliveryId))
+          }
           return
         }
         await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: callEventDesc(callStrategy, calledProviders, lowest, s.callStrategy.escalateAfterMin, s.callStrategy.cheapestN, chosen), operator })
@@ -370,20 +411,44 @@ export async function callRider(input: CallRiderInput) {
       notifySystemAlert('呼叫骑手成功但落库失败', [`订单 ${order.orderNo}（${deliveryNo}）`, '运力方可能已产生真实单，请到快递100 后台核对', (e as Error).message], { key: `kd100-persist:${orderId}` })
       throw new AppError(42225, '呼叫已发出但本地记录失败，请到快递100 后台核对后重试')
     }
-    return { deliveryId, deliveryNo, status: 'CALLING' as const, quotedFeeFen: result.quotedFeeFen }
+    for (const fn of after0Push) { try { fn() } catch { /* 兜底不升级 */ } }
+    if (after0FailedId) void killGhostDelivery(after0FailedId)
+    const finalStatus = after0Status ?? 'CALLING'
+    return { deliveryId, deliveryNo, status: finalStatus as string, quotedFeeFen: result.quotedFeeFen }
   }
 
   const err = lastErr!
   if (err.kind === 'TIMEOUT') {
     // 下单可能已成功：UNKNOWN 占位、不释放，等回调按 URL 认领或人工作废（决策见 spec §5.4）
+    let timeoutRaceStatus: string | null = null
+    let timeoutFailedId: number | null = null
     await prisma.$transaction(async (tx) => {
       const landed = await tx.delivery.updateMany({ where: { id: deliveryId, status: 'PENDING' }, data: { status: 'UNKNOWN', calledAt: new Date(), errorCode: trunc(err.code, 16), failReason: trunc(err.message, 255) } })
       if (landed.count === 0) {
-        notifySystemAlert('下单响应超时但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, '本地占位行已被其它流程改动，超时未能落库为 UNKNOWN，请人工核对'], { key: `kd100-landing-race-timeout:${orderId}` })
+        // P2：回调已先到（行已被推到 CALLING 甚至更远），此时这条 UNKNOWN 转换整个落空。
+        // 此前直接丢弃告警；实际上行早已在正确的路上，只差 calledAt 这一列没人补——
+        // 回填它、写一条「超时但回调已到」的事件，行非终态就不再发「结果被丢弃/下单超时」，
+        // 免得吓店员——回调已经把真相带回来了。
+        await tx.delivery.updateMany({ where: { id: deliveryId, calledAt: null }, data: { calledAt: new Date() } })
+        const after = await tx.delivery.findUnique({ where: { id: deliveryId } })
+        timeoutRaceStatus = after?.status ?? null
+        await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: `下单响应超时，但回调已先到达（当前 ${after?.status ?? '未知'}），按回调继续`, operator })
+        if (after && TERMINAL.includes(after.status as typeof TERMINAL[number])) {
+          if (after.status === 'FAILED') timeoutFailedId = deliveryId
+          else if (after.status === 'DELIVERED') {
+            notifySystemAlert('下单响应超时但呼叫结果补录到已终态配送单，请核对', [`订单 ${order.orderNo}（${deliveryNo}）`, `当前 ${after.status}`], { key: `kd100-landing-race-timeout:${orderId}` })
+          }
+        }
         return
       }
       await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: `下单响应超时，等待回调认领：${err.message}`, operator })
     })
+    if (timeoutFailedId) void killGhostDelivery(timeoutFailedId)
+    if (timeoutRaceStatus !== null) {
+      // 行非终态（多半仍是 CALLING）：回调已经接管，不再发「下单响应超时」这类会误导店员
+      // 去后台核对「是否已产生真实单」的告警——它已经确定产生了。
+      return { deliveryId, deliveryNo, status: timeoutRaceStatus as string, quotedFeeFen: null }
+    }
     notifySystemAlert('快递100 下单响应超时', [`订单 ${order.orderNo}（${deliveryNo}）`, '请到快递100 后台核对是否已产生真实单；回调到达会自动认领，确认没单可在看板作废'], { key: `kd100-timeout:${orderId}` })
     return { deliveryId, deliveryNo, status: 'UNKNOWN' as const, quotedFeeFen: null }
   }
@@ -395,6 +460,11 @@ export async function callRider(input: CallRiderInput) {
       status: 'FAILED', activeOrderId: null, errorCode: trunc(err.code, 16), failReason: trunc(err.message, 255),
     } })
     if (landed.count === 0) {
+      // P2：与 TIMEOUT 不同，这里是本地明确判定的失败（运力方拒单/配置错误/余额不足等），
+      // 与「回调已经把行推进」这个事实是真矛盾（本地说失败，运力方那头却像是在正常走），
+      // 必须留痕且保留告警——只补上此前彻底丢失的 calledAt，不静默这条告警。
+      await tx.delivery.updateMany({ where: { id: deliveryId, calledAt: null }, data: { calledAt: new Date() } })
+      await recordDeliveryEvent(tx, { deliveryId, dedupeKey: adminEventKey(), source: 'API', statusDesc: `呼叫失败(${err.code})：${err.message}（回调已先到达，未按失败处理，请核对）`, operator })
       notifySystemAlert('呼叫失败但占位状态已变化，结果被丢弃', [`订单 ${order.orderNo}（${deliveryNo}）`, `${err.code}: ${err.message}`, '本地占位行已被其它流程改动，请人工核对'], { key: `kd100-landing-race-fail:${orderId}` })
       return
     }
@@ -470,26 +540,74 @@ export async function rollbackOrderAfterCancel(tx: Prisma.TransactionClient, ord
 
 export async function precancelDelivery(orderId: number): Promise<{ cancelFeeFen: number | null }> {
   const d = await requireActive(orderId)
+  // P15：缺 taskId/orderId 的配送单（常见原因：店员没有快递100 企业账号，回调也没来得及
+  // 认领）不外呼——precancel 只是预览，没有 id 也应当能让弹窗走到确认键，不能拿 42234 拦死。
+  if (d.provider !== 'SELF' && (!d.providerTaskId || !d.providerOrderId)) return { cancelFeeFen: null }
   if (!d.providerTaskId) throw new AppError(42234, '配送单尚未成单，无法预估取消费')
-  return { cancelFeeFen: (await getDeliveryProvider().precancelOrder({ taskId: d.providerTaskId })).cancelFeeFen }
+  return { cancelFeeFen: (await getDeliveryProvider().precancelOrder({ taskId: d.providerTaskId, orderId: d.providerOrderId! })).cancelFeeFen }
 }
 
-export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string; source?: 'ADMIN' | 'SCHEDULER' }): Promise<{ cancelFeeFen: number | null }> {
+/**
+ * 配送单终态化为 CANCELLED 的公共收尾（P15/P16 抽取）：CANCELLED 写入 + 三重护栏回退订单 +
+ * rollbackStuck 告警 + ADMIN 来源清 readyAt + 事件留痕。cancelDelivery（店员手动取消，有
+ * taskId/orderId）与 executeCancelIntent（取消意图自动执行，P16）共用同一份收尾，不许各写一份。
+ *
+ * descBuilder 不传时行为与原 cancelDelivery 内联实现逐字相同（"商家取消（取消费 X 元）"）；
+ * P16 的自动取消传入不同的文案生成器（"已自动向快递100 取消（取消费 ¥X，已记账）"），
+ * 让店员从时间线文案就能分清这笔取消是自己点的还是系统自动执行的。
+ */
+export async function finalizeCancel(
+  tx: Prisma.TransactionClient,
+  d: { id: number; orderId: number; orderNo: string; deliveryNo: string },
+  cancelFeeFen: number | null,
+  reason: string | undefined,
+  operator: string,
+  source: 'ADMIN' | 'SCHEDULER',
+  descBuilder?: (feeYuan: string) => string,
+): Promise<{ moved: number }> {
+  const moved = await tx.delivery.updateMany({ where: { id: d.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(reason, 255) ?? '商家取消', cancelFee: cancelFeeFen ?? 0 } })
+  if (moved.count === 0) return { moved: 0 }
+  const { rolled, wasShipped } = await rollbackOrderAfterCancel(tx, d.orderId)
+  const rollbackStuck = wasShipped && rolled === 0
+  if (rollbackStuck) {
+    notifySystemAlert('取消配送成功但订单未回退', [
+      `配送单 ${d.deliveryNo}（订单 ${d.orderNo}）已置为已取消`,
+      '订单未能回退到备餐中（可能存在在途退款/售后），订单会停留在 SHIPPED 且无在途配送单，请人工核对',
+    ], { key: `dlv-cancel-order-stuck:${d.id}` })
+  }
+  const unreadied = source === 'ADMIN'
+    ? await tx.order.updateMany({
+        where: { id: d.orderId, deliveryType: 'LOCAL', scheduledAt: { not: null }, status: 'PREPARING', readyAt: { not: null } },
+        data: { readyAt: null },
+      })
+    : null
+  const feeYuan = ((cancelFeeFen ?? 0) / 100).toFixed(2)
+  const baseDesc = descBuilder ? descBuilder(feeYuan) : `商家取消（取消费 ${feeYuan} 元）`
+  await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `${baseDesc}${rollbackStuck ? '【订单未回退，请核对】' : ''}${unreadied && unreadied.count > 0 ? '【已撤回「已备好」，到点不再自动呼叫】' : ''}`, operator })
+  return { moved: 1 }
+}
+
+export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string; source?: 'ADMIN' | 'SCHEDULER' }): Promise<{ cancelFeeFen: number | null; pending?: true }> {
   const source = input.source ?? 'ADMIN'
   const d = await requireActive(input.orderId)
+  // P15（D2）：缺 taskId/orderId 时不再本地伪取消（旧 P5 缺陷）——店员多半没有快递100
+  // 企业账号去后台核实，本地也没法外呼。只记取消意图，单号一到自动执行真取消。
+  if (d.provider !== 'SELF' && (!d.providerTaskId || !d.providerOrderId)) {
+    return await recordCancelIntent(d, { operator: input.operator, reason: input.reason })
+  }
   let cancelFeeFen: number | null = 0
-  if (d.provider !== 'SELF' && d.providerTaskId) {
+  if (d.provider !== 'SELF') {
     try {
-      cancelFeeFen = (await getDeliveryProvider().cancelOrder({ taskId: d.providerTaskId, reason: input.reason ?? '商家取消' })).cancelFeeFen
+      cancelFeeFen = (await getDeliveryProvider().cancelOrder({ taskId: d.providerTaskId!, orderId: d.providerOrderId!, reason: input.reason ?? '商家取消' })).cancelFeeFen
     } catch (e) {
       if (e instanceof ProviderError && e.kind === 'TIMEOUT') throw new AppError(42238, '取消请求超时，请稍后重试（状态未变化）')
       if (e instanceof ProviderError) throw new AppError(42225, `取消配送单失败：${e.message}`)
       throw e
     }
   }
-  await prisma.$transaction(async (tx) => {
-    const moved = await tx.delivery.updateMany({ where: { id: d.id, status: { notIn: [...TERMINAL] } }, data: { status: 'CANCELLED', activeOrderId: null, cancelledAt: new Date(), cancelReason: trunc(input.reason, 255) ?? '商家取消', cancelFee: cancelFeeFen ?? 0 } })
-    if (moved.count === 0) {
+  const result = await prisma.$transaction(async (tx) => {
+    const r = await finalizeCancel(tx, d, cancelFeeFen, input.reason, input.operator, source)
+    if (r.moved === 0) {
       // 外呼（取消费的扣费）在事务外已经发生；这里写入没命中，说明配送单在 8 秒外呼期间
       // 被别的路径抢先终态化（例如店员双击、或回调抢先到达）。钱已经真花给运力方了，
       // 本地却没有任何记录能对上账——照 addTip 对同样处境的先例，先告警再抛，且告诉店员
@@ -501,48 +619,24 @@ export async function cancelDelivery(input: { orderId: number; operator: string;
       ], { key: `dlv-cancel-lost:${d.id}` })
       throw new AppError(42237, '配送单状态已变化，请刷新。取消费可能已在运力方生效，请先核对再决定是否重试')
     }
-    const { rolled, wasShipped } = await rollbackOrderAfterCancel(tx, input.orderId)
-    // B3-02：「取消呼叫」（骑手还没取货，订单还在 PREPARING）是最常见的正常路径——此时订单
-    // 从来就不是 SHIPPED，回退 0 行是预期之内，不算异常。只有调用前订单确实是 SHIPPED（货已
-    // 出门）却仍回退不了，才是三重护栏之一（多半是在途退款/售后）挡住的真异常。
-    const rollbackStuck = wasShipped && rolled === 0
-    if (rollbackStuck) {
-      // 假成功的另一半：配送单已经真的 CANCELLED、取消费也真扣了，但订单没能回退到 PREPARING
-      // （三重护栏之一挡住：多半是有在途退款/售后）。店员会收到 code:0，以为订单已经能重新走流程，
-      // 实际它停在 SHIPPED 且无在途配送单——call/self-deliver 要 PREPARING、delivered 要在途单，
-      // 全都会拒绝，只能等 autoCompleteLocalDelivered 或一笔退款自愈。必须当场告诉人，不能装没事。
-      notifySystemAlert('取消配送成功但订单未回退', [
-        `配送单 ${d.deliveryNo}（订单 ${d.orderNo}）已置为已取消`,
-        '订单未能回退到备餐中（可能存在在途退款/售后），订单会停留在 SHIPPED 且无在途配送单，请人工核对',
-      ], { key: `dlv-cancel-order-stuck:${d.id}` })
-    }
-    // S1（店主决定 D1）：ADMIN 来源（店员在工作台主动取消）= 撤回「已备好」——readyAt 清空后，
-    // schedulePhase 回落到 CALL_DUE/PREPPING，autoCallScheduled 的候选查询（readyAt 非空）不会
-    // 再选中这张单，系统到点不再自动重呼；店员需要重新点「已备好/立即呼叫」或改自己送。
-    // SCHEDULER 来源（escalateSoloCalls 撤 D-1 建 D-2 的自动升级）不清：店员没有表达过「不要骑手」，
-    // 菜还是那盘做好的菜，升级只是换一批运力接着呼。scheduledAt 非空限定只对预约单生效，
-    // 立即单 scheduledAt 恒为空，这条 updateMany 恒不命中，零影响。
-    const unreadied = source === 'ADMIN'
-      ? await tx.order.updateMany({
-          where: { id: input.orderId, deliveryType: 'LOCAL', scheduledAt: { not: null }, status: 'PREPARING', readyAt: { not: null } },
-          data: { readyAt: null },
-        })
-      : null
-    await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `商家取消（取消费 ${((cancelFeeFen ?? 0) / 100).toFixed(2)} 元）${rollbackStuck ? '【订单未回退，请核对】' : ''}${unreadied && unreadied.count > 0 ? '【已撤回「已备好」，到点不再自动呼叫】' : ''}`, operator: input.operator })
+    return r
   })
+  void result
   return { cancelFeeFen }
 }
 
 export async function addTip(input: { orderId: number; amountFen: number; operator: string }): Promise<{ tipFeeFen: number }> {
   const d = await requireActive(input.orderId)
   if (d.status !== 'CALLING') throw new AppError(42235, '仅待抢单状态可加小费')
+  // P20：意图单正在等自动取消/自动结束，不该再往上加钱
+  if (d.cancelIntentAt) throw new AppError(42235, '该配送单正在取消，不能加小费')
   const s = await getLocalSettings()
   if (input.amountFen > s.tip.maxPerCall) throw new AppError(42235, `单次小费上限 ¥${(s.tip.maxPerCall / 100).toFixed(0)}`)
   // 这里只是给操作员一个即时的说法；真正的封顶靠下面写入时的原子条件（读到的 tipFee 可能已过期）
   if (d.tipFee + input.amountFen > s.tip.maxPerOrder) throw new AppError(42235, `本单小费累计上限 ¥${(s.tip.maxPerOrder / 100).toFixed(0)}，已加 ¥${(d.tipFee / 100).toFixed(2)}`)
-  if (!d.providerTaskId) throw new AppError(42234, '配送单尚未成单')
+  if (!d.providerTaskId || !d.providerOrderId) throw new AppError(42234, '配送单尚未成单')
   try {
-    await getDeliveryProvider().addTip({ taskId: d.providerTaskId, amountFen: input.amountFen })
+    await getDeliveryProvider().addTip({ taskId: d.providerTaskId, orderId: d.providerOrderId, amountFen: input.amountFen })
   } catch (e) {
     if (e instanceof ProviderError && e.kind === 'TIMEOUT') throw new AppError(42236, '加小费请求超时，请稍后在配送明细里核对是否生效')
     if (e instanceof ProviderError) throw new AppError(42236, `加小费被运力拒绝：${e.message}`)
