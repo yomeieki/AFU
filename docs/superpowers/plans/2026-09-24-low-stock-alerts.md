@@ -422,3 +422,79 @@ helper：`p74_sql_bg() { ( sql "$1" >/dev/null 2>&1 ) & }`（复用 `e2e.sh:1723
 
 - 既有 `PUT /:id` 带 `stock` 不带 `skus` 打在多规格商品上会用前端旧 sum 覆盖 `product.stock`（`Products.tsx:261`），本批前已存在。
 - R3、R5、R7 原文见复核。
+
+---
+
+## 修订 3（2026-09-24，L 级全量复核 R2：锁序分析漏了外键 S 锁）
+
+【工序】规划 【模型】Fable 5.1 【等级】L
+
+行号按执行者提交 `91f1b0e`。
+
+### R3-0 亲自核实（§3.2）
+
+在本 worktree 用 `91f1b0e` 起隔离环境（库 `food_shop_ls_plan3`、端口 3142、`SCHEDULER_DISABLED=true`、全 mock；先用 mock 用户真下一单让 `orders` 表有一条可引用的 id），造双规格商品（A/B 各 100）后重跑复核者 `fk-race.sh` 的形态（mysql 会话：`INSERT order_items(product_id=P, sku_id=S)` → `SLEEP(1.5)` → 扣 sku S → 扣 product；0.7 秒时并发 `PUT /:id/stock` 改 A=5）：
+
+```
+OS=A（订单行与 PUT 同一规格）  PUT → code 0, productStock=105   retries in server.log: 1   after: product=105 SUM=105  ✔（PUT 是牺牲者，重试成功，订单不受影响）
+OS=B（订单行是另一规格）       PUT → code 0, productStock=104   retries: 0                 after: product=104 SUM=104  ✔（不成环）
+OS=A 重跑                      同上，retries: 1                                                                        ✔
+```
+
+再用**真实 `POST /api/orders`**（不是 SLEEP 会话）与同一规格的 `PUT` 并发：60 轮同时发、40 轮 PUT 延后 20 ms、40 轮延后 50 ms、40 轮延后 100 ms → 订单 180/180 成功、PUT 180/180 成功、**重试 0 次**、每轮结束 `product == SUM`。复核者的 26/120 是饱和压测（2 单 + 2 改库存同时打）下的数字；真实单笔下单事务里「插 order_items → 扣 sku」之间只有微秒级窗口，所以低延迟形态几乎撞不上。
+
+**R2 成立**：`products.ts:325-330` 的「两个单行事务之间不会互相等待成环」与 `docs/api.md:792`「一张跨两个规格的订单…仍可能互锁」都漏了外键 S 锁，说法与事实不符；结果正确、重试有效。生产 MySQL 参数（编排者只读核实：`innodb_deadlock_detect=1`、`innodb_lock_wait_timeout=50`、REPEATABLE-READ、8.0.46）与本机一致，死锁由检测器即时打断、不会走 50 秒等待。
+
+### R3-1 锁序分析改正（注释 + 文档；只改文字）
+
+`apps/server/src/routes/admin/products.ts:314-330` 那段注释、`docs/api.md:791-792`（3.3 节「并发语义」）与 `:2316`（附录 N）统一改成下面的事实，不得再出现「单行事务之间不会成环」「只有跨两个规格的订单才会互锁」：
+
+1. **下单事务的锁序**（`routes/orders.ts`：`order.create({ items: { create } })` 在扣减循环之前）：`INSERT order_items` 因外键 `order_items_product_id_fkey`（`prisma/migrations/20260509073712_init/migration.sql:252`）先取得 **products 行的 S 锁** → 扣 sku 行 X 锁 → 扣 products 行 X 锁（S→X 升级）。
+2. **改库存接口**：sku 行 X 锁（`FOR UPDATE`）→ products 行 X 锁。
+3. **成环条件**：订单行与改库存是**同一规格**——改库存持 X(sku A) 等 X(products)，被订单的 S(products) 挡住；订单接着要 X(sku A)，被改库存挡住 → 环。**单行订单也会**，不只是跨规格订单。**不同规格不成环**：订单的 S→X 升级只等其它事务**已授予**的冲突锁，改库存那个**等待中**的 X 请求不挡它（实测 OS=B 无死锁）；改库存等订单提交后再拿到 products 行。
+4. **取消/退款回滚**（`utils/order-stock.ts`）没有外键插入，锁序 sku → products，与改库存只在「多行回滚跨到改库存那一规格」时成环（修订 2 的分析对这一支仍成立）。
+5. **牺牲者**：InnoDB 选 undo 量小的一方，实测恒为改库存事务（订单事务已插入 `orders`/`order_items`），顾客下单不受影响；改库存捕获 `P2034` 重试，重试时重新 `FOR UPDATE` 读到订单提交后的新值，delta 仍正确。
+6. 既有的「两笔多行订单以不同顺序扣同一商品」死锁（复核 R3）**不在本批**，`orders.ts` 禁改。
+
+### R3-2 重试上限 3 → 5
+
+`products.ts:339` `STOCK_UPDATE_MAX_ATTEMPTS = 3` 改为 `5`，退避仍 `50 × attempt` ms（最长累计等待 50+100+150+200 = 500 ms，远小于任何前端超时）。理由：按复核饱和压测的每次尝试死锁率 p ≈ 26/120 ≈ 0.22 估算，3 次连败 ≈ 1.0%、5 次连败 ≈ 0.05%；真实下单形态本机 180 轮 0 次；改库存是店员低频手工操作，多两次尝试没有代价，却把饱和场景的失败率压到可忽略。日志文案里的 `/3` 随常量变（模板字符串已引用常量，`:376` 一带核对）。改坏验证不变：去掉重试 → 74.11-c/e 现形。
+
+### R3-3 验收增补（`scripts/e2e.d/74-low-stock.sh`）
+
+- **74.11-e 外键 S 锁 · 同一规格**（复现 R2 形态，放在 c 之后）：复位 A=B=C=10、product=30；`P74_OID=$(sql "SELECT MAX(id) FROM orders;")`（74 之前的分段已下过单，非空；为空则 `fail` 并跳过本步）；后台会话 `BEGIN; INSERT INTO order_items (order_id,product_id,sku_id,product_name,product_price,quantity,subtotal,updated_at) VALUES ($P74_OID,$P74_PID,$P74_A,'e2e-fk-lock',1000,1,1000,NOW(3)); SELECT SLEEP(1.5); UPDATE product_skus SET stock=stock-1 WHERE id=$P74_A AND stock>=1; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$P74_PID; COMMIT;`；0.7 秒后 `p74_stock $P74_PID {skuId:$P74_A, stock:5}` → **`code 0`**、`data.stock=5`；`wait` 后 `products.stock == SUM(sku)`、A=5、B=10、C=10（无论哪一方是牺牲者，终值都相同）；收尾 `sql "DELETE FROM order_items WHERE product_name='e2e-fk-lock';"`。
+- **74.11-f 外键 S 锁 · 不同规格**（钉住「不同规格不成环」这条说法）：同上但 `sku_id=$P74_B`、扣 B；断言 `code 0`、`products.stock == SUM(sku)`、A=5、B=9；收尾同上。
+- **并发真的发生了**（R4 同款证据）：74.11-a/b/c/d/e/f 每步都记 PUT 的墙钟耗时 `P74_T0=$(perl -MTime::HiRes=time -e 'printf "%d", time*1000')`（macOS `date` 无 `%N`），断言 `耗时 ≥ 700`（后台会话至少还要持锁 0.8 秒，PUT 必然在锁上等过；e/f 步 ≥ 700 同样成立：PUT 要么等订单会话到 1.5 秒后提交、要么被牺牲后重试再等）。
+- **[R4] 74.11-d 改成真并发**：后台语句改为 `BEGIN; UPDATE products SET stock=stock-1, sales_count=sales_count+1 WHERE id=$Q74_PID AND stock>=1; SELECT SLEEP(2); COMMIT;`（现在是裸 UPDATE，瞬间提交，PUT 根本没等到锁），加上面的耗时 ≥ 1000 断言；终值断言 `products.stock=7` 不变（绝对值语义）。
+- 改坏验证追加：把 `FOR UPDATE` 去掉（退化成快照读）→ 74.11-e 必红（`product ≠ SUM`）。
+
+### R3-4 [R7] `docs/api.md` 附录 N 第 4 条
+
+`docs/api.md:2299`（附录 N 列表第 4 条）「状态一并丢弃；重新上架时若仍售罄会再推一条，视为新事件」是修订 1 之前的旧口径，改为：「商品被软删或规格被删除（不再出现在扫描结果里）→ 状态一并丢弃；**下架不丢状态**，重新上架、库存仍 < `pushBelow` 的规格不再推，只有补货到 ≥ `pushBelow` 才重置（修订 1 R1-3）」。与同文件的 R3-1 改动一起做。
+
+### 不纳入本修订
+
+- **R6**（`services/low-stock-settings.ts` 读失败把默认值缓存 60 秒、与注释相反）：不在修订 3 涉及的文件里，按 §2.4 不安排修改；编排者登记。
+- R1/R3/R5/R8/R9/R10 由编排者按协议处理，不在本修订。
+
+### 验收增补汇总 / 既有断言放开情况
+
+- 验收 7：74.11 新增 e、f 两步；a–f 加耗时断言；d 改真并发；改坏验证加「去掉 `FOR UPDATE`」。
+- 验收 1/4/5 不变。
+- **既有断言放开情况：无**。
+
+### 授权范围增减
+
+- 无新增文件：`apps/server/src/routes/admin/products.ts`（注释 + 一个常量）、`docs/api.md`（两处 + 附录 N 第 4 条）、`scripts/e2e.d/74-low-stock.sh`（已授权）。
+- `products.ts` 限定：本修订只允许改 `:314-330` 注释块与 `STOCK_UPDATE_MAX_ATTEMPTS` 的值；事务体不动。
+- 禁止清单不变；`routes/orders.ts` 不动（复核 R3 的订单互锁登记独立批次）。
+
+### 上报条件增补
+
+- 74.11-e 若 `SELECT MAX(id) FROM orders` 为空（分段顺序变了）——上报，不得自己造 `orders` 行。
+- 74.11-e/f 若 PUT 在 5 次重试后仍非 0——上报并附 server 日志。
+- 耗时断言若在执行者机器上因 docker exec 启动慢而偶发（表现为 a–f 里 PUT 耗时 < 700 但终值全对）——先把 `sleep 0.7` 改 `sleep 0.5` 重跑一次；仍偶发则上报，不得删耗时断言。
+
+### 待用户决定
+
+- 无。
