@@ -121,7 +121,9 @@ export default function LowStock() {
   const lowCounts = countLowStock(filterLowStockGroups(byChannel, { level: 'LOW' }))
   const displayed = filterLowStockGroups(groups, { level: level === 'ALL' ? null : level, channel })
 
-  const rows = displayed.flatMap((g) => g.units.map((u, i) => ({ group: g, unit: u, first: i === 0 })))
+  const rows = displayed.flatMap((g) =>
+    g.units.map((u, i) => ({ group: g, unit: u, first: i === 0, groupSize: g.units.length })),
+  )
 
   return (
     <div className="space-y-4">
@@ -198,6 +200,7 @@ export default function LowStock() {
         ))}
       </div>
 
+      <div className="bg-white rounded-lg shadow-card overflow-hidden">
       <Table
         columns={4}
         loading={loading}
@@ -205,9 +208,9 @@ export default function LowStock() {
         emptyText="没有售罄或紧张的规格"
         head={
           <tr>
-            <th className="text-left px-4 py-3">商品</th>
-            <th className="text-left px-4 py-3">规格</th>
-            <th className="text-left px-4 py-3">状态</th>
+            <th className="text-left px-4 py-3 w-[26%]">商品</th>
+            <th className="text-left px-4 py-3 w-[24%]">规格</th>
+            <th className="text-left px-4 py-3 w-[18%]">状态</th>
             <th className="text-left px-4 py-3">改库存</th>
           </tr>
         }
@@ -255,23 +258,28 @@ export default function LowStock() {
           const val = edits[r.unit.key] ?? String(r.unit.stock)
           const parsedVal = parseStockInput(val)
           const changed = parsedVal !== null && parsedVal !== r.unit.stock
+          // 组首行（同一商品的第一个规格）上边线更深，把不同商品之间的分隔和组内规格的分隔区分开
+          const rowTopBorder = r.first ? 'border-t border-gray-300' : 'border-t border-gray-100'
           return (
             <tr key={r.unit.key}>
-              <td className="px-4 py-3 align-top">
-                {r.first && (
+              {r.first && (
+                <td
+                  rowSpan={r.groupSize}
+                  className={`px-4 py-3 align-top border-r border-gray-100 bg-gray-50/50 ${rowTopBorder}`}
+                >
                   <span className="inline-flex items-center gap-1.5 font-medium text-gray-800">
                     {r.group.productName}
                     <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${CH_TAG_CLS[r.group.channel]}`}>{CH_SHORT[r.group.channel]}</span>
                   </span>
-                )}
-              </td>
-              <td className="px-4 py-3 text-gray-600">{r.unit.specText ?? '—'}</td>
-              <td className="px-4 py-3">
+                </td>
+              )}
+              <td className={`px-4 py-3 text-gray-600 ${rowTopBorder}`}>{r.unit.specText ?? '—'}</td>
+              <td className={`px-4 py-3 ${rowTopBorder}`}>
                 <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${r.unit.level === 'OUT' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700'}`}>
                   {unitLabel(r.unit.stock)}
                 </span>
               </td>
-              <td className="px-4 py-3">
+              <td className={`px-4 py-3 ${rowTopBorder}`}>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
@@ -290,6 +298,7 @@ export default function LowStock() {
           )
         })}
       </Table>
+      </div>
     </div>
   )
 }
