@@ -188,26 +188,84 @@ t('escalatedFrom：D2 operator 非 scheduler → null', () => {
   assert.strictEqual(escalatedFrom(d2Manual, [D1, d2Manual]), null)
 })
 
+// wb-escalation-display 复核第 1 轮（R5/R6，见 plan-decisions.md 第 7/8 条 + plan-r1-increment.md
+// §S4'）：waitAnchorFor 改成「分链 + 候选链取最早」算法。fixture 补全 WaitAnchorLite 的全部
+// 字段（deliveryNo/status/operator/callOrigin/cancelReason）——旧版只给 id/calledAt/createdAt
+// 四条用例能过纯属巧合（这几个字段全 undefined 时 escalatedFrom 恒返回 null，每张单各自成链，
+// 又因为 callOrigin undefined !== 'MANUAL_EARLY' 而全部入选候选，退化成「全局取最早」，
+// 掩盖了真正的分链与 MANUAL_EARLY 排除逻辑没被测到的事实）。
+const AUTO_REASON = '3 分钟无人接单，自动升级为并呼最便宜 3 家'
+type WaitFixture = {
+  id: number; deliveryNo: string; status: string; operator: string | null; callOrigin: string | null
+  cancelReason: string | null; calledAt: Date | null; createdAt: Date
+}
+const wd = (id: number, over: Partial<WaitFixture> = {}): WaitFixture => ({
+  id, deliveryNo: `D9-${id}`, status: 'CALLING', operator: null, callOrigin: null, cancelReason: null,
+  calledAt: null, createdAt: new Date(`2026-09-26T09:00:0${id}Z`),
+  ...over,
+})
+
 t('waitAnchorFor：链成立 → D1 的 calledAt', () => {
-  const d1 = { id: 1, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') }
-  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') }
-  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt.getTime())
+  const d1 = wd(1, { calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') })
+  const d2 = wd(2, { calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') })
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt!.getTime())
 })
 t('waitAnchorFor：D1 calledAt 为 null → D1 的 createdAt', () => {
-  const d1 = { id: 1, calledAt: null as Date | null, createdAt: new Date('2026-09-26T09:59:00Z') }
-  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') }
+  const d1 = wd(1, { calledAt: null, createdAt: new Date('2026-09-26T09:59:00Z') })
+  const d2 = wd(2, { calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') })
   assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.createdAt.getTime())
 })
 t('waitAnchorFor：店员手动取消重呼 → 仍是 D1 的 calledAt（不清零）', () => {
-  const d1 = { id: 1, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') }
-  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:05:00Z'), createdAt: new Date('2026-09-26T10:05:00Z') }
-  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt.getTime())
+  const d1 = wd(1, { status: 'CANCELLED', cancelReason: '商家取消', calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') })
+  const d2 = wd(2, { operator: 'admin', calledAt: new Date('2026-09-26T10:05:00Z'), createdAt: new Date('2026-09-26T10:05:00Z') })
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt!.getTime())
 })
 t('waitAnchorFor：三张单 D1→D2 自动升级、D2→D3 店员重呼 → 仍是 D1 的 calledAt', () => {
-  const d1 = { id: 1, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') }
-  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') }
-  const d3 = { id: 3, calledAt: new Date('2026-09-26T10:08:00Z'), createdAt: new Date('2026-09-26T10:08:00Z') }
-  assert.strictEqual(waitAnchorFor(d3, [d1, d2, d3]).getTime(), d1.calledAt.getTime())
+  const d1 = wd(1, { status: 'CANCELLED', cancelReason: AUTO_REASON, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') })
+  const d2 = wd(2, { status: 'CANCELLED', operator: 'scheduler', cancelReason: '商家取消', calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') })
+  const d3 = wd(3, { operator: 'admin', calledAt: new Date('2026-09-26T10:08:00Z'), createdAt: new Date('2026-09-26T10:08:00Z') })
+  assert.strictEqual(waitAnchorFor(d3, [d1, d2, d3]).getTime(), d1.calledAt!.getTime())
+})
+t('waitAnchorFor D-R5：呼叫失败也算第一次——FAILED D1（calledAt 空）用 createdAt 10:00，早于 D2 calledAt 10:20', () => {
+  const d1 = wd(1, { status: 'FAILED', calledAt: null, createdAt: new Date('2026-09-26T10:00:00Z') })
+  const d2 = wd(2, { calledAt: new Date('2026-09-26T10:20:00Z'), createdAt: new Date('2026-09-26T10:20:00Z') })
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.createdAt.getTime())
+})
+t('waitAnchorFor D-R6a：MANUAL_EARLY 那次店员手动取消（非自动升级）→ 从 D2（到点那次）算', () => {
+  const d1 = wd(1, { status: 'CANCELLED', callOrigin: 'MANUAL_EARLY', cancelReason: '商家取消', calledAt: new Date('2026-09-26T09:00:00Z'), createdAt: new Date('2026-09-26T08:59:00Z') })
+  const d2 = wd(2, { calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T10:00:00Z') })
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d2.calledAt!.getTime())
+})
+t('waitAnchorFor D-R6b：MANUAL_EARLY 那次呼叫失败、D2 到点自动呼叫 → 从 D2 算', () => {
+  const d1 = wd(1, { status: 'FAILED', callOrigin: 'MANUAL_EARLY', calledAt: null, createdAt: new Date('2026-09-26T09:00:00Z') })
+  const d2 = wd(2, { callOrigin: 'SCHEDULED_AUTO', calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T10:00:00Z') })
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d2.calledAt!.getTime())
+})
+t('waitAnchorFor D-R6c：MANUAL_EARLY 那次被自动升级接续到当前在途单（同一条链）→ 仍从 D1 算', () => {
+  const d1 = wd(1, { status: 'CANCELLED', callOrigin: 'MANUAL_EARLY', cancelReason: AUTO_REASON, calledAt: new Date('2026-09-26T09:00:00Z'), createdAt: new Date('2026-09-26T08:59:00Z') })
+  const d2 = wd(2, { operator: 'scheduler', calledAt: new Date('2026-09-26T09:03:00Z'), createdAt: new Date('2026-09-26T09:03:00Z') })
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt!.getTime())
+})
+t('waitAnchorFor D-R6d：MANUAL_EARLY 那次本身就是当前在途单 → 从它自己算', () => {
+  const d1 = wd(1, { callOrigin: 'MANUAL_EARLY', calledAt: new Date('2026-09-26T09:00:00Z'), createdAt: new Date('2026-09-26T08:59:00Z') })
+  assert.strictEqual(waitAnchorFor(d1, [d1]).getTime(), d1.calledAt!.getTime())
+})
+t('waitAnchorFor D-R6e：连续两次 MANUAL_EARLY 都取消，D3（非预约到点）在途 → 从 D3 算', () => {
+  const d1 = wd(1, { status: 'CANCELLED', callOrigin: 'MANUAL_EARLY', cancelReason: '商家取消', calledAt: new Date('2026-09-26T08:00:00Z'), createdAt: new Date('2026-09-26T07:59:00Z') })
+  const d2 = wd(2, { status: 'CANCELLED', callOrigin: 'MANUAL_EARLY', cancelReason: '商家取消', calledAt: new Date('2026-09-26T08:30:00Z'), createdAt: new Date('2026-09-26T08:29:00Z') })
+  const d3 = wd(3, { calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T10:00:00Z') })
+  assert.strictEqual(waitAnchorFor(d3, [d1, d2, d3]).getTime(), d3.calledAt!.getTime())
+})
+t('waitAnchorFor D-R6e：第三次仍是 MANUAL_EARLY 且本身在途 → 仍从它自己算（不追溯前两次）', () => {
+  const d1 = wd(1, { status: 'CANCELLED', callOrigin: 'MANUAL_EARLY', cancelReason: '商家取消', calledAt: new Date('2026-09-26T08:00:00Z'), createdAt: new Date('2026-09-26T07:59:00Z') })
+  const d2 = wd(2, { status: 'CANCELLED', callOrigin: 'MANUAL_EARLY', cancelReason: '商家取消', calledAt: new Date('2026-09-26T08:30:00Z'), createdAt: new Date('2026-09-26T08:29:00Z') })
+  const d3 = wd(3, { callOrigin: 'MANUAL_EARLY', calledAt: new Date('2026-09-26T09:00:00Z'), createdAt: new Date('2026-09-26T08:59:00Z') })
+  assert.strictEqual(waitAnchorFor(d3, [d1, d2, d3]).getTime(), d3.calledAt!.getTime())
+})
+t('waitAnchorFor 非预约对照：callOrigin 全程 null 时行为不变——D1 自动升级取消、D2 在途 → D1', () => {
+  const d1 = wd(1, { status: 'CANCELLED', cancelReason: AUTO_REASON, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') })
+  const d2 = wd(2, { operator: 'scheduler', calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') })
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt!.getTime())
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

@@ -81,19 +81,41 @@ export function escalatedFrom<T extends DeliveryChainLite>(d: T, all: T[]): Esca
   return { fromDeliveryNo: prev.deliveryNo, providersLabel: calledProvidersLabel(prev.calledProviders), minutes: parsed.minutes }
 }
 
-export interface WaitAnchorLite { id: number; calledAt: Date | null; createdAt: Date }
+export interface WaitAnchorLite extends DeliveryChainLite {
+  calledAt: Date | null
+  createdAt: Date
+}
 
 /**
- * 等待计时口径（用户 2026-09-26 决定）：一律从这一单**第一次呼叫**算起，自动升级、店员取消
- * 重呼、呼叫失败重呼都不清零——取 id 升序**最早那一张**配送单的 calledAt，它没有
- * calledAt（呼叫从未真正发出过）时才退回它自己的 createdAt。不是「全部配送单里任意一张的
- * calledAt」：D1 没呼出去、D2 呼出去了，锚点仍是 D1 的 createdAt，不能被 D2 的 calledAt 抢先。
+ * 等待计时口径（用户 2026-09-26 决定，复核第 1 轮后追加 R5/R6，见 plan-decisions.md 第 7/8 条）：
+ * 一律从这一单**第一次呼叫**算起——自动升级、店员取消重呼、骑手接单后取消重呼、**呼叫失败
+ * 重呼（R5）**都不清零；唯一例外是**预约单「立即呼叫」（callOrigin=MANUAL_EARLY）** 那次：
+ * 如果它后来被取消/失败、到点又重新呼叫了一次，锚点从「到点那次」算，提前那次不计入（R6）；
+ * 但如果 MANUAL_EARLY 那次通过自动升级一路延续到了当前在途单（同一条链），仍从它算——
+ * 用户没有表达过「重新等」，是系统自己把它撤了又续上的。
+ *
+ * 算法：先把 all 按 id 升序分链（下一张若是自动升级接续上一张，算同一条链，见 escalatedFrom）；
+ * 找到 active 所在的那条链（active 不在 all 里时自成一链）；候选链 = active 所在链，加上所有
+ * 链头不是 MANUAL_EARLY 的链；候选链里取「链头 calledAt ?? createdAt」最早的那个。
  */
 export function waitAnchorFor(active: WaitAnchorLite, all: WaitAnchorLite[]): Date {
   const list = all.length ? all : [active]
   const sorted = [...list].sort((a, b) => a.id - b.id)
-  const earliest = sorted[0]
-  return earliest.calledAt ?? earliest.createdAt
+  const anchorOf = (d: WaitAnchorLite) => d.calledAt ?? d.createdAt
+
+  const chains: WaitAnchorLite[][] = []
+  for (const d of sorted) {
+    const prevChain = chains[chains.length - 1]
+    if (prevChain && escalatedFrom(d, sorted) !== null) prevChain.push(d)
+    else chains.push([d])
+  }
+  const activeChain = chains.find((c) => c.some((d) => d.id === active.id)) ?? [active]
+  const candidates = chains.filter((c) => c === activeChain || c[0].callOrigin !== 'MANUAL_EARLY')
+  const earliestChain = candidates.reduce(
+    (min, c) => (anchorOf(c[0]).getTime() < anchorOf(min[0]).getTime() ? c : min),
+    candidates[0] ?? activeChain,
+  )
+  return anchorOf(earliestChain[0])
 }
 
 export interface DeliveryEventLite {
@@ -152,6 +174,8 @@ export function presentDeliveryHistory(all: DeliveryHistoryInput[]): {
       ...ev, deliveryNo: d.deliveryNo, deliverySeq: seqOf.get(d.id)!, displayDesc: legacyDisplayDesc(ev, d),
     })))
     .sort((a, b) => time(a.createdAt) - time(b.createdAt) || a.id - b.id)
-  const firstCalledAt = sorted.length ? waitAnchorFor(sorted[0], sorted) : null
+  // 「active」用最后一张（id 最大）：正常情况下它就是当前在途/最终那一张，与
+  // routes/admin/delivery.ts 的 `delivery`（findFirst orderBy id desc）同一口径。
+  const firstCalledAt = sorted.length ? waitAnchorFor(sorted[sorted.length - 1], sorted) : null
   return { deliveries, events, firstCalledAt }
 }

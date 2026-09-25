@@ -167,7 +167,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       ? await prisma.delivery.findMany({
           where: { orderId: { in: localIds } },
           select: {
-            id: true, orderId: true, activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true,
+            id: true, deliveryNo: true, orderId: true, activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true,
             providerDistanceM: true, calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true,
             cancelReason: true, operator: true, callOrigin: true,
           },
@@ -191,7 +191,7 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
         where: { orderId: { in: doneLocalIds } },
         orderBy: { id: 'asc' },  // 一单可能有多张（取消重呼、改自送），升序遍历后留下的就是最后一张
         select: {
-          id: true, orderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true,
+          id: true, deliveryNo: true, orderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true,
           calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true, cancelReason: true, operator: true, callOrigin: true,
         },
       })
