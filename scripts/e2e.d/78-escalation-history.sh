@@ -46,9 +46,12 @@ S78_D1=$(jq -r .data.deliveryNo <<<"$R")
 
 # 验收 9：快照锚点 = calledAt（第一次呼叫，此时链上只有 D-1，两者本该相等）
 S78_ANCHOR=$(s78_wait_since "$S78_O1")
-S78_D1_CALLEDAT=$(s78_dlv "$S78_O1" | jq -r .data.delivery.calledAt)
+S78_D1_R=$(s78_dlv "$S78_O1")
+S78_D1_CALLEDAT=$(jq -r .data.delivery.calledAt <<<"$S78_D1_R")
 assert_eq "78-9：升级前快照锚点 = D-1 calledAt" "$S78_ANCHOR" "$S78_D1_CALLEDAT"
 [[ -n "$S78_ANCHOR" && "$S78_ANCHOR" != "null" ]] && ok "78-9：锚点非空" || fail "78-9：锚点为空" "$S78_ANCHOR"
+# 验收 11'：GET :id/delivery 的 history.firstCalledAt 与工作台快照 waitSince 同一口径，两处不能各算各的
+assert_eq "78-11'：history.firstCalledAt = 快照 waitSince（升级前）" "$(jq -r .data.history.firstCalledAt <<<"$S78_D1_R")" "$S78_ANCHOR"
 
 # 验收 10：卡片 .local 字段集不因本次改动而变（服务端只换了 waitSince 的算法，不改 toCard 输出形状）
 S78_LOCAL_KEYS=$(req GET "/api/admin/workbench/snapshot?fresh=1" "$AT" | jq -c --argjson o "$S78_O1" \
@@ -111,6 +114,7 @@ S78_ANCHOR2=$(s78_wait_since "$S78_O1")
 assert_eq "78-12：升级后快照锚点仍等于升级前锚点（不清零）" "$S78_ANCHOR2" "$S78_ANCHOR"
 S78_D2_CALLEDAT=$(jq -r .data.delivery.calledAt <<<"$R")
 [[ "$S78_ANCHOR2" != "$S78_D2_CALLEDAT" ]] && ok "78-12：锚点不等于 D-2 calledAt" || fail "78-12：锚点被 D-2 抢先" "$S78_ANCHOR2 == $S78_D2_CALLEDAT"
+assert_eq "78-11'：history.firstCalledAt = 快照 waitSince（升级后）" "$(jq -r .data.history.firstCalledAt <<<"$R")" "$S78_ANCHOR2"
 
 echo "-- ④ 历史「商家取消」行改写：库里原值不动，displayDesc 改写成人话 --"
 S78_D1_ID=$(sql "SELECT id FROM deliveries WHERE delivery_no='$S78_D1'")
@@ -174,6 +178,104 @@ assert_eq "78-15：history.deliveries 长度 1" "$(jq -r '.data.history.deliveri
 assert_eq "78-15：escalatedFrom = null" "$(jq -r '.data.history.deliveries[0].escalatedFrom' <<<"$R")" "null"
 S78_O3_D1_CALLEDAT=$(jq -r .data.delivery.calledAt <<<"$R")
 assert_eq "78-15：快照锚点 = D-1 calledAt" "$(s78_wait_since "$S78_O3")" "$S78_O3_D1_CALLEDAT"
+
+echo "-- ⑦ D-R5：呼叫失败也算第一次——FAILED 的 D-1（calledAt 空）用 createdAt，重呼成功的 D-2 不抢先 --"
+req POST /api/admin/system/kd100-mock/reset "$AT" >/dev/null
+s78_queue_price
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"error","code":"30005"}}' >/dev/null
+S78_O4=$(mk_local_paid); req POST "/api/admin/local/orders/$S78_O4/accept" "$AT" >/dev/null
+sleep 0.5
+R=$(req POST "/api/admin/local/orders/$S78_O4/call" "$AT")
+assert_eq "78-R5：30005 呼叫失败 42225" "$(code "$R")" "42225"
+R=$(s78_dlv "$S78_O4")
+assert_eq "78-R5：D-1 状态 FAILED" "$(jq -r .data.delivery.status <<<"$R")" "FAILED"
+assert_eq "78-R5：D-1 calledAt 为空" "$(jq -r .data.delivery.calledAt <<<"$R")" "null"
+# DeliverySummary（history.deliveries[] 的摘要形状）不下发 createdAt（方案 S3 的字段清单里就没有
+# 这一列，只在 history-view.ts 内部算 waitAnchorFor 时用）——没法从接口里单独抠出「D-1 的
+# createdAt」来跟锚点比对完全相等，改成验证「FAILED 那一刻的 firstCalledAt」在重呼后原样
+#保持（同 78-12/78-14 的「不清零」验证手法），这就是 D-R5 在集成层面真正要证明的事。
+S78_O4_D1_ANCHOR=$(jq -r .data.history.firstCalledAt <<<"$R")
+[[ -n "$S78_O4_D1_ANCHOR" && "$S78_O4_D1_ANCHOR" != "null" ]] \
+  && ok "78-R5：FAILED 时 firstCalledAt 已非空（呼叫失败当场就算第一次，不必等重呼）" \
+  || fail "78-R5：FAILED 时 firstCalledAt 为空" "$S78_O4_D1_ANCHOR"
+sleep 1   # 与重呼那次的 calledAt 拉开 ≥1s，下面的「锚点不被 D-2 抢先」才有意义
+s78_queue_price
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok","quotedFeeFen":1623}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$S78_O4/call" "$AT")
+assert_eq "78-R5：重呼 code 0" "$(code "$R")" "0"
+R=$(s78_dlv "$S78_O4")
+assert_eq "78-R5：history.deliveries 长度 2" "$(jq -r '.data.history.deliveries | length' <<<"$R")" "2"
+S78_O4_D2_CALLEDAT=$(jq -r '.data.history.deliveries[1].calledAt' <<<"$R")
+S78_O4_ANCHOR=$(s78_wait_since "$S78_O4")
+assert_eq "78-14b：快照锚点 = 重呼前的 firstCalledAt（呼叫失败也算第一次，重呼不清零）" "$S78_O4_ANCHOR" "$S78_O4_D1_ANCHOR"
+[[ "$S78_O4_ANCHOR" != "$S78_O4_D2_CALLEDAT" ]] && ok "78-14b：锚点不等于 D-2 calledAt" || fail "78-14b：锚点被 D-2 抢先" "$S78_O4_ANCHOR == $S78_O4_D2_CALLEDAT"
+assert_eq "78-11'：history.firstCalledAt = 快照 waitSince（D-R5 场景）" "$(jq -r .data.history.firstCalledAt <<<"$R")" "$S78_O4_ANCHOR"
+
+echo "-- ⑧ D-R6：预约单提前呼叫（MANUAL_EARLY）被取消、到点重新呼叫 → 只从到点那次算 --"
+S78_SCHED_ORIG=$(req GET /api/admin/settings/local-delivery "$AT" | jq -c .data)
+req PUT /api/admin/settings/local-delivery "$AT" "$(jq -c \
+  '.schedule={enabled:true,slotMinutes:30,daysAhead:1,acceptBufferMin:5,prepMinutes:20,prepTicketLeadMin:15,readyRemindEveryMin:3,readyRemindMaxTimes:3,callToleranceMin:5}
+   | .callStrategy={mode:"SOLO_LOWEST",cheapestN:3,escalateAfterMin:3}' <<<"$S78_SCHED_ORIG")" >/dev/null
+lquote "$LADDR" 2400
+S78_SLOT=$(req GET "/api/local/delivery-slots?distanceM=$LQDIST" | jq -r '[.data.days[].slots[]][1].startAt')
+[[ -n "$S78_SLOT" && "$S78_SLOT" != "null" ]] && ok "78-R6：拿到预约时段 $S78_SLOT" || fail "78-R6：没有可选时段"
+s78_queue_price
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok","quotedFeeFen":1623}}' >/dev/null
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":2},\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\",\"scheduledAt\":\"$S78_SLOT\"}")
+S78_O5=$(jq -r '.data.orderId // empty' <<<"$R"); [[ -n "$S78_O5" ]] && ok "78-R6：预约单 #$S78_O5 已下单" || fail "78-R6：预约单下单失败" "$R"
+req POST "/api/orders/$S78_O5/pay" "$UT" >/dev/null
+req POST "/api/admin/local/orders/$S78_O5/accept" "$AT" >/dev/null
+sleep 0.5
+R=$(req POST "/api/admin/local/orders/$S78_O5/call" "$AT" '{"force":true}')
+assert_eq "78-R6：提前呼叫（force）code 0" "$(code "$R")" "0"
+R=$(s78_dlv "$S78_O5")
+S78_O5_D1=$(jq -r .data.delivery.deliveryNo <<<"$R")
+assert_eq "78-R6：D-1 callOrigin=MANUAL_EARLY" "$(jq -r .data.delivery.callOrigin <<<"$R")" "MANUAL_EARLY"
+s78_only "$S78_O5_D1"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
+sleep 1
+R=$(req POST "/api/admin/local/orders/$S78_O5/delivery/cancel" "$AT" '{"reason":"商家取消"}')
+assert_eq "78-R6：取消 code 0" "$(code "$R")" "0"
+sql "UPDATE orders SET scheduled_at=NOW(3) WHERE id=$S78_O5;"   # 让「该呼叫时刻」落到当下，下面的 /call 不再需要 force
+s78_queue_price
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok","quotedFeeFen":1623}}' >/dev/null
+R=$(req POST "/api/admin/local/orders/$S78_O5/call" "$AT")
+assert_eq "78-R6：到点重呼 code 0（不需要 force）" "$(code "$R")" "0"
+R=$(s78_dlv "$S78_O5")
+assert_eq "78-R6：history.deliveries 长度 2" "$(jq -r '.data.history.deliveries | length' <<<"$R")" "2"
+S78_O5_D1_CALLEDAT=$(jq -r '.data.history.deliveries[0].calledAt' <<<"$R")
+S78_O5_D2_CALLEDAT=$(jq -r '.data.history.deliveries[1].calledAt' <<<"$R")
+S78_O5_ANCHOR=$(s78_wait_since "$S78_O5")
+assert_eq "78-14c：快照锚点 = D-2（到点那次）calledAt" "$S78_O5_ANCHOR" "$S78_O5_D2_CALLEDAT"
+[[ "$S78_O5_ANCHOR" != "$S78_O5_D1_CALLEDAT" ]] && ok "78-14c：锚点不等于 D-1（提前呼叫那次）calledAt" || fail "78-14c：锚点被提前呼叫那次抢先" "$S78_O5_ANCHOR == $S78_O5_D1_CALLEDAT"
+
+echo "-- ⑧b 对照：提前呼叫被自动升级接续到当前在途单（同一条链）→ 仍从提前呼叫那次算 --"
+lquote "$LADDR" 2400
+S78_SLOT2=$(req GET "/api/local/delivery-slots?distanceM=$LQDIST" | jq -r '[.data.days[].slots[]][1].startAt')
+s78_queue_price
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"createOrder","directive":{"kind":"ok","quotedFeeFen":1623}}' >/dev/null
+R=$(req POST /api/orders "$UT" "{\"directItem\":{\"productId\":$LPID,\"quantity\":2},\"addressId\":$LADDR,\"deliveryType\":\"LOCAL\",\"quoteToken\":\"$LQTOKEN\",\"scheduledAt\":\"$S78_SLOT2\"}")
+S78_O6=$(jq -r '.data.orderId // empty' <<<"$R"); [[ -n "$S78_O6" ]] && ok "78-R6b：预约单 #$S78_O6 已下单" || fail "78-R6b：预约单下单失败" "$R"
+req POST "/api/orders/$S78_O6/pay" "$UT" >/dev/null
+req POST "/api/admin/local/orders/$S78_O6/accept" "$AT" >/dev/null
+sleep 0.5
+R=$(req POST "/api/admin/local/orders/$S78_O6/call" "$AT" '{"force":true}')
+assert_eq "78-R6b：提前呼叫 code 0" "$(code "$R")" "0"
+S78_O6_D1=$(jq -r .data.deliveryNo <<<"$R")
+s78_only "$S78_O6_D1"
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"precancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
+req POST /api/admin/system/kd100-mock/queue "$AT" '{"op":"cancelOrder","directive":{"kind":"ok","cancelFeeFen":0}}' >/dev/null
+sleep 1
+R=$(sched '{"escalateAfterMin":0.01}')
+[[ "$(jq -r '.data.localEscalate // -1' <<<"$R")" -ge 1 ]] && ok "78-R6b：升级任务命中" || fail "78-R6b：升级任务未命中" "$R"
+R=$(s78_dlv "$S78_O6")
+assert_eq "78-R6b：history.deliveries 长度 2" "$(jq -r '.data.history.deliveries | length' <<<"$R")" "2"
+assert_eq "78-R6b：D-2.escalatedFrom.fromDeliveryNo = D-1（同一条链延续）" "$(jq -r '.data.history.deliveries[1].escalatedFrom.fromDeliveryNo' <<<"$R")" "$S78_O6_D1"
+S78_O6_D1_CALLEDAT=$(jq -r '.data.history.deliveries[0].calledAt' <<<"$R")
+S78_O6_ANCHOR=$(s78_wait_since "$S78_O6")
+assert_eq "78-14c对照：快照锚点 = D-1（提前呼叫，同链延续不排除）calledAt" "$S78_O6_ANCHOR" "$S78_O6_D1_CALLEDAT"
+
+req PUT /api/admin/settings/local-delivery "$AT" "$S78_SCHED_ORIG" >/dev/null
 
 echo "-- 收尾：复原设置、清空 mock 队列 --"
 req PUT /api/admin/settings/local-delivery "$AT" "$S78_ORIG" >/dev/null
