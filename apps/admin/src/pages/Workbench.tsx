@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router-dom'
 import { Bell, Bike, CircleAlert, Clock, CircleQuestionMark, Copy, Ellipsis, LogOut, Maximize, Moon, Package, Phone, Printer, Store, Sun, X } from 'lucide-react'
 import './Workbench.css'
 import type {
-  CourierLive, DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView,
+  CourierLive, DeliveryEventInfo, DeliveryHistory, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView,
   LocalDeliverySettings, Order, OrderChannel, OrderItem, QuoteSnapshot, RejectReason, WorkbenchCard, WorkbenchSnapshot,
 } from '../types'
 import { pickupCountdown, isFutureDayPickup, pickupUrgency, pickupPendingAnchor } from '../utils/pickup'
@@ -39,7 +39,9 @@ import ExpressBookingModal, { DAYS, HOURS, slotError } from '../components/Expre
 import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOrders'
 import { useIsPhone } from '../hooks/useIsPhone'
 import { fmtHHmm, fmtHHmmOrDate, fmtMonthDayTime, fmtMonthDayCn, todayKey } from '../utils/time'
-import { providerLabel, callStrategyLabel } from '../utils/providers'
+import { providerLabel } from '../utils/providers'
+import { confirmLabel, normalCardSub, fastCardSub, ladderLine, quoteFooter, type CallStrategyMode } from '../utils/call-dialog'
+import { callStrategyLabelWithEscalation, historyEventRows } from '../utils/delivery-history'
 
 // scheduled 不是显示列：出票前的预约单渲染在待接单列的折叠组里（colKey='pending'），它只是快照里的一个桶
 type ColKey = Exclude<keyof WorkbenchSnapshot['columns'], 'scheduled'>
@@ -365,12 +367,18 @@ function FillButton({ channel, onClick, disabled, children }: {
 interface ConfirmSpec {
   title: string
   channel: OrderChannel
-  what: string
+  /**
+   * 三件事块（§6：会发生什么/顾客会看到什么/花多少钱）——compact 为 true 时不渲染这一块，
+   * 也不渲染 amber；目前只有呼叫弹窗（callSpec）走 compact（店主 2026-09-25 决定简化）。
+   * compact 弹窗不需要 what/customer/cost，留空即可。
+   */
+  compact?: boolean
+  what?: string
   /** 有实时选择时用它生成说明（呼叫弹窗按普通/极速切换文案）；没有就用 what */
   whatOf?: (pick: CallPick) => string
-  customer: string
-  cost: string
-  /** 花钱的操作额外给一块琥珀提示（§6） */
+  customer?: string
+  cost?: string
+  /** 花钱的操作额外给一块琥珀提示（§6）。compact 弹窗不渲染，即使给了也忽略 */
   amber?: string
   /**
    * 确认块与琥珀之间的自定义内容（呼叫弹窗用它放各家报价，见 CallQuoteBlock）。
@@ -408,12 +416,15 @@ interface CallPick {
 /** 极速配送固定只呼闪送（一对一专送）。编码与 utils/providers.ts 同一套。 */
 const FAST_PROVIDER = 'shansongtongcheng'
 
-function CallQuoteBlock({ orderId, initial, mode, cheapestN, freshMs, skewMs, onPick }: {
+function CallQuoteBlock({ orderId, initial, mode, cheapestN, escalateMin, callTimeoutMin, freshMs, skewMs, onPick }: {
   orderId: number
   initial: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean } | null
   /** 后台设定的「普通配送」第一次呼谁，决定普通那张卡显示哪几家的价 */
-  mode: 'SOLO_LOWEST' | 'CHEAPEST_N' | 'ALL'
+  mode: CallStrategyMode
   cheapestN: number
+  /** 呼叫策略里的自动升级阈值（分钟，0/负数=关闭）与到头提醒阈值——卡下那行「没人接会怎样」要用 */
+  escalateMin: number
+  callTimeoutMin: number
   /** 服务端定义的新鲜度阈值（quote.ts 的 QUOTE_FRESH_MS），与 quotedAt 一起实时重算 stale */
   freshMs: number
   /**
@@ -470,40 +481,49 @@ function CallQuoteBlock({ orderId, initial, mode, cheapestN, freshMs, skewMs, on
     // picked 是每次渲染新建的数组，放进依赖会自激；用它的内容做依赖
   }, [onPick, choice, stale, sorted.length, picked.map((x) => `${x.provider}:${x.feeFen}`).join(',')])
 
+  // 卡下唯一一行「没人接会怎样」——用弹窗里当前选的那张卡（choice）算，切卡文案跟着变
+  const ladder = ladderLine({ choice, mode, cheapestN, escalateMin, callTimeoutMin })
   if (!sorted.length) {
     return (
       <div className="wb__quote">
-        <span className="wb__muted">暂无报价（呼叫时会自动查一次）</span>
-        <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 查价'}</button>
+        <div className="wb__quote-empty-row">
+          <span className="wb__muted">暂无报价（呼叫时会自动查一次）</span>
+          <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 查价'}</button>
+        </div>
+        <div className="wb__quote-note">{ladder}</div>
       </div>
     )
   }
   const normalFen = normalQuotes.reduce((n, x) => n + x.feeFen, 0)
-  const normalSub = normalQuotes.length === 1
-    ? `${providerLabel(normalQuotes[0].provider)} 起呼`
-    : `并呼 ${normalQuotes.length} 家`
+  const lowestProvider = normalQuotes[0]?.provider ?? null
+  // ALL 模式「并呼全部 n 家」的 n 是这次实际会呼的家数（sorted 全量），不是设置里的 cheapestN
+  const normalN = mode === 'ALL' ? normalQuotes.length : cheapestN
   return (
     <div className={`wb__quote${stale ? ' wb__quote--stale' : ''}`}>
-      <div className="wb__quote-head">
-        <span>{stale ? '报价已过期' : '选一种方式'}</span>
-        <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻ 刷新'}</button>
-      </div>
-      {/* 报价新鲜度靠时钟偏移校正过，店员没法从「过期/未过期」倒推查价的实际时间——
-          直接写出查价时刻（按上海时区，与小票/其他时间戳同口径），比自己心算靠谱 */}
-      <div className="wb__muted">查于 {fmtHHmm(q?.quotedAt)}</div>
       <div className="wb__callopts">
         <button type="button" className={`wb__callopt${choice === 'normal' ? ' wb__callopt--on' : ''}`}
           aria-pressed={choice === 'normal'} onClick={() => setChoice('normal')}>
           <span className="wb__callopt-name">普通配送</span>
-          <span className="wb__callopt-fee">¥{yuan(normalFen)}</span>
-          <span className="wb__callopt-sub">{normalSub}</span>
+          <span className={`wb__callopt-fee${stale ? ' wb__callopt-fee--stale' : ''}`}>
+            ¥{yuan(normalFen)}{stale ? ' 已过期' : ''}
+          </span>
+          <span className="wb__callopt-sub">{normalCardSub(mode, normalN, lowestProvider)}</span>
         </button>
         <button type="button" className={`wb__callopt${choice === 'fast' ? ' wb__callopt--on' : ''}`}
           aria-pressed={choice === 'fast'} disabled={!fastQuote} onClick={() => setChoice('fast')}>
           <span className="wb__callopt-name">极速配送</span>
-          <span className="wb__callopt-fee">{fastQuote ? `¥${yuan(fastQuote.feeFen)}` : '—'}</span>
-          <span className="wb__callopt-sub">{fastQuote ? '闪送专人直送' : '闪送暂无运力'}</span>
+          <span className={`wb__callopt-fee${stale && fastQuote ? ' wb__callopt-fee--stale' : ''}`}>
+            {fastQuote ? `¥${yuan(fastQuote.feeFen)}${stale ? ' 已过期' : ''}` : '—'}
+          </span>
+          <span className="wb__callopt-sub">{fastCardSub(!!fastQuote)}</span>
         </button>
+      </div>
+      <div className="wb__quote-note">{ladder}</div>
+      {/* 报价新鲜度靠时钟偏移校正过，店员没法从「过期/未过期」倒推查价的实际时间——
+          直接写出查价时刻（按上海时区，与小票/其他时间戳同口径），比自己心算靠谱 */}
+      <div className={`wb__quote-foot${stale ? ' wb__quote-note--warn' : ''}`}>
+        <span>{quoteFooter(fmtHHmm(q?.quotedAt), stale)}</span>
+        <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻'}</button>
       </div>
     </div>
   )
@@ -537,9 +557,11 @@ function ConfirmModal({ spec, onClose, onDone }: { spec: ConfirmSpec; onClose: (
         </>
       }
     >
-      <WhatBlock what={pick && spec.whatOf ? spec.whatOf(pick) : spec.what} customer={spec.customer} cost={spec.cost} />
+      {!spec.compact && (
+        <WhatBlock what={(pick && spec.whatOf ? spec.whatOf(pick) : spec.what) ?? ''} customer={spec.customer ?? ''} cost={spec.cost ?? ''} />
+      )}
       {spec.extra?.(onPick)}
-      {spec.amber && <div className="wb__amber">{spec.amber}</div>}
+      {!spec.compact && spec.amber && <div className="wb__amber">{spec.amber}</div>}
     </WbModal>
   )
 }
@@ -1424,6 +1446,9 @@ export default function Workbench() {
   const [drawer, setDrawer] = useState<{ card: WorkbenchCard; colKey: ColKey } | null>(null)
   const [detail, setDetail] = useState<{
     order: Order; delivery: DeliveryInfo | null; events: DeliveryEventInfo[]
+    // wb-escalation-display：这一单全部配送单 + 全部事件（第一级呼叫与自动升级经过）；
+    // `delivery`/`events`（上面两个旧字段）语义不变。channel !== 'LOCAL' 时为 null。
+    history: DeliveryHistory | null
     // 服务端早就返回 quote/costFen 了，此前前端一直原样丢掉——报价块与「配送成本」都要用
     // quoteFreshMs：服务端下发的新鲜度阈值，配合 quotedAt 由 CallQuoteBlock 自己实时重算 stale
     quote: { snapshot: QuoteSnapshot | null; quotedAt: string | null; stale: boolean; quoteFreshMs: number } | null
@@ -1578,6 +1603,7 @@ export default function Workbench() {
         order: o.data.data,
         delivery: d?.data.data.delivery ?? null,
         events: d?.data.data.events ?? [],
+        history: d?.data.data.history ?? null,
         quote: d?.data.data.quote ?? null,
         costFen: d?.data.data.costFen ?? 0,
         expressBooking: eb?.data.data ?? null,
@@ -1753,9 +1779,6 @@ export default function Workbench() {
     const active = delivery && delivery.activeOrderId === order.id && !TERMINAL_DELIVERY.includes(delivery.status)
       ? delivery : null
     const confirm = (spec: ConfirmSpec) => setModal({ kind: 'confirm', spec })
-    // 「实际约 ¥5–8」这句已被实测推翻（2026-09-06 首单 8.94 km 实扣 ¥23.32，1.1 km 那组
-    // 最贵的也报 ¥11.22），改成不给死数字，让店员看下面报价块里的真实金额。
-    const CALL_AMBER = '会预扣配送费，实际以中标运力的预扣为准。若之后取消已接单的骑手，可能产生约 ¥2 取消费。'
     // 呼叫方式来自设置（默认并呼最便宜的 N 家）。拿不到设置时按「并呼全部」措辞——
     // 宁可文案保守，也不要让店员以为只花一家的钱、结果按并呼冻结了 N 笔。
     const callMode = settings?.callStrategy?.mode ?? 'ALL'
@@ -1763,6 +1786,7 @@ export default function Workbench() {
     // 最低价不在这里取：确认键的金额由弹窗内的报价块实时回传（见 ConfirmSpec.confirmTextOf），
     // 这里取一次会停在打开抽屉那一刻的快照上，店员在弹窗里点过刷新之后就成了错数字。
     const escalateMin = settings?.callStrategy?.escalateAfterMin ?? 0
+    const callTimeoutMin = settings?.callTimeoutMin ?? 10
     const btns: ReactNode[] = []
     const fill = (key: string, label: string, onClick: () => void) => (
       <FillButton key={key} channel={ch} onClick={onClick}>{label}</FillButton>
@@ -1775,62 +1799,41 @@ export default function Workbench() {
       <a key={key} className="wb__btn wb__btn--ghost" href={`tel:${phone}`}><Phone className="w-4 h-4" />{label}</a>
     )
     /**
-     * 呼叫确认弹窗。文案随呼叫方式变——呼几家在**冻结多少钱**上差一个数量级
-     * （首单那组报价：只呼最低 ¥16.23／最便宜 3 家约 ¥51.76／全部 7 家 ¥75.08），
-     * 店员按下去之前必须知道是哪种。
-     * `hasQuote=false` 用于「接单并呼叫」：那一刻还没查过价，报价块给不出数字，
-     * 也就没得选——只能说明会先查价，选运力这件事留给之后单独点「呼叫骑手」。
+     * 呼叫确认弹窗（店主 2026-09-25 决定：简化为两张卡 + 卡下一句阶梯提示 + 右下报价时间/
+     * 刷新 + 「再想想」/「呼叫 · 普通」「呼叫 · 极速」，不再写三段块与金额确认键、不再有
+     * 琥珀警示）。`hasQuote=false` 用于「接单并呼叫」：那一刻还没接单、没查过价，报价块给
+     * 不出数字，只说明会先查价、按普通方式呼叫，选运力留给之后单独点「呼叫骑手」。
      */
-    // 两级阶梯（店主 2026-09-12 定）：普通 = 第一次按设置呼，没人接升到并呼最便宜 N 家，再没人接只提醒；
-    // 极速 = 只呼闪送一对一，没人接同样升到并呼 N 家。文案随弹窗里当前选的那张卡变。
     const normalFirst = callMode === 'SOLO_LOWEST' ? '先呼最便宜的一家'
       : callMode === 'CHEAPEST_N' ? `并呼最便宜的 ${cheapestN} 家，谁先接算谁的`
         : '并呼设置里的全部运力，谁先接算谁的'
-    const ladderText = (fast: boolean) => {
-      if (escalateMin <= 0 || callMode === 'ALL') return fast ? '只呼闪送，专人一对一' : normalFirst
-      return fast
-        ? `只呼闪送，专人一对一；${escalateMin} 分钟没人接，自动转普通并呼最便宜 ${cheapestN} 家`
-        : callMode === 'SOLO_LOWEST'
-          ? `先呼最便宜的一家；${escalateMin} 分钟没人接，自动并呼最便宜 ${cheapestN} 家`
-          : `${normalFirst}；${escalateMin} 分钟没人接会提醒店员`
-    }
     const callSpec = (
-      title: string, confirmText: string, what: string,
+      title: string, confirmText: string, _what: string,
       run: (pick?: CallPick | null) => Promise<unknown>, hasQuote = true,
     ): ConfirmSpec => {
       return {
-        title, channel: ch,
-        // 确认键上带运力名与金额，是「按下去要花多少钱」最后一道提示。
-        // 取的是**弹窗里那块报价当前的选择**（点刷新或改选都会跟着变），而不是打开抽屉那一刻
-        // 的快照；报价过期时 CallQuoteBlock 报空 quotes，这里就退回不带金额的文案——
-        // 过期意味着服务端下单前会自己重查，此刻写死一个价就是空头承诺。
-        confirmTextOf: hasQuote
-          ? (p) => {
-            const sum = p.quotes.reduce((n, x) => n + x.feeFen, 0)
-            const kind = p.manual ? '极速' : '普通'
-            return p.quotes.length ? `${confirmText} · ${kind} ¥${yuan(sum)}` : `${confirmText} · ${kind}`
-          }
-          : undefined,
-        confirmText,
+        title, channel: ch, compact: true,
+        confirmTextOf: (p) => confirmLabel(p.manual ? 'fast' : 'normal', confirmText),
+        confirmText: hasQuote ? confirmLabel('normal', confirmText) : `${confirmText} · 普通`,
         okMsg: '已呼叫骑手',
-        // 说明随弹窗里当前选的那张卡变（whatOf）；没查过价的「接单并呼叫」路径固定按普通说
-        what: hasQuote ? `${what}${ladderText(false)}。` : `${what}接单后先查价，再${normalFirst}。`,
-        whatOf: hasQuote ? (p) => `${what}${ladderText(p.manual)}。` : undefined,
-        customer: '顾客看到「正在为您呼叫骑手」，运费不变。',
-        cost: '呼几家就同时冻结几笔预扣，只有中标那家最终扣款，其余释放。极速比普通多出的差价由店铺承担。',
         extra: hasQuote
           ? (onPick) => (
             <CallQuoteBlock
               orderId={order.id}
               initial={detail?.quote ?? null}
-              mode={callMode} cheapestN={cheapestN}
+              mode={callMode} cheapestN={cheapestN} escalateMin={escalateMin} callTimeoutMin={callTimeoutMin}
               freshMs={detail?.quote?.quoteFreshMs ?? DEFAULT_QUOTE_FRESH_MS}
               skewMs={skewRef.current}
               onPick={onPick}
             />
           )
-          : undefined,
-        amber: CALL_AMBER, run,
+          : () => (
+            <div className="wb__quote">
+              <div className="wb__quote-note">接单后先查价，再{normalFirst}</div>
+              <div className="wb__quote-note">{ladderLine({ choice: 'normal', mode: callMode, cheapestN, escalateMin, callTimeoutMin })}</div>
+            </div>
+          ),
+        run,
       }
     }
     // 「作废重呼」出现在「备餐中」「等待配送员」两列，文案（含琥珀警示的钱字）必须一字不差——
@@ -2165,7 +2168,12 @@ export default function Workbench() {
                 {/* 哪一家接的单——数据一直在库里（courierCompany 也在管理端白名单里），
                     只是从来没显示过。首单时店员完全不知道是闪送接的。 */}
                 <div className="wb__line"><span>运力</span><span>{providerLabel(d.courierCompany)}</span></div>
-                <div className="wb__line"><span>呼叫方式</span><span>{callStrategyLabel(d.callStrategy, d.calledProviders, d.courierCompany)}</span></div>
+                {/* wb-escalation-display：自动升级时补一句「只呼 X N 分钟无人接，自动升级」——
+                    escalatedFrom 只在 d 是「由自动升级接续而来的那张」时非空，从 history.deliveries 按 id 找。 */}
+                <div className="wb__line"><span>呼叫方式</span><span>{callStrategyLabelWithEscalation({
+                  callStrategy: d.callStrategy, calledProviders: d.calledProviders, courierCompany: d.courierCompany,
+                  escalatedFrom: detail?.history?.deliveries.find((x) => x.id === d.id)?.escalatedFrom ?? null,
+                })}</span></div>
                 {d.callOrigin && <div className="wb__line"><span>呼叫来源</span><span>{d.callOrigin === 'SCHEDULED_AUTO' ? '到点自动' : '店员提前呼叫'}</span></div>}
                 <div className="wb__line"><span>姓名</span><span>{d.courierName ?? '未接单'}</span></div>
                 <div className="wb__line">
@@ -2215,18 +2223,25 @@ export default function Workbench() {
                   )
                 })()}
                 {d.failReason && <div className="wb__line"><span>失败原因</span><span>{d.failReason}</span></div>}
-                {showEvents && (
-                  <div style={{ marginTop: 6 }}>
-                    {detail?.events.length
-                      ? detail.events.map((ev) => (
-                        <div className="wb__line" key={ev.id}>
-                          <span>{dateTime(ev.createdAt)}</span>
-                          <span style={{ textAlign: 'right' }}>{ev.statusDesc ?? ev.source}</span>
-                        </div>
-                      ))
-                      : <div className="wb__empty">暂无进度记录</div>}
-                  </div>
-                )}
+                {/* wb-escalation-display：看进度改用 history（全部配送单事件按时间合并），
+                    多于一张配送单时每行带 D…-1/D…-2 标签；history 缺失时退回旧的单张单渲染。 */}
+                {showEvents && (() => {
+                  const rows = detail?.history
+                    ? historyEventRows(detail.history)
+                    : (detail?.events ?? []).map((ev) => ({ id: ev.id, at: ev.createdAt, tag: null as string | null, text: ev.statusDesc ?? ev.source }))
+                  return (
+                    <div style={{ marginTop: 6 }}>
+                      {rows.length
+                        ? rows.map((row) => (
+                          <div className="wb__line" key={row.id}>
+                            <span>{dateTime(row.at)}{row.tag && <span className="wb__muted"> · {row.tag}</span>}</span>
+                            <span style={{ textAlign: 'right' }}>{row.text}</span>
+                          </div>
+                        ))
+                        : <div className="wb__empty">暂无进度记录</div>}
+                    </div>
+                  )
+                })()}
               </div>
             )}
 

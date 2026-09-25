@@ -1,6 +1,7 @@
 import { providerLabel } from './providers.ts'
+import { callStrategyLabelWithEscalation } from './delivery-history.ts'
 import { AFTER_SALE_REASON_LABEL, AFTER_SALE_STATUS_LABEL } from '../types.ts'
-import type { OrderDetail, DeliveryInfo, ExpressBookingView, RefundRecord } from '../types.ts'
+import type { OrderDetail, DeliveryInfo, DeliverySummary, ExpressBookingView, RefundRecord } from '../types.ts'
 
 /** 与 pages/Orders.tsx 原来的 REFUND_LABEL 同一份文案，搬到这里供列表与详情共用 */
 export const REFUND_STATUS_LABEL: Record<string, string> = {
@@ -133,13 +134,36 @@ type TimelineOrder = Pick<
 >
 
 /**
+ * 一张配送单被取消时，时间线「配送取消」要显示的 detail：如果它是被自动升级撤掉的（另一张
+ * 配送单的 escalatedFrom.fromDeliveryNo 指回它），写自动升级说明，而不是原始 cancelReason
+ * （那是调度器写的英文味「N 分钟无人接单，自动升级为…」，店员应该看到人话版）。
+ */
+function cancelDetailFor(d: DeliverySummary, all: DeliverySummary[]): string | undefined {
+  const next = all.find((x) => x.escalatedFrom?.fromDeliveryNo === d.deliveryNo)
+  if (next?.escalatedFrom) {
+    const { providersLabel, minutes } = next.escalatedFrom
+    return `${providersLabel} ${minutes} 分钟无人接，自动升级`
+  }
+  return d.cancelReason ?? undefined
+}
+
+/**
  * 时间线节点：只用已存在的时间戳拼，按时间升序；不编造操作人（「接单」库里没有操作人字段，
  * 不显示）。渠道专属的节点（配送/取餐/物流）通过 `extra` 传入，因为它们来自另外两个接口
  * （`getOrderDelivery` / `getExpressBooking`），不在 `GET /orders/:id` 里。
+ *
+ * wb-escalation-display：`extra.deliveries` 传入时（这一单有配送历史），LOCAL 渠道的
+ * 「呼叫骑手」「配送取消」按每张配送单各出一条，而不是只看最新一张——自动升级会留下
+ * 一张 CANCELLED 的 D-1，此前这里只看得到 D-2，第一级呼叫与升级经过整段消失。
+ * 不传时（旧调用点、或还没查过历史）保持原样：只用 extra.delivery 这一张。
  */
 export function timelineNodes(
   o: TimelineOrder,
-  extra: { delivery?: Pick<DeliveryInfo, 'provider' | 'calledAt' | 'acceptedAt' | 'pickedUpAt' | 'deliveredAt' | 'cancelledAt' | 'cancelReason' | 'courierName'> | null; booking?: Pick<ExpressBookingView, 'bookedAt' | 'acceptedAt' | 'pickedAt' | 'deliveredAt' | 'cancelledAt' | 'slotText'> | null }
+  extra: {
+    delivery?: Pick<DeliveryInfo, 'provider' | 'calledAt' | 'acceptedAt' | 'pickedUpAt' | 'deliveredAt' | 'cancelledAt' | 'cancelReason' | 'courierName'> | null
+    booking?: Pick<ExpressBookingView, 'bookedAt' | 'acceptedAt' | 'pickedAt' | 'deliveredAt' | 'cancelledAt' | 'slotText'> | null
+    deliveries?: DeliverySummary[]
+  }
 ): TimelineNode[] {
   const nodes: TimelineNode[] = []
   const push = (at: string | null | undefined, label: string, opts: { detail?: string; tone?: TimelineNode['tone'] } = {}) => {
@@ -154,11 +178,23 @@ export function timelineNodes(
 
   if (o.deliveryType === 'LOCAL') {
     const d = extra.delivery
-    push(d?.calledAt, '呼叫骑手', { detail: d ? providerLabel(d.provider) : undefined })
+    if (extra.deliveries && extra.deliveries.length) {
+      // 一单可能有多张配送单（自动升级、店员取消重呼）：每张各出一条「呼叫骑手」；
+      // 「配送取消」只对真的被取消过的那几张出，取消原因优先显示自动升级说明。
+      for (const dd of extra.deliveries) {
+        push(dd.calledAt, '呼叫骑手', { detail: `${dd.deliveryNo} · ${callStrategyLabelWithEscalation(dd)}` })
+      }
+      for (const dd of extra.deliveries) {
+        push(dd.cancelledAt, '配送取消', { detail: cancelDetailFor(dd, extra.deliveries), tone: 'warn' })
+      }
+    } else {
+      push(d?.calledAt, '呼叫骑手', { detail: d ? providerLabel(d.provider) : undefined })
+      push(d?.cancelledAt, '配送取消', { detail: d?.cancelReason ?? undefined, tone: 'warn' })
+    }
+    // 接单/取货/送达只看当前这张（成功路径只有一张单会走到这几步），与升级前的历史无关
     push(d?.acceptedAt, '骑手接单', { detail: d?.courierName ?? undefined })
     push(d?.pickedUpAt, '骑手取货')
     push(d?.deliveredAt, '已送达')
-    push(d?.cancelledAt, '配送取消', { detail: d?.cancelReason ?? undefined, tone: 'warn' })
   }
   if (o.deliveryType === 'PICKUP') {
     push(o.pickupReadyAt, '已备好')

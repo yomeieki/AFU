@@ -263,8 +263,14 @@
 .wb__callopt-name { font-size:13px; color:var(--text-2); }
 .wb__callopt--on .wb__callopt-name { color:var(--local); font-weight:600; }
 .wb__callopt-fee { font-size:18px; font-weight:700; line-height:1.2; }
+/* 报价过期：卡片价格灰显（不是隐藏——店员仍要看到上一次查到的数），同时价格后面带「已过期」文字 */
+.wb__callopt-fee--stale { color:var(--text-2); font-weight:600; }
 .wb__callopt-sub { font-size:11px; color:var(--text-2); }
 .wb__quote-note--warn { color:var(--warn); font-weight:600; }
+/* 呼叫弹窗简化形态（wb-escalation-display，店主 2026-09-25 决定）：无报价时「暂无报价 / 查价」
+   同一行；右下角报价时间 + 刷新按钮同一行右对齐。 */
+.wb__quote-empty-row, .wb__quote-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.wb__quote-foot { margin-top:6px; font-size:12px; color:var(--text-2); }
 .wb__redbar { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }
 

@@ -18,9 +18,9 @@ import DetailRefunds from '../components/orders/detail/DetailRefunds'
 import DetailAfterSales from '../components/orders/detail/DetailAfterSales'
 import DetailActions from '../components/orders/detail/DetailActions'
 import { backTargetFor, backLabelFor, channelLabel, timelineNodes, withLatestRefund } from '../utils/order-detail'
-import type { DeliveryEventInfo, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView, ExpressTrack, OrderDetail as OrderDetailData } from '../types'
+import type { DeliveryEventInfo, DeliveryHistory, DeliveryInfo, ExpressBookingEventInfo, ExpressBookingView, ExpressTrack, OrderDetail as OrderDetailData } from '../types'
 
-type LocalData = { delivery: DeliveryInfo | null; events: DeliveryEventInfo[]; costFen: number } | null
+type LocalData = { delivery: DeliveryInfo | null; events: DeliveryEventInfo[]; history: DeliveryHistory | null; costFen: number } | null
 type ExpressData = { booking: ExpressBookingView | null; active: boolean; events: ExpressBookingEventInfo[]; track: ExpressTrack | null } | null
 
 export default function OrderDetail() {
@@ -137,7 +137,7 @@ export default function OrderDetail() {
     )
   }
 
-  const nodes = timelineNodes(order, { delivery: localData?.delivery, booking: expressData?.booking })
+  const nodes = timelineNodes(order, { delivery: localData?.delivery, booking: expressData?.booking, deliveries: localData?.history?.deliveries })
   const costFen = localData?.costFen
 
   return (

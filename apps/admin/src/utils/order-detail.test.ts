@@ -192,6 +192,42 @@ test('timelineNodes：自取单不出现「已完成」而出现「已取走」'
   assert.ok(nodes.some((n) => n.label === '已取走'))
 })
 
+// wb-escalation-display 验收 4：timelineNodes 的 extra.deliveries——自动升级链要拆成两条
+// 「呼叫骑手」+ 一条「配送取消」，取消 detail 是自动升级说明而不是原始 cancelReason。
+const deliveryFixture = (over: Partial<import('../types.ts').DeliverySummary>): import('../types.ts').DeliverySummary => ({
+  id: 1, orderId: 34, deliveryNo: 'D34-1', seq: 1, status: 'CALLING', provider: 'KD100',
+  callStrategy: 'SOLO', calledProviders: ['dadatongcheng'], courierCompany: null,
+  operator: null, callOrigin: null, calledAt: '2026-09-26T10:00:00Z', acceptedAt: null,
+  cancelledAt: null, cancelReason: null, cancelFee: 0, escalatedFrom: null,
+  ...over,
+})
+
+test('timelineNodes：extra.deliveries 传入时按每张单各出「呼叫骑手」，取消 detail 用自动升级说明', () => {
+  const d1 = deliveryFixture({
+    id: 1, deliveryNo: 'D34-1', status: 'CANCELLED', calledAt: '2026-09-26T10:00:00Z',
+    cancelledAt: '2026-09-26T10:03:00Z', cancelReason: '3 分钟无人接单，自动升级为并呼最便宜 3 家',
+  })
+  const d2 = deliveryFixture({
+    id: 2, deliveryNo: 'D34-2', status: 'CALLING', callStrategy: 'CHEAPEST',
+    calledProviders: ['dadatongcheng', 'fengniaotongcheng', 'uupaotui'], operator: 'scheduler', callOrigin: null,
+    calledAt: '2026-09-26T10:03:00Z', cancelledAt: null,
+    escalatedFrom: { fromDeliveryNo: 'D34-1', providersLabel: '达达', minutes: '3' },
+  })
+  const nodes = timelineNodes(baseOrder, { deliveries: [d1, d2] })
+  const callNodes = nodes.filter((n) => n.label === '呼叫骑手')
+  const cancelNodes = nodes.filter((n) => n.label === '配送取消')
+  assert.equal(callNodes.length, 2)
+  assert.equal(cancelNodes.length, 1)
+  assert.ok(cancelNodes[0].detail?.includes('自动升级'), cancelNodes[0].detail)
+  assert.ok(!cancelNodes[0].detail?.includes('商家取消'), cancelNodes[0].detail)
+})
+
+test('timelineNodes：不传 extra.deliveries 时行为与现有单测逐字一致（用 delivery 单张单）', () => {
+  const nodes = timelineNodes(baseOrder, { delivery: { provider: 'KD100', calledAt: '2026-09-18T00:50:00Z', acceptedAt: null, pickedUpAt: null, deliveredAt: null, cancelledAt: null, cancelReason: null, courierName: null } })
+  assert.equal(nodes.filter((n) => n.label === '呼叫骑手').length, 1)
+  assert.equal(nodes.filter((n) => n.label === '配送取消').length, 0)
+})
+
 test('backLabelFor：/users 开头（含查询参数）→ 返回用户管理', () => {
   assert.equal(backLabelFor('/users?kw=x&orders=5'), '返回用户管理')
 })
