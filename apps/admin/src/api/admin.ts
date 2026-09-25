@@ -22,6 +22,7 @@ import type {
   WorkbenchSnapshot,
   DeliveryInfo,
   DeliveryEventInfo,
+  DeliveryHistory,
   QuoteSnapshot,
   CourierLive,
   RejectReason,
@@ -353,6 +354,9 @@ export const getOrderDelivery = (id: number) =>
   client.get<ApiResponse<{
     delivery: DeliveryInfo | null
     events: DeliveryEventInfo[]
+    // wb-escalation-display：这一单全部配送单摘要 + 全部事件（第一级呼叫与自动升级经过都在
+    // 这），`delivery`/`events`（上面两个旧字段）语义不变，仍只含最新一张单及其事件。
+    history: DeliveryHistory
     // 这一单**所有**配送单的成本合计（含升级留下的那张 D-1 的取消费），服务端算好，
     // 前端与退款弹窗共用，不要各算各的
     costFen: number

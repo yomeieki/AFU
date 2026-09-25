@@ -662,6 +662,46 @@ export interface DeliveryEventInfo {
   courierName: string | null
   operator: string | null
   createdAt: string
+  /** wb-escalation-display：`history.events` 里才有——旧字段 `events`（只含最新一张单）不带这三个 */
+  deliveryNo?: string
+  deliverySeq?: number
+  /** legacyDisplayDesc 改写后的展示文案；未改写时与 statusDesc 相同 */
+  displayDesc?: string | null
+}
+
+/** 某张配送单是否由自动升级从前一张接续而来（services/delivery/history-view.ts:escalatedFrom 同构） */
+export interface EscalatedFromInfo {
+  fromDeliveryNo: string
+  providersLabel: string
+  minutes: string
+}
+
+/** 一单里某一张配送单的摘要（GET :id/delivery 的 `history.deliveries[]`） */
+export interface DeliverySummary {
+  id: number
+  orderId: number
+  deliveryNo: string
+  seq: number
+  status: string
+  provider: string | null
+  callStrategy: string | null
+  calledProviders: string[] | null
+  courierCompany: string | null
+  operator: string | null
+  callOrigin: string | null
+  calledAt: string | null
+  acceptedAt: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  cancelFee: number
+  escalatedFrom: EscalatedFromInfo | null
+}
+
+/** GET :id/delivery 的 `history` 字段：这一单全部配送单 + 全部事件（第一级呼叫与自动升级经过都在这） */
+export interface DeliveryHistory {
+  deliveries: DeliverySummary[]
+  events: DeliveryEventInfo[]
+  firstCalledAt: string | null
 }
 
 /** 邮寄取件预约详情。与服务端 services/delivery/express-booking.ts 的 BookingView 同构 */
