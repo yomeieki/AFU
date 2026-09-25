@@ -31,6 +31,10 @@ export interface HistoryEventLite {
   displayDesc?: string | null
   statusDesc?: string | null
   source?: string | null
+  /** 复核 R3：BASE 的订单详情配送轨迹行会拼「（骑手名）」与「 · 操作人」，
+      新分支漏拼了——这两个字段原样透传，不参与 text 的优先级判定 */
+  courierName?: string | null
+  operator?: string | null
 }
 
 export interface HistoryEventRow {
@@ -39,6 +43,8 @@ export interface HistoryEventRow {
   /** 只有一张配送单时不加标签（列表本来就没有歧义） */
   tag: string | null
   text: string
+  courierName: string | null
+  operator: string | null
 }
 
 /** 抽屉「看进度」/ 订单详情「配送轨迹」的事件行：按时间合并多张单，只有一张单不加标签 */
@@ -53,5 +59,13 @@ export function historyEventRows(history: { deliveries: { deliveryNo: string }[]
     at: ev.createdAt,
     tag: singleDelivery ? null : (ev.deliveryNo ?? null),
     text: ev.displayDesc ?? ev.statusDesc ?? ev.source ?? '',
+    courierName: ev.courierName ?? null,
+    operator: ev.operator ?? null,
   }))
+}
+
+/** 复核 R4：SELF（店内自送）配送单没有运力概念，callStrategy 恒为 null——
+    「呼叫方式」行与「呼叫骑手」时间线节点都不该出现在它身上（会显示词不达意的「并呼（旧）」） */
+export function isSelfDelivery(d: { provider?: string | null }): boolean {
+  return d.provider === 'SELF'
 }

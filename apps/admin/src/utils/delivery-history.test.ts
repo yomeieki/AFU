@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { callStrategyLabelWithEscalation, historyEventRows } from './delivery-history.ts'
+import { callStrategyLabelWithEscalation, historyEventRows, isSelfDelivery } from './delivery-history.ts'
 import { callStrategyLabel } from './providers.ts'
 
 test('callStrategyLabelWithEscalation：escalatedFrom 非空时追加自动升级说明', () => {
@@ -55,4 +55,30 @@ test('historyEventRows：text 优先 displayDesc，其次 statusDesc，最后 so
   assert.equal(rows[0].text, '改写后文案')
   assert.equal(rows[1].text, '原文案2')
   assert.equal(rows[2].text, 'CALLBACK')
+})
+
+// 复核 R3：DetailDelivery.tsx 的新分支只渲染了 row.text，丢了 BASE 原有的「（骑手名）」与
+// 「 · 操作人」——historyEventRows 必须原样透传这两个字段，由 DetailDelivery 自己拼回去。
+test('historyEventRows：原样透传 courierName/operator，缺省时为 null', () => {
+  const history = {
+    deliveries: [{ deliveryNo: 'D34-1' }],
+    events: [
+      { id: 1, createdAt: '2026-09-26T10:00:00Z', deliveryNo: 'D34-1', statusDesc: '骑手已接单', courierName: '王骑手', operator: '张三' },
+      { id: 2, createdAt: '2026-09-26T10:01:00Z', deliveryNo: 'D34-1', statusDesc: '已送达' },
+    ],
+  }
+  const rows = historyEventRows(history)
+  assert.equal(rows[0].courierName, '王骑手')
+  assert.equal(rows[0].operator, '张三')
+  assert.equal(rows[1].courierName, null)
+  assert.equal(rows[1].operator, null)
+})
+
+// 复核 R4：SELF（店内自送）没有运力概念，callStrategy 恒 null——「呼叫方式」行与时间线
+// 「呼叫骑手」节点都不该出现在它身上（会显示词不达意的「并呼（旧）」）。
+test('isSelfDelivery：按 provider 判定', () => {
+  assert.equal(isSelfDelivery({ provider: 'SELF' }), true)
+  assert.equal(isSelfDelivery({ provider: 'KD100' }), false)
+  assert.equal(isSelfDelivery({ provider: null }), false)
+  assert.equal(isSelfDelivery({}), false)
 })

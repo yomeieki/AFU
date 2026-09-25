@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { confirmLabel, normalCardSub, fastCardSub, ladderLine, quoteFooter } from './call-dialog.ts'
+import { confirmLabel, callConfirmText, normalCardSub, fastCardSub, ladderLine, quoteFooter } from './call-dialog.ts'
 
 test('confirmLabel：不拼金额，默认动词「呼叫」', () => {
   assert.equal(confirmLabel('normal'), '呼叫 · 普通')
@@ -55,4 +55,24 @@ test('ladderLine：普通 ALL（任何 esc）与 esc=0（任何 mode）→ 含 c
 test('quoteFooter：正常态与过期态', () => {
   assert.equal(quoteFooter('22:50', false), '22:50 报价')
   assert.ok(quoteFooter('22:50', true).includes('已过期'))
+})
+
+// 复核 R1：确认键此前拼了「确认」二字（如「确认呼叫 · 普通」），店主要的是「呼叫 · 普通」——
+// callConfirmText 是 callSpec 里 confirmText/confirmTextOf 唯一的落地点。
+test('callConfirmText：四个调用点的 verb，均不含「确认」与金额', () => {
+  assert.equal(callConfirmText({ verb: '呼叫', hasQuote: true, pick: null }), '呼叫 · 普通')
+  assert.equal(callConfirmText({ verb: '重新呼叫', hasQuote: true, pick: { manual: true } }), '重新呼叫 · 极速')
+  assert.equal(callConfirmText({ verb: '立即呼叫', hasQuote: true, pick: null }), '立即呼叫 · 普通')
+  assert.equal(callConfirmText({ verb: '接单并呼叫', hasQuote: false, pick: null }), '接单并呼叫 · 普通')
+  for (const s of [
+    callConfirmText({ verb: '呼叫', hasQuote: true, pick: null }),
+    callConfirmText({ verb: '重新呼叫', hasQuote: true, pick: { manual: true } }),
+    callConfirmText({ verb: '立即呼叫', hasQuote: true, pick: null }),
+    callConfirmText({ verb: '接单并呼叫', hasQuote: false, pick: null }),
+  ]) {
+    assert.equal(/确认|[¥\d]/.test(s), false, s)
+  }
+})
+test('callConfirmText：hasQuote=false 时即便误传了 pick.manual 也按普通处理（报价块本就没渲染）', () => {
+  assert.equal(callConfirmText({ verb: '接单并呼叫', hasQuote: false, pick: { manual: true } }), '接单并呼叫 · 普通')
 })

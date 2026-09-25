@@ -16,6 +16,18 @@ export function confirmLabel(choice: CallChoice, verb: string = '呼叫'): strin
 }
 
 /**
+ * 复核 R1：呼叫弹窗四处确认键此前都拼了「确认」二字（如「确认呼叫 · 普通」），店主要的是
+ * 「呼叫 · 普通」——verb 本身就不该带「确认」，这里不做字符串清洗，靠调用方传对 verb
+ * （callSpec 的四个调用点已改成「呼叫」「重新呼叫」「立即呼叫」「接单并呼叫」）。
+ * `hasQuote=false` 时报价块不会渲染、`pick` 永远拿不到，这里仍显式按 pick.manual 判一次
+ * ——即使将来误传了 pick 也不会因为 hasQuote 被忽略而算错。
+ */
+export function callConfirmText(input: { verb: string; hasQuote: boolean; pick?: { manual: boolean } | null }): string {
+  const choice: CallChoice = input.hasQuote && input.pick?.manual ? 'fast' : 'normal'
+  return confirmLabel(choice, input.verb)
+}
+
+/**
  * 普通卡片下的一句副标题：SOLO_LOWEST 报「先呼谁」，CHEAPEST_N 报「并呼几家」，
  * ALL 报「并呼全部几家」。拿不到最低价运力（还没查到价）时退回固定短句，不编造。
  */
