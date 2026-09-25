@@ -17,6 +17,7 @@ import { notifyLocalDeliveryAlert, notifyExpressAlert } from '../order-notify'
 import { DELIVERY_STATUS_LABEL, TERMINAL, providerLabel } from './state'
 import { executeCancelIntent, notifyIntentDoneIfRefundPending, shouldAutoVoidCancelIntent, CANCEL_INTENT_MAX_ATTEMPTS, CANCEL_INTENT_VOID_MIN } from './cancel-intent'
 import { ProviderError } from './types'
+import { autoEscalationCancelDesc } from './history-view'
 
 const BATCH = 100
 const ago = (min: number) => new Date(Date.now() - min * 60 * 1000)
@@ -341,7 +342,11 @@ export async function escalateSoloCalls(min?: number): Promise<number> {
       const rungText = `并呼最便宜 ${s.callStrategy.cheapestN} 家`
       // S1：升级是「撤 D-1 立刻建 D-2」，店员没有表达过「不要骑手」——source:'SCHEDULER' 让
       // cancelDelivery 不清 readyAt（见其注释），预约单不会因为这次自动升级又被打回 CALL_DUE。
-      await cancelDelivery({ orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为${rungText}`, source: 'SCHEDULER' })
+      const calledProvidersLabel = calledLabel(d.calledProviders)
+      await cancelDelivery({
+        orderId: d.orderId, operator: 'scheduler', reason: `${threshold} 分钟无人接单，自动升级为${rungText}`, source: 'SCHEDULER',
+        descBuilder: (feeYuan) => autoEscalationCancelDesc({ providersLabel: calledProvidersLabel, minutes: String(threshold), feeYuan, rungText }),
+      })
       try {
         await callRider({
           orderId: d.orderId, operator: 'scheduler', source: 'SCHEDULER', forceMode: nextMode,

@@ -13,6 +13,7 @@ import { getCourierLocationByOrder } from '../../services/delivery/courier-locat
 import { getLocalSettings, haversineM, estimateMinutes } from '../../services/local-settings'
 import { rejectCancelRequest } from '../../services/cancel-request'
 import { scheduleTimeline } from '../../services/delivery/schedule'
+import { presentDeliveryHistory } from '../../services/delivery/history-view'
 
 const router = Router()
 
@@ -230,7 +231,13 @@ router.get('/:id/delivery', async (req: Request, res: Response, next: NextFuncti
       prisma.order.findUnique({ where: { id }, select: { quoteSnapshot: true, quotedAt: true } }),
       // 这一单**所有**配送单，不只最近一张：自动升级会留下一张 CANCELLED 的 D-1，
       // 它身上的取消费也是店家真花出去的钱。只看最近一张会把这笔漏掉。
-      prisma.delivery.findMany({ where: { orderId: id }, select: { status: true, quotedFee: true, actualFee: true, tipFee: true, cancelFee: true } }),
+      // wb-escalation-display：连同事件一起取全，供下面 presentDeliveryHistory 拼第一级呼叫
+      // 与自动升级经过——costFen 仍只读下面四个字段，逐字不变。
+      prisma.delivery.findMany({
+        where: { orderId: id },
+        select: { ...ADMIN_DELIVERY_SELECT, events: { orderBy: { id: 'asc' } } },
+        orderBy: { id: 'asc' },
+      }),
     ])
     // 配送成本口径（前端与退款弹窗共用这一个数，不要各算各的）：
     //
@@ -249,6 +256,10 @@ router.get('/:id/delivery', async (req: Request, res: Response, next: NextFuncti
     success(res, {
       delivery: delivery ?? null,
       events: delivery?.events ?? [],
+      // wb-escalation-display：全部配送单摘要（含自动升级链路归属）+ 全部事件按时间合并、按单打标签。
+      // `delivery`/`events`（旧字段）语义不变——只含最新一张单及其事件，既有 e2e 分片大量按
+      // `.data.events` 断言，不能改；`history` 是新增的第二个视角，给工作台抽屉与订单详情页用。
+      history: presentDeliveryHistory(allOfOrder),
       costFen,
       // 呼叫弹窗要的那一块：六家报价 + 查询时间 + 是否已过期（>5 分钟转琥珀底并标「已过期」）。
       // stale 仍在这里算一次给首屏用，但它是「取详情这一刻」的快照——抽屉一旦被店员晾在

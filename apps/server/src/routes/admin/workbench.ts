@@ -15,6 +15,7 @@ import { prepStartAt, pickupSlotLabel } from '../../services/pickup'
 import { scheduleView } from '../../services/delivery/schedule'
 import { REAL_ORDERS } from '../../utils/stats-scope'
 import { getWorkbenchPrinterHealth, PrinterHealthEntry } from '../../services/ticket'
+import { waitAnchorFor } from '../../services/delivery/history-view'
 
 const router = Router()
 const WAITING_STATUSES = ['CALLING', 'ACCEPTED', 'ARRIVING', 'ARRIVED', 'REASSIGNING', 'ABNORMAL', 'UNKNOWN']
@@ -160,10 +161,27 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     if (req.query.fresh !== '1' && cache && Date.now() - cache.at < 3000) return success(res, structuredClone(cache.data))
     const [orders, settings, expressSettings] = await Promise.all([loadOrders(), getLocalSettings(), getExpressSettings()])
     const localIds = orders.filter((o) => o.deliveryType === 'LOCAL').map((o) => o.id)
-    const actives = localIds.length
-      ? await prisma.delivery.findMany({ where: { activeOrderId: { in: localIds } }, select: { activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true } })
+    // wb-escalation-display：这批订单**全部**配送单（不只当前在途这一张）——等待锚点
+    // （waitAnchorFor）要看到自动升级/店员取消重呼之前那张的 calledAt，才能不清零等待计时。
+    const allActives = localIds.length
+      ? await prisma.delivery.findMany({
+          where: { orderId: { in: localIds } },
+          select: {
+            id: true, orderId: true, activeOrderId: true, status: true, provider: true, courierName: true, courierMobile: true,
+            providerDistanceM: true, calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true,
+            cancelReason: true, operator: true, callOrigin: true,
+          },
+          orderBy: { id: 'asc' },
+        })
       : []
-    const byOrder = new Map(actives.map((d) => [d.activeOrderId!, d]))
+    const byOrder = new Map(allActives.filter((d) => d.activeOrderId != null).map((d) => [d.activeOrderId!, d]))
+    // 按 orderId 分组的全部配送单，供 waitAnchorFor 用；只有 waitingCourier 列的等待锚点需要它。
+    const allByOrder = new Map<number, typeof allActives>()
+    for (const d of allActives) {
+      const arr = allByOrder.get(d.orderId)
+      if (arr) arr.push(d)
+      else allByOrder.set(d.orderId, [d])
+    }
     // 已完成的单按 activeOrderId 是查不到的——送达时那个字段被清空了（唯一索引要腾给下一单）。
     // 结果「已完成」列常年显示「骑手 未呼叫」，还跟着一个未来时刻的「预计送达」：两条都是假的。
     // 这里按 orderId 把最后一张配送单补回来，让那一列能如实回答「这单最后是谁送的」。
@@ -172,7 +190,10 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
       const finished = await prisma.delivery.findMany({
         where: { orderId: { in: doneLocalIds } },
         orderBy: { id: 'asc' },  // 一单可能有多张（取消重呼、改自送），升序遍历后留下的就是最后一张
-        select: { orderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true, calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true },
+        select: {
+          id: true, orderId: true, status: true, provider: true, courierName: true, courierMobile: true, providerDistanceM: true,
+          calledAt: true, createdAt: true, cancelIntentAt: true, pickedUpAt: true, cancelReason: true, operator: true, callOrigin: true,
+        },
       })
       for (const d of finished) byOrder.set(d.orderId, { ...d, activeOrderId: d.orderId })
     }
@@ -204,7 +225,9 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
         // P8：等待锚点 calledAt ?? createdAt——P1/P2 竞态窗口里 calledAt 可能一度为空
         // （回调抢先推进了状态，orchestrator 还没来得及补上 calledAt），落回占位创建时间，
         // 不让这张卡片的等待时长显示成 NaN/纪元时间。
-        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, d.calledAt ?? d.createdAt, d, null, null, sc))
+        // wb-escalation-display：锚点改用 waitAnchorFor——一律从这一单第一次呼叫算，自动升级/
+        // 店员取消重呼都不清零（用户 2026-09-26 决定）。
+        if (o.deliveryType === 'LOCAL' && d && WAITING_STATUSES.includes(d.status)) cols.waitingCourier.push(toCard(o, waitAnchorFor(d, allByOrder.get(o.id) ?? [d]), d, null, null, sc))
         else if (o.deliveryType === 'EXPRESS' && b && b.activeOrderId === o.id) cols.waitingCourier.push(toCard(o, b.bookedAt ?? b.createdAt, null, b, null))
         else cols.preparing.push(toCard(o, o.acceptedAt, d, b, pk, sc))
       }

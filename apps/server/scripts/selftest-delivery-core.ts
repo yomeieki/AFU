@@ -5,6 +5,9 @@ import { isCircuitTripped, tripCircuit, resetCircuit, getCircuitState } from '..
 import { trunc, makeCallbackDedupeKey, adminEventKey } from '../src/services/delivery/events'
 import { ProviderError } from '../src/services/delivery/types'
 import { shouldKillGhost, shouldAutoVoidCancelIntent, ghostNoIdShouldAlert } from '../src/services/delivery/cancel-intent'
+import {
+  parseAutoEscalationReason, autoEscalationCancelDesc, legacyDisplayDesc, escalatedFrom, waitAnchorFor,
+} from '../src/services/delivery/history-view'
 
 let pass = 0
 function t(name: string, fn: () => void) {
@@ -112,6 +115,99 @@ t('ghostNoIdShouldAlert：rank 0/20/30/40/50/100 期望 false/true/true/true/tru
   assert.strictEqual(ghostNoIdShouldAlert(40), true)
   assert.strictEqual(ghostNoIdShouldAlert(50), true)
   assert.strictEqual(ghostNoIdShouldAlert(100), false)
+})
+
+// wb-escalation-display 验收 4：history-view.ts 纯函数——解析自动升级取消理由、拼历史行文案、
+// 判定升级链路归属、算等待锚点（一律从第一次呼叫算，自动升级/店员取消重呼都不清零）。
+t('parseAutoEscalationReason：合法 reason 解析出 minutes/rungText', () => {
+  assert.deepStrictEqual(
+    parseAutoEscalationReason('3 分钟无人接单，自动升级为并呼最便宜 3 家'),
+    { minutes: '3', rungText: '并呼最便宜 3 家' },
+  )
+})
+t('parseAutoEscalationReason：小数分钟（升级阈值 0.01 场景）', () => {
+  assert.deepStrictEqual(
+    parseAutoEscalationReason('0.01 分钟无人接单，自动升级为并呼最便宜 3 家'),
+    { minutes: '0.01', rungText: '并呼最便宜 3 家' },
+  )
+})
+t('parseAutoEscalationReason：非升级 reason / null → null', () => {
+  assert.strictEqual(parseAutoEscalationReason('商家取消'), null)
+  assert.strictEqual(parseAutoEscalationReason(null), null)
+})
+t('autoEscalationCancelDesc：拼出取消文案', () => {
+  assert.strictEqual(
+    autoEscalationCancelDesc({ providersLabel: '达达', minutes: '3', feeYuan: '0.00', rungText: '并呼最便宜 3 家' }),
+    '达达 3 分钟无人接，已自动取消（取消费 ¥0.00），改为并呼最便宜 3 家',
+  )
+})
+t('legacyDisplayDesc：ADMIN+scheduler 事件 + 匹配的升级 cancelReason → 改写为新文案', () => {
+  const ev = { source: 'ADMIN', operator: 'scheduler', statusDesc: '商家取消（取消费 0.00 元）' }
+  const d = { cancelReason: '3 分钟无人接单，自动升级为并呼最便宜 3 家', calledProviders: ['dadatongcheng'] }
+  assert.strictEqual(legacyDisplayDesc(ev, d), '达达 3 分钟无人接，已自动取消（取消费 ¥0.00），改为并呼最便宜 3 家')
+})
+t('legacyDisplayDesc：带【订单未回退，请核对】尾巴时尾巴保留', () => {
+  const ev = { source: 'ADMIN', operator: 'scheduler', statusDesc: '商家取消（取消费 0.00 元）【订单未回退，请核对】' }
+  const d = { cancelReason: '3 分钟无人接单，自动升级为并呼最便宜 3 家', calledProviders: ['dadatongcheng'] }
+  assert.strictEqual(
+    legacyDisplayDesc(ev, d),
+    '达达 3 分钟无人接，已自动取消（取消费 ¥0.00），改为并呼最便宜 3 家【订单未回退，请核对】',
+  )
+})
+t('legacyDisplayDesc：operator 非 scheduler → 原文不改', () => {
+  const ev = { source: 'ADMIN', operator: 'admin', statusDesc: '商家取消（取消费 0.00 元）' }
+  const d = { cancelReason: '3 分钟无人接单，自动升级为并呼最便宜 3 家', calledProviders: ['dadatongcheng'] }
+  assert.strictEqual(legacyDisplayDesc(ev, d), '商家取消（取消费 0.00 元）')
+})
+t('legacyDisplayDesc：cancelReason 不匹配升级格式 → 原文不改', () => {
+  const ev = { source: 'ADMIN', operator: 'scheduler', statusDesc: '商家取消（取消费 0.00 元）' }
+  const d = { cancelReason: '商家取消', calledProviders: ['dadatongcheng'] }
+  assert.strictEqual(legacyDisplayDesc(ev, d), '商家取消（取消费 0.00 元）')
+})
+t('legacyDisplayDesc：statusDesc 已是新文案 → 原文不改（不重复改写）', () => {
+  const ev = { source: 'ADMIN', operator: 'scheduler', statusDesc: '达达 3 分钟无人接，已自动取消（取消费 ¥0.00），改为并呼最便宜 3 家' }
+  const d = { cancelReason: '3 分钟无人接单，自动升级为并呼最便宜 3 家', calledProviders: ['dadatongcheng'] }
+  assert.strictEqual(legacyDisplayDesc(ev, d), ev.statusDesc)
+})
+
+const D1 = { id: 1, deliveryNo: 'D34-1', status: 'CANCELLED', operator: 'scheduler', callOrigin: null, cancelReason: '3 分钟无人接单，自动升级为并呼最便宜 3 家', calledProviders: ['dadatongcheng'] }
+const D2 = { id: 2, deliveryNo: 'D34-2', status: 'CALLING', operator: 'scheduler', callOrigin: null, cancelReason: null, calledProviders: ['dadatongcheng', 'fengniaotongcheng', 'uupaotui'] }
+t('escalatedFrom：自动升级链成立 → 前一张的运力/分钟数', () => {
+  assert.deepStrictEqual(escalatedFrom(D2, [D1, D2]), { fromDeliveryNo: 'D34-1', providersLabel: '达达', minutes: '3' })
+})
+t('escalatedFrom：前一张是店员手动取消（reason=商家取消）→ null', () => {
+  const d1Manual = { ...D1, cancelReason: '商家取消' }
+  assert.strictEqual(escalatedFrom(D2, [d1Manual, D2]), null)
+})
+t('escalatedFrom：前一张是 SOLO_HELD 未取消（status 非 CANCELLED）→ null', () => {
+  const d1Held = { ...D1, status: 'CALLING' }
+  assert.strictEqual(escalatedFrom(D2, [d1Held, D2]), null)
+})
+t('escalatedFrom：D2 operator 非 scheduler → null', () => {
+  const d2Manual = { ...D2, operator: 'admin' }
+  assert.strictEqual(escalatedFrom(d2Manual, [D1, d2Manual]), null)
+})
+
+t('waitAnchorFor：链成立 → D1 的 calledAt', () => {
+  const d1 = { id: 1, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') }
+  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') }
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt.getTime())
+})
+t('waitAnchorFor：D1 calledAt 为 null → D1 的 createdAt', () => {
+  const d1 = { id: 1, calledAt: null as Date | null, createdAt: new Date('2026-09-26T09:59:00Z') }
+  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') }
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.createdAt.getTime())
+})
+t('waitAnchorFor：店员手动取消重呼 → 仍是 D1 的 calledAt（不清零）', () => {
+  const d1 = { id: 1, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') }
+  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:05:00Z'), createdAt: new Date('2026-09-26T10:05:00Z') }
+  assert.strictEqual(waitAnchorFor(d2, [d1, d2]).getTime(), d1.calledAt.getTime())
+})
+t('waitAnchorFor：三张单 D1→D2 自动升级、D2→D3 店员重呼 → 仍是 D1 的 calledAt', () => {
+  const d1 = { id: 1, calledAt: new Date('2026-09-26T10:00:00Z'), createdAt: new Date('2026-09-26T09:59:00Z') }
+  const d2 = { id: 2, calledAt: new Date('2026-09-26T10:03:00Z'), createdAt: new Date('2026-09-26T10:03:00Z') }
+  const d3 = { id: 3, calledAt: new Date('2026-09-26T10:08:00Z'), createdAt: new Date('2026-09-26T10:08:00Z') }
+  assert.strictEqual(waitAnchorFor(d3, [d1, d2, d3]).getTime(), d1.calledAt.getTime())
 })
 
 console.log(`\n${process.exitCode ? '有失败' : `全部通过 ${pass}`}`)

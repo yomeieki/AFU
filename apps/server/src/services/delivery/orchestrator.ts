@@ -610,7 +610,7 @@ export async function finalizeCancel(
     : null
   const feeYuan = ((cancelFeeFen ?? 0) / 100).toFixed(2)
   const baseDesc = descBuilder ? descBuilder(feeYuan) : `商家取消（取消费 ${feeYuan} 元）`
-  await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source: 'ADMIN', statusDesc: `${baseDesc}${rollbackStuck ? '【订单未回退，请核对】' : ''}${unreadied && unreadied.count > 0 ? '【已撤回「已备好」，到点不再自动呼叫】' : ''}`, operator })
+  await recordDeliveryEvent(tx, { deliveryId: d.id, dedupeKey: adminEventKey(), source, statusDesc: `${baseDesc}${rollbackStuck ? '【订单未回退，请核对】' : ''}${unreadied && unreadied.count > 0 ? '【已撤回「已备好」，到点不再自动呼叫】' : ''}`, operator })
   return { moved: 1 }
 }
 
@@ -647,7 +647,7 @@ export async function patchRacedCancelFee(
   return { patched: true }
 }
 
-export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string; source?: 'ADMIN' | 'SCHEDULER' }): Promise<{ cancelFeeFen: number | null; pending?: true }> {
+export async function cancelDelivery(input: { orderId: number; operator: string; reason?: string; source?: 'ADMIN' | 'SCHEDULER'; descBuilder?: (feeYuan: string) => string }): Promise<{ cancelFeeFen: number | null; pending?: true }> {
   const source = input.source ?? 'ADMIN'
   const d = await requireActive(input.orderId)
   // P15（D2）：缺 taskId/orderId 时不再本地伪取消（旧 P5 缺陷）——店员多半没有快递100
@@ -666,7 +666,7 @@ export async function cancelDelivery(input: { orderId: number; operator: string;
     }
   }
   const result = await prisma.$transaction(async (tx) => {
-    const r = await finalizeCancel(tx, d, cancelFeeFen, input.reason, input.operator, source)
+    const r = await finalizeCancel(tx, d, cancelFeeFen, input.reason, input.operator, source, input.descBuilder)
     if (r.moved === 0) {
       // R1：行已经被 720 回调抢先终态化成 CANCELLED——补记取消费，不当成「丢了」处理
       if (r.terminalStatus === 'CANCELLED') {
