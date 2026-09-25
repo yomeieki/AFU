@@ -40,7 +40,7 @@ import { usePendingOrders, requestNotifyPermission } from '../hooks/usePendingOr
 import { useIsPhone } from '../hooks/useIsPhone'
 import { fmtHHmm, fmtHHmmOrDate, fmtMonthDayTime, fmtMonthDayCn, todayKey } from '../utils/time'
 import { providerLabel } from '../utils/providers'
-import { confirmLabel, normalCardSub, fastCardSub, ladderLine, quoteFooter, type CallStrategyMode } from '../utils/call-dialog'
+import { callConfirmText, normalCardSub, fastCardSub, ladderLine, quoteFooter, type CallStrategyMode } from '../utils/call-dialog'
 import { callStrategyLabelWithEscalation, historyEventRows } from '../utils/delivery-history'
 
 // scheduled 不是显示列：出票前的预约单渲染在待接单列的折叠组里（colKey='pending'），它只是快照里的一个桶
@@ -520,10 +520,12 @@ function CallQuoteBlock({ orderId, initial, mode, cheapestN, escalateMin, callTi
       </div>
       <div className="wb__quote-note">{ladder}</div>
       {/* 报价新鲜度靠时钟偏移校正过，店员没法从「过期/未过期」倒推查价的实际时间——
-          直接写出查价时刻（按上海时区，与小票/其他时间戳同口径），比自己心算靠谱 */}
-      <div className={`wb__quote-foot${stale ? ' wb__quote-note--warn' : ''}`}>
+          直接写出查价时刻（按上海时区，与小票/其他时间戳同口径），比自己心算靠谱。
+          复核 R2：过期态用 wb__quote-foot--stale（声明在 wb__quote-foot 之后，同选择器
+          优先级下才不会被它的 color 覆盖掉）；刷新按钮过期态写「↻ 刷新」，不只是一个孤零零的图标。 */}
+      <div className={`wb__quote-foot${stale ? ' wb__quote-foot--stale' : ''}`}>
         <span>{quoteFooter(fmtHHmm(q?.quotedAt), stale)}</span>
-        <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : '↻'}</button>
+        <button className="wb__iconbtn" onClick={() => void refresh()} disabled={busy}>{busy ? '查价中…' : stale ? '↻ 刷新' : '↻'}</button>
       </div>
     </div>
   )
@@ -1808,13 +1810,15 @@ export default function Workbench() {
       : callMode === 'CHEAPEST_N' ? `并呼最便宜的 ${cheapestN} 家，谁先接算谁的`
         : '并呼设置里的全部运力，谁先接算谁的'
     const callSpec = (
-      title: string, confirmText: string, _what: string,
+      title: string, verb: string, _what: string,
       run: (pick?: CallPick | null) => Promise<unknown>, hasQuote = true,
     ): ConfirmSpec => {
       return {
         title, channel: ch, compact: true,
-        confirmTextOf: (p) => confirmLabel(p.manual ? 'fast' : 'normal', confirmText),
-        confirmText: hasQuote ? confirmLabel('normal', confirmText) : `${confirmText} · 普通`,
+        // 复核 R1：verb 本身必须是「呼叫/重新呼叫/立即呼叫/接单并呼叫」，不带「确认」——
+        // 四个调用点已改（原来传的是「确认呼叫」这类，会拼出「确认呼叫 · 普通」）。
+        confirmTextOf: (p) => callConfirmText({ verb, hasQuote, pick: p }),
+        confirmText: callConfirmText({ verb, hasQuote, pick: null }),
         okMsg: '已呼叫骑手',
         extra: hasQuote
           ? (onPick) => (
@@ -1907,7 +1911,7 @@ export default function Workbench() {
       })))
       if (ch === 'LOCAL' && !card.local?.schedule) {
         btns.push(ghost('accept-call', '接单并呼叫', () => confirm(callSpec(
-          '接单并呼叫骑手', '确认接单并呼叫',
+          '接单并呼叫骑手', '接单并呼叫',
           '先接单，随即向快递100 发单呼叫骑手；骑手会来店里取货。',
           () => acceptAndCallLocalOrder(order.id),
           false,   // 这一刻还没接单、没查过价，报价块给不出数字
@@ -1935,7 +1939,7 @@ export default function Workbench() {
               })))
             }
             btns.push(ghost('call-now', '立即呼叫', () => confirm(callSpec(
-              '立即呼叫骑手', '确认立即呼叫',
+              '立即呼叫骑手', '立即呼叫',
               `${callNowConfirmText(sc, now)}向快递100 发单，骑手会来店里取货。`,
               (pick) => callRider(order.id, pick?.manual ? pick.providers : undefined, true),
             ))))
@@ -1944,7 +1948,7 @@ export default function Workbench() {
             /* 原有立即单的「呼叫骑手 / 重新呼叫骑手」+「自己送」两颗按钮原样 */
             const failed = delivery?.status === 'FAILED'
             btns.push(fill('call', failed ? '重新呼叫骑手' : '呼叫骑手', () => confirm(callSpec(
-              failed ? '重新呼叫骑手' : '呼叫骑手', failed ? '确认重呼' : '确认呼叫',
+              failed ? '重新呼叫骑手' : '呼叫骑手', failed ? '重新呼叫' : '呼叫',
               '向快递100 发单，等骑手接单并到店取货。',
               // 手选了才传 providers：传了服务端就记 MANUAL、原样照办；
               // 不传才走后台策略（并呼最便宜的 N 家），两条路在配送单上分得开，事后能对账

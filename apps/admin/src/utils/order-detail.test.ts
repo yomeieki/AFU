@@ -228,6 +228,38 @@ test('timelineNodes：不传 extra.deliveries 时行为与现有单测逐字一�
   assert.equal(nodes.filter((n) => n.label === '配送取消').length, 0)
 })
 
+// 复核 R4：SELF（店内自送）没有呼叫这回事，callStrategy 恒 null——走 callStrategyLabelWithEscalation
+// 会显示词不达意的「并呼（旧）」。SELF 单应该出「自己送」节点，不出「呼叫骑手」。
+test('timelineNodes：SELF 单 → 只出「自己送」，不出「呼叫骑手」，不含「并呼（旧）」', () => {
+  const self = deliveryFixture({ id: 1, deliveryNo: 'D34-1', provider: 'SELF', callStrategy: null, calledProviders: null, calledAt: '2026-09-26T10:00:00Z' })
+  const nodes = timelineNodes(baseOrder, { deliveries: [self] })
+  assert.equal(nodes.filter((n) => n.label === '呼叫骑手').length, 0)
+  const selfNodes = nodes.filter((n) => n.label === '自己送')
+  assert.equal(selfNodes.length, 1)
+  assert.equal(selfNodes[0].detail, 'D34-1')
+  assert.ok(!nodes.some((n) => n.detail?.includes('并呼（旧）')))
+})
+
+test('timelineNodes：混合 [KD100 已取消, SELF] → 呼叫骑手(D1) + 自己送(D2) + 配送取消(D1)', () => {
+  const d1 = deliveryFixture({
+    id: 1, deliveryNo: 'D34-1', status: 'CANCELLED', provider: 'KD100', callStrategy: 'SOLO',
+    calledAt: '2026-09-26T10:00:00Z', cancelledAt: '2026-09-26T10:03:00Z', cancelReason: '商家取消',
+  })
+  const d2 = deliveryFixture({
+    id: 2, deliveryNo: 'D34-2', status: 'DELIVERED', provider: 'SELF', callStrategy: null, calledProviders: null,
+    calledAt: '2026-09-26T10:05:00Z',
+  })
+  const nodes = timelineNodes(baseOrder, { deliveries: [d1, d2] })
+  const callNodes = nodes.filter((n) => n.label === '呼叫骑手')
+  const selfNodes = nodes.filter((n) => n.label === '自己送')
+  const cancelNodes = nodes.filter((n) => n.label === '配送取消')
+  assert.equal(callNodes.length, 1)
+  assert.equal(callNodes[0].detail?.startsWith('D34-1'), true)
+  assert.equal(selfNodes.length, 1)
+  assert.equal(selfNodes[0].detail, 'D34-2')
+  assert.equal(cancelNodes.length, 1)
+})
+
 test('backLabelFor：/users 开头（含查询参数）→ 返回用户管理', () => {
   assert.equal(backLabelFor('/users?kw=x&orders=5'), '返回用户管理')
 })

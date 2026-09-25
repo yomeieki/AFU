@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Phone } from 'lucide-react'
 import StatusBadge from '../../ui/StatusBadge'
 import Spinner from '../../ui/Spinner'
 import { providerLabel } from '../../../utils/providers'
-import { callStrategyLabelWithEscalation, historyEventRows } from '../../../utils/delivery-history'
+import { callStrategyLabelWithEscalation, historyEventRows, isSelfDelivery } from '../../../utils/delivery-history'
 import { fmtDateTimeSec, fmtHHmmOrDate, fmtMonthDayTime } from '../../../utils/time'
 import type { DeliveryEventInfo, DeliveryHistory, DeliveryInfo, OrderDetail as OrderDetailData } from '../../../types'
 
@@ -72,11 +72,15 @@ export default function DetailDelivery({ order, data, loading, loadFailed, onRet
           )}
           <p className="text-sm text-gray-500">配送成本 {(data?.costFen ?? 0) > 0 ? `¥${yuan(data!.costFen)}` : '—'}</p>
           {/* wb-escalation-display：呼叫方式（自动升级时追加「只呼 X N 分钟无人接，自动升级」）——
-              从 history.deliveries 里找当前 d 对应的那张摘要，取它的 escalatedFrom */}
-          <p className="text-sm text-gray-500">呼叫方式 {callStrategyLabelWithEscalation({
-            callStrategy: d.callStrategy, calledProviders: d.calledProviders, courierCompany: d.courierCompany,
-            escalatedFrom: data?.history?.deliveries.find((x) => x.id === d.id)?.escalatedFrom ?? null,
-          })}</p>
+              从 history.deliveries 里找当前 d 对应的那张摘要，取它的 escalatedFrom。
+              复核 R4：SELF（店内自送）没有运力/呼叫策略这回事，callStrategy 恒 null 会显示
+              词不达意的「并呼（旧）」——这一行只在非自送时出现。 */}
+          {!isSelfDelivery(d) && (
+            <p className="text-sm text-gray-500">呼叫方式 {callStrategyLabelWithEscalation({
+              callStrategy: d.callStrategy, calledProviders: d.calledProviders, courierCompany: d.courierCompany,
+              escalatedFrom: data?.history?.deliveries.find((x) => x.id === d.id)?.escalatedFrom ?? null,
+            })}</p>
+          )}
           {d.callOrigin && <p className="text-sm text-gray-500">呼叫来源 {CALL_ORIGIN_LABEL[d.callOrigin] ?? d.callOrigin}</p>}
           {d.failReason && <p className="text-xs text-red-500">失败原因：{d.failReason}</p>}
           {eventCount > 0 && (
@@ -94,6 +98,8 @@ export default function DetailDelivery({ order, data, loading, loadFailed, onRet
                         <span>
                           {row.tag && <span className="text-gray-400">{row.tag} · </span>}
                           {row.text}
+                          {row.courierName ? `（${row.courierName}）` : ''}
+                          {row.operator ? ` · ${row.operator}` : ''}
                         </span>
                       </li>
                     ))

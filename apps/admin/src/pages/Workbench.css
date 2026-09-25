@@ -269,8 +269,13 @@
 .wb__quote-note--warn { color:var(--warn); font-weight:600; }
 /* 呼叫弹窗简化形态（wb-escalation-display，店主 2026-09-25 决定）：无报价时「暂无报价 / 查价」
    同一行；右下角报价时间 + 刷新按钮同一行右对齐。 */
-.wb__quote-empty-row, .wb__quote-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.wb__quote-foot { margin-top:6px; font-size:12px; color:var(--text-2); }
+.wb__quote-empty-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+/* 复核 R2：时间与刷新按钮作为一组靠右（不是分散在两端）——flex-end 让两个子元素贴在一起停在右侧 */
+.wb__quote-foot { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-top:6px; font-size:12px; color:var(--text-2); }
+/* 必须声明在 .wb__quote-foot 之后：两者选择器优先级相同（各一个 class），
+   后声明的 color 才会赢——放在它前面会被 .wb__quote-foot 的 color:var(--text-2) 盖掉，
+   过期提示色就成了摆设（复核 R2 命中的原因）。 */
+.wb__quote-foot--stale { color:var(--warn); font-weight:600; }
 .wb__redbar { background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
   border-radius:8px; padding:8px 10px; font-size:13px; font-weight:600; line-height:1.5; }
 

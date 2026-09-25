@@ -1,5 +1,5 @@
 import { providerLabel } from './providers.ts'
-import { callStrategyLabelWithEscalation } from './delivery-history.ts'
+import { callStrategyLabelWithEscalation, isSelfDelivery } from './delivery-history.ts'
 import { AFTER_SALE_REASON_LABEL, AFTER_SALE_STATUS_LABEL } from '../types.ts'
 import type { OrderDetail, DeliveryInfo, DeliverySummary, ExpressBookingView, RefundRecord } from '../types.ts'
 
@@ -181,8 +181,11 @@ export function timelineNodes(
     if (extra.deliveries && extra.deliveries.length) {
       // 一单可能有多张配送单（自动升级、店员取消重呼）：每张各出一条「呼叫骑手」；
       // 「配送取消」只对真的被取消过的那几张出，取消原因优先显示自动升级说明。
+      // 复核 R4：SELF（店内自送）没有「呼叫」这回事，callStrategy 恒 null，callStrategyLabelWithEscalation
+      // 会显示词不达意的「并呼（旧）」——自送行改显示「自己送」，不走呼叫方式文案。
       for (const dd of extra.deliveries) {
-        push(dd.calledAt, '呼叫骑手', { detail: `${dd.deliveryNo} · ${callStrategyLabelWithEscalation(dd)}` })
+        if (isSelfDelivery(dd)) push(dd.calledAt, '自己送', { detail: dd.deliveryNo })
+        else push(dd.calledAt, '呼叫骑手', { detail: `${dd.deliveryNo} · ${callStrategyLabelWithEscalation(dd)}` })
       }
       for (const dd of extra.deliveries) {
         push(dd.cancelledAt, '配送取消', { detail: cancelDetailFor(dd, extra.deliveries), tone: 'warn' })
