@@ -1,4 +1,4 @@
-# 高风险路径（协议 §2.2 第 1 条；glob，* 可跨目录；# 起注释）
+# 高风险路径清单：改动命中任一条即按 L 级处理（glob，* 可跨目录；# 起注释）
 # food-shop 版：钱、对外产生真实费用、认证、数据迁移、部署——碰到任一条即 L 级
 # 2026-09-24 由 food SaaS 同名文件按本仓库结构改写
 # —— 支付 / 退款 / 会员资产 / 价格计算 ——
@@ -28,6 +28,7 @@ scripts/deploy.sh
 scripts/set-env.sh
 scripts/import-secrets.sh
 .env.example
-# —— 协议自身 ——
+# —— 协议与 agent 定义本身 ——
+.claude/*
 .agent/*
-.claude/agents/*
+CLAUDE.md

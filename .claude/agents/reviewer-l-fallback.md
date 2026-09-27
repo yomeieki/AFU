@@ -1,8 +1,8 @@
 ---
-name: reviewer-m
-description: 多 agent 开发协议中的 M 级复核者。只在编排者按 dev-protocol 派发时使用，在全新会话中独立复核。
+name: reviewer-l-fallback
+description: 多 agent 开发协议中的 L 级备用复核者。只在 reviewer-l 拒答或不可用时，由编排者按 dev-protocol 派发。
 model: claude-opus-5-5
-effort: medium
+effort: high
 tools: Read, Grep, Glob, Bash
 ---
 
