@@ -13,6 +13,7 @@ var requestSubscribe = require('../../utils/subscribe').requestSubscribe
 var formatPrice = require('../../utils/format').formatPrice
 var localCatalog = require('../../utils/local-catalog')
 var st = require('../../utils/pickup-checkout-state')
+var asapUtil = require('../../utils/pickup-asap')
 var newClientRequestId = require('../../utils/local-checkout-state').newClientRequestId
 var tableware = require('../../utils/tableware')
 var app = getApp()
@@ -54,6 +55,9 @@ Page({
     slotsError: '',
     hasAnySlot: false,     // 本轮时段里是否有任意一格可选（区分「还没选」与「真没时段」两种占位文案）
     pickerOpen: false,
+    // 尽快取（2026-09-28）：asap 为 null = 老服务端没下发，页面只有预约（与改动前一样）
+    pickupMode: 'SCHEDULED', // 'ASAP' | 'SCHEDULED'
+    asap: null,             // utils/pickup-asap decorateAsap 的结果
     // 取餐人
     contactName: '',
     contactPhone: '',
@@ -191,6 +195,18 @@ Page({
         }
         var patch = { days: days, slotsLoading: false, hasAnySlot: hasAnySlot }
         var blocked = !!view.blocked
+        // 尽快取（2026-09-28）：第一次拉到 asap 时按可用与否定默认模式（可用 → 尽快取；否则停在预约，
+        // 时段照旧不自动预选）；之后的刷新只在「顾客选着尽快取、它却不可用了」时切回预约并提示
+        var asap = asapUtil.decorateAsap(view.asap)
+        patch.asap = asap
+        if (asap && !self._asapModeInited) {
+          self._asapModeInited = true
+          patch.pickupMode = asapUtil.initialPickupMode(asap)
+        } else if (self.data.pickupMode === 'ASAP' && !(asap && asap.available)) {
+          patch.pickupMode = 'SCHEDULED'
+          self._clientRequestId = newClientRequestId()
+          if (!blocked) wx.showToast({ title: '尽快取暂不可用，请选择取餐时间', icon: 'none', duration: 2500 })
+        }
         if (blocked) {
           // 服务端说这会儿不能自取（休业/暂停/未开通）：清选择、阻塞提交，文案用它给的
           patch.selected = null
@@ -256,6 +272,8 @@ Page({
         noSlots: !d.slotsLoading && !d.slotsError && !d.hasAnySlot,
         hasSlot: !!d.selected,
         slotStale: d.slotStale,
+        mode: d.pickupMode,
+        asapAvailable: !!(d.asap && d.asap.available),
         phoneValid: st.isValidPhone(d.contactPhone),
         belowMinGap: gap,
         payAmount: payAmount,
@@ -275,8 +293,25 @@ Page({
     // 阻塞、或本轮压根没有任何一格可选（noSlots/初次还没拉到）时，整张卡片点了也不该弹出空
     // 弹层；时段请求在途但手上还有上一轮的旧列表（hasAnySlot 仍真）时照常能打开——
     // 与按钮判定用的 !hasSlot 口径不同，这里看的是「弹层里有没有格子可翻」。
+    // 尽快取模式下点卡片不弹时段（要选时段先点「预约时段」）
+    if (this.data.pickupMode === 'ASAP') return
     if (this.data.blockReason || !this.data.hasAnySlot) return
     this.setData({ pickerOpen: true })
+  },
+  // 尽快取 / 预约时段 切换（2026-09-28）。尽快取不可用时点不动；再点一次「预约时段」直接开时段弹层
+  pickMode: function(e) {
+    var mode = e.currentTarget && e.currentTarget.dataset.mode
+    if (mode !== 'ASAP' && mode !== 'SCHEDULED') return
+    if (mode === 'ASAP' && !(this.data.asap && this.data.asap.available)) return
+    if (mode === this.data.pickupMode) {
+      if (mode === 'SCHEDULED') this.openPicker()
+      return
+    }
+    this.setData({ pickupMode: mode, pickerOpen: false })
+    // 换了取餐方式就是另一张单：超时重试的幂等只该在同一取餐方式内成立（D4）
+    this._clientRequestId = newClientRequestId()
+    this.recompute()
+    if (mode === 'SCHEDULED' && !this.data.selected) this.openPicker()
   },
   closePicker: function() {
     this.setData({ pickerOpen: false })
@@ -429,6 +464,14 @@ Page({
       this.openTableware()
       return
     }
+    // 尽快取刚变成不可用：切回预约、重拉时段并打开选择器
+    if (act.action === 'schedule') {
+      this.setData({ pickupMode: 'SCHEDULED', selected: null, slotStale: false, pickerOpen: true })
+      this._clientRequestId = newClientRequestId()
+      this.recompute()
+      this.loadSlots()
+      return
+    }
     if (act.action === 'reslot') {
       this.setData({ selected: null, slotStale: false, pickerOpen: true })
       this.recompute()
@@ -440,15 +483,17 @@ Page({
   },
 
   doSubmit: function() {
-    if (this.data.submitting || !this.data.selected || this.data.slotStale || !this.data.tableware || !this.data.action || this.data.action.action !== 'submit' || this.data.action.disabled) return
+    var asapMode = this.data.pickupMode === 'ASAP'
+    // 尽快取不需要时段；预约照旧要求已选且未失效
+    if (this.data.submitting || (asapMode ? !(this.data.asap && this.data.asap.available) : (!this.data.selected || this.data.slotStale)) || !this.data.tableware || !this.data.action || this.data.action.action !== 'submit' || this.data.action.disabled) return
     this.setData({ submitting: true })
     this.recompute()
     var self = this
     var name = (this.data.contactName || '').trim()
-    orderApi.createOrder({
+    orderApi.createOrder(Object.assign({
       cartItemIds: this.data.cartItemIds,
       deliveryType: 'PICKUP',
-      pickupAt: this.data.selected.startAt,
+    }, asapUtil.pickupTimePayload(this.data.pickupMode, this.data.selected), {
       pickupContact: name ? { name: name.slice(0, 32), phone: this.data.contactPhone.trim() } : { phone: this.data.contactPhone.trim() },
       remark: this.data.remark ? this.data.remark.slice(0, 20) : undefined,
       tableware: this.data.tableware,
@@ -456,7 +501,7 @@ Page({
       gifts: this.data.gifts && this.data.gifts.length ? this.data.gifts : undefined,
       // 幂等键。失败时故意不换：超时那一类失败服务端可能已建单，再按一次带同一个 id 就拿回那张单
       clientRequestId: this._clientRequestId,
-    }, true)
+    }), true)
       .then(function(res) {
         if (typeof res.actualAmount === 'number' && res.actualAmount !== self.data.payAmount) {
           console.warn('local/pickup payAmount 与服务端 actualAmount 不一致', self.data.payAmount, res.actualAmount)
@@ -496,6 +541,16 @@ Page({
       this.recompute()
       this.loadSlots()
       this.setData({ pickerOpen: true })
+      return
+    }
+    // 42285 尽快取此刻不可用（打烊/午休/今日已约满/本段来不及，2026-09-28）：提示、重拉时段、
+    // 切回预约模式、清掉已选时段（D5）
+    if (code === 42285) {
+      wx.showToast({ title: err.message || '暂不能尽快取，请预约取餐时间', icon: 'none', duration: 2500 })
+      this.setData({ pickupMode: 'SCHEDULED', selected: null, slotStale: false })
+      this._clientRequestId = newClientRequestId()
+      this.recompute()
+      this.loadSlots()
       return
     }
     // 42280 自取不可用 / 42282 门槛：刷 meta，按钮按最新状态变

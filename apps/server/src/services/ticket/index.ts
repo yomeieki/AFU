@@ -27,7 +27,7 @@ import {
   renderTestTicket, renderReadyDueTicket, TicketOrderInput, TicketChannel,
 } from './content'
 import { getLocalSettings, isShopOpenNow, LocalDeliverySettings } from '../local-settings'
-import { pickupTicketLabel, prepStartAt } from '../pickup'
+import { pickupTicketFields, prepStartAt } from '../pickup'
 import { scheduleTimeline } from '../delivery/schedule'
 import { ticketLabel, ticketLabelParts, hhmmOf } from '../slots'
 
@@ -170,6 +170,8 @@ type OrderForTicket = {
   cancelRequestNote: string | null
   // ── 自取（PICKUP）专属──
   pickupAt: Date | null
+  // 尽快取（2026-09-28）。同样是 TicketOrderInput 的唯一生产者之一：漏列就永远印成预约票
+  pickupAsap: boolean
   pickupDiscountAmount: number
   // 全店满减（2026-09-17 设计 §6）。同样是 TicketOrderInput 的**唯一生产者**，漏列不会有
   // 编译错误，只会让票面永远打不出满减行。
@@ -185,7 +187,7 @@ const ORDER_SELECT = {
   status: true, scheduledAt: true,
   discountAmount: true, pointsUsed: true, cancelRequestNote: true,
   tablewareMode: true, tablewareCount: true,
-  pickupAt: true, pickupDiscountAmount: true, promoDiscountAmount: true,
+  pickupAt: true, pickupAsap: true, pickupDiscountAmount: true, promoDiscountAmount: true,
   items: { select: { productName: true, specText: true, quantity: true, subtotal: true, isGift: true, pointsCost: true } },
 } as const
 
@@ -217,14 +219,11 @@ function toTicketInput(order: OrderForTicket, slotMinutes: number, schedule: Sch
     tablewareMode: order.tablewareMode,
     tablewareCount: order.tablewareCount,
     pickupAt: order.pickupAt,
-    // 票面印绝对日期（方案一）：付款时打的票第二天还在夹子上，「明天」会变成假话
-    pickupSlotLabel: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).text : null,
-    // S7（店主决定 D3，复核裁决 R9）：日期段 / 时段段拆开传，票面把日期普通字号、时段单独放大
-    // （content.ts）。pickupTicketLabel 是 ticketLabel 的别名（services/pickup.ts 是 deny，不改），
-    // 已恢复成 { text, stamp } 契约，date/time 改用 slots.ticketLabelParts 单独算。
-    pickupSlotDate: order.pickupAt ? ticketLabelParts(order.pickupAt, slotMinutes).date : null,
-    pickupSlotTime: order.pickupAt ? ticketLabelParts(order.pickupAt, slotMinutes).time : null,
-    pickupDayStamp: order.pickupAt ? pickupTicketLabel(order.pickupAt, slotMinutes).stamp : null,
+    // 票面印绝对日期（方案一）：付款时打的票第二天还在夹子上，「明天」会变成假话。
+    // S7（店主决定 D3，复核裁决 R9）：日期段 / 时段段拆开传，票面把日期普通字号、时段单独放大（content.ts）。
+    // 尽快取（2026-09-28）：取餐联放大行「尽快取 约 HH:mm」（读库里付款时重算后的 pickupAt），不盖戳、不出日期行。
+    // 五个字段统一由 services/pickup.ts 的 pickupTicketFields 给出（纯函数，selftest-pickup-asap A8/A15 覆盖）。
+    ...pickupTicketFields(order.pickupAt, order.pickupAsap, slotMinutes),
     pickupDiscountAmount: order.pickupDiscountAmount,
     promoDiscountAmount: order.promoDiscountAmount,
     // 复核 R10：distanceM 为 null（数据异常）时 enqueueOrderTicket 算不出 schedule（见下方调用处），
@@ -687,7 +686,7 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
 
   const candidates = await prisma.order.findMany({
     where: { status: 'PAID', paidAt: { not: null } },
-    select: { id: true, deliveryType: true, paidAt: true, announceCount: true, lastAnnouncedAt: true, pickupAt: true, scheduledAt: true, distanceM: true },
+    select: { id: true, deliveryType: true, paidAt: true, announceCount: true, lastAnnouncedAt: true, pickupAt: true, pickupAsap: true, scheduledAt: true, distanceM: true },
     orderBy: { paidAt: 'asc' },
     take: BATCH,
   })
@@ -714,7 +713,8 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
     if (!order.paidAt) continue
     // 自取预约单：催单基准是「开始备餐时刻 − 15 分钟」，不是付款时刻——明天中午取的单今天不该响一整天
     // （与 services/pickup-tasks.ts 的企微催单同一口径）。设置读不到时退回按付款时刻，不因此停催。
-    if (order.deliveryType === 'PICKUP' && localSettings) {
+    // 尽快取（2026-09-28）不走这道门：与同城立即单同一口径，从付款时刻起算
+    if (order.deliveryType === 'PICKUP' && !order.pickupAsap && localSettings) {
       if (!order.pickupAt) continue
       if (now < prepStartAt(localSettings, order.pickupAt).getTime() - 15 * 60_000) continue
     }
@@ -734,7 +734,8 @@ export async function repeatAnnounce(): Promise<{ announced: number; exhausted: 
     // ⚠️ 这里是 `continue` 而不是「记一次」：**绝不能推进 announceCount / lastAnnouncedAt**。
     // 否则打烊那几个小时会把 maxTimes 空烧完，第二天开门时次数已经耗尽，反而一次都不催 ——
     // 那正好是这个门控要避免的相反效果。
-    if (order.deliveryType !== 'LOCAL' && !shopOpen) continue
+    // 尽快取（2026-09-28）与同城一样不受门控：它只能在营业段内下单，钱已收，打烊那一刻也得有人接
+    if (order.deliveryType !== 'LOCAL' && !(order.deliveryType === 'PICKUP' && order.pickupAsap) && !shopOpen) continue
     const afterMin = order.deliveryType === 'EXPRESS' ? settings.repeat.expressAfterMin : settings.repeat.localAfterMin
     const waitedMs = now - anchor
     const waitedMin = waitedMs / 60_000

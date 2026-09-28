@@ -43,7 +43,8 @@ function fmtTime(d: Date) {
   return d.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
 }
 
-function buildContent(order: NotifyOrderInfo, items: NotifyItemInfo[]) {
+/** 来单推送正文。导出只为自测（scripts/selftest-pickup-asap.ts A10）*/
+export function buildContent(order: NotifyOrderInfo, items: NotifyItemInfo[]) {
   const lines = items.map((it) => {
     const spec = it.specText ? `（${it.specText}）` : ''
     // 赠品前缀不能省：它在订单里金额为 0，不标出来打包的人很容易当成「多出来的一行」跳过
@@ -54,8 +55,12 @@ function buildContent(order: NotifyOrderInfo, items: NotifyItemInfo[]) {
   const discountLine = order.discountAmount && order.discountAmount > 0
     ? [`已用券 −¥${fmtYuan(order.discountAmount)}`]
     : []
+  // 尽快单的取餐文案本身就是「尽快取 约 HH:mm」（services/pickup.ts 的 pickupTimeLabel），再补一个「取」
+  // 就成了「尽快取 约 11:40 取」。按文案前缀判而不是另加字段：真实回调那条推送是手拼字面量，
+  // 那个文件（wechat-notify.ts）本批只许换取餐文案那一块。预约时段文案（「今天 12:00–12:30」）不会以它开头。
+  const pickupSuffix = order.pickupSlotLabel && !order.pickupSlotLabel.startsWith('尽快取') ? ' 取' : ''
   return [
-    order.deliveryType === 'PICKUP' ? `**🏪 自取新订单${order.pickupSlotLabel ? ` · ${order.pickupSlotLabel} 取` : ''}**`
+    order.deliveryType === 'PICKUP' ? `**🏪 自取新订单${order.pickupSlotLabel ? ` · ${order.pickupSlotLabel}${pickupSuffix}` : ''}**`
       : order.deliveryType === 'LOCAL' ? (order.scheduleSlotLabel ? `**📅 同城预约单 · ${order.scheduleSlotLabel} 送达**` : `**🛵 同城新订单**`)
       : `**🔔 新订单待发货**`,
     `订单号：${order.orderNo}`,

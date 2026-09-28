@@ -59,14 +59,16 @@ const COLUMNS: { key: ColKey; title: string }[] = [
 
 /** 渠道徽标：卡片与抽屉头共用（图例文案是「到店自取」，另写）。
  *  scheduled：同城预约单（未出票也好、已接单也好）显示时钟图标 +「同城预约」、琥珀色底，与立即单区分开 */
-function ChannelBadge({ channel, scheduled }: { channel: OrderChannel; scheduled?: boolean }) {
+function ChannelBadge({ channel, scheduled, asap }: { channel: OrderChannel; scheduled?: boolean; asap?: boolean }) {
   const sched = channel === 'LOCAL' && !!scheduled
+  // 尽快取（2026-09-28）：自取尽快单徽标写「自取 · 尽快」，与预约自取一眼分开（配色仍是自取色）
+  const pickupAsap = channel === 'PICKUP' && !!asap
   const cls = sched ? 'wb__badge--sched' : channel === 'LOCAL' ? 'wb__badge--local' : channel === 'PICKUP' ? 'wb__badge--pickup' : 'wb__badge--express'
   const Icon = sched ? Clock : channel === 'LOCAL' ? Bike : channel === 'PICKUP' ? Store : Package
   return (
     <span className={`wb__badge ${cls}`}>
       <Icon className="w-3.5 h-3.5" />
-      {sched ? '同城预约' : channel === 'LOCAL' ? '同城配送' : channel === 'PICKUP' ? '自取' : '全国邮寄'}
+      {sched ? '同城预约' : channel === 'LOCAL' ? '同城配送' : channel === 'PICKUP' ? (pickupAsap ? '自取 · 尽快' : '自取') : '全国邮寄'}
     </span>
   )
 }
@@ -240,12 +242,12 @@ function urgencyOf(card: WorkbenchCard, colKey: ColKey, now: number, prepMin: nu
   const sc = card.local?.schedule
   if (sc) return scheduleUrgency(sc.phase)
   // 明天的自取单在哪一列都不点亮：它的所有时限都在明天
-  if (card.channel === 'PICKUP' && isFutureDayPickup(card.pickup?.pickupAt, now)) return ''
+  if (card.channel === 'PICKUP' && isFutureDayPickup(card.pickup?.pickupAt, now, card.pickup?.asap)) return ''
   let u: Urgency = ''
   const budget = dwellBudget(colKey, card.channel, prepMin)
   if (budget) {
     // 自取待接单从「开始备餐 −15 分」起算（下午的单不该从付款起就烧红）
-    const since = card.channel === 'PICKUP' && card.pickup ? pickupPendingAnchor(card.waitSince, card.pickup.prepStartAt) : Date.parse(card.waitSince)
+    const since = card.channel === 'PICKUP' && card.pickup ? pickupPendingAnchor(card.waitSince, card.pickup.prepStartAt, card.pickup.asap) : Date.parse(card.waitSince)
     const min = (now - since) / 60_000
     if (min >= budget[1]) u = 'late'
     else if (min >= budget[0]) u = 'warn'
@@ -289,10 +291,11 @@ function pickupCapsule(card: WorkbenchCard, colKey: ColKey, now: number, urg: Ur
   if (card.channel !== 'PICKUP' || !card.pickup) return null
   const pickup = card.pickup
   if (colKey === 'done') return null
-  if (isFutureDayPickup(pickup.pickupAt, now)) return { text: pickup.slotLabel || '明日自取', cls: '' }
+  if (isFutureDayPickup(pickup.pickupAt, now, pickup.asap)) return { text: pickup.slotLabel || '明日自取', cls: '' }
   if (colKey === 'pending') {
-    const anchor = pickupPendingAnchor(card.waitSince, pickup.prepStartAt)
-    if (anchor > now) return { text: `${hhmm(pickup.prepStartAt)} 开始备餐`, cls: '' }
+    // 尽快单（2026-09-28）从付款时刻起算，永远不出「HH:mm 开始备餐」
+    const anchor = pickupPendingAnchor(card.waitSince, pickup.prepStartAt, pickup.asap)
+    if (!pickup.asap && anchor > now) return { text: `${hhmm(pickup.prepStartAt)} 开始备餐`, cls: '' }
     return waitLabel(new Date(anchor).toISOString(), now, urg)
   }
   // preparing / delivering
@@ -1203,7 +1206,7 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }}
     >
       <div className="wb__card-top">
-        <ChannelBadge channel={card.channel} scheduled={!!card.local?.schedule} />
+        <ChannelBadge channel={card.channel} scheduled={!!card.local?.schedule} asap={!!card.pickup?.asap} />
         <span className={`wb__wait ${w.cls}`}>{w.text}</span>
       </div>
 
@@ -1222,7 +1225,7 @@ function Card({ card, colKey, now, graceMin, prepMin, onOpen, onHandleCancel, on
       <div className="wb__fields">
         {pickup ? (
           <>
-            <span>取餐 {pickup.slotLabel || hhmm(pickup.pickupAt)}</span>
+            {pickup.asap ? <span>预计 {hhmm(pickup.pickupAt)} 可取</span> : <span>取餐 {pickup.slotLabel || hhmm(pickup.pickupAt)}</span>}
             {colKey === 'delivering' && pickup.pickupReadyAt && <span>已备好 {hhmm(pickup.pickupReadyAt)}</span>}
             {colKey === 'done' && <span>已取餐</span>}
           </>
@@ -1868,7 +1871,7 @@ export default function Workbench() {
       if (aColKey === 'pending') {
         btns.push(fill('accept', '接单', () => confirm({
           title: '接单', channel: ch, confirmText: '确认接单', okMsg: '已接单',
-          what: `订单转入「备餐中」。${pk?.prepStartAt ? `建议 ${hhmm(pk.prepStartAt)} 开始备餐，` : ''}做好后点「已备好」通知顾客来取。`,
+          what: `订单转入「备餐中」。${pk?.asap ? `尽快单，请现在开始备餐（预计 ${hhmm(pk.pickupAt)} 可取），` : pk?.prepStartAt ? `建议 ${hhmm(pk.prepStartAt)} 开始备餐，` : ''}做好后点「已备好」通知顾客来取。`,
           customer: '顾客小程序显示「商家已接单」。',
           cost: '不产生任何费用。',
           run: () => acceptOrder(order.id),
@@ -2050,7 +2053,7 @@ export default function Workbench() {
         <div className="wb__mask" onClick={closeDrawer} />
         <aside className="wb__drawer" role="dialog" aria-modal="true">
           <div className="wb__drawer-head">
-            <ChannelBadge channel={card.channel} scheduled={!!card.local?.schedule} />
+            <ChannelBadge channel={card.channel} scheduled={!!card.local?.schedule} asap={!!card.pickup?.asap} />
             <span><span className="wb__shortno">{card.receiver.phone ? `尾号${card.receiver.phone.slice(-4)}` : shortNo(card.orderNo)}</span></span>
             <button className="wb__iconbtn" onClick={closeDrawer} aria-label="关闭"><X className="w-4 h-4" /></button>
           </div>
@@ -2110,8 +2113,15 @@ export default function Workbench() {
               </div>
               {pickup ? (
                 <>
-                  <div className="wb__line"><span>取餐时段</span><span>{pickup.slotLabel || hhmm(pickup.pickupAt)}</span></div>
-                  <div className="wb__line"><span>开始备餐</span><span>{hhmm(pickup.prepStartAt)}</span></div>
+                  {pickup.asap ? (
+                    /* 尽快单（2026-09-28）：没有「取餐时段」「开始备餐」两个概念，只有付款时算好的预计可取时刻 */
+                    <div className="wb__line"><span>尽快取 · 预计可取</span><span>{hhmm(pickup.pickupAt)}</span></div>
+                  ) : (
+                    <>
+                      <div className="wb__line"><span>取餐时段</span><span>{pickup.slotLabel || hhmm(pickup.pickupAt)}</span></div>
+                      <div className="wb__line"><span>开始备餐</span><span>{hhmm(pickup.prepStartAt)}</span></div>
+                    </>
+                  )}
                   {pickup.pickupReadyAt && <div className="wb__line"><span>已备好</span><span>{dateTime(pickup.pickupReadyAt)}</span></div>}
                   {!!o?.completedAt && <div className="wb__line"><span>已取走</span><span>{dateTime(o.completedAt)}</span></div>}
                 </>
@@ -2548,7 +2558,7 @@ export default function Workbench() {
           // 明天的自取单默认折叠到列底（spec §6.1）；开始备餐时刻一到自然是「今天」，会自动回到正常列。
           // 带取消申请的明日单例外：红框告警卡必须留在正常列，否则顶栏「待处理告警」有数但列里找不到卡（Important-4）。
           const foldable = (c: WorkbenchCard) =>
-            c.channel === 'PICKUP' && isFutureDayPickup(c.pickup?.pickupAt, now) && !c.pickup?.cancelRequested
+            c.channel === 'PICKUP' && isFutureDayPickup(c.pickup?.pickupAt, now, c.pickup?.asap) && !c.pickup?.cancelRequested
           const tomorrow = col.key === 'done' ? [] : list.filter(foldable)
           const todayList = col.key === 'done' ? list : list.filter((c) => !foldable(c))
           // 预约单出票前不进五列（服务端 columns.scheduled），在待接单列顶部折成一组；有取消申请的留在正常列（同明日自取的道理）

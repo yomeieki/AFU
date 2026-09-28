@@ -242,6 +242,8 @@ export interface Order {
   cancelRequestNote?: string | null
   /** 自取单：取餐时段起点 / 备好时刻 / 自取优惠（分）。非自取单为 null/0 */
   pickupAt?: string | null
+  /** 尽快取（2026-09-28）：true 时 pickupAt 是预计可取时刻（付款成功时可能已被推后），不是时段起点 */
+  pickupAsap?: boolean
   pickupReadyAt?: string | null
   pickupDiscountAmount?: number
   /** 预约送达（2026-09-21）：送达时段起点 / 已备好时刻 / 详情接口算好的倒推时刻。立即单为 null */
@@ -840,8 +842,10 @@ export interface WorkbenchCard {
     pickupReadyAt: string | null
     /** 开始备餐时刻 = pickupAt − 备餐时长 − acceptBufferMin（服务端 prepStartAt） */
     prepStartAt: string | null
-    /** 「今天 12:00–12:30」，服务端按快照时刻算好 */
+    /** 「今天 12:00–12:30」，服务端按快照时刻算好；尽快单为「尽快取 约 HH:mm」 */
     slotLabel: string
+    /** 尽快取（2026-09-28）：true 时 prepStartAt 是付款时刻，待接单从付款起算；旧服务端没有此字段 */
+    asap?: boolean
     cancelRequested: boolean
     cancelRejected: 'AUTO' | 'MANUAL' | null
     acceptedAt: string | null

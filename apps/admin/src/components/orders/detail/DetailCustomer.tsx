@@ -2,6 +2,7 @@ import { Copy, Phone } from 'lucide-react'
 import { copyText } from '../copyText'
 import { tablewareLabel } from '../../../utils/tableware'
 import { fmtDateTime } from '../../../utils/time'
+import { pickupDetailLine } from '../../../utils/pickup'
 import type { OrderDetail } from '../../../types'
 
 export default function DetailCustomer({ order }: { order: OrderDetail }) {
@@ -35,7 +36,8 @@ export default function DetailCustomer({ order }: { order: OrderDetail }) {
       {order.schedule && <p className="text-sm text-gray-700">预约送达 {order.schedule.slotLabel}</p>}
       {isPickup && (
         <div className="text-sm text-gray-700 space-y-1">
-          {order.pickupAt && <p>预约取餐 {fmtDateTime(order.pickupAt)}</p>}
+          {/* 尽快单「尽快取 · 预计 HH:mm」，预约单「预约取餐 …」照旧（utils/pickup.ts pickupDetailLine） */}
+          {order.pickupAt && <p>{pickupDetailLine(order)}</p>}
           {order.pickupReadyAt && <p>备好 {fmtDateTime(order.pickupReadyAt)}</p>}
           {order.status === 'COMPLETED' && order.completedAt && <p>取走 {fmtDateTime(order.completedAt)}</p>}
         </div>

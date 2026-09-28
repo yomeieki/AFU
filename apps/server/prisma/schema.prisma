@@ -322,6 +322,10 @@ model Order {
   // ── 到店自取（deliveryType=PICKUP 时写入；spec 2026-09-11-local-pickup-design §3.1）──
   // 顾客选的取餐时段起点。取消窗口/催单/过时未取/自动完成全部以它为基准，不看 paidAt
   pickupAt                    DateTime? @map("pickup_at")
+  // 尽快取（2026-09-28）：true = 顾客不选时段、「尽快取」下的单。此时 pickupAt 存的是「预计可取时刻」：
+  // 下单时按 services/pickup.ts 的 asapReadyAt 算一次，付款成功时可能被推后一次（只往后、不往前，
+  // 见 asapPickupAtOnPaid）。false = 预约自取（含存量数据），pickupAt 是所选时段的起点。
+  pickupAsap                  Boolean   @default(false) @map("pickup_asap")
   // 自取优惠（分）。小票与统计直接读它，不从设置反推——设置会变，这单当时优惠了多少不该跟着变
   pickupDiscountAmount        Int       @default(0) @map("pickup_discount_amount")
   // 店员点「已备好」的时刻（PREPARING → SHIPPED）
