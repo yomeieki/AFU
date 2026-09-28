@@ -96,6 +96,9 @@ function headNoticeOf(meta, mode) {
     var when = pk.earliestPickupWhen
     if (when === 'NONE') return { text: '暂无可取时段', blocking: true }
     if (when === 'CURRENT') return { text: '', blocking: false }
+    // 尽快取（2026-09-28）此刻可用：顾客现在下单就是尽快取，不再提示「现在下单为预约自取」。
+    // 放在 NONE 之后：blocking 的取值在任何输入下都与改前一致；asap 缺失/不可用时走下面原逻辑
+    if (pk.asap && pk.asap.available === true) return { text: '', blocking: false }
     // LATER（任一种——营业时间外，或此刻仍在营业时段但本段已约不到）都给软提示；
     // when 缺失（老服务端）按 outOfHours 兜底，与 HEAD 逐字节一致。
     if (when === 'LATER' || (when === undefined && outOfHours(meta))) {

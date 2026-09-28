@@ -1976,9 +1976,39 @@ PENDING(占位，外呼进行中) ──(外呼成功)──► BOOKED ──(1/
 | 42282 | 未达自取起送门槛 |
 | 42283 | （预留：取餐人手机号无效。当前由 zod 以 40001 报，保留码值不占用） |
 | 42284 | 操作与自取订单状态不符（发货/标记完成/确认收货等误操作） |
+| 42285 | 尽快取此刻不可用（不在营业时间 / 今日已约满 / 本段来不及，文案按原因区分；2026-09-28，见下方「尽快取」） |
 
 同城看板路由（`/admin/local/orders/:id/accept|call|self-deliver|delivered`）对非同城单沿用既有的
 `42204`，不改成 42284——那些守卫早于自取存在，对邮寄单也是 42204。
+
+### 尽快取（2026-09-28）
+
+方案 `docs/superpowers/plans/2026-09-28-pickup-asap.md`。营业中顾客可以不选时段直接下「尽快取」单，服务端算预计可取时刻写进 `pickupAt`，
+新列 `orders.pickup_asap`（Prisma `pickupAsap`，默认 false = 预约自取，存量数据全是 false）标记尽快单。唯一实现在 `services/pickup.ts`。
+
+| 接口 | 变化 |
+|---|---|
+| `GET /api/local/pickup-slots` | 多 `asap: { available, readyAt, minutes, reason }`。不可用时 `readyAt`、`minutes` 为 `null`，`reason` ∈ `DISABLED`/`HOLIDAY`/`PAUSED`/`CLOSED`/`NONE`/`TOO_LATE`（按此顺序判第一个不满足的）。已有字段不变。 |
+| `GET /api/local/meta` | `pickup` 节多同一个 `asap`。 |
+| `POST /api/orders` | 新增可选 `pickupMode: 'ASAP' \| 'SCHEDULED'`，不传 = `SCHEDULED`（老客户端，校验、报错码、文案与改前逐字节一致）。只有 `deliveryType='PICKUP'` 能带，否则 `40001`；`ASAP` 时 **不传** `pickupAt`（传了 `40001`），`pickupContact` 仍必填。校验顺序：`42280`（未开通/休业/暂停）→ `42285`（尽快取不可用）→ `42282` 起送 → 券；`42285` 在任何库存与券的写操作之前报出。响应多 `pickupAsap`。 |
+| `GET /api/orders/:id` | 顶层多 `pickupAsap`；`pickup` 节多 `asap`，尽快单的 `slotLabel` 为「尽快取 约 HH:mm」。 |
+| `PUT /api/orders/:id/cancel` | 尽快单不走「约定时刻前 selfCancelLeadMin」口径：`PAID` 且未接单可秒退（条件写 `status='PAID' AND accepted_at IS NULL`，与接单互斥）；接单后 `42204`「店家已接单，不可取消…」。 |
+| `POST /api/orders/:id/cancel-request` | 尽快单恒 `42229`（`canRequestCancel` 恒 false）：未接单提示直接取消，已接单「店家已接单，不可取消」。售后（`/after-sale`）不受影响。 |
+| `POST /api/orders/:id/pay`（mock） | 响应体不变。 |
+| `GET /api/admin/orders`、`/:id` | 多 `pickupAsap`。 |
+| `GET /api/admin/workbench/snapshot` | 自取卡片 `pickup` 多 `asap`；尽快单 `prepStartAt` 给付款时刻（待接单从付款起算），`slotLabel` 为「尽快取 约 HH:mm」；非「已完成」列里同为自取时尽快单排在预约自取之前。 |
+
+**预计可取时刻**：`readyAt = 向上取整到整分(t + P + B)`，`B = pickup.acceptBufferMin`；`P` 先取 `prepMinutes`，临时取餐时刻 `t+P+B`
+落在高峰窗口里就换成 `peak.prepMaxMinutes`。下单时 `t = 此刻`，且要求 `readyAt` 严格早于此刻所在营业段的结束。
+
+**尽快单的 `pickupAt` 在付款成功时可能被推后一次**：真实回调与 mock 付款都在 `PENDING_PAYMENT→PAID` 那条条件写的同一事务里，
+把 `pickupAt` 重算为 `max(原值, readyAt(实时设置, 锚点))`，只在条件写成功（count=1）时生效，永不往前挪；回调重推、mock 重复付款都不会再推后。
+锚点 = `max(paidAt, 处理时刻)`：真实回调的 `paidAt` 是微信 `success_time`（缺省服务器时刻），处理时刻是服务器处理这次回调的时钟；mock 两者都是服务器当前时刻。
+`orders.paid_at` / `payments.paid_at` 的取值与含义不变，锚点不落库。付款时**不校验**尽快可用性（暂停、休业、已过营业段都照收照做，预计时刻不封顶）。
+票面、工作台、详情、来单推送、催单、未取提醒、自动完成一律读库里重算后的值。
+
+**催单与票面**：尽快单企微催单在付款 + 15 分钟（同同城立即单），重复播报从付款起算、用 `repeat.localAfterMin`、不受营业时间门控；
+取餐联放大行「尽快取 约 HH:mm」（15 列），不盖日期戳、不出日期行。预约自取的催单与票面不变。
 
 ### 环境变量
 

@@ -59,17 +59,17 @@ const DELIVERY_STATUS_LABEL: Record<string, string> = {
   DELIVERED: '已送达', CANCELLED: '已取消', FAILED: '呼叫失败', UNKNOWN: '状态未确认',
 }
 
-export type OrderListRow = Pick<Order, 'deliveryType' | 'status' | 'pickupAt' | 'pickupReadyAt' | 'completedAt' | 'shipment' | 'latestDelivery' | 'scheduledAt' | 'schedule'>
+export type OrderListRow = Pick<Order, 'deliveryType' | 'status' | 'pickupAt' | 'pickupReadyAt' | 'completedAt' | 'shipment' | 'latestDelivery' | 'scheduledAt' | 'schedule' | 'pickupAsap'>
 
 /**
  * 宽屏第 7 列（配送·取餐）两行文字：
  *   LOCAL   → ['骑手 X' | '未呼叫', 配送单状态]；预约单（scheduledAt 非空）首行换成「预约 <送达时段>」
- *   PICKUP  → ['取餐 HH:mm', '已备好' | '已取走' | '']
+ *   PICKUP  → ['取餐 HH:mm'（尽快单「尽快取 约 HH:mm」）, '已备好' | '已取走' | '']
  *   EXPRESS → ['公司 单号' | '未发货', 'M-DD HH:mm 发货' | '']
  */
 export function deliveryColumn(o: OrderListRow, _now: Date): [string, string] {
   if (o.deliveryType === 'PICKUP') {
-    const line1 = `取餐 ${fmtHHmm(o.pickupAt)}`
+    const line1 = o.pickupAsap ? `尽快取 约 ${fmtHHmm(o.pickupAt)}` : `取餐 ${fmtHHmm(o.pickupAt)}`
     const line2 = o.status === 'COMPLETED' ? '已取走' : o.pickupReadyAt ? '已备好' : ''
     return [line1, line2]
   }

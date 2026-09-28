@@ -10,7 +10,7 @@ import { config } from '../config'
 import { sendPaidSubscribeMessage } from '../services/subscribe-message'
 import { enqueueOrderTicket } from '../services/ticket'
 import { getLocalSettings } from '../services/local-settings'
-import { pickupSlotLabel } from '../services/pickup'
+import { asapPickupAtOnPaid, pickupTimeLabel } from '../services/pickup'
 // 别名避免与下方本地变量 slotLabel（自取时段文案）同名冲突
 import { slotLabel as computeScheduleSlotLabel } from '../services/slots'
 
@@ -219,9 +219,18 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
         lateCancelled = { orderNo: order.orderNo, actualAmount: order.actualAmount }
         return
       }
+      // 尽快取（2026-09-28，店主 Q2=B）：付款成功时重算预计可取时刻，并进下面这条条件写的 data——
+      // 同一事务、只在 count=1 时生效；上面 wasCancelled 分支与下面 count=0 回落都不写 pickupAt。
+      // 锚点 = max(paidAt(success_time), 处理时刻) 在 asapPickupAtOnPaid 内部取；处理时刻就是服务器
+      // 此刻处理本次回调的时钟。paidAt 本身一个字不改（仍写 success_time，对账与工作台计时都读它）。
+      // 只对尽快单读设置，其它订单不多一次读。
+      const processedAt = new Date()
+      const retimed = order.deliveryType === 'PICKUP' && order.pickupAsap
+        ? asapPickupAtOnPaid(order, await getLocalSettings(), paidAt, processedAt)
+        : null
       const moved = await tx.order.updateMany({
         where: { id: orderId, status: 'PENDING_PAYMENT' },
-        data: { status: 'PAID', paidAt },
+        data: { status: 'PAID', paidAt, ...(retimed ? { pickupAt: retimed } : {}) },
       })
       if (moved.count === 0) {
         // 抢输了：并发的取消已经提交并释放了券与赠品积分。此时**绝不能**把状态写成 PAID
@@ -281,7 +290,8 @@ export async function wechatPayNotifyHandler(req: Request, res: Response): Promi
           let slotLabel: string | undefined
           if (paid.deliveryType === 'PICKUP' && paid.pickupAt) {
             try {
-              slotLabel = pickupSlotLabel(paid.pickupAt, (await getLocalSettings()).pickup.slotMinutes)
+              // 尽快单「尽快取 约 HH:mm」（paid 是事务后重新查的，已是重算值），预约单与改前逐字节一致
+              slotLabel = pickupTimeLabel({ pickupAt: paid.pickupAt, pickupAsap: paid.pickupAsap }, await getLocalSettings())
             } catch (err) {
               console.error('[wechat-notify] 计算取餐时段文案失败:', (err as Error).message)
             }

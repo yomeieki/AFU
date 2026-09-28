@@ -12,6 +12,7 @@ var fmtDayHHmm = timeUtil.fmtDayHHmm
 var expressTrackUtil = require('../../utils/express-track')
 var tablewareUtil = require('../../utils/tableware')
 var scheduleOrderUtil = require('../../utils/schedule-order')
+var pickupAsapUtil = require('../../utils/pickup-asap')
 
 var STATUS_LABEL = {
   PENDING_PAYMENT: '待付款',
@@ -327,6 +328,8 @@ function decorateOrder(order) {
   var isLocal = order.deliveryType === 'LOCAL'
   var isExpress = order.deliveryType === 'EXPRESS'
   var isPickup = order.deliveryType === 'PICKUP'
+  // 尽快取（2026-09-28）：取餐时间不是时段而是「预计可取」；待付款不出钟点（付款成功时会重算）
+  var isPickupAsap = pickupAsapUtil.isAsapOrder(order)
   // 服务端从 2026-09-11 起下发 canSelfCancel（自取按「开始备餐时刻」判）；老服务端没有就按旧规则算
   var selfCancel = typeof order.canSelfCancel === 'boolean'
     ? order.canSelfCancel
@@ -346,7 +349,11 @@ function decorateOrder(order) {
     isPickup: isPickup,
     tablewareLabel: tablewareUtil.tablewareLabel(order.tablewareMode, order.tablewareCount),
     phoneTail: (order.receiverPhone || '').slice(-4),
-    pickupSlotLabel: order.pickup ? (order.pickup.slotLabel || '') : '',
+    pickupSlotLabel: order.pickup && !isPickupAsap ? (order.pickup.slotLabel || '') : '',
+    pickupAsap: isPickupAsap,
+    pickupAsapText: pickupAsapUtil.asapDetailText(order),
+    // 尽快单接单后取消卡的文案（一接单就不能取消，也没有申请取消入口）；非尽快单为 ''
+    pickupAsapCancelCopy: isPickupAsap ? pickupAsapUtil.ASAP_ACCEPTED_TEXT : '',
     pickupStore: order.pickup ? order.pickup.store : null,
     promoDiscountAmountText: formatPrice(order.promoDiscountAmount || 0),
     pickupDiscountAmountText: formatPrice(order.pickupDiscountAmount || 0),
@@ -408,7 +415,7 @@ function decorateOrder(order) {
     refunds: refunds,
     afterSale: afterSale,
     // 提示文案与按钮必须看同一个判定，否则会出现「按钮能点、文案说不能」
-    pickupHint: isPickup ? pickupHintOf(order, selfCancel) : '',
+    pickupHint: isPickup ? (pickupAsapUtil.asapCancelHint(order, selfCancel) || pickupHintOf(order, selfCancel)) : '',
     items: order.items.map(function(item) {
       // 赠品行的 productPrice / subtotal 服务端恒为 0（积分不进商品行金额）。
       // 照直渲染成 ¥0.00 会被顾客当成 0 元 bug 来投诉，所以价格换成积分价、小计留「—」。

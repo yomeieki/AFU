@@ -11,7 +11,7 @@ import { getCircuitState } from '../../services/delivery/circuit'
 import { getLocalSettings, isOpenNow } from '../../services/local-settings'
 import { getExpressSettings } from '../../services/express-settings'
 import { bookingView } from '../../services/delivery/express-booking'
-import { prepStartAt, pickupSlotLabel } from '../../services/pickup'
+import { prepStartAt, pickupTimeLabel } from '../../services/pickup'
 import { scheduleView } from '../../services/delivery/schedule'
 import { REAL_ORDERS } from '../../utils/stats-scope'
 import { getWorkbenchPrinterHealth, PrinterHealthEntry } from '../../services/ticket'
@@ -122,6 +122,9 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
           pickupReadyAt: o.pickupReadyAt?.toISOString() ?? null,
           prepStartAt: pk?.prepStartAt ?? null,
           slotLabel: pk?.slotLabel ?? '',
+          // 尽快取（2026-09-28）：pickupAt 是付款时重算后的预计可取时刻；prepStartAt 给付款时刻，
+          // 前端待接单计时从付款起算、不出「HH:mm 开始备餐」
+          asap: o.pickupAsap,
           cancelRequested: !!o.cancelRequestedAt && !['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
           cancelRejected: !!o.cancelRequestRejectedAt && ['PAID', 'PREPARING'].includes(o.status)
             ? (o.cancelRequestRejectedBy === 'AUTO' ? 'AUTO' : 'MANUAL')
@@ -137,7 +140,7 @@ function toCard(o: OrderRow, waitSince: Date | null, d: { status: string; provid
  * 预约送达（spec §6.1）：同渠道内预约单按 prepStartAt 升序排在立即单之前。
  */
 const CHANNEL_RANK: Record<string, number> = { LOCAL: 0, PICKUP: 1, EXPRESS: 2 }
-export type SortableCard = { channel: string; waitSince: string; local?: { schedule?: { prepStartAt: string } | null } | null }
+export type SortableCard = { channel: string; waitSince: string; local?: { schedule?: { prepStartAt: string } | null } | null; pickup?: { asap?: boolean } | null }
 export function sortColumn(cards: SortableCard[], newestFirst = false) {
   cards.sort((a, b) => {
     if (a.channel !== b.channel) return (CHANNEL_RANK[a.channel] ?? 9) - (CHANNEL_RANK[b.channel] ?? 9)
@@ -149,6 +152,9 @@ export function sortColumn(cards: SortableCard[], newestFirst = false) {
       const sa = a.local?.schedule?.prepStartAt ?? null, sb = b.local?.schedule?.prepStartAt ?? null
       if (sa && sb) return sa.localeCompare(sb)
       if (sa !== sb) return sa ? -1 : 1
+      // 尽快取（2026-09-28）：同为自取时，尽快单是「现在就要做」的单，排在预约自取之前；done 列不参与
+      const qa = !!a.pickup?.asap, qb = !!b.pickup?.asap
+      if (qa !== qb) return qa ? -1 : 1
     }
     return newestFirst ? b.waitSince.localeCompare(a.waitSince) : a.waitSince.localeCompare(b.waitSince)
   })
@@ -211,7 +217,11 @@ router.get('/snapshot', async (req: Request, res: Response, next: NextFunction) 
     const now = new Date()
     for (const o of orders) {
       const pk = o.deliveryType === 'PICKUP' && o.pickupAt
-        ? { prepStartAt: prepStartAt(settings, o.pickupAt).toISOString(), slotLabel: pickupSlotLabel(o.pickupAt, settings.pickup.slotMinutes) }
+        ? {
+            // 尽快单没有「开始备餐时刻」这回事——付款即出票、现在就做，给付款时刻（旧版前端也会据此从付款起算）
+            prepStartAt: o.pickupAsap ? (o.paidAt ?? o.createdAt).toISOString() : prepStartAt(settings, o.pickupAt).toISOString(),
+            slotLabel: pickupTimeLabel({ pickupAt: o.pickupAt, pickupAsap: o.pickupAsap }, settings),
+          }
         : null
       const d = byOrder.get(o.id) ?? null
       // S4：hasActiveDelivery 传 !!d——byOrder 对未完成单只含在途配送单（activeOrderId 命中），

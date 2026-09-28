@@ -15,7 +15,7 @@ import {
 } from '../services/local-settings'
 import { promoPreviewOf } from '../services/promotion'
 import { measureRoadQuote } from '../services/delivery/quote'
-import { buildPickupSlots, earliestPickupInfo } from '../services/pickup'
+import { buildPickupSlots, earliestPickupInfo, pickupAsapInfo } from '../services/pickup'
 import { buildDeliverySlots, earliestScheduleText } from '../services/delivery/schedule'
 import { deliveryTypeSchema } from '../utils/channel'
 
@@ -30,7 +30,9 @@ router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => 
     success(res, {
       ...meta,
       delivery: { ...meta.delivery, earliestScheduleText: earliestScheduleText(s) },
-      pickup: { ...meta.pickup, earliestPickupText: pickupInfo.text, earliestPickupWhen: pickupInfo.when },
+      // asap（尽快取，2026-09-28）与 earliestPickupWhen 同一位置补：publicLocalMeta 在 local-settings.ts，
+      // 那边不能反向 import pickup.ts（循环依赖）
+      pickup: { ...meta.pickup, earliestPickupText: pickupInfo.text, earliestPickupWhen: pickupInfo.when, asap: pickupAsapInfo(s) },
     })
   } catch (e) {
     next(e)
@@ -40,7 +42,10 @@ router.get('/meta', async (_req: Request, res: Response, next: NextFunction) => 
 // 自取时段（公开；不登录也能看）。全部计算在 services/pickup.ts，这里只是读设置 + 出参
 router.get('/pickup-slots', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    success(res, buildPickupSlots(await getLocalSettings(), new Date()))
+    // asap（尽快取，2026-09-28）：与时段列表同一个 s、同一个 now 算，结算页两种模式互不打架
+    const s = await getLocalSettings()
+    const now = new Date()
+    success(res, { ...buildPickupSlots(s, now), asap: pickupAsapInfo(s, now) })
   } catch (e) {
     next(e)
   }

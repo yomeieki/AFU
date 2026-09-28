@@ -49,6 +49,8 @@ const orderListSelect = {
   cancelRequestedAt: true,
   estimatedDeliveryAt: true,
   pickupAt: true,
+  // 尽快取（2026-09-28）：列表第 7 列要区分「尽快取 约 HH:mm」与「取餐 HH:mm」
+  pickupAsap: true,
   pickupReadyAt: true,
   pickupDiscountAmount: true,
   // 预约送达（2026-09-21）：列表 schedule 筛选与预约单标识要用

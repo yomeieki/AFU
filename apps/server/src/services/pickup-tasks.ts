@@ -8,7 +8,7 @@
  */
 import prisma from '../utils/prisma'
 import { getLocalSettings } from './local-settings'
-import { prepStartAt, pickupSlotLabel } from './pickup'
+import { prepStartAt, pickupTimeLabel } from './pickup'
 import { notifyAcceptReminder, notifyPickupUnpicked, notifyPickupAutoCompleted } from './order-notify'
 import { settlePoints } from './member/points'
 import { ACCEPT_REMIND_AFTER_MIN } from '../utils/constants'
@@ -21,11 +21,14 @@ export async function remindPickupUnaccepted(afterMin = ACCEPT_REMIND_AFTER_MIN)
   const now = Date.now()
   const rows = await prisma.order.findMany({
     where: { deliveryType: 'PICKUP', status: 'PAID', acceptRemindedAt: null, paidAt: { not: null }, pickupAt: { not: null } },
-    select: { id: true, orderNo: true, actualAmount: true, receiverName: true, receiverPhone: true, paidAt: true, pickupAt: true },
+    select: { id: true, orderNo: true, actualAmount: true, receiverName: true, receiverPhone: true, paidAt: true, pickupAt: true, pickupAsap: true },
     take: BATCH, orderBy: { paidAt: 'asc' },
   })
-  // 触发时刻 = max(付款 + afterMin, 开始备餐 − 15 分钟)：明天的单不在今晚催，尽快的单照旧 15 分钟
-  const due = rows.filter((o) => now >= Math.max(o.paidAt!.getTime() + afterMin * MIN, prepStartAt(s, o.pickupAt!).getTime() - 15 * MIN))
+  // 触发时刻 = max(付款 + afterMin, 开始备餐 − 15 分钟)：明天的单不在今晚催，尽快的单照旧 15 分钟。
+  // 尽快取（2026-09-28）：与同城立即单同一口径，付款 + afterMin 就催，不看开始备餐时刻
+  const due = rows.filter((o) => now >= (o.pickupAsap
+    ? o.paidAt!.getTime() + afterMin * MIN
+    : Math.max(o.paidAt!.getTime() + afterMin * MIN, prepStartAt(s, o.pickupAt!).getTime() - 15 * MIN)))
   if (due.length === 0) return 0
   await prisma.order.updateMany({ where: { id: { in: due.map((o) => o.id) } }, data: { acceptRemindedAt: new Date() } })
   notifyAcceptReminder(due)
@@ -37,7 +40,7 @@ export async function remindPickupUnpicked(afterMin?: number): Promise<number> {
   const after = afterMin ?? s.pickup.unpickedRemindAfterMin
   const rows = await prisma.order.findMany({
     where: { deliveryType: 'PICKUP', status: 'SHIPPED', pickupRemindedAt: null, pickupAt: { lt: new Date(Date.now() - after * MIN) } },
-    select: { id: true, orderNo: true, receiverPhone: true, pickupAt: true },
+    select: { id: true, orderNo: true, receiverPhone: true, pickupAt: true, pickupAsap: true },
     take: BATCH, orderBy: { pickupAt: 'asc' },
   })
   let n = 0
@@ -46,7 +49,7 @@ export async function remindPickupUnpicked(afterMin?: number): Promise<number> {
     const marked = await prisma.order.updateMany({ where: { id: o.id, pickupRemindedAt: null }, data: { pickupRemindedAt: new Date() } })
     if (marked.count === 0) continue
     n++
-    reminded.push({ orderNo: o.orderNo, receiverPhone: o.receiverPhone, slotLabel: pickupSlotLabel(o.pickupAt!, s.pickup.slotMinutes) })
+    reminded.push({ orderNo: o.orderNo, receiverPhone: o.receiverPhone, slotLabel: pickupTimeLabel({ pickupAt: o.pickupAt!, pickupAsap: o.pickupAsap }, s) })
   }
   if (reminded.length) notifyPickupUnpicked(reminded)
   return n
@@ -57,7 +60,7 @@ export async function autoCompletePickup(afterMin?: number): Promise<number> {
   const after = afterMin ?? s.pickup.autoCompleteAfterMin
   const rows = await prisma.order.findMany({
     where: { deliveryType: 'PICKUP', status: 'SHIPPED', pickupAt: { lt: new Date(Date.now() - after * MIN) } },
-    select: { id: true, orderNo: true, receiverPhone: true, pickupAt: true },
+    select: { id: true, orderNo: true, receiverPhone: true, pickupAt: true, pickupAsap: true },
     take: BATCH, orderBy: { pickupAt: 'asc' },
   })
   const done: { orderNo: string; receiverPhone: string; slotLabel: string }[] = []
@@ -68,7 +71,7 @@ export async function autoCompletePickup(afterMin?: number): Promise<number> {
     })
     if (moved.count === 0) continue
     void settlePoints(o.id)
-    done.push({ orderNo: o.orderNo, receiverPhone: o.receiverPhone, slotLabel: pickupSlotLabel(o.pickupAt!, s.pickup.slotMinutes) })
+    done.push({ orderNo: o.orderNo, receiverPhone: o.receiverPhone, slotLabel: pickupTimeLabel({ pickupAt: o.pickupAt!, pickupAsap: o.pickupAsap }, s) })
   }
   if (done.length) notifyPickupAutoCompleted(done)
   if (done.length > 0) console.log(`[scheduler] 自取超时自动完成 ${done.length} 单`)

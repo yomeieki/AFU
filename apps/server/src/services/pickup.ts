@@ -4,8 +4,8 @@
  * 备餐时长按取餐时刻判高峰、开始备餐时刻、DISABLED/PAUSED/HOLIDAY 三种阻塞、自取优惠。
  * 不 import prisma、不抛 AppError；每条边界由 scripts/selftest-pickup.ts 穷举。
  */
-import { LocalDeliverySettings, isHolidayOn, isPickupPaused, minutesInPeak, shanghaiDateStr } from './local-settings'
-import { Slot, SlotDay, MIN, buildSlotDays, shanghaiMinutesOf, slotLabel, ticketLabel, toMin } from './slots'
+import { LocalDeliverySettings, isHolidayOn, isHolidayNow, isPickupPaused, minutesInPeak, shanghaiDateStr } from './local-settings'
+import { Slot, SlotDay, MIN, atShanghai, buildSlotDays, hhmmOf, shanghaiMinutesOf, slotLabel, ticketLabel, ticketLabelParts, toMin } from './slots'
 
 export type PickupSlot = Slot
 export type PickupDay = SlotDay
@@ -89,3 +89,113 @@ export function pickupDiscountOf(s: LocalDeliverySettings, subtotalFen: number):
 
 export const pickupSlotLabel = slotLabel
 export const pickupTicketLabel = ticketLabel
+
+// ── 尽快取（2026-09-28，plans/2026-09-28-pickup-asap.md「关键决定」）───────────────────
+// 服务端唯一实现：结算页（pickup-slots / meta）、下单、两条付款路径（mock 与真实回调）都只调这里，
+// 不各写一份公式。全部纯函数：时刻与设置都由调用方传入。
+
+export type PickupAsapReason = 'DISABLED' | 'PAUSED' | 'HOLIDAY' | 'CLOSED' | 'NONE' | 'TOO_LATE'
+export interface PickupAsapInfo {
+  available: boolean
+  /** 预计可取时刻（ISO）。不可用时为 null */
+  readyAt: string | null
+  /** 备餐 + 接单缓冲（分钟）。不可用时为 null */
+  minutes: number | null
+  reason: null | PickupAsapReason
+}
+
+/**
+ * 尽快单的预计可取时刻（只管公式，不判可用性）：P = 备餐，B = 接单缓冲。
+ * 先按平时备餐算临时取餐时刻 t+P+B，它落在高峰窗口就把 P 换成高峰上限；
+ * readyAt = 向上取整到整分(t + P + B)，minutes = P + B。
+ */
+export function asapReadyAt(s: LocalDeliverySettings, t: Date): { readyAt: Date; minutes: number } {
+  const buffer = s.pickup.acceptBufferMin
+  const tentative = new Date(t.getTime() + (s.prepMinutes + buffer) * MIN)
+  const prep = minutesInPeak(s, shanghaiMinutesOf(tentative)) ? s.peak.prepMaxMinutes : s.prepMinutes
+  const raw = t.getTime() + (prep + buffer) * MIN
+  // 上海是整小时时区，按纪元毫秒向上取整到整分与按上海钟点取整等价
+  return { readyAt: new Date(Math.ceil(raw / MIN) * MIN), minutes: prep + buffer }
+}
+
+/**
+ * 此刻能不能「尽快取」。按下面顺序判，第一个不满足的就是 reason：
+ * 未开通 DISABLED → 今天休业 HOLIDAY → 自取暂停 PAUSED → 此刻不在任何营业段 CLOSED →
+ * daysAhead 内一格都约不到 NONE（「今日已约满」）→ 预计可取时刻不严格早于本段结束 TOO_LATE。
+ * **外送暂停/外送开关不影响尽快取**（自取有自己的暂停开关）。
+ */
+export function pickupAsapInfo(s: LocalDeliverySettings, now: Date = new Date()): PickupAsapInfo {
+  const no = (reason: PickupAsapReason): PickupAsapInfo => ({ available: false, readyAt: null, minutes: null, reason })
+  if (!s.pickup.enabled) return no('DISABLED')
+  if (isHolidayNow(s, now)) return no('HOLIDAY')
+  if (isPickupPaused(s, now)) return no('PAUSED')
+  const cur = shanghaiMinutesOf(now)
+  const window = s.businessHours.find((h) => toMin(h.start) <= cur && cur < toMin(h.end))
+  if (!window) return no('CLOSED')
+  if (earliestPickupInfo(s, now).when === 'NONE') return no('NONE')
+  const { readyAt, minutes } = asapReadyAt(s, now)
+  const windowEnd = atShanghai(shanghaiDateStr(now), toMin(window.end))
+  if (readyAt.getTime() >= windowEnd.getTime()) return no('TOO_LATE')
+  return { available: true, readyAt: readyAt.toISOString(), minutes, reason: null }
+}
+
+/** 下单时尽快取不可用（42285）的顾客文案，按 reason 区分。DISABLED/PAUSED/HOLIDAY 由 42280 先报，这里只兜底 */
+export function pickupAsapUnavailableText(reason: PickupAsapReason | null): string {
+  if (reason === 'CLOSED') return '现在不在营业时间，暂不能尽快取，请预约取餐时间'
+  if (reason === 'TOO_LATE') return '本段营业快结束了，来不及备餐，请预约取餐时间'
+  if (reason === 'NONE') return '暂无可取时段，暂不能尽快取'
+  return '暂不能尽快取，请预约取餐时间'
+}
+
+/**
+ * 付款成功时重算尽快单的预计可取时刻（店主 2026-09-28 选 Q2=B，锚点取较晚者）。
+ * - 非尽快单（预约自取、同城、邮寄）或 pickupAt 为空：返回 null，调用方**不写** pickupAt。
+ * - 尽快单：锚点 = max(paidAt, processedAt)，在**这里**取；返回 max(原 pickupAt, asapReadyAt(实时设置, 锚点))，
+ *   永不往前挪。真实回调传 success_time（缺省服务器时刻）与处理本次回调时的服务器时钟；mock 两个都传服务器当前时刻。
+ * 付款时**不校验**尽快可用性（Q3=A 照收照做）：结果可以落在本段营业结束之后，不封顶。
+ * paidAt 本身的取值与含义不变——锚点只用来算 pickupAt，不回写任何 paidAt 列。
+ */
+export function asapPickupAtOnPaid(
+  order: { deliveryType: string; pickupAsap: boolean; pickupAt: Date | null },
+  s: LocalDeliverySettings,
+  paidAt: Date,
+  processedAt: Date,
+): Date | null {
+  if (order.deliveryType !== 'PICKUP' || !order.pickupAsap || !order.pickupAt) return null
+  const anchor = paidAt.getTime() >= processedAt.getTime() ? paidAt : processedAt
+  const { readyAt } = asapReadyAt(s, anchor)
+  return readyAt.getTime() > order.pickupAt.getTime() ? readyAt : order.pickupAt
+}
+
+/** 尽快单的取餐文案「尽快取 约 HH:mm」（上海钟点）。票面放大行也是这一串（15 列，≤16） */
+export function asapPickupLabel(pickupAt: Date): string {
+  return `尽快取 约 ${hhmmOf(pickupAt)}`
+}
+
+/**
+ * 取餐文案：工作台、企微来单推送、未取提醒、自动完成共用这一个。
+ * 尽快单「尽快取 约 HH:mm」；预约单原样返回 slotLabel（与改动前逐字节一致）。
+ */
+export function pickupTimeLabel(o: { pickupAt: Date; pickupAsap?: boolean | null }, s: LocalDeliverySettings, now: Date = new Date()): string {
+  return o.pickupAsap ? asapPickupLabel(o.pickupAt) : slotLabel(o.pickupAt, s.pickup.slotMinutes, now)
+}
+
+/**
+ * 小票取餐联的五个字段（services/ticket/index.ts 的 toTicketInput 展开它；抽成纯函数是为了不连库也能自测）。
+ * - 预约单：与改前 toTicketInput 里的四行逐字节一致（绝对日期 + 放大时段 + 非今天盖戳）。
+ * - 尽快单：只给「尽快取 约 HH:mm」一条放大行，日期行、时段行、戳一律 null——跨零点（23:50 下单、
+ *   次日 00:04 可取）也不盖「明日单」，那是现在就要做的单。
+ */
+export function pickupTicketFields(pickupAt: Date | null, pickupAsap: boolean, slotMinutes: number, now: Date = new Date()): {
+  pickupAsap: boolean; pickupSlotLabel: string | null; pickupSlotDate: string | null; pickupSlotTime: string | null; pickupDayStamp: string | null
+} {
+  if (!pickupAt) return { pickupAsap, pickupSlotLabel: null, pickupSlotDate: null, pickupSlotTime: null, pickupDayStamp: null }
+  if (pickupAsap) return { pickupAsap, pickupSlotLabel: asapPickupLabel(pickupAt), pickupSlotDate: null, pickupSlotTime: null, pickupDayStamp: null }
+  return {
+    pickupAsap,
+    pickupSlotLabel: ticketLabel(pickupAt, slotMinutes, now).text,
+    pickupSlotDate: ticketLabelParts(pickupAt, slotMinutes, now).date,
+    pickupSlotTime: ticketLabelParts(pickupAt, slotMinutes, now).time,
+    pickupDayStamp: ticketLabel(pickupAt, slotMinutes, now).stamp,
+  }
+}

@@ -35,6 +35,7 @@
     <view class="pickup-head">
       <text class="pickup-tail">尾号 {{order.phoneTail}}</text>
       <text class="pickup-slot" wx:if="{{order.pickupSlotLabel}}">{{order.pickupSlotLabel}} 取</text>
+      <text class="pickup-slot" wx:if="{{order.pickupAsapText}}">{{order.pickupAsapText}}</text>
     </view>
     <text class="pickup-hint" wx:if="{{order.pickupHint}}">{{order.pickupHint}}</text>
     <view class="info-row" wx:if="{{order.pickupStore}}">
@@ -124,7 +125,8 @@
       <text class="local-cancel-copy">{{order.scheduleCancelCopy}}</text>
     </view>
     <!-- 预约单已备好时优先显示 scheduleCancelCopy（同城/邮寄默认文案照旧） -->
-    <view class="local-cancel-unavailable" wx:else>{{order.scheduleCancelCopy || (order.isPickup ? '餐品已在准备，如有问题请联系商家' : ('订单已开始' + (order.isExpress ? '备货' : '制作') + '，如有问题请联系商家'))}}</view>
+    <!-- 尽快单（2026-09-28）接单后：店家已接单，不可取消（pickupAsapCancelCopy，非尽快单为空串） -->
+    <view class="local-cancel-unavailable" wx:else>{{order.scheduleCancelCopy || (order.isPickup ? (order.pickupAsapCancelCopy || '餐品已在准备，如有问题请联系商家') : ('订单已开始' + (order.isExpress ? '备货' : '制作') + '，如有问题请联系商家'))}}</view>
   </view>
 
   <!-- Items -->

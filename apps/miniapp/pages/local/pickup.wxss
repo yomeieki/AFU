@@ -122,3 +122,14 @@
 .bottom-total-wrap { flex-direction: column; align-items: flex-start; }
 .bottom-total-line { display: flex; align-items: baseline; }
 .bottom-total-sub { display: block; font-size: 22rpx; color: var(--brand); }
+
+/* 尽快取 / 预约时段 两个选项（2026-09-28），样式照 confirm.wxss 的送达时间卡 */
+.mode-row { display: flex; gap: 16rpx; margin-bottom: 14rpx; }
+.mode-opt { flex: 1; border: 2rpx solid var(--border); border-radius: 12rpx; padding: 18rpx; text-align: center; }
+.mode-opt.active { border-color: var(--brand); background: var(--brand-bg); }
+.mode-opt.disabled { opacity: .45; }
+.mode-name { display: block; color: var(--text-1); font-weight: 600; }
+.mode-opt.active .mode-name { color: var(--brand); }
+.mode-sub { display: block; margin-top: 6rpx; color: var(--text-3); font-size: 22rpx; }
+.asap-eta { color: var(--text-1); font-size: 28rpx; }
+.asap-eta-time { color: var(--brand); font-size: 34rpx; font-weight: 700; }

@@ -37,6 +37,7 @@ var TEXT = {
   NO_TABLEWARE: '请选择餐具',
   SUBMIT: '提交订单',
   SUBMITTING: '提交中',
+  ASAP_GONE: '请改选取餐时间',
 }
 
 function result(disabled, text, amountState, action) {
@@ -57,18 +58,26 @@ function result(disabled, text, amountState, action) {
  *   hasTableware    已选餐具
  *   benefitsLoading 优惠券/赠品正在重算
  *   submitting      正在提交
+ *   mode            'ASAP' | 'SCHEDULED'（尽快取，2026-09-28）。不传 = SCHEDULED，行为与改动前逐字节一致
+ *   asapAvailable   服务端此刻说尽快取可用（只在 mode==='ASAP' 时看）
  */
 function pickupCheckoutAction(s) {
   var st = s || {}
   if (st.blockReason) return result(true, TEXT.BLOCKED, 'blocked', 'none')
   // 金额与时段是否加载完成无关：能算出来就照常显示，别因为时段没格子就把底栏压成「待计算」
   var amt = st.payAmount === null || st.payAmount === undefined ? 'pending' : 'ready'
-  if (st.slotsLoading && !st.hasSlot) return result(true, TEXT.SLOT_LOADING, amt, 'none')
-  if (st.slotsError && !st.hasSlot) return result(true, TEXT.SLOT_LOADING_ERROR, amt, 'none')
-  if (st.noSlots) return result(true, TEXT.NO_SLOTS, amt, 'none')
-  // 与「未选餐具」一致：按钮可点，动作是打开时段选择器，不是提交
-  if (!st.hasSlot) return result(false, TEXT.NO_SLOT, amt, 'slot')
-  if (st.slotStale) return result(false, TEXT.SLOT_STALE, 'pending', 'reslot')
+  if (st.mode === 'ASAP') {
+    // 尽快取不需要时段：跳过「加载中/失败/无格/未选/失效」五格。尽快取刚变成不可用（打烊、本段来不及）
+    // 时按钮绝不能落到 submit——可点，动作是切回预约并打开时段选择器
+    if (!st.asapAvailable) return result(false, TEXT.ASAP_GONE, amt, 'schedule')
+  } else {
+    if (st.slotsLoading && !st.hasSlot) return result(true, TEXT.SLOT_LOADING, amt, 'none')
+    if (st.slotsError && !st.hasSlot) return result(true, TEXT.SLOT_LOADING_ERROR, amt, 'none')
+    if (st.noSlots) return result(true, TEXT.NO_SLOTS, amt, 'none')
+    // 与「未选餐具」一致：按钮可点，动作是打开时段选择器，不是提交
+    if (!st.hasSlot) return result(false, TEXT.NO_SLOT, amt, 'slot')
+    if (st.slotStale) return result(false, TEXT.SLOT_STALE, 'pending', 'reslot')
+  }
   // 这两格也要跟着 amt 走：满减在途/失败时 payAmount 为 null，写死 'ready' 会让
   // 「请填写手机号」「还差 ¥X 起」状态下的应付金额显示成 ¥0.00 而不是「待计算」（02 复核 2026-09-21）
   if (!st.phoneValid) return result(true, TEXT.NO_PHONE, amt, 'none')

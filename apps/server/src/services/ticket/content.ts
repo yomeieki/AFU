@@ -78,6 +78,9 @@ export interface TicketOrderInput {
   pickupSlotTime?: string | null
   /** 票头戳：'' = 今天取（不盖），'明日单' / '9月13日单' = 不是今天取，提醒别今天做 */
   pickupDayStamp?: string | null
+  /** 尽快取（2026-09-28）：true 时取餐联只出一条放大行 `<B>{pickupSlotLabel}</B>`（「尽快取 约 HH:mm」，
+   *  调用方算好，≤16 列），不盖日期戳、不出日期行。缺省/false 时票面与改前逐字节一致 */
+  pickupAsap?: boolean
   /** 自取优惠（分）。>0 时取餐联在合计与券之间打一行；厨房联不打 */
   pickupDiscountAmount?: number
   /** 全店满减（分，2026-09-17 设计 §6）。>0 时配送/取餐联在自取优惠之后、券之前打一行；厨房联不打 */
@@ -349,7 +352,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
     // 来单票：非今日送达盖戳（同自取），备餐票不盖——它就是当天出的
     ...(isScheduled && !o.prep && o.scheduleDayStamp ? [`<CB>【${esc(o.scheduleDayStamp)}】</CB>`] : []),
     // 非今日取的自取单盖一枚大字戳：票面日期已是绝对日期，这枚戳只负责「今天先别做」
-    ...(isPickup && o.pickupDayStamp ? [`<CB>【${esc(o.pickupDayStamp)}】</CB>`] : []),
+    ...(isPickup && !o.pickupAsap && o.pickupDayStamp ? [`<CB>【${esc(o.pickupDayStamp)}】</CB>`] : []),
     ...(o.announceNo !== null && o.announceNo !== undefined ? [`<C>第 ${o.announceNo} 次催单</C>`] : []),
     // PO 2026-09-06 定：顶部只放**加大的后 4 位**。完整单号 20 字符在 32 列纸上占大半行，
     // 而店里认单靠这 4 位，没人逐位核对前缀。完整单号挪到 footer 小字——客服对单、查退款仍需要。
@@ -372,7 +375,7 @@ export function renderOrderTicket(o: TicketOrderInput): string {
         // S7（店主决定 D3，2026-09-23 一起修，编排者已把 e2e.d/62-pickup.sh 补入授权）：原
         // 「<B>取餐 9月12日（周六）12:00–12:30</B>」整段进 <B> 超真机 16 列可用宽度——
         // 日期普通字号单独一行，时段单独放大一行；date/time 缺失时回落老写法（见 slotBigLines）。
-        ...slotBigLines('取餐', o.pickupSlotLabel, o.pickupSlotDate, o.pickupSlotTime),
+        ...(o.pickupAsap ? [`<B>${esc(o.pickupSlotLabel ?? '')}</B>`] : slotBigLines('取餐', o.pickupSlotLabel, o.pickupSlotDate, o.pickupSlotTime)),
         `取餐人 ${esc(o.receiverName)}`,
         `电话 ${maskPhone(esc(o.receiverPhone))}`,
       ]

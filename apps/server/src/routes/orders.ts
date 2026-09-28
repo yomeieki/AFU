@@ -25,7 +25,9 @@ import {
 } from '../services/local-settings'
 import { calcPackingFee } from '../services/packing-fee'
 import { promoDiscountOf } from '../services/promotion'
-import { isValidPickupSlot, prepStartAt, pickupDiscountOf, pickupSlotLabel } from '../services/pickup'
+import {
+  isValidPickupSlot, prepStartAt, pickupDiscountOf, pickupAsapInfo, pickupAsapUnavailableText, asapPickupAtOnPaid, pickupTimeLabel,
+} from '../services/pickup'
 import { scheduleTimeline, isValidDeliverySlot, scheduleView } from '../services/delivery/schedule'
 import { slotLabel } from '../services/slots'
 import { getSubscribeTemplateIds, sendPaidSubscribeMessage, getSubscribeTemplateGroups } from '../services/subscribe-message'
@@ -82,15 +84,19 @@ function withPayExpire<T extends { status: string; createdAt: Date }>(
   }
 }
 
-/** 顾客端自取节：取餐时间、备好时刻、开始备餐时刻、门店（spec §5.5）。非自取单为 null */
-async function pickupViewOf(order: { deliveryType: string; pickupAt: Date | null; pickupReadyAt: Date | null }) {
+/**
+ * 顾客端自取节：取餐时间、备好时刻、开始备餐时刻、门店（spec §5.5）。非自取单为 null。
+ * asap（2026-09-28）：尽快单 true，此时 pickupAt 是预计可取时刻（付款成功时可能已被推后），slotLabel 为「尽快取 约 HH:mm」。
+ */
+async function pickupViewOf(order: { deliveryType: string; pickupAt: Date | null; pickupReadyAt: Date | null; pickupAsap: boolean }) {
   if (order.deliveryType !== 'PICKUP' || !order.pickupAt) return null
   const s = await getLocalSettings()
   return {
     pickupAt: order.pickupAt.toISOString(),
     pickupReadyAt: order.pickupReadyAt?.toISOString() ?? null,
     prepStartAt: prepStartAt(s, order.pickupAt).toISOString(),
-    slotLabel: pickupSlotLabel(order.pickupAt, s.pickup.slotMinutes),
+    slotLabel: pickupTimeLabel({ pickupAt: order.pickupAt, pickupAsap: order.pickupAsap }, s),
+    asap: order.pickupAsap,
     store: { name: s.store.name, phone: s.store.phone, address: `${s.store.district}${s.store.address}`, latE6: s.store.latE6, lngE6: s.store.lngE6 },
   }
 }
@@ -98,15 +104,16 @@ async function pickupViewOf(order: { deliveryType: string; pickupAt: Date | null
  * 「取消订单」按钮该不该出现（spec 2026-09-21 §4.6）：待付款一律可；
  * 自取 / 预约外送：约定时刻前 selfCancelLeadMin 分钟之外可自助秒退，不看是否接单，PAID/PREPARING 均可，
  * 但已备好（readyAt / pickupReadyAt）后关闭；立即单与邮寄：PAID 未接单。
+ * 尽快取（2026-09-28，店主：只要接单就不可退款）：与立即单同一口径——PAID 且未接单可秒退，不看 selfCancelLeadMin。
  */
 async function canSelfCancelOf(order: {
   deliveryType: string; status: string; acceptedAt: Date | null
-  pickupAt: Date | null; pickupReadyAt: Date | null
+  pickupAt: Date | null; pickupReadyAt: Date | null; pickupAsap: boolean
   scheduledAt: Date | null; distanceM: number | null; readyAt: Date | null
 }) {
   if (order.status === 'PENDING_PAYMENT') return true
   if (order.status !== 'PAID' && order.status !== 'PREPARING') return false
-  if (order.deliveryType === 'PICKUP') {
+  if (order.deliveryType === 'PICKUP' && !order.pickupAsap) {
     if (!order.pickupAt || order.pickupReadyAt) return false
     const s = await getLocalSettings()
     return Date.now() < order.pickupAt.getTime() - s.selfCancelLeadMin * 60_000
@@ -129,10 +136,12 @@ function isPayExpired(order: { createdAt: Date }): boolean {
  */
 async function cancelWindowOf(order: {
   deliveryType: string; status: string; acceptedAt: Date | null; cancelRequestedAt: Date | null
-  pickupAt: Date | null; pickupReadyAt: Date | null
+  pickupAt: Date | null; pickupReadyAt: Date | null; pickupAsap: boolean
   scheduledAt: Date | null; distanceM: number | null; readyAt: Date | null
 }) {
   const closed = { canRequestCancel: false, cancelRequestDeadline: null as Date | null, cancelGraceMin: 0 }
+  // 尽快取（2026-09-28）：顾客侧没有「申请取消」——接单前直接秒退，接单后不可取消（售后照常）
+  if (order.deliveryType === 'PICKUP' && order.pickupAsap) return closed
   if (order.deliveryType === 'PICKUP') {
     if (!order.pickupAt || order.cancelRequestedAt || order.pickupReadyAt) return closed
     if (order.status !== 'PAID' && order.status !== 'PREPARING') return closed
@@ -169,6 +178,9 @@ const createOrderSchema = z
     deliveryType: deliveryTypeSchema.default('EXPRESS'),
     // ── 到店自取（spec 2026-09-11 §4.3）──
     pickupAt: z.string().datetime({ offset: true }).optional(),
+    // 尽快取（2026-09-28）：只对 PICKUP 有意义；不传 = SCHEDULED（老客户端），行为与改前逐字节一致。
+    // ASAP 时 pickupAt 必须不传，由服务端按此刻算预计可取时刻。
+    pickupMode: z.enum(['ASAP', 'SCHEDULED']).optional(),
     pickupContact: z
       .object({ name: z.string().trim().max(32).optional(), phone: z.string().trim().regex(/^1\d{10}$/, '取餐人手机号无效') })
       .optional(),
@@ -201,8 +213,12 @@ const createOrderSchema = z
   // addressId 时的报错文案必须与改动前逐字节一致，客户端可能已经按这句话做过匹配。
   .refine((v) => v.deliveryType === 'PICKUP' || v.addressId !== undefined, { message: '请选择收货地址' })
   .refine((v) => v.deliveryType !== 'PICKUP' || v.addressId === undefined, { message: '自取订单不需要收货地址' })
-  .refine((v) => v.deliveryType !== 'PICKUP' || (!!v.pickupAt && !!v.pickupContact), { message: '请选择取餐时间并填写取餐人手机号' })
+  // 这条文案老客户端可能按字面匹配，必须逐字不变；尽快取（ASAP）不带 pickupAt，由下面三条单独把关
+  .refine((v) => v.deliveryType !== 'PICKUP' || v.pickupMode === 'ASAP' || (!!v.pickupAt && !!v.pickupContact), { message: '请选择取餐时间并填写取餐人手机号' })
   .refine((v) => v.scheduledAt === undefined || v.deliveryType === 'LOCAL', { message: '仅同城外送支持预约送达' })
+  .refine((v) => v.pickupMode === undefined || v.deliveryType === 'PICKUP', { message: '仅到店自取支持选择取餐方式' })
+  .refine((v) => v.pickupMode !== 'ASAP' || v.pickupAt === undefined, { message: '尽快取无需选择取餐时间' })
+  .refine((v) => v.pickupMode !== 'ASAP' || !!v.pickupContact, { message: '请填写取餐人手机号' })
 
 /**
  * 「订单已创建」的返回体。首次创建与幂等重试**必须逐字段相同**——
@@ -234,6 +250,7 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
     payExpireAt: payExpireAtOf(order.createdAt, config.order.payTimeoutMin),
     subscribeTemplateIds: getSubscribeTemplateIds(),
     pickupAt: order.pickupAt ?? null,
+    pickupAsap: order.pickupAsap,
     scheduledAt: order.scheduledAt ?? null,
     pickupDiscountAmount: order.pickupDiscountAmount,
     promoDiscountAmount: order.promoDiscountAmount,
@@ -244,7 +261,7 @@ async function orderCreatedView(order: Prisma.OrderGetPayload<Record<string, nev
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.userId!
-    const { cartItemIds, directItem, addressId, deliveryType, pickupAt, pickupContact, quoteToken, scheduledAt, remark, tableware, couponId, gifts, clientRequestId } =
+    const { cartItemIds, directItem, addressId, deliveryType, pickupAt, pickupMode, pickupContact, quoteToken, scheduledAt, remark, tableware, couponId, gifts, clientRequestId } =
       createOrderSchema.parse(applyLegacyTablewarePrefix(req.body))
 
     // 幂等前置查询：客户端超时重试时，绝大多数情况在这里就命中并原样返回，
@@ -289,21 +306,32 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     // （LOCAL/EXPRESS 的营业时间/范围/起送错误同样在券之前判）保持同一优先级；
     // ② 券面额要按「小计 − 自取优惠」封顶，这个封顶值得先有 pickupDiscount 才算得出来。
     let pickupDiscount = 0
-    let pickupSnapshot: { pickupAt?: Date; pickupDiscountAmount?: number } = {}
+    let pickupSnapshot: { pickupAt?: Date; pickupAsap?: boolean; pickupDiscountAmount?: number } = {}
     let localStore: LocalDeliverySettings['store'] | null = null
     if (deliveryType === 'PICKUP') {
       const s = await getLocalSettings()
       if (!s.pickup.enabled) throw new AppError(42280, '到店自取暂未开通')
       if (isHolidayNow(s)) throw new AppError(42280, `休息中${s.holiday?.until ? `，${s.holiday.until.slice(5).replace('-', '月')}日后恢复` : ''}`)
       if (isPickupPaused(s)) throw new AppError(42280, `自取暂停接单${s.pickup.paused?.reason ? `：${s.pickup.paused.reason}` : ''}`)
-      const at = new Date(pickupAt!)
-      // 必须精确命中此刻算出的某一格：顾客在页面磨蹭到那格过期了就拒，让他重选
-      if (!isValidPickupSlot(s, at, new Date())) throw new AppError(42281, '该时段已不可选，请重新选择取餐时间')
+      let at: Date
+      if (pickupMode === 'ASAP') {
+        // 尽快取（2026-09-28）：此刻不在营业段 / 今日已约满 / 本段来不及 → 42285（先于起送与券，
+        // 早于任何库存与券的写操作）。可用就把服务端算的预计可取时刻写进 pickupAt，付款成功时可能再推后一次。
+        const asap = pickupAsapInfo(s, new Date())
+        if (!asap.available || !asap.readyAt) throw new AppError(42285, pickupAsapUnavailableText(asap.reason))
+        at = new Date(asap.readyAt)
+      } else {
+        at = new Date(pickupAt!)
+        // 必须精确命中此刻算出的某一格：顾客在页面磨蹭到那格过期了就拒，让他重选
+        if (!isValidPickupSlot(s, at, new Date())) throw new AppError(42281, '该时段已不可选，请重新选择取餐时间')
+      }
       if (s.pickup.minOrderAmountFen > 0 && totalAmount < s.pickup.minOrderAmountFen) {
         throw new AppError(42282, `到店自取满 ¥${(s.pickup.minOrderAmountFen / 100).toFixed(2)} 起，当前 ¥${(totalAmount / 100).toFixed(2)}`)
       }
       pickupDiscount = pickupDiscountOf(s, totalAmount)
-      pickupSnapshot = { pickupAt: at, pickupDiscountAmount: pickupDiscount }
+      pickupSnapshot = pickupMode === 'ASAP'
+        ? { pickupAt: at, pickupAsap: true, pickupDiscountAmount: pickupDiscount }
+        : { pickupAt: at, pickupDiscountAmount: pickupDiscount }
       localStore = s.store
     }
     // ── 全店满减（2026-09-17 设计 §4.2/§4.3）：插在自取优惠之后、券之前 ─────────────
@@ -972,6 +1000,13 @@ router.post('/:id/cancel-request', async (req: Request, res: Response, next: Nex
     }
     const win = await cancelWindowOf(order)
     if (!win.canRequestCancel) {
+      // 尽快取（2026-09-28）：没有申请取消这条路——接单前让顾客直接取消，接单后不可取消
+      if (order.deliveryType === 'PICKUP' && order.pickupAsap) {
+        const notAccepted = order.status === 'PENDING_PAYMENT' || (order.status === 'PAID' && !order.acceptedAt)
+        throw new AppError(42229, notAccepted
+          ? '商家尚未接单，可直接取消订单'
+          : order.pickupReadyAt ? '餐品已备好，如有问题请联系商家或申请售后' : '店家已接单，不可取消')
+      }
       const timed = order.deliveryType === 'PICKUP' || (order.deliveryType === 'LOCAL' && !!order.scheduledAt)
       // 复核 R3：与 PUT /:id/cancel 的 timed 分支同一根因——pickupAt 缺失 / 预约单 distanceM 缺失是数据
       // 异常（正常下单路径不产生），cancelWindowOf 同样因缺字段返回 closed，会落进「当前可直接取消订单，
@@ -1058,6 +1093,9 @@ router.put('/:id/confirm', async (req: Request, res: Response, next: NextFunctio
   }
 })
 
+/** 尽快取已接单时顾客自助取消的报错（42204）。店家后台退款、售后不受影响 */
+const ASAP_ACCEPTED_TEXT = '店家已接单，不可取消，如有问题请联系商家'
+
 // PUT /api/orders/:id/cancel — 客户自助取消
 // 待付款：直接取消（并关闭微信订单）
 // 已付款且商家未接单：秒退——回滚库存、订单转 REFUNDING 后立即向微信发起全额退款，无需店员审核；
@@ -1097,7 +1135,9 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
 
     // 自取 / 预约外送：约定时刻前 selfCancelLeadMin 之外可自助秒退，不看是否接单（spec 2026-09-21 §4.6）；
     // 立即单 / 邮寄：PAID 未接单。两种都落到同一段「出 CANCEL 票 + 发起全额退款」。
-    const timed = order.deliveryType === 'PICKUP' || (order.deliveryType === 'LOCAL' && !!order.scheduledAt)
+    // 尽快取（2026-09-28）不进 timed：走立即单分支（条件写 status='PAID' AND accepted_at IS NULL，与接单互斥）。
+    const asapPickup = order.deliveryType === 'PICKUP' && order.pickupAsap
+    const timed = (order.deliveryType === 'PICKUP' && !asapPickup) || (order.deliveryType === 'LOCAL' && !!order.scheduledAt)
     let selfCancelled = false
     if (timed && (order.status === 'PAID' || order.status === 'PREPARING')) {
       // 复核 R3：pickupAt 缺失 / 预约单 distanceM 缺失都是数据异常（正常下单路径不产生），
@@ -1131,7 +1171,7 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
           where: { id, status: 'PAID', acceptedAt: null },
           data: { status: 'REFUNDING', cancelledAt: new Date(), cancelReason: '用户申请退款' },
         })
-        if (moved.count === 0) throw new AppError(42204, '商家已接单备餐，请电话联系商家协商退款')
+        if (moved.count === 0) throw new AppError(42204, asapPickup ? ASAP_ACCEPTED_TEXT : '商家已接单备餐，请电话联系商家协商退款')
         await rollbackOrderStock(tx, order.items)
       })
       selfCancelled = true
@@ -1173,7 +1213,7 @@ router.put('/:id/cancel', async (req: Request, res: Response, next: NextFunction
     throw new AppError(
       42204,
       order.status === 'PAID' || order.status === 'PREPARING'
-        ? '商家已接单备餐，请电话联系商家协商退款'
+        ? (asapPickup ? ASAP_ACCEPTED_TEXT : '商家已接单备餐，请电话联系商家协商退款')
         : `订单状态为 ${order.status}，不可取消`
     )
   } catch (e) {
@@ -1255,6 +1295,13 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
 
     if (useMockPay) {
       const paidAt = new Date()
+      // 尽快取（2026-09-28，店主 Q2=B）：付款成功时把预计可取时刻重算为 max(原值, 锚点 + 备餐 + 缓冲)。
+      // mock 的处理时刻就是 paidAt（服务器当前时刻），锚点在 asapPickupAtOnPaid 内部取。
+      // 与真实回调（wechat-notify.ts）调同一个函数；非尽快单返回 null，不写 pickupAt。
+      // 写入并进下面那条 PENDING_PAYMENT→PAID 条件写的 data：同一事务、只在 count=1 时生效。
+      const retimed = order.deliveryType === 'PICKUP' && order.pickupAsap
+        ? asapPickupAtOnPaid(order, await getLocalSettings(), paidAt, paidAt)
+        : null
       await prisma.$transaction(async (tx) => {
         await tx.payment.upsert({
           where: { orderId },
@@ -1273,10 +1320,12 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
         // mock 路径生产禁用，但 e2e 天天走它——两条路的语义必须一致，否则 e2e 验的不是生产行为。
         const moved = await tx.order.updateMany({
           where: { id: orderId, status: 'PENDING_PAYMENT' },
-          data: { status: 'PAID', paidAt },
+          data: { status: 'PAID', paidAt, ...(retimed ? { pickupAt: retimed } : {}) },
         })
         if (moved.count === 0) throw new AppError(42204, '订单状态已变化，请刷新后重试')
       })
+      // 推送必须用重算后的取餐时刻：上面 order 是事务前读到的快照，尽快单的 pickupAt 已过期
+      const paidPickupAt = retimed ?? order.pickupAt
       prisma.orderItem
         .findMany({ where: { orderId }, select: { productName: true, specText: true, quantity: true, isGift: true } })
         .then(async (items) => {
@@ -1285,9 +1334,9 @@ router.post('/:id/pay', payLimiter, async (req: Request, res: Response, next: Ne
           // try/catch 是为了让 getLocalSettings/pickupSlotLabel 出错时仍能发不带取餐时间的推送。
           // 变量名与本文件从 services/slots 导入的 slotLabel 函数撞名，改叫 pickupSlotLabelText 避免遮蔽。
           let pickupSlotLabelText: string | undefined
-          if (order.deliveryType === 'PICKUP' && order.pickupAt) {
+          if (order.deliveryType === 'PICKUP' && paidPickupAt) {
             try {
-              pickupSlotLabelText = pickupSlotLabel(order.pickupAt, (await getLocalSettings()).pickup.slotMinutes)
+              pickupSlotLabelText = pickupTimeLabel({ pickupAt: paidPickupAt, pickupAsap: order.pickupAsap }, await getLocalSettings())
             } catch (e) {
               console.error('[orders] 计算取餐时段文案失败（mock 支付）:', (e as Error).message)
             }
